@@ -41,6 +41,10 @@ pub struct Filter {
     /// the folders inside it (see [`crate::folders`]). Photos only browsed in Local are never part
     /// of it, unlike [`Filter::folder`].
     pub library_folder: Option<String>,
+    /// With [`Filter::library_folder`]: only the photos directly in that folder, not those of the
+    /// folders inside it (Show Photos in Subfolders turned off).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub library_folder_only: bool,
     /// A keyword; hierarchical keywords match their children too (`travel` finds `travel|italy`).
     pub keyword: Option<String>,
     /// A person: photos with a named face region of this name (case-insensitive), as read from XMP.
@@ -304,7 +308,7 @@ impl Filter {
             return false;
         }
         if let Some(root) = root
-            && !photo_in_root(p, root)
+            && !(if self.library_folder_only { photo_directly_in(p, root) } else { photo_in_root(p, root) })
         {
             return false;
         }
@@ -545,6 +549,12 @@ pub(crate) fn photo_in_root(p: &Photo, root: &str) -> bool {
         return path.strip_prefix(r).is_some_and(|rest| rest.starts_with('/'));
     }
     crate::local::folder_of(p).is_some_and(|f| key_within(&f, root))
+}
+
+/// Whether a library photo lies directly in the folder whose [`folder_key`] is `root` (not in a
+/// folder inside it).
+pub(crate) fn photo_directly_in(p: &Photo, root: &str) -> bool {
+    !p.local && crate::local::folder_of(p).is_some_and(|f| !root.is_empty() && f.trim_end_matches('/') == root.trim_end_matches('/'))
 }
 
 /// [`folder_within`] for two paths already turned into their [`folder_key`].

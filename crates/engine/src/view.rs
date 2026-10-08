@@ -11,6 +11,8 @@ pub enum LibrarySource {
     All,
     /// Imported in the last import session (we treat "recent" as the latest import date).
     RecentlyAdded,
+    /// The photos of the latest import (Lightroom Classic's Previous Import).
+    PreviousImport,
     Album(AlbumId),
     RecentlyDeleted,
     /// Photos with picks.
@@ -48,6 +50,12 @@ impl LibrarySource {
                     .unwrap_or_else(|| latest.get(..10).unwrap_or("").to_string());
                 f.imported_from = Some(from);
             }
+            // one import stamps every photo it adds with the same time
+            LibrarySource::PreviousImport => {
+                let latest = cat.photos().filter(|p| p.in_library()).map(|p| p.imported.clone()).max().unwrap_or_default();
+                // nothing imported yet: nothing (an empty prefix would match everything)
+                f.imported = Some(if latest.is_empty() { "\u{0}".into() } else { latest });
+            }
             LibrarySource::Album(a) => f.album = Some(*a),
             LibrarySource::RecentlyDeleted => f.deleted = true,
             LibrarySource::Picks => f.flag = Some(lightcraft_catalog::Flag::Pick),
@@ -61,6 +69,7 @@ impl LibrarySource {
         match self {
             LibrarySource::All => "All Photos".into(),
             LibrarySource::RecentlyAdded => "Recently Added".into(),
+            LibrarySource::PreviousImport => "Previous Import".into(),
             LibrarySource::Album(a) => cat.album(*a).map(|a| a.name.clone()).unwrap_or_else(|| "Album".into()),
             LibrarySource::RecentlyDeleted => "Recently Deleted".into(),
             LibrarySource::Picks => "Picks".into(),

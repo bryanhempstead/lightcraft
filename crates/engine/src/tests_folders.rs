@@ -448,3 +448,71 @@ fn a_blank_folder_filter_is_no_filter() {
     s.execute("library.filter", &json!({"libraryFolder": "  "})).unwrap();
     assert_eq!(s.filter, lightcraft_catalog::Filter::default(), "no hidden 'filters active' state");
 }
+
+/// Lightroom Classic's Folders panel, by command: Show Photos in Subfolders, Previous Import,
+/// Synchronize Folder, Find Missing Folder, Create Folder Inside, Add Parent Folder.
+#[test]
+fn classic_folder_commands() {
+    let dir = Scratch::new("classic");
+    let png = |rel: &str, shade: u8| {
+        let p = dir.0.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let img = lightcraft_raster::Rgba8::filled(8, 6, [shade, shade, shade, 255]);
+        let b = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(&p, b).unwrap();
+        p.to_string_lossy().to_string()
+    };
+    let trip = dir.path("Trip");
+    png("Trip/a.png", 10);
+    png("Trip/Day 1/b.png", 20);
+    png("Trip/Day 1/c.png", 30);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [trip], "mode": "add"})).unwrap();
+    assert!(s.library_subfolders, "on by default, like Classic");
+    assert_eq!(source_folder(&mut s, &trip)["count"], json!(3));
+    let r = s.execute("library.showSubfolders", &json!({})).unwrap();
+    assert_eq!((r["on"].clone(), r["count"].clone()), (json!(false), json!(1)), "only the folder's own photo");
+    assert_eq!(s.visible_cloned().len(), 1);
+    s.execute("library.showSubfolders", &json!({"on": true})).unwrap();
+    assert_eq!(s.visible_cloned().len(), 3);
+
+    // Previous Import: the latest import only
+    s.clock = Box::new(|| "2030-01-01T00:00:00".into());
+    let d = png("Trip/Day 2/d.png", 40);
+    let r = s.execute("folder.sync", &json!({"path": trip})).unwrap();
+    assert_eq!((r["new"].clone(), r["imported"].clone(), r["missing"].clone()), (json!(1), json!(1), json!(0)), "{r}");
+    assert_eq!(s.execute("library.source", &json!({"kind": "previousImport"})).unwrap()["count"], json!(1));
+    assert_eq!(s.execute("folder.sync", &json!({"path": trip})).unwrap()["new"], json!(0), "nothing new twice");
+
+    // the folder is renamed behind the library's back: Find Missing Folder
+    let moved = dir.path("Trip 2026");
+    std::fs::rename(&trip, &moved).unwrap();
+    assert!(s.execute("folder.sync", &json!({"path": trip})).is_err(), "a folder that's gone says so");
+    let r = s.execute("folder.locate", &json!({"path": trip, "to": moved})).unwrap();
+    assert_eq!((r["relinked"].clone(), r["stillMissing"].clone()), (json!(4), json!(0)));
+    assert!(s.catalog.photos().all(|p| matches!(&p.source, Source::File { path } if std::path::Path::new(path).is_file())));
+    let _ = d;
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.photos().all(|p| matches!(&p.source, Source::File { path } if path.contains("/Trip/"))), "one undo step");
+    s.execute("edit.redo", &json!({})).unwrap();
+
+    // Create Folder Inside: listed while empty
+    let r = s.execute("folder.create", &json!({"path": moved, "name": "selects"})).unwrap();
+    assert!(std::path::Path::new(r["path"].as_str().unwrap()).is_dir());
+    let tree = s.execute("library.folders", &json!({"classic": true})).unwrap();
+    let text = tree.to_string();
+    assert!(text.contains("\"selects\""), "{text}");
+    assert!(s.execute("folder.create", &json!({"path": moved, "name": "a/b"})).is_err());
+
+    // Folders starts at the root folder; Add Parent Folder lists the one above it
+    let top = |s: &mut Session| {
+        let t = s.execute("library.folders", &json!({"classic": true})).unwrap();
+        t[0]["children"][0]["name"].as_str().unwrap().to_string()
+    };
+    assert_eq!(top(&mut s), "Trip 2026");
+    s.execute("folder.addParent", &json!({"path": moved})).unwrap();
+    assert_eq!(top(&mut s), dir.0.file_name().unwrap().to_string_lossy());
+    s.execute("folder.promoteSubfolders", &json!({"path": dir.path("")})).unwrap();
+    assert_eq!(top(&mut s), "Trip 2026");
+    assert!(s.execute("folder.promoteSubfolders", &json!({"path": moved})).is_err());
+}

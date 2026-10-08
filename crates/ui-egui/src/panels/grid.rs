@@ -200,7 +200,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let by = resolve_group(app.session.sort.group, target);
     let group_key = match app.session.source {
         lightcraft_engine::LibrarySource::RecentlyDeleted => None,
-        lightcraft_engine::LibrarySource::RecentlyAdded => Some(SortKey::ImportDate),
+        lightcraft_engine::LibrarySource::RecentlyAdded | lightcraft_engine::LibrarySource::PreviousImport => Some(SortKey::ImportDate),
         _ => Some(app.session.sort.key),
     };
     let runs_key = (generation, group_key, by);

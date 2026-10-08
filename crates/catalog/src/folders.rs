@@ -154,9 +154,18 @@ impl Catalog {
     /// The library's volumes with their folders and photo counts: volumes by name
     /// (case-insensitive), each folder with its subfolders the same way.
     pub fn folder_tree(&self) -> Vec<FolderNode> {
+        self.folder_tree_with(&[])
+    }
+
+    /// [`Catalog::folder_tree`] with `extra` folders listed too, holding no photo (folders made
+    /// in the library that are still empty).
+    pub fn folder_tree_with(&self, extra: &[String]) -> Vec<FolderNode> {
         // photos per containing folder, as spelled (sorted, so the spelling that names a folder
         // never depends on hash order)
         let mut dirs: BTreeMap<&str, usize> = BTreeMap::new();
+        for e in extra.iter().map(|e| e.trim_end_matches(['/', '\\'])).filter(|e| !e.is_empty()) {
+            dirs.entry(e).or_default();
+        }
         for p in self.photos().filter(|p| p.in_library()) {
             if let Source::File { path } = &p.source
                 && let Some(i) = path.rfind(['/', '\\'])
@@ -223,4 +232,40 @@ fn mark_selectable(nodes: &mut [FolderNode], mounts: &[String]) {
 
 fn sort(v: &mut [FolderNode]) {
     v.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
+}
+
+/// The tree as Lightroom Classic lists it: under each disk, its *root folders* rather than every
+/// folder from the top of the disk down. A folder that holds no photo of its own and just one
+/// folder (`Users` → `me` → `Pictures`) is skipped, so a disk lists the first folders where the
+/// library's photos are or branch, and their parents only when added with Add Parent Folder
+/// (`parents`, any spelling). Counts are unchanged: a folder's count still covers what is inside it.
+pub fn root_folders(tree: &[FolderNode], parents: &[String]) -> Vec<FolderNode> {
+    let parents: Vec<String> = parents.iter().map(|p| folder_key(p)).collect();
+    let kept = |n: &FolderNode| parents.iter().any(|p| *p == folder_key(&n.path));
+    fn top<'a>(n: &'a FolderNode, kept: &dyn Fn(&FolderNode) -> bool, depth: usize) -> &'a FolderNode {
+        match n.children.as_slice() {
+            [only] if n.own == 0 && !kept(n) && depth < MAX_DEPTH => top(only, kept, depth + 1),
+            _ => n,
+        }
+    }
+    tree.iter()
+        .map(|v| {
+            let mut v = v.clone();
+            let mut roots: Vec<FolderNode> = v.children.iter().map(|c| top(c, &kept, 0).clone()).collect();
+            sort(&mut roots);
+            v.children = roots;
+            v
+        })
+        .collect()
+}
+
+/// The folder `path` is in, as written (`/a/b` → `/a`); `None` for a disk's root.
+pub fn parent_folder(path: &str) -> Option<String> {
+    if is_disk_root(path) {
+        return None;
+    }
+    let t = path.trim_end_matches(['/', '\\']);
+    let i = t.rfind(['/', '\\'])?;
+    let parent = t.get(..i.max(1))?;
+    (!parent.is_empty()).then(|| parent.to_string())
 }

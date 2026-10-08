@@ -402,3 +402,48 @@ fn the_quick_check_agrees_with_the_careful_one() {
         }
     }
 }
+
+/// Lightroom Classic's Folders panel: under a disk, the first folders where photos are or the
+/// tree branches (root folders), not every folder from the top of the disk; Add Parent Folder
+/// lists one level more; an empty folder made in the library is listed with no photos.
+#[test]
+fn root_folders_skip_the_single_lane_above_the_photos() {
+    let c = library(&[
+        "/Volumes/HEMPSTEAD/Edit/current/CHEEVE/a.cr3",
+        "/Volumes/HEMPSTEAD/Edit/current/edit now/b.cr3",
+        "/Volumes/HEMPSTEAD/Edit/Iceland/c.cr3",
+        "/Users/me/Pictures/Lightroom/SYNC/d.heic",
+    ]);
+    let tree = c.folder_tree();
+    let roots = crate::folders::root_folders(&tree, &[]);
+    let names = |v: &[FolderNode]| v.iter().map(|n| n.name.clone()).collect::<Vec<_>>();
+    let disk = roots.iter().find(|v| v.name == "HEMPSTEAD").unwrap();
+    assert_eq!(names(&disk.children), ["Edit"], "Edit branches: it is the root folder");
+    assert_eq!(disk.children[0].count, 3);
+    let startup = roots.iter().find(|v| v.path == "/").unwrap();
+    assert_eq!(names(&startup.children), ["SYNC"], "/Users/me/Pictures/Lightroom hold nothing of their own");
+    // Add Parent Folder: Lightroom is listed above SYNC
+    let roots = crate::folders::root_folders(&tree, &["/Users/me/Pictures/Lightroom/".into()]);
+    let startup = roots.iter().find(|v| v.path == "/").unwrap();
+    assert_eq!(names(&startup.children), ["Lightroom"]);
+    assert_eq!(names(&startup.children[0].children), ["SYNC"]);
+    assert_eq!(crate::folders::parent_folder("/Users/me/Pictures/Lightroom/SYNC").as_deref(), Some("/Users/me/Pictures/Lightroom"));
+    assert_eq!(crate::folders::parent_folder("/Volumes/HEMPSTEAD"), None, "a disk has no parent folder");
+    // an empty folder made inside one
+    let tree = c.folder_tree_with(&["/Volumes/HEMPSTEAD/Edit/Iceland/selects/".into()]);
+    let edit = &crate::folders::root_folders(&tree, &[]).into_iter().find(|v| v.name == "HEMPSTEAD").unwrap().children[0];
+    let iceland = edit.children.iter().find(|n| n.name == "Iceland").unwrap();
+    assert_eq!(outline(&iceland.children), [("selects".to_string(), 0, 0)]);
+    assert_eq!(edit.count, 3);
+}
+
+/// Show Photos in Subfolders turned off: a folder shows only the photos directly in it.
+#[test]
+fn a_folder_without_its_subfolders_shows_only_its_own_photos() {
+    let c = library(&["/pics/trip/a.jpg", "/pics/trip/day1/b.jpg", "/pics/trip/day1/c.jpg", "/pics/tripod/d.jpg"]);
+    let q = |only: bool| {
+        let f = Filter { library_folder: Some("/pics/trip/".into()), library_folder_only: only, ..Default::default() };
+        c.query(&f, &Sort::default()).len()
+    };
+    assert_eq!((q(false), q(true)), (3, 1));
+}

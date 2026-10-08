@@ -260,13 +260,14 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Source",
             [],
             None,
-            "{kind: all|recentlyAdded|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder)}",
+            "{kind: all|recentlyAdded|previousImport|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder)}",
             always,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("all");
                 s.source = match kind {
                     "all" => LibrarySource::All,
                     "recentlyAdded" => LibrarySource::RecentlyAdded,
+                    "previousImport" => LibrarySource::PreviousImport,
                     "recentlyDeleted" => LibrarySource::RecentlyDeleted,
                     "picks" => LibrarySource::Picks,
                     "missing" => LibrarySource::Missing,
@@ -331,9 +332,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "Library Folders",
             [],
             None,
-            "{} → [{name, path, count, own, volume, selectable, children}] the disks and the folders the library's photos were imported from, with photo counts (subfolders included in `count`); show one with library.source {kind: libraryFolder, path} (rows with selectable false only open)",
+            "{classic?: bool} → [{name, path, count, own, volume, selectable, children}] the disks and the folders the library's photos were imported from, with photo counts (subfolders included in `count`, `own` = directly in it); show one with library.source {kind: libraryFolder, path} (rows with selectable false only open). classic: as the Folders panel lists them — each disk's root folders (the first folders where photos are or branch, and parents added with folder.addParent) and empty folders made with folder.create",
             always,
-            |s, _| Ok(serde_json::to_value(s.catalog.folder_tree()).unwrap_or_default())
+            |s, p| Ok(serde_json::to_value(crate::cmd::folders::folder_view(s, bool_or(p, "classic", false))).unwrap_or_default())
         ),
         cmd!(
             "library.removeFolder",

@@ -77,6 +77,7 @@ pub fn source_key(app: &LightcraftApp) -> String {
     match &app.session.source {
         LibrarySource::All => "all".into(),
         LibrarySource::RecentlyAdded => "recentlyAdded".into(),
+        LibrarySource::PreviousImport => "previousImport".into(),
         LibrarySource::Album(a) => format!("album:{}", a.0),
         LibrarySource::RecentlyDeleted => "recentlyDeleted".into(),
         LibrarySource::Picks => "picks".into(),
