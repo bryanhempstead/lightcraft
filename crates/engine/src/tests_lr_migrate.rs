@@ -414,3 +414,122 @@ fn shoot_commands() {
     drop(o);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A catalog shaped like a real one (Bryan's): the Quick Collection (a system-owned plain
+/// collection), a "Smart Collections" set, a top-level "From Lightroom" set holding a collection
+/// whose members are all unchanged sync-duplicate virtual copies, an empty collection, a
+/// top-level smart collection, and print / slideshow drafts. Every real collection comes over
+/// with its members and nesting; a dry run says so; a collections-only run on a library made
+/// by an earlier migration tidies what that one got wrong and changes no photo.
+#[test]
+fn collections_come_over_with_members_and_nesting() {
+    let dir = std::env::temp_dir().join(format!("lc-lrcols-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let photos = dir.join("shoot");
+    std::fs::create_dir_all(&photos).unwrap();
+    write_png(&photos.join("a.png"));
+    let img = lightcraft_raster::Rgba8::filled(20, 16, [9, 9, 9, 255]);
+    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(photos.join("b.png"), bytes).unwrap();
+    let root = format!("{}/", dir.display());
+    let im = |id: i64, base: &str, extra: Value| {
+        let mut v =
+            json!({"id": id, "root": root, "folder": "shoot/", "base": base, "ext": "png", "develop": "s = { Exposure2012 = 0 }", "rating": 4});
+        if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+            o.extend(e.clone());
+        }
+        v
+    };
+    let sync = "c3b21bc52b6c4c9392c79204e4f0b5bb:sync duplicate";
+    let images = vec![
+        im(1, "a", json!({})),
+        im(2, "b", json!({})),
+        im(3, "a", json!({"master": 1, "copyName": "Copy 1", "copyReason": sync})),
+        im(4, "b", json!({"master": 2, "copyName": "Copy 1", "copyReason": sync})),
+    ];
+    let col = |id: i64, name: &str, parent: Value, kind: &str, system: f64| json!({"id": id, "name": name, "parent": parent, "kind": format!("com.adobe.ag.{kind}"), "system": system});
+    let cols = vec![
+        col(5, "quick collection", Value::Null, "library.collection", 1.0),
+        col(12, "Smart Collections", Value::Null, "library.group", 0.0),
+        col(18, "Five Stars", json!(12), "library.smart_collection", 0.0),
+        col(48589, "From Lightroom", Value::Null, "library.group", 0.0),
+        col(100, "Trip Copy 2", json!(48589), "library.collection", 0.0),
+        col(101, "Photostoedit", json!(48589), "library.collection", 0.0),
+        col(3785731, "Unsaved Slideshow", Value::Null, "slideshow.unsaved", 1.0),
+        col(3797593, "Unsaved Print", Value::Null, "print.unsaved", 1.0),
+        col(6933125, "Duplicates", Value::Null, "library.smart_collection", 0.0),
+    ];
+    let ci = vec![json!({"collection": 5, "image": 2}), json!({"collection": 100, "image": 3}), json!({"collection": 100, "image": 4})];
+    let smart = vec![
+        json!({"collection": 18, "content": "s = { { criteria = \"rating\", operation = \">=\", value = 5 }, combine = \"intersect\" }"}),
+        json!({"collection": 6933125, "content": "s = { { criteria = \"keywords\", operation = \"words\", value = \"Duplicate\" }, combine = \"intersect\" }"}),
+    ];
+    let rec = records_from_rows("t.lrcat", &images, &[], &[], &cols, &ci, &smart);
+    assert_eq!(rec.collections.iter().find(|c| c.id == 5).map(|c| c.kind.as_str()), Some("quick"));
+    assert_eq!(rec.collections.len(), 7, "print / slideshow drafts are left out");
+    let rec_path = dir.join("records.json");
+    std::fs::write(&rec_path, serde_json::to_vec(&rec).unwrap()).unwrap();
+    let rec_s = rec_path.to_string_lossy().to_string();
+
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    let dry = s.execute("library.migrateLightroom", &json!({"records": rec_s, "dryRun": true, "presets": false})).unwrap();
+    assert_eq!(dry["albums"], json!({"albums": 2, "smart": 2, "sets": 1, "quick": 1, "skipped": []}), "a dry run counts the collections");
+
+    let r = s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false})).unwrap();
+    assert_eq!(r["albums"]["albums"], json!(2), "{r}");
+    let cat = &s.catalog;
+    let id_of = |n: &str| cat.photos().find(|p| p.file_name.starts_with(n) && p.copy_of.is_none()).unwrap().id;
+    let (a, b) = (id_of("a"), id_of("b"));
+    let named = |n: &str| cat.albums().find(|al| al.name == n).cloned().unwrap_or_else(|| panic!("no album {n}"));
+    let top = named(ALBUM_FOLDER);
+    assert!(top.folder && top.parent.is_none());
+    assert_eq!(cat.albums().filter(|al| al.name == ALBUM_FOLDER).count(), 1, "the catalog's own From Lightroom set is ours, not one inside it");
+    let trip = named("Trip Copy 2");
+    assert_eq!((trip.parent, trip.photos.clone()), (Some(top.id), vec![a, b]), "sync-duplicate copies stand for their masters");
+    assert_eq!(named("Photostoedit").parent, Some(top.id));
+    let sets = named("Smart Collections");
+    assert!(sets.folder && sets.parent == Some(top.id));
+    let five = named("Five Stars");
+    assert!(five.is_smart() && five.parent == Some(sets.id));
+    assert!(named("Duplicates").is_smart() && named("Duplicates").parent == Some(top.id));
+    let quick = cat.quick_collection().and_then(|q| cat.album(q)).unwrap();
+    assert_eq!(quick.photos, vec![b], "Lightroom's Quick Collection is ours");
+    assert!(!cat.albums().any(|al| al.name.eq_ignore_ascii_case("quick collection") && !al.quick));
+    assert!(!cat.albums().any(|al| al.name.contains("Unsaved")));
+    // again: nothing twice
+    let n = s.catalog.albums().count();
+    s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false})).unwrap();
+    assert_eq!(s.catalog.albums().count(), n);
+
+    // a library an earlier migration got wrong: a "quick collection" album and a From Lightroom
+    // folder inside ours; collections only, the photos keep what they have
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib2"), false).unwrap();
+    let files: Vec<String> = ["a.png", "b.png"].iter().map(|f| photos.join(f).to_string_lossy().to_string()).collect();
+    s.execute("library.import", &json!({"paths": files, "mode": "add"})).unwrap();
+    let a = s.catalog.photos().find(|p| p.file_name.starts_with('a')).unwrap().id;
+    let mk = |s: &mut Session, name: &str, parent: Option<AlbumId>, folder: bool, photos: Vec<PhotoId>| {
+        let id = s.catalog.alloc_album_id();
+        s.commit("t", Op::AddAlbum { album: Album { parent, folder, photos, ..Album::new(id, name) } }).unwrap();
+        id
+    };
+    let top = mk(&mut s, ALBUM_FOLDER, None, true, vec![]);
+    mk(&mut s, "quick collection", Some(top), false, vec![a]);
+    let nested = mk(&mut s, ALBUM_FOLDER, Some(top), true, vec![]);
+    mk(&mut s, "Trip Copy 2", Some(nested), false, vec![a]);
+    let r = s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false, "import": false, "collectionsOnly": true})).unwrap();
+    assert_eq!(r["rated"], json!(0), "collections only: {r}");
+    let cat = &s.catalog;
+    assert!(cat.photos().all(|p| p.rating == 0 && p.copy_of.is_none()), "no photo changed, no copy made");
+    let b = cat.photos().find(|p| p.file_name.starts_with('b')).unwrap().id;
+    let quick = cat.quick_collection().and_then(|q| cat.album(q)).unwrap();
+    assert_eq!(quick.photos, vec![a, b], "the old album's photos joined the Quick Collection");
+    assert!(cat.album(nested).is_none(), "the nested folder is gone");
+    assert_eq!(cat.albums().filter(|al| al.name == ALBUM_FOLDER).count(), 1);
+    let trips: Vec<&Album> = cat.albums().filter(|al| al.name == "Trip Copy 2").collect();
+    assert_eq!(trips.len(), 1);
+    assert_eq!((trips[0].parent, trips[0].photos.clone()), (Some(top), vec![a, b]));
+    assert!(!cat.albums().any(|al| al.name.eq_ignore_ascii_case("quick collection") && !al.quick));
+    let _ = std::fs::remove_dir_all(&dir);
+}

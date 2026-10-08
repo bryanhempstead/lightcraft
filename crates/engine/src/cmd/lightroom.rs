@@ -45,6 +45,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         limit: p.get("limit").and_then(Value::as_u64).map(|l| l.min(usize::MAX as u64) as usize),
         dry_run: bool_or(p, "dryRun", false),
         develop_all: bool_or(p, "developAll", false),
+        collections_only: bool_or(p, "collectionsOnly", false),
         preset_dirs: preset_dirs(p, &rec.catalog),
         look_map: p
             .get("lookMap")
@@ -62,7 +63,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Migrate from Lightroom Classic…",
             ["File"],
             None,
-            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy with the system sqlite3, the catalog itself is never opened) | records?: records JSON (from recordsOut), recordsOut?: path, import?: bool (default true: add the files in place; false when they were imported already), limit?: N (only the first N photos whose files exist), dryRun?: bool, developAll?: bool (also photos never edited in Lightroom), lookMap?: {lookName: profileId} (creative looks → our profiles; an imported .cube profile named like the look matches by itself), presets?: bool (default true), presetDirs?: [folders] (default: Lightroom Settings/{Settings, Develop Presets, Keyword Sets} next to the catalog + Camera Raw / Lightroom preset folders)} → {found, missing, missingByRoot, matched, rated, flagged, labelled, keyworded, virtualCopies, develop: {applied, unmapped: [{key, photos}], photosWithUnmapped…}, albums, presets} — ratings, flags, colour labels, keywords, caption/copyright/creator/location, collections (albums in a \"From Lightroom\" folder; smart collections whose rules map), virtual copies, develop settings and Lightroom's edit times; one undo step",
+            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy with the system sqlite3, the catalog itself is never opened) | records?: records JSON (from recordsOut), recordsOut?: path, import?: bool (default true: add the files in place; false when they were imported already), limit?: N (only the first N photos whose files exist), dryRun?: bool, developAll?: bool (also photos never edited in Lightroom), collectionsOnly?: bool (only the collections, for a library migrated already: nothing imported, no photo changed, no presets), lookMap?: {lookName: profileId} (creative looks → our profiles; an imported .cube profile named like the look matches by itself), presets?: bool (default true), presetDirs?: [folders] (default: Lightroom Settings/{Settings, Develop Presets, Keyword Sets} next to the catalog + Camera Raw / Lightroom preset folders)} → {found, missing, missingByRoot, matched, rated, flagged, labelled, keyworded, virtualCopies, develop: {applied, unmapped: [{key, photos}], photosWithUnmapped…}, albums: {albums, smart, sets, quick, skipped}, presets} — ratings, flags, colour labels, keywords, caption/copyright/creator/location, collections (albums in a \"From Lightroom\" folder, sets as folders, smart collections whose rules map, the Quick Collection into ours), virtual copies, develop settings and Lightroom's edit times; one undo step",
             always,
             run
         ),

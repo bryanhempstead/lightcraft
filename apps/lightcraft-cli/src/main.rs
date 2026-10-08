@@ -10,7 +10,7 @@
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
 //! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
-//! lightcraft-cli migrate-lightroom --library DIR [--catalog X.lrcat | --records R.json] [--limit N] [--dry-run] [--no-presets] [--develop-all]
+//! lightcraft-cli migrate-lightroom --library DIR [--catalog X.lrcat | --records R.json] [--limit N] [--dry-run] [--no-presets] [--develop-all] [--collections-only]
 //! ```
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -108,6 +108,9 @@ USAGE:
         --dry-run          report what would happen; change nothing (no --library needed)
         --no-presets       skip the preset folders
         --develop-all      also apply Lightroom's settings to photos never edited there
+        --collections-only only the collections (albums, smart albums, sets, the Quick
+                           Collection), for a library migrated already: nothing imported,
+                           no photo or preset changed
   lightcraft-cli --version | --help
 ";
 
@@ -621,6 +624,7 @@ fn migrate_lightroom(args: &[String]) -> Result<(), String> {
             "--dry-run" => p["dryRun"] = json!(true),
             "--no-presets" => p["presets"] = json!(false),
             "--develop-all" => p["developAll"] = json!(true),
+            "--collections-only" => p["collectionsOnly"] = json!(true),
             a => return Err(format!("unknown option `{a}`")),
         }
         i += 1;
