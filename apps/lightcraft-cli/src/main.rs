@@ -10,6 +10,7 @@
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
 //! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+//! lightcraft-cli migrate-lightroom --library DIR [--catalog X.lrcat | --records R.json] [--limit N] [--dry-run] [--no-presets] [--develop-all]
 //! ```
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -91,6 +92,20 @@ USAGE:
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
+  lightcraft-cli migrate-lightroom --library DIR [OPTIONS]
+      Migrate from Lightroom Classic into the library DIR (created if needed): the catalog's
+      photos are added in place (never copied or moved), with ratings, flags, colour labels,
+      keywords, captions, virtual copies, collections (\"From Lightroom\" album folder) and develop
+      settings; every preset folder is imported too. The catalog is read from a copy (with its
+      -wal) by the system sqlite3; nothing of Lightroom's is written. Prints the report as JSON.
+      Options:
+        --catalog FILE     the .lrcat (default: the newest in ~/Pictures/Lightroom)
+        --records FILE     read a records file (from --records-out) instead of a catalog
+        --records-out FILE save what was read from the catalog
+        --limit N          only the first N photos whose files exist
+        --dry-run          report what would happen; change nothing (no --library needed)
+        --no-presets       skip the preset folders
+        --develop-all      also apply Lightroom's settings to photos never edited there
   lightcraft-cli --version | --help
 ";
 
@@ -133,6 +148,7 @@ fn main() -> ExitCode {
         Some("synth-merge") => synth_merge(&args[1..]),
         Some("controls") => controls(&args[1..]),
         Some("calibrate") => calibrate(&args[1..]),
+        Some("migrate-lightroom") => migrate_lightroom(&args[1..]),
         Some("--version" | "-V" | "version") => {
             println!("lightcraft-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -583,6 +599,40 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     drop(backend); // a library session is flushed here
     if failed > 0 { Err(format!("{failed} command(s) failed")) } else { Ok(()) }
+}
+
+fn migrate_lightroom(args: &[String]) -> Result<(), String> {
+    let mut library: Option<String> = None;
+    let mut p = json!({});
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--library" => library = Some(take_value(args, &mut i, "--library")?.to_string()),
+            "--catalog" => p["catalog"] = json!(take_value(args, &mut i, "--catalog")?),
+            "--records" => p["records"] = json!(take_value(args, &mut i, "--records")?),
+            "--records-out" => p["recordsOut"] = json!(take_value(args, &mut i, "--records-out")?),
+            "--limit" => p["limit"] = json!(take_value(args, &mut i, "--limit")?.parse::<u64>().map_err(|_| "--limit expects a number")?),
+            "--dry-run" => p["dryRun"] = json!(true),
+            "--no-presets" => p["presets"] = json!(false),
+            "--develop-all" => p["developAll"] = json!(true),
+            a => return Err(format!("unknown option `{a}`")),
+        }
+        i += 1;
+    }
+    let dry = p["dryRun"] == json!(true);
+    let mut session = Session::new().with_fs();
+    match &library {
+        Some(dir) => {
+            session.open_library(dir, false).map_err(|e| library_error(dir, e))?;
+        }
+        None if dry => {}
+        None => return Err("migrate-lightroom: give --library DIR (or --dry-run)".into()),
+    }
+    let t = std::time::Instant::now();
+    let r = session.execute("library.migrateLightroom", &p).map_err(|e| e.to_string())?;
+    println!("{}", serde_json::to_string_pretty(&r).map_err(|e| e.to_string())?);
+    eprintln!("lightcraft-cli migrate-lightroom: done in {:.1} s", t.elapsed().as_secs_f64());
+    Ok(())
 }
 
 fn take_value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, String> {

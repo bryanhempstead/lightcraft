@@ -14,6 +14,7 @@ pub mod i18n;
 pub mod icons;
 pub mod import;
 pub mod links;
+pub mod lr_migrate;
 pub mod menubar;
 pub mod menus;
 pub mod merge;

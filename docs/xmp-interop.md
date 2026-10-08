@@ -135,11 +135,44 @@ names are read (e.g. `Exposure2012`, not the older `Exposure`).
 | `PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y` | `geometry.vertical/horizontal/rotate/scale/aspect/offset_x/offset_y` | |
 | `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided |
 | `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
+| `LensProfileDistortionScale`, `LensProfileVignettingScale` | `optics.profile_distortion`, `optics.profile_vignetting` | |
+| `ChromaticAberrationR`, `ChromaticAberrationB` | `optics.ca_red`, `optics.ca_blue` | |
+| `Look` (`Name`, `Amount`), `CameraProfile` | `profile.id`, `profile.amount` | base profiles by name: Adobe/Camera Color, Standard, Faithful → Color; Neutral, Flat → Neutral; Vivid, Landscape, Portrait, Monochrome → ours; "Embedded" / Apple ProRAW → Color. Creative looks (their own colour tables) are reported as `Look` |
+| `RetouchAreas` (`SpotType`, `Opacity`, `Feather`, `Masks[0]`: `Dabs` / `Mask/Ellipse`, `SourceX` + `OffsetY` = source position) | `spots` | `heal`, `clone`; `heal_patchmatch` → content-aware remove; `crates/engine/src/crs_spots.rs` |
+| `RetouchInfo` (`centerX/Y`, `radius`, `sourceX/Y`, `spotType`) | `spots` | the older circle spots, read only when there are no `RetouchAreas` (newer versions keep both, as copies) |
+| `PointColors` (`SrcHue/Sat/Lum`, `HueShift`, `SatScale`, `LumScale`, `RangeAmount`, ranges) | `point_colors` | approximate: the sample is read as an sRGB HSL colour |
+| `ExtendedToneCurvePV2012*` | `curve.*` | only when the plain curve is missing (newer versions store both) |
 
-Values pass through our control specs, so anything outside our slider ranges gets clamped.
+Values pass through our control specs, so anything outside our slider ranges gets clamped. Bookkeeping fields are not
+reported as unmapped: digests, `LensProfile*` names, `Upright*` guide data, `GrainSeed`, `Custom*` remembered white
+balance, `ToggleStyle*`, `Preset`, HDR fields while `HDREditMode` is 0, preset descriptions and sort names.
 
-**Not mapped:** camera profiles and looks (`CameraProfile`, `Look`; we have our own profile set), local adjustments
-(masks, gradients, brushes), spot removal, red eye, lens blur, process-version 2010 field names, and AI features.
+**Not mapped:** creative profiles (looks with their own colour tables, e.g. third-party profile packs), red eye, lens
+blur, guided Upright lines (`UprightTransform_*`), process-version 2010 field names, and AI features.
+
+## Lightroom Classic catalogs
+
+`library.migrateLightroom` (File ▸ Migrate from Lightroom Classic…, `lightcraft-cli migrate-lightroom`) brings a
+`.lrcat` over (`crates/engine/src/lr_migrate.rs`). LightCraft has no SQLite reader of its own (pure Rust, no C
+dependencies): the catalog and its `-wal` log are copied to a temporary folder and read with the system `sqlite3`
+(`-json`); the catalog itself is never opened. What comes over:
+
+| Lightroom | Ours | Notes |
+|---|---|---|
+| `Adobe_images.rating`, `pick`, `colorLabels` | rating, flag, colour label | labels by name through the label names; plug-in labels like `TK#…` are ignored |
+| `AgLibraryKeyword` + `AgLibraryKeywordImage` | keywords | hierarchy as `parent|child` |
+| `AgLibraryIPTC.caption`, `copyright`; `AgHarvestedIptcMetadata` creator, location, city, state, country | Info fields | |
+| files (`AgLibraryRootFolder` + `AgLibraryFolder` + `AgLibraryFile`) | photos, added in place | files on volumes that aren't mounted are counted per root folder (`missingByRoot`) |
+| virtual copies (`masterImage`, `copyName`) | virtual copies | Lightroom's own sync-conflict copies identical to their master are left out |
+| collections, collection sets | albums, folders | under an album folder "From Lightroom" |
+| smart collections | smart albums | rating, pick, label, keywords, file name / folder / text fields, camera, lens, ISO, aperture, focal length, GPS, edited, file type, capture / import / touch dates; other rules → reported, not created |
+| `Adobe_imageDevelopSettings.text` (Lua) | develop settings | the `crs:` tables above; crop edges, mask and spot positions are turned from the file's stored frame to the frame as shown; settings are applied to photos Lightroom shows as edited (history beyond the import, or a look that differs from its defaults; `developAll` for all) |
+| `Adobe_images.orientation` | `orientation` | only the turn beyond the file's own EXIF orientation |
+| last develop-history time, `touchTime` | `edited`; `<library>/lightroom-migration.json` | for `library.resumePoint` |
+| preset folders | presets, keyword sets | dedupe by `crs:UUID`, then name + group |
+
+A creative look matches an imported `.cube` profile of the same name (`profile.import`), or `lookMap: {look: profileId}`.
+Running the migration again adds nothing twice.
 
 ## Local corrections (masks)
 
@@ -170,7 +203,7 @@ carry over are listed in `preset.import`'s `unmapped` as `Mask: <kind>`.
 |---|---|
 | Ours: `.lcpreset` | JSON `{"format": "lightcraft.preset", "version": 1, "presets": [{id, name, group, settings}]}`, where `settings` is a partial develop-settings object (only the groups the preset includes). A file can hold one preset or many, and every preset keeps its group. Import also accepts a bare preset object or an array of them. |
 | Export | `preset.export {path, ids?, group?}`: all user presets by default, or the given ids or one group. In the app: File ▸ Export Presets…, Presets panel ▸ ⋯ ▸ Export User Presets…, or right-click a group ▸ Export Group…. |
-| Import | `preset.import {paths, group?, dryRun?}`: files or folders (recursive): `.lcpreset`, `.xmp`, classic `.lrtemplate` (a Lua table: `value.settings` holds the same field names as `crs:`), photos that carry their edits in XMP ("DNG presets" from mobile apps; their crop, geometry and custom white balance are left out) and `.zip` bundles of any of these. Presets in a folder (or a folder inside a zip) go to a group named after it, unless the file names its own group. The result lists, per preset, the settings that couldn't be carried over (`unmapped`, e.g. `CameraProfile`, `Look`, local masks), and the app's toast names them. Older (process version 2010) fields — `Exposure`, `Contrast`, `FillLight`, `HighlightRecovery`, `Shadows`, `Brightness`, `Clarity`, `ToneCurve` — are approximated with today's sliders when a preset has no 2012-era fields. Dropping preset files on the window imports them too. In the app: File ▸ Import Presets…, or Presets panel ▸ ⋯ ▸ Import Presets…. A preset that's already there (same name, group and settings) is skipped. If an id clashes, the import gets a fresh `user.*` id, and built-in presets are never replaced. |
+| Import | `preset.import {paths, group?, dryRun?}`: files or folders (recursive): `.lcpreset`, `.xmp`, classic `.lrtemplate` (a Lua table: `value.settings` holds the same field names as `crs:`), photos that carry their edits in XMP ("DNG presets" from mobile apps; their crop, geometry and custom white balance are left out) and `.zip` bundles of any of these. Presets in a folder (or a folder inside a zip) go to a group named after it, unless the file names its own group. The result lists, per preset, the settings that couldn't be carried over (`unmapped`, e.g. a creative `Look`, an unknown `CameraProfile`), and the app's toast names them. Older (process version 2010) fields — `Exposure`, `Contrast`, `FillLight`, `HighlightRecovery`, `Shadows`, `Brightness`, `Clarity`, `ToneCurve` — are approximated with today's sliders when a preset has no 2012-era fields. Dropping preset files on the window imports them too. In the app: File ▸ Import Presets…, or Presets panel ▸ ⋯ ▸ Import Presets…. A preset that's already there (same name, group and settings) is skipped. If an id clashes, the import gets a fresh `user.*` id, and built-in presets are never replaced. |
 | XMP presets | Read with the `crs:` table above, with `crs:Name` as the name (falling back to the file name) and `crs:Group` as the group (falling back to "Imported Presets"). Only the fields the preset sets are included, so applying it leaves everything else alone and the Amount slider scales it like any other preset. We only read XMP presets; we don't write them. |
 
 LightCraft ships no third-party presets. Its built-in presets are its own values (`crates/engine/src/presets.rs`).

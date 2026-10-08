@@ -946,6 +946,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.dialog = Some(Dialog::Shortcuts);
             Ok(Value::Null)
         }
+        // File ▸ Migrate from Lightroom Classic…: read + import in the background (lr_migrate.rs)
+        "library.migrateLightroom" if !cfg!(target_arch = "wasm32") && crate::lr_migrate::runs_in_background(p) => crate::lr_migrate::start(app, p),
         "library.browse" if !cfg!(target_arch = "wasm32") => {
             // listed and read in the background (see `import::browse`)
             let path = p.get("path").and_then(Value::as_str)?;

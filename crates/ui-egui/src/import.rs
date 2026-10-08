@@ -123,6 +123,9 @@ pub struct ImportTask {
     /// Auto Import: the selection to keep.
     keep_selection: Option<lightcraft_engine::Selection>,
     run: Option<ImportRun>,
+    /// A command to run when the import has finished (e.g. the Lightroom migration's apply step),
+    /// and the toast its result makes: what the finished import announces.
+    then: Option<Then>,
 }
 
 impl ImportTask {
@@ -491,14 +494,24 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
     Ok(json!({"importing": total}))
 }
 
+/// A command to run after an import: (id, params, the toast for its result).
+pub type Then = (String, Value, fn(&Value) -> String);
+
 /// Start importing `paths` (files or folders) in the background, e.g. dropped on the window.
 pub fn start_paths(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String> {
+    start_paths_then(app, paths, None)
+}
+
+/// [`start_paths`], then run command `then` (id, params) once the import has finished.
+pub fn start_paths_then(app: &mut LightcraftApp, paths: Vec<String>, then: Option<Then>) -> Result<Value, String> {
     if app.import.is_some() || app.scan.as_ref().is_some_and(|t| !t.browse) {
         return Err("an import is running".into());
     }
     let undo0 = app.session.undo.len();
     let total = paths.len();
-    app.import = Some(ImportTask::new(paths, json!({"mode": "add"}), undo0, false));
+    let mut task = ImportTask::new(paths, json!({"mode": "add"}), undo0, false);
+    task.then = then;
+    app.import = Some(task);
     Ok(json!({"importing": total}))
 }
 
@@ -584,10 +597,20 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
 }
 
 /// The import is done (or cancelled): one undo step, select the first photo, say what happened.
-fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
+fn finish(app: &mut LightcraftApp, ctx: &egui::Context, mut task: ImportTask) {
     let steps = app.session.undo.len().saturating_sub(task.undo0);
     let label = crate::i18n::tr_format!("Add {} Photo{}", task.imported, if task.imported == 1 { "" } else { "s" });
     app.session.merge_undo(steps, &label);
+    if let Some((id, params, toast)) = task.then.take() {
+        match app.run(&id, params) {
+            Ok(v) => {
+                log::info!("{id} after the import: {v}");
+                app.toast_for(ctx, toast(&v), 12.0);
+            }
+            Err(e) => app.toast_error(ctx, format!("{id}: {e}")),
+        }
+        return;
+    }
     if task.auto {
         if task.imported > 0 {
             app.toast(ctx, format!("Auto Import: added {} photo{}", task.imported, if task.imported == 1 { "" } else { "s" }));

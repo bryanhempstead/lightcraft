@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_catalog::{Album, AlbumId, ColorLabel, Flag, MediaKind, Op, PhotoId, Source};
+use lightcraft_catalog::{Album, AlbumId, ColorLabel, Flag, Op, PhotoId, Source};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -70,6 +70,30 @@ pub struct LrImage {
     /// When it was last selected / changed in Lightroom (ISO 8601, UTC).
     pub touched: Option<String>,
     pub format: String,
+    /// The file's stored (unrotated) size as Lightroom recorded it.
+    pub width: u32,
+    pub height: u32,
+    /// Work done ahead (on a worker thread) by [`prepare`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepared: Option<Prepared>,
+}
+
+/// What [`prepare`] works out per photo without the session: is the file there, how its own
+/// EXIF turns it, and its develop settings mapped to ours.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Prepared {
+    pub exists: bool,
+    /// Quarter turns the file's own EXIF orientation makes (read only for photos Lightroom shows
+    /// turned).
+    pub file_turns: u8,
+    /// Partial develop settings in our frame (crop, masks, spots turned with the photo).
+    pub develop: Option<Value>,
+    pub unmapped: Vec<String>,
+    /// The look differs from Lightroom's defaults.
+    pub custom: bool,
+    pub creative_look: Option<(String, f64)>,
+    pub error: Option<String>,
 }
 
 /// A collection, collection set or smart collection.
@@ -142,7 +166,7 @@ fn int(v: &Value, k: &str) -> Option<i64> {
 
 const SQL_IMAGES: &str = "SELECT i.id_local AS id, i.masterImage AS master, i.copyName AS copyName, i.copyReason AS copyReason, \
  i.rating AS rating, i.pick AS pick, i.colorLabels AS label, i.orientation AS orientation, i.touchTime AS touchTime, \
- i.fileFormat AS format, rf.absolutePath AS root, fo.pathFromRoot AS folder, f.baseName AS base, f.extension AS ext, \
+ i.fileFormat AS format, i.fileWidth AS width, i.fileHeight AS height, rf.absolutePath AS root, fo.pathFromRoot AS folder, f.baseName AS base, f.extension AS ext, \
  d.text AS develop, h.lastEdit AS lastEdit, h.edits AS edits, ip.caption AS caption, ip.copyright AS copyright, \
  cr.value AS creator, lo.value AS location, ci.value AS city, st.value AS state, co.value AS country \
  FROM Adobe_images i \
@@ -246,6 +270,9 @@ pub fn records_from_rows(
                 last_edit: number(r, "lastEdit").and_then(cocoa_time),
                 touched: number(r, "touchTime").filter(|t| *t > 0.0).and_then(cocoa_time),
                 format: text(r, "format"),
+                width: number(r, "width").unwrap_or(0.0).clamp(0.0, 1e6) as u32,
+                height: number(r, "height").unwrap_or(0.0).clamp(0.0, 1e6) as u32,
+                prepared: None,
             })
         })
         .collect();
@@ -766,7 +793,7 @@ fn file_orientation(path: &str) -> lightcraft_geom::Orientation {
     use std::io::Read;
     let mut buf = Vec::new();
     if let Ok(f) = std::fs::File::open(path) {
-        let _ = f.take(1 << 20).read_to_end(&mut buf);
+        let _ = f.take(512 << 10).read_to_end(&mut buf);
     }
     lightcraft_meta::extract(&buf).orientation.unwrap_or_default()
 }
@@ -783,6 +810,69 @@ fn photos_by_path(s: &Session) -> HashMap<String, PhotoId> {
         .collect()
 }
 
+/// [`Prepared`] for one photo. `photo_aspect`: the shown width / height when Lightroom didn't
+/// record the file's size.
+pub fn prepare_image(im: &LrImage, photo_aspect: Option<f64>) -> Prepared {
+    let exists = Path::new(&im.path).is_file();
+    let turns = lr_quarter_turns(&im.orientation).unwrap_or(0);
+    let file_turns = if exists && turns != 0 { file_orientation(&im.path).to_parts().1 % 4 } else { 0 };
+    let mut out = Prepared { exists, file_turns, ..Default::default() };
+    if im.develop.trim().is_empty() {
+        return out;
+    }
+    // Lightroom's positions are fractions of the stored frame
+    let aspect = if im.width > 0 && im.height > 0 {
+        im.width as f64 / im.height as f64
+    } else {
+        photo_aspect.map(|a| if turns % 2 == 1 { 1.0 / a } else { a }).unwrap_or(0.0)
+    };
+    let raw = matches!(im.format.as_str(), "RAW" | "DNG");
+    match map_develop(&im.develop, raw, aspect) {
+        Ok(MappedDevelop { mut partial, unmapped, custom, creative_look }) => {
+            reorient_partial(&mut partial, lightcraft_geom::Orientation::from_parts(false, turns));
+            out.develop = Some(partial);
+            out.unmapped = unmapped;
+            out.custom = custom;
+            out.creative_look = creative_look;
+        }
+        Err(e) => out.error = Some(e),
+    }
+    out
+}
+
+/// Do [`prepare_image`] for the photos a migration with `limit` takes (the first `limit` masters
+/// whose files exist, and their virtual copies). Needs no session: the app runs it on a worker
+/// thread.
+pub fn prepare(rec: &mut Records, limit: Option<usize>) {
+    let mut found = 0usize;
+    let mut wanted = HashSet::new();
+    for im in rec.images.iter_mut().filter(|i| i.master.is_none()) {
+        if limit.is_some_and(|l| found >= l) {
+            break;
+        }
+        let p = im.prepared.take().unwrap_or_else(|| prepare_image(im, None));
+        if p.exists {
+            found += 1;
+            wanted.insert(im.id);
+        }
+        im.prepared = Some(p);
+    }
+    for im in rec.images.iter_mut().filter(|i| i.master.is_some_and(|m| wanted.contains(&m))) {
+        let p = im.prepared.take().unwrap_or_else(|| prepare_image(im, None));
+        im.prepared = Some(p);
+    }
+}
+
+/// The masters' files a migration with `limit` imports (after [`prepare`]).
+pub fn files_to_import(rec: &Records, limit: Option<usize>) -> Vec<String> {
+    rec.images
+        .iter()
+        .filter(|i| i.master.is_none() && i.prepared.as_ref().is_some_and(|p| p.exists))
+        .take(limit.unwrap_or(usize::MAX))
+        .map(|i| i.path.clone())
+        .collect()
+}
+
 /// Migrate `rec` into the session. See the module docs.
 pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::Result<Value> {
     let undo0 = s.undo.len();
@@ -795,7 +885,8 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
         if opts.limit.is_some_and(|l| masters.len() >= l) {
             break;
         }
-        if Path::new(&im.path).is_file() {
+        let exists = im.prepared.as_ref().map_or_else(|| Path::new(&im.path).is_file(), |p| p.exists);
+        if exists {
             masters.push(im);
         } else {
             missing += 1;
@@ -858,51 +949,41 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
         if let (Some(p), Some(t)) = (&target, &im.touched) {
             touched.insert(p.id.0.to_string(), json!(t));
         }
-        // develop (also measured on a dry run, against the file format)
-        // Lightroom's positions are fractions of the stored frame: its aspect is the shown one's,
-        // turned back
-        let lr_turn = lr_quarter_turns(&im.orientation).unwrap_or(0);
-        let (raw, aspect) = match &target {
-            Some(p) if p.width > 0 && p.height > 0 => {
-                let a = p.width as f64 / p.height as f64;
-                (p.kind == MediaKind::Raw, if lr_turn % 2 == 1 { 1.0 / a } else { a })
-            }
-            Some(p) => (p.kind == MediaKind::Raw, 0.0),
-            None => (matches!(im.format.as_str(), "RAW" | "DNG"), 0.0),
+        // develop (also measured on a dry run): worked out ahead by `prepare`, else now
+        let prep = match &im.prepared {
+            Some(p) => p.clone(),
+            None => prepare_image(im, target.as_ref().filter(|p| p.width > 0 && p.height > 0).map(|p| p.width as f64 / p.height as f64)),
         };
         let mut develop = None;
-        if !im.develop.trim().is_empty() {
-            match map_develop(&im.develop, raw, aspect) {
-                Ok(MappedDevelop { mut partial, mut unmapped, custom, creative_look }) => {
-                    // a creative look: an imported LUT profile of that name (or `lookMap`'s choice)
-                    if let Some((name, amount)) = &creative_look {
-                        *dev.looks.entry(name.clone()).or_default() += 1;
-                        let id = opts
-                            .look_map
-                            .get(name)
-                            .cloned()
-                            .or_else(|| s.lut_profiles.iter().find(|l| l.name.eq_ignore_ascii_case(name)).map(|l| l.id.clone()));
-                        if let Some(id) = id {
-                            partial["profile"] = json!({"id": id, "amount": (amount * 100.0).clamp(0.0, 200.0)});
-                            unmapped.retain(|k| k != "Look");
-                            dev.looks_matched += 1;
-                        }
-                    }
-                    let edited = im.edits > 0 || custom;
-                    if im.edits > 0 {
-                        dev.by_history += 1;
-                    } else if custom {
-                        dev.by_look += 1;
-                    }
-                    if edited || opts.develop_all {
-                        dev.note(&unmapped);
-                        reorient_partial(&mut partial, lightcraft_geom::Orientation::from_parts(false, lr_turn));
-                        develop = Some(partial);
-                    } else {
-                        dev.unedited += 1;
-                    }
+        if let Some(e) = &prep.error {
+            dev.failed.push(json!([im.path, e]));
+        }
+        if let Some(mut partial) = prep.develop.clone() {
+            let mut unmapped = prep.unmapped.clone();
+            // a creative look: an imported LUT profile of that name (or `lookMap`'s choice)
+            if let Some((name, amount)) = &prep.creative_look {
+                *dev.looks.entry(name.clone()).or_default() += 1;
+                let id = opts
+                    .look_map
+                    .get(name)
+                    .cloned()
+                    .or_else(|| s.lut_profiles.iter().find(|l| l.name.eq_ignore_ascii_case(name)).map(|l| l.id.clone()));
+                if let Some(id) = id {
+                    partial["profile"] = json!({"id": id, "amount": (amount * 100.0).clamp(0.0, 200.0)});
+                    unmapped.retain(|k| k != "Look");
+                    dev.looks_matched += 1;
                 }
-                Err(e) => dev.failed.push(json!([im.path, e])),
+            }
+            if im.edits > 0 {
+                dev.by_history += 1;
+            } else if prep.custom {
+                dev.by_look += 1;
+            }
+            if im.edits > 0 || prep.custom || opts.develop_all {
+                dev.note(&unmapped);
+                develop = Some(partial);
+            } else {
+                dev.unedited += 1;
             }
         }
         let Some(p) = target else { continue };
@@ -952,13 +1033,7 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
         }
         // Lightroom's orientation is the photo as shown; the file's own EXIF turn is applied when
         // it's decoded, so only the difference is ours to keep (files shown as shot aren't read)
-        let turn = lr_quarter_turns(&im.orientation).map(|q| match q {
-            0 => lightcraft_geom::Orientation::Normal,
-            q => {
-                let (_, file_q) = file_orientation(&im.path).to_parts();
-                lightcraft_geom::Orientation::from_parts(false, (q + 4 - file_q % 4) % 4)
-            }
-        });
+        let turn = lr_quarter_turns(&im.orientation).map(|q| lightcraft_geom::Orientation::from_parts(false, (q + 4 - prep.file_turns % 4) % 4));
         let applied = develop.is_some();
         let mut d = match develop {
             Some(partial) => lightcraft_develop::apply_partial(&p.import_defaults(), &partial, 1.0),

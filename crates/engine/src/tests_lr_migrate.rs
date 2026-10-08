@@ -271,6 +271,22 @@ fn migrate_end_to_end_and_resume_point() {
     assert_eq!(s.execute("library.resumePoint", &json!({"folder": "/nowhere"})).unwrap(), Value::Null);
     assert!(s.execute("library.resumePoint", &json!({"album": 99999})).is_err());
 
+    // the app's way: prepare off the session, import, then apply without importing
+    let mut rec2 = rec.clone();
+    prepare(&mut rec2, None);
+    assert_eq!(files_to_import(&rec2, None).len(), 2);
+    assert!(rec2.images.iter().find(|i| i.id == 1).and_then(|i| i.prepared.as_ref()).is_some_and(|p| p.exists && p.develop.is_some()));
+    assert!(rec2.images.iter().find(|i| i.id == 4).and_then(|i| i.prepared.as_ref()).is_some_and(|p| !p.exists));
+    let mut s2 = Session::new().with_fs();
+    s2.open_library(dir.join("lib2"), false).unwrap();
+    s2.execute("library.import", &json!({"paths": files_to_import(&rec2, None)})).unwrap();
+    let rec2_path = dir.join("records2.json");
+    std::fs::write(&rec2_path, serde_json::to_vec(&rec2).unwrap()).unwrap();
+    let r2 = s2.execute("library.migrateLightroom", &json!({"records": rec2_path.to_string_lossy(), "import": false, "presets": false})).unwrap();
+    assert_eq!(r2["matched"], json!(3), "{r2}");
+    assert_eq!(r2["import"], Value::Null);
+    assert!(s2.catalog.photos().any(|p| p.develop.light.exposure == 1.25 && p.rating == 4));
+
     // running it again adds nothing new
     let n = s.catalog.len();
     let albums = s.catalog.albums().count();
