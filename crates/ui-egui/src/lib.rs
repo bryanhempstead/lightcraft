@@ -972,6 +972,8 @@ pub struct LibraryCounts {
     pub total: usize,
     pub picks: usize,
     pub deleted: usize,
+    /// Photos of the latest import (Previous Import).
+    pub previous_import: usize,
 }
 
 /// The values the filter bar's pickers offer.
@@ -988,13 +990,15 @@ pub(crate) fn key_of(parts: impl std::hash::Hash) -> u64 {
 }
 
 impl Caches {
-    /// The folders the library's photos were imported from.
-    pub fn folder_tree(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<Vec<lightcraft_catalog::FolderNode>> {
+    /// The Folders panel's tree: each disk's root folders, as Lightroom Classic lists them
+    /// (`library.folders {classic: true}`).
+    pub fn folder_tree(&mut self, s: &lightcraft_engine::Session) -> std::sync::Arc<Vec<lightcraft_catalog::FolderNode>> {
+        let k = key_of((s.catalog.revision, &s.empty_folders, &s.folder_parents));
         match &self.folder_tree {
-            Some((r, t)) if *r == cat.revision => t.clone(),
+            Some((r, t)) if *r == k => t.clone(),
             _ => {
-                let t = std::sync::Arc::new(cat.folder_tree());
-                self.folder_tree = Some((cat.revision, t.clone()));
+                let t = std::sync::Arc::new(lightcraft_engine::cmd::folders::folder_view(s, true));
+                self.folder_tree = Some((k, t.clone()));
                 t
             }
         }
@@ -1035,9 +1039,18 @@ impl Caches {
             return c;
         }
         let mut c = LibraryCounts::default();
+        let mut latest = "";
         for p in cat.photos() {
             if p.in_library() {
                 c.total += 1;
+                match p.imported.as_str().cmp(latest) {
+                    std::cmp::Ordering::Greater => {
+                        latest = p.imported.as_str();
+                        c.previous_import = 1;
+                    }
+                    std::cmp::Ordering::Equal => c.previous_import += 1,
+                    std::cmp::Ordering::Less => {}
+                }
                 if p.flag == lightcraft_catalog::Flag::Pick {
                     c.picks += 1;
                 }

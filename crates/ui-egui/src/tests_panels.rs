@@ -149,8 +149,8 @@ fn a_narrow_window_shrinks_the_panels_without_forgetting_their_width() {
     assert_eq!(widget(&h, "panel:right_panel").width(), 480.0);
 }
 
-/// The left sidebar's Albums, Local, By Date and Keywords headers fold their sections; the choice
-/// is part of the saved UI state.
+/// The left sidebar is Lightroom Classic's Library panel: Navigator, Catalog, Folders and
+/// Collections headers fold their sections, and the choice is part of the saved UI state.
 #[test]
 fn sidebar_sections_collapse_and_remember_it() {
     let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid", "leftPanel": true}));
@@ -161,43 +161,80 @@ fn sidebar_sections_collapse_and_remember_it() {
         h.step();
         h.step();
     };
-    // By Date lists years while open; its header folds them away and back
-    assert!(has(&h, "sidebarSection:byDate"));
-    let year_rows = |h: &Headless| h.app.widgets.iter().filter(|(w, _)| w.starts_with("source:date:")).count();
-    assert!(year_rows(&h) > 0, "the demo library has dated photos");
-    click(&mut h, "sidebarSection:byDate");
-    assert_eq!(year_rows(&h), 0, "folded");
-    assert!(h.app.ui.sidebar_section_collapsed("byDate") && !h.app.ui.sidebar_section_collapsed("albums"));
-    assert!(has(&h, "sidebarSection:byDate"), "the header stays so it can be reopened");
+    for id in ["navigator", "catalog", "folders", "collections"] {
+        assert!(has(&h, &format!("sidebarSection:{id}")), "{id}");
+    }
+    assert!(!has(&h, "sidebarSection:byDate") && !has(&h, "sidebarSection:keywords"), "not Classic's: gone from the panel");
+    assert!(!has(&h, "sidebarSection:local"), "Local shows only while a folder is browsed");
+    assert!(has(&h, "button:left-import") && has(&h, "button:left-export"));
+    // Catalog folds its rows away and back
+    assert!(has(&h, "source:all") && has(&h, "source:quick") && has(&h, "source:previousImport"));
+    click(&mut h, "sidebarSection:catalog");
+    assert!(!has(&h, "source:all"), "folded");
+    assert!(h.app.ui.sidebar_section_collapsed("catalog") && !h.app.ui.sidebar_section_collapsed("collections"));
     // the choice survives a save/load of the UI state
     let saved = serde_json::to_value(&h.app.ui).unwrap();
     let back: crate::state::UiState = serde_json::from_value(saved).unwrap();
-    assert!(back.sidebar_section_collapsed("byDate"));
-    click(&mut h, "sidebarSection:byDate");
-    assert!(year_rows(&h) > 0, "unfolded again");
-    // Albums folds too, and the plus button inside its header still works on its own
-    click(&mut h, "sidebarSection:albums");
-    assert!(h.app.ui.sidebar_section_collapsed("albums"));
-    assert!(has(&h, "icon:albumNew"), "the Create Album button stays in the header");
-    click(&mut h, "sidebarSection:albums");
-    assert!(!h.app.ui.sidebar_section_collapsed("albums"));
-    // Keywords and Local fold their rows too
-    let rows = |h: &Headless, prefix: &str| h.app.widgets.iter().filter(|(w, _)| w.starts_with(prefix)).count();
-    assert!(rows(&h, "source:keyword:") > 0, "the demo library has keywords");
-    click(&mut h, "sidebarSection:keywords");
-    assert_eq!(rows(&h, "source:keyword:"), 0, "keywords folded");
-    click(&mut h, "sidebarSection:keywords");
-    assert!(rows(&h, "source:keyword:") > 0);
-    if has(&h, "sidebarSection:local") {
-        click(&mut h, "sidebarSection:local");
-        assert_eq!(rows(&h, "source:local:"), 0, "local folded");
-        assert!(!has(&h, "source:local:browse"), "Browse Folder… folds with it");
-        click(&mut h, "sidebarSection:local");
-        assert!(!h.app.ui.sidebar_section_collapsed("local"));
-    }
-    // a click on the plus is the button's, not the header's
+    assert!(back.sidebar_section_collapsed("catalog"));
+    click(&mut h, "sidebarSection:catalog");
+    assert!(has(&h, "source:all"), "unfolded again");
+    // Collections folds too, and the plus button inside its header still works on its own
+    click(&mut h, "sidebarSection:collections");
+    assert!(h.app.ui.sidebar_section_collapsed("collections"));
+    assert!(has(&h, "icon:albumNew"), "the Create Collection button stays in the header");
+    click(&mut h, "sidebarSection:collections");
+    assert!(!h.app.ui.sidebar_section_collapsed("collections"));
     click(&mut h, "icon:albumNew");
-    assert!(!h.app.ui.sidebar_section_collapsed("albums"), "the plus does not fold Albums");
+    assert!(!h.app.ui.sidebar_section_collapsed("collections"), "the plus does not fold Collections");
+}
+
+/// Folders as in Classic: a click on a parent folder shows its subfolders' photos while Show
+/// Photos in Subfolders is on (its count too), only its own when off.
+#[test]
+fn show_photos_in_subfolders_changes_counts_and_grid() {
+    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/trip/day1/b.jpg", "/pics/trip/day1/c.jpg", "/pics/home/d.jpg"]);
+    click(&mut h, "libraryFolderToggle:/pics");
+    click(&mut h, "source:libfolder:/pics/trip");
+    assert_eq!(h.app.session.visible().len(), 3);
+    let count = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "count:libfolder:/pics/trip");
+    assert!(count(&h));
+    let r = h.request("engine.execute", json!({"command": "library.showSubfolders", "params": {"on": false}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.session.visible().len(), 1, "only the photo directly in trip");
+    let rows = h.app.caches.folder_tree(&h.app.session);
+    let trip = rows[0].children.iter().find(|n| n.name == "pics").and_then(|p| p.children.iter().find(|n| n.name == "trip")).cloned().unwrap();
+    assert_eq!((trip.count, trip.own), (3, 1), "the row shows `own` while the toggle is off");
+    h.request("engine.execute", json!({"command": "library.showSubfolders", "params": {"on": true}}), T);
+    h.step();
+    assert_eq!(h.app.session.visible().len(), 3);
+}
+
+/// Collections: sets (album folders) hold collections and smart collections; the Quick
+/// Collection is in Catalog, not here.
+#[test]
+fn collections_tree_shows_sets_collections_and_smart_ones() {
+    use lightcraft_catalog::{Album, AlbumId, Op};
+    let mut h = folders_app(&["/pics/trip/a.jpg"]);
+    let cat = &mut h.app.session.catalog;
+    let mut add = |name: &str, parent: Option<AlbumId>, folder: bool, smart: bool, quick: bool| {
+        let id = cat.alloc_album_id();
+        let smart = smart.then(|| Box::new(lightcraft_catalog::Filter { rating: 5, ..Default::default() }));
+        cat.apply(Op::AddAlbum { album: Album { parent, folder, smart, quick, ..Album::new(id, name) } }).unwrap();
+        id
+    };
+    let set = add("Smart Collections", None, true, false, false);
+    let five = add("Five Stars", Some(set), false, true, false);
+    let iceland = add("Iceland", None, false, false, false);
+    let quick = add("Quick Collection", None, false, false, true);
+    h.step();
+    h.step();
+    for id in [format!("source:folder:{}", set.0), format!("source:album:{}", five.0), format!("source:album:{}", iceland.0)] {
+        assert!(has(&h, &id), "{id}");
+    }
+    assert!(!has(&h, &format!("source:album:{}", quick.0)), "the Quick Collection lives in Catalog");
+    assert!(has(&h, "source:quick"));
 }
 
 /// A headless app over a library of file-backed photos that exist only in the catalog.
@@ -414,7 +451,32 @@ fn right_click_opens_a_folders_menu_from_the_triangle_too() {
     h.step();
     h.step();
     right_click(&mut h, "source:libfolder:/");
-    assert!(!popup_open(&h), "the startup disk offers nothing");
+    assert!(popup_open(&h), "the startup disk offers Show Photos in Subfolders");
+}
+
+/// A deep chain of folders, each holding a photo (so none is skipped as a root folder), every
+/// level opened.
+fn deep_app() -> Headless {
+    let deep = "/a/b/c/d/e/f/g/h/i/j/k/l/m";
+    let mut paths: Vec<String> = Vec::new();
+    let mut path = String::new();
+    for name in deep.split('/').filter(|n| !n.is_empty()) {
+        path.push('/');
+        path.push_str(name);
+        paths.push(format!("{path}/{name}.jpg"));
+    }
+    paths.push(format!("{deep}/x/1.jpg"));
+    paths.push(format!("{deep}/y/2.jpg"));
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    // tall enough for every level below Navigator and Catalog
+    let mut h = folders_app_sized(&refs, [1400.0, 1600.0]);
+    let mut path = String::new();
+    for name in deep.split('/').filter(|n| !n.is_empty()) {
+        path.push('/');
+        path.push_str(name);
+        click(&mut h, &format!("libraryFolderToggle:{path}"));
+    }
+    h
 }
 
 #[test]
@@ -434,7 +496,7 @@ fn removing_a_disk_from_the_library_asks_first() {
 #[test]
 fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
     let deep = "/a/b/c/d/e/f/g/h/i/j/k/l/m";
-    let mut h = folders_app(&[&format!("{deep}/x/1.jpg"), &format!("{deep}/y/2.jpg")]);
+    let mut h = deep_app();
     let mut xs: Vec<f32> = Vec::new();
     let mut path = String::new();
     for name in deep.split('/').filter(|n| !n.is_empty()) {
@@ -451,7 +513,7 @@ fn a_deep_chain_keeps_its_nesting_and_the_sidebar_scrolls_sideways() {
         assert!(widget(&h, id).right() <= panel.right(), "{id} stays inside the panel");
     }
     // what a row needs is known before it is drawn off screen, so the plus stays reachable
-    assert!(widget(&h, "icon:albumNew").right() <= panel.right(), "Create Album stays inside the visible panel");
+    assert!(widget(&h, "icon:albumNew").right() <= panel.right(), "Create Collection stays inside the visible panel");
     // a click in the middle of a deep row chooses it; only the little triangle folds it
     click(&mut h, "source:libfolder:/a/b/c/d/e/f/g/h/i/j/k/l");
     assert_eq!(h.app.session.library_folder.as_deref(), Some("/a/b/c/d/e/f/g/h/i/j/k/l"), "the row's middle is the row, not its triangle");
@@ -528,8 +590,7 @@ fn a_long_name_alone_does_not_make_the_sidebar_scroll() {
 /// The selection bar ends at the panel's edge, not past it, when the content is wider.
 #[test]
 fn the_selection_bar_stays_inside_the_panel() {
-    let deep = "/a/b/c/d/e/f/g/h/i/j/k/l/m";
-    let mut h = folders_app(&[&format!("{deep}/x/1.jpg"), &format!("{deep}/y/2.jpg")]);
+    let mut h = deep_app();
     click(&mut h, "source:libfolder:/a/b/c/d/e/f/g/h/i/j/k/l");
     let panel = widget(&h, "panel:left_panel");
     let bar = widget(&h, "highlight:libfolder:/a/b/c/d/e/f/g/h/i/j/k/l");
@@ -562,30 +623,4 @@ fn filmstrip_marks_every_selected_photo() {
         checked += 1;
     }
     assert!(checked >= 3, "checked {checked} cells");
-}
-
-/// By Date and Keywords count the whole library, so choosing a row shows its photos from All
-/// Photos even when another source (here Recently Deleted, which is empty) was open (issue #341).
-#[test]
-fn date_and_keyword_rows_show_their_photos_from_any_source() {
-    // tall enough that the By Date rows are on screen below the other sections
-    let mut h = demo([1400.0, 2000.0], json!({"view": "photoGrid", "leftPanel": true}));
-    let first = h.app.session.visible_cloned()[0];
-    let year = h.app.session.catalog.photo(first).and_then(|p| p.captured.clone()).expect("demo photo date")[..4].to_string();
-    // (Keywords rows go through the same helper, `browse_all_photos`)
-    let (row, key) = (format!("source:date:{year}"), "date");
-    let r = h.request("engine.execute", json!({"command": "library.source", "params": {"kind": "recentlyDeleted"}}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    assert!(h.app.session.visible().is_empty(), "nothing deleted in the demo");
-    let r = h.request("ui.clickWidget", json!({"id": row}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::All, "{key}");
-    assert!(!h.app.session.visible().is_empty(), "{key}: its photos are shown");
-    // choosing the row again clears it, and stays in All Photos
-    let r = h.request("ui.clickWidget", json!({"id": row}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    assert_eq!(h.app.session.filter, lightcraft_catalog::Filter::default(), "{key}");
 }

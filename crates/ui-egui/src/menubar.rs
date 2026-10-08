@@ -327,6 +327,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "panel.keywords" => panel(RightPanel::Keywords),
         "panel.presets" => Some(u.presets),
         "library.toggleAutoWriteXmp" => Some(app.session.xmp.auto_write),
+        "library.showSubfolders" => Some(app.session.library_subfolders),
         _ => None,
     }
 }

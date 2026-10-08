@@ -205,7 +205,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "library.showSubfolders",
             "Show Photos in Subfolders",
-            ["View"],
+            ["Library"],
             None,
             "{on?: bool} (default: toggle) — choosing a folder shows the photos of the folders inside it too (on, the default) or only its own; its count follows. Kept in the library's preferences → {on, count}",
             always,
