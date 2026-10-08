@@ -321,3 +321,80 @@ fn presets_import_with_dedupe_and_keyword_sets() {
     assert_eq!(again["imported"], json!(0));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The folder-scoped ("shoot") commands a pipeline drives: status, import with stars, show,
+/// export by folder, export as catalog.
+#[test]
+fn shoot_commands() {
+    let dir = std::env::temp_dir().join(format!("lc-shoot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let shoot = dir.join("Shoot A");
+    std::fs::create_dir_all(shoot.join("raw")).unwrap();
+    for (i, n) in ["raw/1.png", "raw/2.png", "3.png"].iter().enumerate() {
+        let img = lightcraft_raster::Rgba8::filled(16 + i, 12, [i as u8 * 40, 7, 7, 255]);
+        let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(shoot.join(n), bytes).unwrap();
+    }
+    let folder = shoot.to_string_lossy().to_string();
+    let f = |n: &str| shoot.join(n).to_string_lossy().to_string();
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+
+    let st = s.execute("library.folderStatus", &json!({"folder": folder})).unwrap();
+    assert_eq!((st["inLibrary"].clone(), st["onDisk"].clone(), st["notInLibrary"].clone()), (json!(0), json!(3), json!(3)));
+
+    let r = s
+        .execute("library.importRated", &json!({"files": [{"path": f("raw/1.png"), "rating": 5, "flag": "pick", "keywords": ["keeper"]}, {"path": f("raw/2.png"), "rating": 3}, "/no/such.png"]}))
+        .unwrap();
+    assert_eq!(r["rated"], json!(2), "{r}");
+    assert_eq!(r["notFound"], json!(["/no/such.png"]));
+    let st = s.execute("library.folderStatus", &json!({"folder": format!("{folder}/"), "ids": true})).unwrap();
+    assert_eq!(st["inLibrary"], json!(2));
+    assert_eq!(st["ratings"]["5"], json!(1));
+    assert_eq!(st["ratings"]["3"], json!(1));
+    assert_eq!(st["picks"], json!(1));
+    assert_eq!(st["notInLibraryFiles"], json!([f("3.png")]));
+    let flat = s.execute("library.folderStatus", &json!({"folder": folder, "subfolders": false})).unwrap();
+    assert_eq!(flat["inLibrary"], json!(0));
+    assert!(s.execute("library.folderStatus", &json!({"folder": " "})).is_err());
+
+    // open the shoot: its photos shown and selected
+    s.execute("library.import", &json!({"paths": [f("3.png")]})).unwrap();
+    let other = dir.join("other.png");
+    let img = lightcraft_raster::Rgba8::filled(9, 9, [200, 1, 1, 255]);
+    std::fs::write(
+        &other,
+        lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap(),
+    )
+    .unwrap();
+    s.execute("library.import", &json!({"paths": [other.to_string_lossy()]})).unwrap();
+    let shown = s.execute("library.showFolder", &json!({"folder": f("raw")})).unwrap();
+    assert_eq!(shown["count"], json!(2), "{shown}");
+    assert_eq!(s.selection.ids.len(), 2);
+
+    // export the shoot by folder, with a preset
+    let ids = crate::cmd::shoot::photos_under(&s, &folder, true);
+    let p = s.export_params(&json!({"folder": folder, "dir": "/tmp/x"})).unwrap();
+    assert_eq!(p["ids"].as_array().unwrap().len(), ids.len());
+    assert!(p.get("folder").is_none());
+    assert!(s.export_params(&json!({"folder": "/nowhere"})).is_err());
+
+    // export as catalog: a library with just the shoot (and its albums), originals untouched
+    s.selection = crate::Selection::single(ids[0]);
+    s.execute("album.create", &json!({"name": "Best", "addSelected": true})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.7})).unwrap();
+    let dest = shoot.join("Shoot A.lightcraft");
+    let r = s.execute("library.exportCatalog", &json!({"folder": folder, "dest": dest.to_string_lossy()})).unwrap();
+    assert_eq!(r["photos"], json!(3), "{r}");
+    assert_eq!(r["albums"], json!(1));
+    assert!(s.execute("library.exportCatalog", &json!({"folder": folder, "dest": dest.to_string_lossy()})).is_err(), "never into a used folder");
+    let mut o = Session::new().with_fs();
+    o.open_library(&dest, false).unwrap();
+    assert_eq!(o.catalog.len(), 3);
+    let p0 = o.catalog.photo(ids[0]).unwrap();
+    assert_eq!(p0.develop.light.exposure, 0.7);
+    assert!(o.catalog.albums().any(|a| a.name == "Best" && a.photos == vec![ids[0]]));
+    assert!(shoot.join("3.png").is_file());
+    drop(o);
+    let _ = std::fs::remove_dir_all(&dir);
+}

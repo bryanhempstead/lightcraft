@@ -15,8 +15,29 @@ impl Session {
     }
 
     /// `app.export` params with a named `preset` expanded: the preset's params, overridden by the
-    /// call's own (`preset` itself removed). Unknown preset names are an error.
+    /// call's own (`preset` itself removed), and a `folder` (+ `subfolders`, default true) turned
+    /// into the `ids` of the library's photos under it. Unknown preset names are an error.
     pub fn export_params(&self, p: &Value) -> std::result::Result<Value, String> {
+        let mut p = self.export_preset_params(p)?;
+        // `folder`: the library's photos under it (a shoot), unless `ids` names them
+        if let Some(folder) = p.get("folder").and_then(Value::as_str).map(str::to_string)
+            && let Some(o) = p.as_object_mut()
+        {
+            let sub = o.get("subfolders").and_then(Value::as_bool).unwrap_or(true);
+            o.remove("folder");
+            o.remove("subfolders");
+            if !o.contains_key("ids") {
+                let ids = super::shoot::photos_under(self, &folder, sub);
+                if ids.is_empty() {
+                    return Err(format!("no photos in the library under {folder}"));
+                }
+                o.insert("ids".into(), json!(ids.iter().map(|i| i.0).collect::<Vec<_>>()));
+            }
+        }
+        Ok(p)
+    }
+
+    fn export_preset_params(&self, p: &Value) -> std::result::Result<Value, String> {
         let Some(name) = p.get("preset").and_then(Value::as_str) else { return Ok(p.clone()) };
         let (preset, _) = self
             .all_export_presets()
@@ -38,7 +59,7 @@ fn list(s: &Session) -> Value {
 }
 
 /// Params that describe a destination or a selection, not the export settings.
-const NOT_SETTINGS: &[&str] = &["ids", "path", "dir", "preset"];
+const NOT_SETTINGS: &[&str] = &["ids", "path", "dir", "preset", "folder", "subfolders"];
 
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "export.savePreset";
