@@ -31,8 +31,20 @@ pub fn preview_only_variant(reason: &str) -> &str {
     reason.split(" (").next().unwrap_or(reason).trim()
 }
 
+/// A photo decoded by macOS's ImageIO (see `lightcraft_engine::files::sysdecode`), not shown
+/// from an embedded preview.
+pub fn decoded_by_macos(reason: &str) -> bool {
+    reason.starts_with(lightcraft_engine::files::sysdecode::MARK)
+}
+
 /// What a preview-only raw means for the user (see `Photo::preview_only`).
 pub fn preview_only_explanation(reason: &str) -> String {
+    if decoded_by_macos(reason) {
+        return crate::i18n::tr(
+            "LightCraft has no built-in decoder for this file yet, so macOS's own image engine decoded it. You're editing macOS's rendered image (like a TIFF): white balance and highlight recovery have less room than a raw decode.",
+        )
+        .to_string();
+    }
     crate::i18n::tr_format!(
         "LightCraft can't decode this raw variant yet ({}). You're editing the camera's embedded JPEG preview, which already includes the camera's picture style (e.g. Monochrome) and white balance.",
         preview_only_variant(reason)
@@ -53,7 +65,8 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) {
             ui.horizontal(|ui| {
                 let (ir, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                 paint(ui.painter(), ir, Icon::Info, t.caution);
-                ui.label(egui::RichText::new(crate::i18n::tr("Preview only")).font(t.semibold(12.5)).color(t.text));
+                let title = if decoded_by_macos(reason) { "Decoded by macOS" } else { "Preview only" };
+                ui.label(egui::RichText::new(crate::i18n::tr(title)).font(t.semibold(12.5)).color(t.text));
             });
             ui.add_space(2.0);
             ui.label(egui::RichText::new(preview_only_explanation(reason)).size(11.5).color(t.text_label));
