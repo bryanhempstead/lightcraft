@@ -1,0 +1,250 @@
+{
+  "app": "ai.storyteller.lightcraft",
+  "assignments": {
+    "  AP>": {
+      "settings": {
+        "color": "#000000",
+        "doubleTap": {
+          "channel": 1,
+          "midi": "note",
+          "note": 61
+        },
+        "info": "LightCraft: AP> turn → cc 30 → crop.angle (dial); AP> press+turn → cc 50 → crop.x (dial); AP> press → note 60 → view.maskOverlay {}; AP> double-tap → note 61 → develop.resetControl {\"control\":\"crop.angle\"}",
+        "label": "Straighten",
+        "name": "Straighten",
+        "press": {
+          "channel": 1,
+          "midi": "note",
+          "note": 60
+        },
+        "pressAndTurn": {
+          "cc": 50,
+          "channel": 1,
+          "midi": "cc"
+        },
+        "turn": {
+          "cc": 30,
+          "channel": 1,
+          "midi": "cc"
+        }
+      }
+    },
+    "  Ajn": {
+      "settings": {
+        "color": "#000000",
+        "info": "LightCraft: Ajn slider → cc 20 → light.highlights",
+        "label": "Highlights",
+        "name": "Highlights",
+        "pose": {
+          "cc": 20,
+          "channel": 1,
+          "midi": "cc"
+        }
+      }
+    },
+    "  Ak2": {
+      "settings": {
+        "color": "#000000",
+        "info": "LightCraft: Ak2 slider → cc 21 → light.shadows",
+        "label": "Shadows",
+        "name": "Shadows",
+        "pose": {
+          "cc": 21,
+          "channel": 1,
+          "midi": "cc"
+        }
+      }
+    },
+    "  BFo": {
+      "settings": {
+        "color": "#000000",
+        "info": "LightCraft: BFo press → note 62 → preset.applyByName {\"name\":\"BH - NMD - 7 - TD\"}; BFo hold → note 63 → keys.macro {\"steps\":[{\"command\":\"preset.applyByName\",\"params\":{\"name\":\"BH - B&W - HardBlack\"}},{\"command\":\"photo.unflag\",\"params\":{}}]}",
+        "label": "BH - NMD - 7 - TD",
+        "name": "BH - NMD - 7 - TD",
+        "press": {
+          "channel": 1,
+          "midi": "note",
+          "note": 62
+        },
+        "pressAndHold": {
+          "channel": 1,
+          "midi": "note",
+          "note": 63
+        }
+      }
+    },
+    "  BH6": {
+      "settings": {
+        "color": "#000000",
+        "info": "LightCraft: BH6 press → note 64 → view.beforeAfter {}; BH6 hold → note 65 → view.fullScreenPreview {}",
+        "label": "Compare Before and After",
+        "name": "Compare Before and After",
+        "press": {
+          "channel": 1,
+          "midi": "note",
+          "note": 64
+        },
+        "pressAndHold": {
+          "channel": 1,
+          "midi": "note",
+          "note": 65
+        }
+      }
+    },
+    "  BI`": {
+      "settings": {
+        "color": "#000000",
+        "info": "LightCraft: BI` press → note 66 → view.fullScreenPreview {}; BI` hold → note 67 → preset.applyByName {\"name\":\"BH - Iceland - Greens\"}",
+        "label": "Full Screen Preview",
+        "name": "Full Screen Preview",
+        "press": {
+          "channel": 1,
+          "midi": "note",
+          "note": 66
+        },
+        "pressAndHold": {
+          "channel": 1,
+          "midi": "note",
+          "note": 67
+        }
+      }
+    },
+    "  C7J": {
+      "settings": {
+        "info": "LightCraft: C7J turn → cc 31 → light.exposure (dial); C7J press+turn → cc 51 → wb.tint (dial); C7J press → note 68 → tool.radial {}",
+        "label": "Exposure",
+        "name": "Exposure",
+        "press": {
+          "channel": 1,
+          "midi": "note",
+          "note": 68
+        },
+        "pressAndTurn": {
+          "cc": 51,
+          "channel": 1,
+          "midi": "cc"
+        },
+        "turn": {
+          "cc": 31,
+          "channel": 1,
+          "midi": "cc"
+        }
+      }
+    },
+    "  C7`": {
+      "settings": {
+        "color": "#000000",
+        "info": "LightCraft: C7` turn → cc 32 → light.blacks (dial); C7` press+turn → cc 52 → light.whites (dial); C7` press → note 69 → view.beforeAfter {}",
+        "label": "Blacks",
+        "name": "Blacks",
+        "press": {
+          "channel": 1,
+          "midi": "note",
+          "note": 69
+        },
+        "pressAndTurn": {
+          "cc": 52,
+          "channel": 1,
+          "midi": "cc"
+        },
+        "turn": {
+          "cc": 32,
+          "channel": 1,
+          "midi": "cc"
+        }
+      }
+    },
+    "  CEZ": {
+      "settings": {
+        "info": "LightCraft: CEZ turn → cc 33 → crop.scale (dial); CEZ press+turn → cc 53 → crop.y (dial); CEZ press → note 70 → keys.send {\"keys\":\"Cmd+X\"}",
+        "label": "Crop scale",
+        "name": "Crop scale",
+        "press": {
+          "channel": 1,
+          "midi": "note",
+          "note": 70
+        },
+        "pressAndTurn": {
+          "cc": 53,
+          "channel": 1,
+          "midi": "cc"
+        },
+        "turn": {
+          "cc": 33,
+          "channel": 1,
+          "midi": "cc"
+        }
+      }
+    },
+    "  CJ|": {
+      "settings": {
+        "color": "#000000",
+        "info": "LightCraft: CJ| slider → cc 22 → light.contrast",
+        "label": "Contrast",
+        "name": "Contrast",
+        "pose": {
+          "cc": 22,
+          "channel": 1,
+          "midi": "cc"
+        }
+      }
+    },
+    "  C{>": {
+      "settings": {
+        "color": "#000000",
+        "info": "LightCraft: C{> press+turn → cc 54 → color.saturation (dial); C{> press → note 71 → preset.applyByName {\"name\":\"BH - NMD - 7 - TD\"}",
+        "label": "Saturation",
+        "name": "Saturation",
+        "press": {
+          "channel": 1,
+          "midi": "note",
+          "note": 71
+        },
+        "pressAndTurn": {
+          "cc": 54,
+          "channel": 1,
+          "midi": "cc"
+        }
+      }
+    },
+    "  H|r": {
+      "settings": {
+        "color": "#000000",
+        "doubleTap": {
+          "channel": 1,
+          "midi": "note",
+          "note": 73
+        },
+        "info": "LightCraft: H|r turn → cc 34 → wb.temp (dial); H|r press+turn → cc 55 → curve.lights (dial); H|r press → note 72 → tool.wbPicker {}; H|r double-tap → note 73 → develop.resetControl {\"control\":\"light.blacks\"}",
+        "label": "Temp",
+        "name": "Temp",
+        "press": {
+          "channel": 1,
+          "midi": "note",
+          "note": 72
+        },
+        "pressAndTurn": {
+          "cc": 55,
+          "channel": 1,
+          "midi": "cc"
+        },
+        "turn": {
+          "cc": 34,
+          "channel": 1,
+          "midi": "cc"
+        }
+      }
+    },
+    "00005": {
+      "fixedPosition": true,
+      "settings": {},
+      "submodules": {}
+    }
+  },
+  "id": "LightCraftLr1MidiMapx",
+  "link": "",
+  "notes": "Generated by LightCraft from the Monogram profile \"Lightroom 1\": every control sends MIDI on channel 1; LightCraft maps it (Settings ▸ ctrl.).",
+  "tags": [],
+  "title": "LightCraft (Lightroom 1)",
+  "version": "3.0"
+}

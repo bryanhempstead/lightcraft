@@ -87,6 +87,11 @@ Export dialog, Space Toggle zoom, ⇧M Create Version, ⇧X Reject + advance, �
 Before/After Split and the History panel; History lost the binding. `W` and `⇧⌘I` also fired the engine command
 under the UI command that wraps it (a no-op error); the UI command now wins.
 
+**Keymap (Bryan's fork):** Settings ▸ shrt. picks a key profile — `lightroom` (these built-in keys) or `classic`
+(Lightroom Classic's keys where they differ: G grid, E loupe, D Develop, C compare, R crop, Q spot removal, K brush,
+M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLASSIC` in `crates/ui-egui/src/keymap.rs`)
+— and user bindings in `<config>/keymap.json` override both; menus show the effective keys.
+
 **Deliberate differences (our key → Lightroom desktop key)** — each is a conflict with another binding we have:
 
 | Action | Ours | Lightroom desktop | Why |

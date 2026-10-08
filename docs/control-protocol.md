@@ -33,7 +33,7 @@ mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 | `ui.inspect` | — | UI state, window, canvas/image rects, `scroll: {grid, filmstrip}` (scroll offsets in points, `null` until drawn), active photo, selection, perf (`frameMs` = layout, `logicMs` = per-frame logic before it, `updateMs` = both, `maxUpdateMs`, `fps`, render queue …, `gpu` = adapter in use, `gpuReason` = why renders don't use the GPU, `gpuFallback` = latest render redone on the CPU and why — see `docs/gpu-pipeline.md`), status, memory (bytes per cache, see `library.memory`; plus stage caches and textures), `export: {running: {total, done, current} \| null, last}`, `notices` (warnings waiting to be shown, e.g. a damaged settings file; OK = `button:noticeOk`), `quitPrompt` (why quitting was stopped: unsaved changes; `button:quitRetry` / `button:quitAnyway` / `button:quitCancel`), `import: {done, total, imported, cancelled} \| null` (an import runs on a worker thread), `tasks` (other background work: `Find Missing Photos`, `Auto Import`) |
 | `ui.widgets` | `{filter?}` | On-screen widgets `{id, rect: [x, y, w, h]}` (screen points) |
 | `ui.clickWidget` / `ui.dragWidget` / `ui.hoverWidget` | `{id, count?, fx?, fy?}` / `{id, toX?, toY?, dx?, dy?, steps?}` / `{id, fx?, fy?}` | Real egui input on a widget (hover: the pointer rests on it, e.g. for preset/profile previews) |
-| `ui.move` / `ui.click` / `ui.drag` | `{x, y, count?, button?}` / `{x, y, toX, toY, steps?}` | Raw pointer input, screen points |
+| `ui.move` / `ui.click` / `ui.drag` | `{x, y, count?, button?: left\|right\|middle\|back\|forward}` / `{x, y, toX, toY, steps?}` | Raw pointer input, screen points (`back` / `forward` = the mouse's thumb buttons) |
 | `ui.pointer` | `{events: [{kind: down\|drag\|up, x, y}], alt?, shift?, cmd?}` | Gesture in normalized image coordinates (Detail view) |
 | `ui.key` | `{key, cmd?, shift?, alt?, ctrl?}` | Key press |
 | `ui.text` | `{text}` | Text input |
@@ -45,6 +45,11 @@ mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 | `engine.execute {command: "app.export", params}` | export params (see `docs/mcp.md`), plus `preset`, `dir` / `path`, `ids`, `background` | Writes the files and returns `{files}`; with `background: true` (what the Export dialog and menus use) it returns `{background: true, total}` at once and the batch runs on a worker thread — poll `ui.inspect` → `export` |
 | `ui.render` | `{id?, size?, path?}` | Render a photo (PNG to `path`), `{width, height}` |
 | `app.quit` | — | Close the app |
+| `engine.execute {command: "keys.list"}` | — | The keymap (Settings ▸ shrt. / ctrl.): `{path, error, file, rows, recording, learn, lastMidi, midiStatus}` — `rows` = every binding with its layer (`builtin` / `profile` / `user`), `overridden`, `conflict` |
+| `keys.set` / `keys.add` / `keys.record` | partial `keymap.json` (`profile: lightroom\|classic`, `bindings`, `midi`, `midiEnabled`, `steps`) / `{keys, command, params?, label?}` / `{command?, params?, label?, index?}` | Change the keymap (saved to `<config>/keymap.json`); `keys.record` makes the next key press (or mouse back/forward/middle click) the binding's keys |
+| `keys.import` | `{source: lrkeys\|superkeys\|monogram, path?, profile?, write?}` | Read LrKeys `bindings.json`, LrSuperKeys `Shortcuts.xml`+`SpeedKeys.xml`, or a Monogram `state.json` profile (read-only) into the keymap → `{mapped, skipped, …}`; `write` saves the generated Monogram profile |
+| `keys.midi` / `keys.learn` | `{midi: cc\|note, number, value?, channel?}` or `{bytes}` / `{on}` | A MIDI message as if from the MIDI input → what it did / MIDI learn |
+| super keys | `keys.nudge {control, dir, size: small\|large}` · `keys.macro {steps: [{command, params}]}` · `keys.send {keys}` · `preset.applyByName {name}` · `crop.nudge {x?, y?, scale?}` · `view.develop` · `view.colorMixer {mode}` · `view.resumeLastLeftOff` | Commands for keys, MIDI and the control channel (see `crates/ui-egui/src/keymap.rs`, `leftoff.rs`) |
 
 ### When the library can't be saved
 
