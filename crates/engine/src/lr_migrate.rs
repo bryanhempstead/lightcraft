@@ -26,7 +26,8 @@ use crate::preset_import::{Lua, develop_text_props, parse_lua};
 
 /// Seconds from the Unix epoch to Lightroom's (Cocoa) epoch, 2001-01-01 UTC.
 const COCOA_EPOCH: f64 = 978_307_200.0;
-/// The folder (album folder) the catalog's collections go into.
+/// The album folder earlier versions of the migration wrapped every collection in (now the
+/// collections keep the catalog's own tree; see [`flatten_wrapper`]).
 pub const ALBUM_FOLDER: &str = "From Lightroom";
 /// The file (in the library folder) that keeps Lightroom's per-photo times for
 /// `library.resumePoint`.
@@ -1162,19 +1163,12 @@ fn top_level(c: &LrCollection, all: &[LrCollection]) -> bool {
     c.parent.is_none_or(|pid| !all.iter().any(|x| x.id == pid))
 }
 
-/// A top-level collection set that is itself called "From Lightroom" (catalogs that were
-/// migrated or synced before have one): it is our folder, not a folder inside it.
-fn is_root_alias(c: &LrCollection, all: &[LrCollection]) -> bool {
-    c.kind == "set" && top_level(c, all) && c.name.trim().eq_ignore_ascii_case(ALBUM_FOLDER)
-}
-
 /// A dry run's account of the collections: what would be made, counted from the catalog alone.
 fn plan_collections(cols: &[LrCollection]) -> CollectionsDone {
     let mut n = BTreeMap::<&str, usize>::new();
     let mut skipped = Vec::new();
     for c in cols {
         match c.kind.as_str() {
-            "set" if is_root_alias(c, cols) => {}
             "set" => *n.entry("sets").or_default() += 1,
             "quick" => *n.entry("quick").or_default() += c.images.len(),
             "smart" => match c.rules.as_deref().map(smart_rules) {
@@ -1196,8 +1190,9 @@ fn plan_collections(cols: &[LrCollection]) -> CollectionsDone {
 /// order), smart collections smart albums where their rules map, and the Quick Collection's
 /// photos join ours. Membership goes by catalog image id; a virtual copy left out as an
 /// unchanged sync duplicate stands for its master, so a collection of such copies keeps its
-/// photos. Runs again without making anything twice, and tidies what earlier versions of the
-/// migration made (a "quick collection" album, a "From Lightroom" folder inside ours).
+/// photos. The tree is the catalog's own: top-level collections and sets are top-level albums
+/// and folders, nothing is wrapped. Runs again without making anything twice, and first undoes
+/// what earlier versions of the migration did ([`flatten_wrapper`]).
 fn migrate_collections(
     s: &mut Session,
     rec: &Records,
@@ -1211,26 +1206,25 @@ fn migrate_collections(
     let member = |i: &i64| ids.get(i).copied().or_else(|| lr_by_id.get(i).and_then(|im| im.master).and_then(|m| ids.get(&m).copied()));
     let (mut albums_made, mut smart_made, mut sets_made, mut quick_added) = (0usize, 0usize, 0usize, 0usize);
     let mut skipped = Vec::new();
-    let root = find_or_make_album(s, ALBUM_FOLDER, None, true)?;
-    tidy_earlier_runs(s, root)?;
+    // the catalog's own top-level "From Lightroom" set (if it has one) is not our wrapper
+    let own_set =
+        rec.collections.iter().any(|c| c.kind == "set" && top_level(c, &rec.collections) && c.name.trim().eq_ignore_ascii_case(ALBUM_FOLDER));
+    flatten_wrapper(s, !own_set)?;
     let mut made: HashMap<i64, AlbumId> = HashMap::new();
     // parents first (bounded: a parent cycle can't loop)
     let mut todo: Vec<&LrCollection> = rec.collections.iter().collect();
     for _ in 0..16 {
         let mut later = Vec::new();
         for c in todo {
-            let parent = if top_level(c, &rec.collections) { Some(root) } else { c.parent.and_then(|pid| made.get(&pid).copied()) };
+            let parent = if top_level(c, &rec.collections) { Some(None) } else { c.parent.and_then(|pid| made.get(&pid).copied()).map(Some) };
             let Some(parent) = parent else {
                 later.push(c);
                 continue;
             };
             let name = if c.name.trim().is_empty() { "Untitled Collection".to_string() } else { c.name.clone() };
             match c.kind.as_str() {
-                "set" if is_root_alias(c, &rec.collections) => {
-                    made.insert(c.id, root);
-                }
                 "set" => {
-                    made.insert(c.id, find_or_make_album(s, &name, Some(parent), true)?);
+                    made.insert(c.id, find_or_make_album(s, &name, parent, true)?);
                     sets_made += 1;
                 }
                 "quick" => {
@@ -1255,8 +1249,8 @@ fn migrate_collections(
                 }
                 "smart" => match c.rules.as_deref().map(smart_rules) {
                     Some(Ok(rules)) => {
-                        if !s.catalog.albums().any(|a| a.parent == Some(parent) && a.name == name && a.is_smart()) {
-                            s.execute("album.createSmart", &json!({"name": name, "rules": rules, "parent": parent.0}))?;
+                        if !s.catalog.albums().any(|a| a.parent == parent && a.name == name && a.is_smart()) {
+                            s.execute("album.createSmart", &json!({"name": name, "rules": rules, "parent": parent.map(|p| p.0)}))?;
                         }
                         smart_made += 1;
                     }
@@ -1264,7 +1258,7 @@ fn migrate_collections(
                     None => skipped.push(json!({"name": name, "why": "no rules"})),
                 },
                 _ => {
-                    let id = find_or_make_album(s, &name, Some(parent), false)?;
+                    let id = find_or_make_album(s, &name, parent, false)?;
                     albums_made += 1;
                     let mut photos = s.catalog.album(id).map(|a| a.photos.clone()).unwrap_or_default();
                     for pid in c.images.iter().filter_map(member) {
@@ -1290,22 +1284,32 @@ fn migrate_collections(
     Ok(done)
 }
 
-/// Undo two mistakes of earlier migrations, in the library they were made in: the Quick
-/// Collection came over as an album called "quick collection" (its photos join ours and the
-/// album goes), and a catalog set called "From Lightroom" became a folder inside our
-/// "From Lightroom" (what it holds moves up and the empty folder goes).
-fn tidy_earlier_runs(s: &mut Session, root: AlbumId) -> crate::Result<()> {
+/// Undo what earlier versions of the migration did in a library: every collection went into a
+/// top-level "From Lightroom" album folder (so a catalog that had its own "From Lightroom" set
+/// showed From Lightroom ▸ From Lightroom ▸ …), and the Quick Collection came over as an album
+/// called "quick collection". The wrapper's contents move to the top level (an album whose
+/// twin is already there gives it its photos) and the empty wrapper goes; the "quick
+/// collection" album's photos join the Quick Collection. One undo step.
+///
+/// The wrapper is the top-level "From Lightroom" folder that holds another "From Lightroom"
+/// folder, or (`any`) any top-level "From Lightroom" folder — the migration passes `any` when
+/// the catalog has no such set of its own. Returns `{flattened, moved, merged, quick}`.
+pub fn flatten_wrapper(s: &mut Session, any: bool) -> crate::Result<Value> {
+    let named = |a: &Album| a.folder && a.name.trim().eq_ignore_ascii_case(ALBUM_FOLDER);
+    let wrapper = s
+        .catalog
+        .albums()
+        .filter(|w| w.parent.is_none() && named(w))
+        .find(|w| any || s.catalog.albums().any(|k| k.parent == Some(w.id) && named(k)))
+        .map(|w| w.id);
     let old_quick: Vec<Album> = s
         .catalog
         .albums()
-        .filter(|a| a.parent == Some(root) && !a.folder && !a.quick && !a.is_smart() && a.name.trim().eq_ignore_ascii_case("quick collection"))
+        .filter(|a| (a.parent.is_none() || a.parent == wrapper) && !a.folder && !a.quick && !a.is_smart())
+        .filter(|a| a.name.trim().eq_ignore_ascii_case("quick collection"))
         .cloned()
         .collect();
-    let nested: Vec<AlbumId> =
-        s.catalog.albums().filter(|a| a.parent == Some(root) && a.folder && a.name.trim().eq_ignore_ascii_case(ALBUM_FOLDER)).map(|a| a.id).collect();
-    if old_quick.is_empty() && nested.is_empty() {
-        return Ok(());
-    }
+    let (mut moved, mut merged) = (0usize, 0usize);
     let mut ops = Vec::new();
     if !old_quick.is_empty() {
         let quick = match s.catalog.quick_collection() {
@@ -1317,39 +1321,46 @@ fn tidy_earlier_runs(s: &mut Session, root: AlbumId) -> crate::Result<()> {
             }
         };
         let mut photos = s.catalog.album(quick).map(|a| a.photos.clone()).unwrap_or_default();
-        for a in &old_quick {
-            for p in &a.photos {
-                if !photos.contains(p) {
-                    photos.push(*p);
-                }
+        for p in old_quick.iter().flat_map(|a| a.photos.iter()) {
+            if !photos.contains(p) {
+                photos.push(*p);
             }
         }
         ops.push(Op::SetAlbumPhotos { id: quick, photos });
         ops.extend(old_quick.iter().map(|a| Op::RemoveAlbum { id: a.id }));
     }
-    for n in nested {
-        // a same-named album already at the top stays; the nested one's photos join it
-        let kids: Vec<Album> = s.catalog.albums().filter(|a| a.parent == Some(n)).cloned().collect();
+    if let Some(w) = wrapper {
+        let kids: Vec<Album> = s.catalog.albums().filter(|a| a.parent == Some(w) && !old_quick.iter().any(|q| q.id == a.id)).cloned().collect();
         for k in kids {
             let twin = s
                 .catalog
                 .albums()
-                .find(|a| a.parent == Some(root) && a.name == k.name && a.folder == k.folder && a.is_smart() == k.is_smart())
+                .find(|a| a.parent.is_none() && a.id != w && a.name == k.name && a.folder == k.folder && a.is_smart() == k.is_smart() && !a.quick)
                 .map(|a| a.id);
             match twin {
-                Some(t) if !k.folder => {
+                Some(t) if !k.folder && !k.is_smart() => {
                     let mut photos = s.catalog.album(t).map(|a| a.photos.clone()).unwrap_or_default();
                     photos.extend(k.photos.iter().copied().filter(|p| !photos.contains(p)).collect::<Vec<_>>());
                     ops.push(Op::SetAlbumPhotos { id: t, photos });
                     ops.push(Op::RemoveAlbum { id: k.id });
+                    merged += 1;
                 }
-                _ => ops.push(Op::MoveAlbum { id: k.id, parent: Some(root) }),
+                Some(_) if k.is_smart() => {
+                    ops.push(Op::RemoveAlbum { id: k.id });
+                    merged += 1;
+                }
+                _ => {
+                    ops.push(Op::MoveAlbum { id: k.id, parent: None });
+                    moved += 1;
+                }
             }
         }
-        ops.push(Op::RemoveAlbum { id: n });
+        ops.push(Op::RemoveAlbum { id: w });
     }
-    s.commit("Tidy Lightroom Collections", Op::Batch { ops })?;
-    Ok(())
+    if !ops.is_empty() {
+        s.commit("Flatten Lightroom Collections", Op::Batch { ops })?;
+    }
+    Ok(json!({"flattened": wrapper.is_some(), "moved": moved, "merged": merged, "quick": old_quick.len()}))
 }
 
 /// An album (or folder) named `name` under `parent`, made if there is none.

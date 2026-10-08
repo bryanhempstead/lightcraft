@@ -97,7 +97,7 @@ USAGE:
   lightcraft-cli migrate-lightroom --library DIR [OPTIONS]
       Migrate from Lightroom Classic into the library DIR (created if needed): the catalog's
       photos are added in place (never copied or moved), with ratings, flags, colour labels,
-      keywords, captions, virtual copies, collections (\"From Lightroom\" album folder) and develop
+      keywords, captions, virtual copies, collections (the catalog's own tree) and develop
       settings; every preset folder is imported too. The catalog is read from a copy (with its
       -wal) by the system sqlite3; nothing of Lightroom's is written. Prints the report as JSON.
       Options:
@@ -110,7 +110,8 @@ USAGE:
         --develop-all      also apply Lightroom's settings to photos never edited there
         --collections-only only the collections (albums, smart albums, sets, the Quick
                            Collection), for a library migrated already: nothing imported,
-                           no photo or preset changed
+                           no photo or preset changed; also undoes earlier runs' extra
+                           \"From Lightroom\" wrapper folder
   lightcraft-cli --version | --help
 ";
 

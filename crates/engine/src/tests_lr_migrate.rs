@@ -252,7 +252,7 @@ fn migrate_end_to_end_and_resume_point() {
     assert_eq!(picks.photos.len(), 2);
     let set = s.catalog.album(picks.parent.unwrap()).unwrap();
     assert!(set.folder && set.name == "Set");
-    assert_eq!(s.catalog.album(set.parent.unwrap()).unwrap().name, ALBUM_FOLDER);
+    assert_eq!(set.parent, None, "the catalog's own tree, no wrapper folder");
 
     // resume: b was touched last in Lightroom
     let folder = photos.to_string_lossy().to_string();
@@ -474,7 +474,7 @@ fn collections_come_over_with_members_and_nesting() {
     let mut s = Session::new().with_fs();
     s.open_library(dir.join("lib"), false).unwrap();
     let dry = s.execute("library.migrateLightroom", &json!({"records": rec_s, "dryRun": true, "presets": false})).unwrap();
-    assert_eq!(dry["albums"], json!({"albums": 2, "smart": 2, "sets": 1, "quick": 1, "skipped": []}), "a dry run counts the collections");
+    assert_eq!(dry["albums"], json!({"albums": 2, "smart": 2, "sets": 2, "quick": 1, "skipped": []}), "a dry run counts the collections");
 
     let r = s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false})).unwrap();
     assert_eq!(r["albums"]["albums"], json!(2), "{r}");
@@ -482,17 +482,18 @@ fn collections_come_over_with_members_and_nesting() {
     let id_of = |n: &str| cat.photos().find(|p| p.file_name.starts_with(n) && p.copy_of.is_none()).unwrap().id;
     let (a, b) = (id_of("a"), id_of("b"));
     let named = |n: &str| cat.albums().find(|al| al.name == n).cloned().unwrap_or_else(|| panic!("no album {n}"));
+    // exactly the catalog's tree: its From Lightroom set at the top, nothing wrapped around it
     let top = named(ALBUM_FOLDER);
     assert!(top.folder && top.parent.is_none());
-    assert_eq!(cat.albums().filter(|al| al.name == ALBUM_FOLDER).count(), 1, "the catalog's own From Lightroom set is ours, not one inside it");
+    assert_eq!(cat.albums().filter(|al| al.name == ALBUM_FOLDER).count(), 1, "one From Lightroom: the catalog's own set");
     let trip = named("Trip Copy 2");
     assert_eq!((trip.parent, trip.photos.clone()), (Some(top.id), vec![a, b]), "sync-duplicate copies stand for their masters");
     assert_eq!(named("Photostoedit").parent, Some(top.id));
     let sets = named("Smart Collections");
-    assert!(sets.folder && sets.parent == Some(top.id));
+    assert!(sets.folder && sets.parent.is_none());
     let five = named("Five Stars");
     assert!(five.is_smart() && five.parent == Some(sets.id));
-    assert!(named("Duplicates").is_smart() && named("Duplicates").parent == Some(top.id));
+    assert!(named("Duplicates").is_smart() && named("Duplicates").parent.is_none());
     let quick = cat.quick_collection().and_then(|q| cat.album(q)).unwrap();
     assert_eq!(quick.photos, vec![b], "Lightroom's Quick Collection is ours");
     assert!(!cat.albums().any(|al| al.name.eq_ignore_ascii_case("quick collection") && !al.quick));
@@ -502,8 +503,9 @@ fn collections_come_over_with_members_and_nesting() {
     s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false})).unwrap();
     assert_eq!(s.catalog.albums().count(), n);
 
-    // a library an earlier migration got wrong: a "quick collection" album and a From Lightroom
-    // folder inside ours; collections only, the photos keep what they have
+    // a library an earlier migration got wrong (his): everything wrapped in a From Lightroom
+    // folder, so From Lightroom ▸ From Lightroom ▸ Trip, From Lightroom ▸ Smart Collections, and
+    // a "quick collection" album; collections only, the photos keep what they have
     let mut s = Session::new().with_fs();
     s.open_library(dir.join("lib2"), false).unwrap();
     let files: Vec<String> = ["a.png", "b.png"].iter().map(|f| photos.join(f).to_string_lossy().to_string()).collect();
@@ -518,6 +520,7 @@ fn collections_come_over_with_members_and_nesting() {
     mk(&mut s, "quick collection", Some(top), false, vec![a]);
     let nested = mk(&mut s, ALBUM_FOLDER, Some(top), true, vec![]);
     mk(&mut s, "Trip Copy 2", Some(nested), false, vec![a]);
+    let old_sets = mk(&mut s, "Smart Collections", Some(top), true, vec![]);
     let r = s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false, "import": false, "collectionsOnly": true})).unwrap();
     assert_eq!(r["rated"], json!(0), "collections only: {r}");
     let cat = &s.catalog;
@@ -525,11 +528,28 @@ fn collections_come_over_with_members_and_nesting() {
     let b = cat.photos().find(|p| p.file_name.starts_with('b')).unwrap().id;
     let quick = cat.quick_collection().and_then(|q| cat.album(q)).unwrap();
     assert_eq!(quick.photos, vec![a, b], "the old album's photos joined the Quick Collection");
-    assert!(cat.album(nested).is_none(), "the nested folder is gone");
+    assert!(cat.album(top).is_none(), "the wrapper is gone");
+    assert_eq!(cat.album(nested).map(|n| n.parent), Some(None), "the catalog's own set is at the top");
+    assert_eq!(cat.album(old_sets).map(|n| n.parent), Some(None));
     assert_eq!(cat.albums().filter(|al| al.name == ALBUM_FOLDER).count(), 1);
+    assert_eq!(cat.albums().filter(|al| al.name == "Smart Collections").count(), 1);
     let trips: Vec<&Album> = cat.albums().filter(|al| al.name == "Trip Copy 2").collect();
     assert_eq!(trips.len(), 1);
-    assert_eq!((trips[0].parent, trips[0].photos.clone()), (Some(top), vec![a, b]));
+    assert_eq!((trips[0].parent, trips[0].photos.clone()), (Some(nested), vec![a, b]));
     assert!(!cat.albums().any(|al| al.name.eq_ignore_ascii_case("quick collection") && !al.quick));
+    assert!(cat.albums().any(|al| al.name == "Five Stars" && al.parent == Some(old_sets)));
+    // undo the whole run: the wrapper is back
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.album(top).is_some());
+
+    // the one-shot command, on its own (his library as the first migration left it)
+    let r = s.execute("library.flattenLightroomCollections", &json!({})).unwrap();
+    assert_eq!(r["flattened"], json!(true), "{r}");
+    assert_eq!(r["quick"], json!(1));
+    assert!(s.catalog.album(top).is_none() && s.catalog.album(nested).is_some_and(|n| n.parent.is_none()));
+    let again = s.execute("library.flattenLightroomCollections", &json!({})).unwrap();
+    assert_eq!(again["flattened"], json!(false), "the catalog's own From Lightroom set is left alone");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.album(top).is_some(), "one undo step");
     let _ = std::fs::remove_dir_all(&dir);
 }

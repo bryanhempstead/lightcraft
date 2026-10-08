@@ -4,7 +4,9 @@
 use serde_json::Value;
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
-use crate::lr_migrate::{MigrateOptions, Records, default_catalog, default_preset_dirs, dump_catalog, migrate, read_records, resume_point};
+use crate::lr_migrate::{
+    MigrateOptions, Records, default_catalog, default_preset_dirs, dump_catalog, flatten_wrapper, migrate, read_records, resume_point,
+};
 use crate::{Result, Session};
 
 const C: &str = "library.migrateLightroom";
@@ -63,9 +65,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Migrate from Lightroom Classic…",
             ["File"],
             None,
-            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy with the system sqlite3, the catalog itself is never opened) | records?: records JSON (from recordsOut), recordsOut?: path, import?: bool (default true: add the files in place; false when they were imported already), limit?: N (only the first N photos whose files exist), dryRun?: bool, developAll?: bool (also photos never edited in Lightroom), collectionsOnly?: bool (only the collections, for a library migrated already: nothing imported, no photo changed, no presets), lookMap?: {lookName: profileId} (creative looks → our profiles; an imported .cube profile named like the look matches by itself), presets?: bool (default true), presetDirs?: [folders] (default: Lightroom Settings/{Settings, Develop Presets, Keyword Sets} next to the catalog + Camera Raw / Lightroom preset folders)} → {found, missing, missingByRoot, matched, rated, flagged, labelled, keyworded, virtualCopies, develop: {applied, unmapped: [{key, photos}], photosWithUnmapped…}, albums: {albums, smart, sets, quick, skipped}, presets} — ratings, flags, colour labels, keywords, caption/copyright/creator/location, collections (albums in a \"From Lightroom\" folder, sets as folders, smart collections whose rules map, the Quick Collection into ours), virtual copies, develop settings and Lightroom's edit times; one undo step",
+            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy with the system sqlite3, the catalog itself is never opened) | records?: records JSON (from recordsOut), recordsOut?: path, import?: bool (default true: add the files in place; false when they were imported already), limit?: N (only the first N photos whose files exist), dryRun?: bool, developAll?: bool (also photos never edited in Lightroom), collectionsOnly?: bool (only the collections, for a library migrated already: nothing imported, no photo changed, no presets), lookMap?: {lookName: profileId} (creative looks → our profiles; an imported .cube profile named like the look matches by itself), presets?: bool (default true), presetDirs?: [folders] (default: Lightroom Settings/{Settings, Develop Presets, Keyword Sets} next to the catalog + Camera Raw / Lightroom preset folders)} → {found, missing, missingByRoot, matched, rated, flagged, labelled, keyworded, virtualCopies, develop: {applied, unmapped: [{key, photos}], photosWithUnmapped…}, albums: {albums, smart, sets, quick, skipped}, presets} — ratings, flags, colour labels, keywords, caption/copyright/creator/location, collections (the catalog's own tree: sets as album folders, smart collections whose rules map, the Quick Collection into ours), virtual copies, develop settings and Lightroom's edit times; one undo step",
             always,
             run
+        ),
+        cmd!(
+            "library.flattenLightroomCollections",
+            "Flatten Lightroom Collections",
+            [],
+            None,
+            "{any?: bool} — undo what earlier Lightroom migrations did: the top-level \"From Lightroom\" album folder that wraps a second \"From Lightroom\" folder (with `any`: any top-level \"From Lightroom\" folder) is removed and everything in it moves to the top level, as the collections were in Lightroom (an album whose twin is already there gives it its photos); an album called \"quick collection\" joins the Quick Collection. One undo step → {flattened, moved, merged, quick}",
+            always,
+            |s, p| flatten_wrapper(s, bool_or(p, "any", false))
         ),
         cmd!(
             query "library.resumePoint",
