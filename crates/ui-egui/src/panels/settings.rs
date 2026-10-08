@@ -17,7 +17,14 @@ use crate::theme::Tokens;
 use crate::widgets::register;
 
 /// (id, label) of the tabs, in order.
-pub const TABS: &[(&str, &str)] = &[("general", "General"), ("import", "Import"), ("performance", "Performance"), ("interface", "Interface")];
+pub const TABS: &[(&str, &str)] = &[
+    ("general", "General"),
+    ("import", "Import"),
+    ("performance", "Performance"),
+    ("interface", "Interface"),
+    ("shortcuts", "shrt."),
+    ("controllers", "ctrl."),
+];
 
 /// Thumbnail cache sizes offered (MB).
 const CACHE_SIZES: [u32; 5] = [512, 1024, 2048, 4096, 8192];
@@ -43,6 +50,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         "import" => import_tab(app, ui, &t),
         "performance" => performance_tab(app, ui, &t),
         "interface" => interface_tab(app, ui, &t),
+        "shortcuts" => shortcuts_tab(app, ui, &t),
+        "controllers" => controllers_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
 }
@@ -546,4 +555,374 @@ pub fn open_library(app: &mut LightcraftApp, p: &Value) -> Result<Value, String>
     app.ui.compare = None;
     app.ui.settings.library_path = path.clone();
     Ok(json!({"path": path, "photos": app.session.catalog.len()}))
+}
+
+// ------------------------------------------------------------------------------------ shrt.
+
+/// Keys recorded on the shrt. page: user binding `target` gets them, or (no target) the draft
+/// action is bound to them.
+pub fn recorded(app: &mut LightcraftApp, target: Option<usize>, keys: &str) -> Result<(), String> {
+    let mut f = app.keymap.file.clone();
+    let combo = crate::keymap::parse_combo(keys);
+    match target {
+        Some(i) => {
+            let b = f.bindings.get_mut(i).ok_or("that binding is gone")?;
+            b.keys = keys.to_string();
+        }
+        None => {
+            let mut b = app.keymap.draft.clone();
+            if b.command.is_empty() && b.label.is_empty() {
+                return Err("pick an action first".into());
+            }
+            b.keys = keys.to_string();
+            f.bindings.retain(|x| crate::keymap::parse_combo(&x.keys) != combo);
+            f.bindings.push(b);
+        }
+    }
+    app.keymap.set(f)
+}
+
+/// A fixed-width, left-aligned table cell (long text is cut with …).
+fn cell(ui: &mut egui::Ui, w: f32, text: RichText) {
+    ui.allocate_ui_with_layout(egui::vec2(w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_width(w);
+        ui.set_max_width(w);
+        ui.add(egui::Label::new(text).truncate());
+    });
+}
+
+fn save_keymap(app: &mut LightcraftApp, f: crate::keymap::KeymapFile) {
+    if let Err(e) = app.keymap.set(f) {
+        app.ui.toast = Some((e, app.last_time + 6.0));
+    }
+}
+
+/// The super-key actions offered for a new binding: `(label, command, params)`.
+fn draft_actions(app: &LightcraftApp) -> Vec<(String, String, Value)> {
+    let mut v: Vec<(String, String, Value)> = crate::keymap::SUPER_ACTIONS
+        .iter()
+        .map(|(_, l, c, p)| (l.to_string(), c.to_string(), serde_json::from_str(p).unwrap_or(json!({}))))
+        .collect();
+    let control = app.keymap.draft.params.get("control").and_then(Value::as_str).unwrap_or("light.exposure").to_string();
+    let label = lightcraft_develop::controls::find(&control).map(|c| c.label.to_lowercase()).unwrap_or(control.clone());
+    for (dir, size, what) in [(1, "small", "+"), (-1, "small", "-"), (1, "large", "++"), (-1, "large", "--")] {
+        v.push((format!("{label} {what}"), "keys.nudge".into(), json!({"control": control, "dir": dir, "size": size})));
+    }
+    v.push((format!("reset {label}"), "develop.resetControl".into(), json!({"control": control})));
+    v.push(("nothing (unbind)".into(), String::new(), Value::Null));
+    v
+}
+
+fn import_result(app: &mut LightcraftApp, r: Result<Value, String>) {
+    let text = match r {
+        Ok(v) => format!(
+            "imported {} keys, {} midi, {} steps · {} not mapped",
+            v["bindings"].as_u64().unwrap_or(0),
+            v["midi"].as_u64().unwrap_or(0),
+            v["steps"].as_u64().unwrap_or(0),
+            v["skipped"].as_array().map_or(0, Vec::len)
+        ),
+        Err(e) => e,
+    };
+    app.ui.toast = Some((text, app.last_time + 5.0));
+}
+
+fn shortcuts_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let mut f = app.keymap.file.clone();
+    row(ui, t, "Profile", |ui| {
+        let mut p = if f.profile.is_empty() { "lightroom".to_string() } else { f.profile.clone() };
+        let opts: Vec<(&str, &str)> = crate::keymap::PROFILES.iter().map(|(id, l)| (*id, *l)).collect();
+        let mut sel = opts.iter().position(|(id, _)| *id == p).unwrap_or(0);
+        let labels: Vec<(usize, &str)> = opts.iter().enumerate().map(|(i, (_, l))| (i, *l)).collect();
+        if choices(ui, "keysProfile", &labels, &mut sel) {
+            p = opts.get(sel).map(|(id, _)| id.to_string()).unwrap_or_default();
+            f.profile = p;
+            save_keymap(app, f.clone());
+        }
+    });
+    row(ui, t, "Import", |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for (id, label, source) in [("keysImportLrkeys", "lrkeys.", "lrkeys"), ("keysImportSuperkeys", "superkeys.", "superkeys")] {
+            if crate::widgets::text_button(ui, id, label, false).clicked() {
+                let r = crate::keymap::import(app, &json!({"source": source}));
+                import_result(app, r);
+            }
+        }
+        if crate::widgets::text_button(ui, "keysReset", "reset.", false).clicked() {
+            let mut g = app.keymap.file.clone();
+            g.bindings.clear();
+            save_keymap(app, g);
+        }
+    });
+    if let Some(e) = &app.keymap.error {
+        ui.label(RichText::new(format!("⚠ {e}")).color(t.caution));
+    } else if let Some(p) = &app.keymap.path {
+        hint(ui, t, &format!("{} · edits here save at once; edits to the file reload by themselves", p.display()));
+    }
+    ui.add_space(8.0);
+    // a new binding: pick an action, then rec. and press the keys
+    let actions = draft_actions(app);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_min_width(LABEL_W);
+            ui.label(RichText::new("Add").color(t.text_label));
+        });
+        let d = app.keymap.draft.clone();
+        let current = if d.command.is_empty() && d.label.is_empty() {
+            "pick an action".to_string()
+        } else {
+            actions
+                .iter()
+                .find(|(l, c, p)| *c == d.command && *p == d.params && (d.label.is_empty() || *l == d.label))
+                .map(|(l, ..)| l.clone())
+                .unwrap_or(d.label.clone())
+        };
+        let r = egui::ComboBox::from_id_salt("keysDraftAction").width(200.0).selected_text(current).show_ui(ui, |ui| {
+            for (l, c, p) in &actions {
+                if ui.selectable_label(d.command == *c && d.params == *p, l).clicked() {
+                    app.keymap.draft = crate::keymap::Binding::new("", c, p.clone(), l);
+                }
+            }
+        });
+        register(ui.ctx(), "combo:keysDraftAction", r.response.rect);
+        // the slider the nudge / reset actions move
+        let control = app.keymap.draft.params.get("control").and_then(Value::as_str).unwrap_or("light.exposure").to_string();
+        let r = egui::ComboBox::from_id_salt("keysDraftControl").width(150.0).selected_text(control.clone()).show_ui(ui, |ui| {
+            for c in lightcraft_develop::controls::CONTROLS.iter().map(|c| c.id).chain(crate::keymap::CROP_PSEUDO.iter().copied()) {
+                if ui.selectable_label(c == control, c).clicked() {
+                    let d = &mut app.keymap.draft;
+                    if d.params.get("control").is_some() {
+                        d.params["control"] = json!(c);
+                        d.label.clear();
+                    } else {
+                        *d = crate::keymap::Binding::new("", "keys.nudge", json!({"control": c, "dir": 1, "size": "small"}), "");
+                    }
+                }
+            }
+        });
+        register(ui.ctx(), "combo:keysDraftControl", r.response.rect);
+        let rec = app.keymap.recording == Some(None);
+        if crate::widgets::text_button(ui, "keysRecord", if rec { "press keys…" } else { "rec." }, rec).clicked() {
+            app.keymap.recording = if rec { None } else { Some(None) };
+        }
+    });
+    ui.add_space(8.0);
+    let search_id = egui::Id::new("keysSearch");
+    let mut q: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
+    row(ui, t, "Search", |ui| {
+        let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text("keys, action or command").desired_width(260.0));
+        register(ui.ctx(), "field:keysSearch", r.rect);
+    });
+    ui.data_mut(|d| d.insert_temp(search_id, q.clone()));
+    let ql = q.to_lowercase();
+    let rows: Vec<crate::keymap::Row> = crate::keymap::rows(&f)
+        .into_iter()
+        .filter(|r| {
+            ql.is_empty() || r.keys.to_lowercase().contains(&ql) || r.label.to_lowercase().contains(&ql) || r.command.to_lowercase().contains(&ql)
+        })
+        .collect();
+    ui.add_space(4.0);
+    // one fixed-size list that scrolls inside
+    egui::ScrollArea::vertical().id_salt("keysList").max_height(300.0).min_scrolled_height(300.0).auto_shrink([false, false]).show(ui, |ui| {
+        let mut group = String::new();
+        for (n, r) in rows.iter().enumerate() {
+            if r.group != group {
+                group = r.group.clone();
+                ui.add_space(6.0);
+                ui.label(RichText::new(&group).font(t.semibold(11.5)).color(t.text_label));
+            }
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let keys = RichText::new(crate::keymap::display(&r.keys)).font(t.semibold(11.5));
+                let keys = if r.overridden { keys.strikethrough().color(t.text_dim) } else { keys.color(t.text) };
+                cell(ui, 110.0, keys);
+                let mut text = r.label.clone();
+                if r.command.is_empty() {
+                    text = "(unbound)".into();
+                }
+                cell(ui, 220.0, RichText::new(text).color(t.text));
+                let origin = match r.origin {
+                    crate::keymap::Origin::Builtin => "built-in",
+                    crate::keymap::Origin::Profile => "classic",
+                    crate::keymap::Origin::User => "mine",
+                };
+                cell(ui, 52.0, RichText::new(origin).size(10.5).color(t.text_dim));
+                if r.conflict {
+                    ui.label(RichText::new("⚠ conflict").size(10.5).color(t.caution));
+                }
+                if r.origin == crate::keymap::Origin::User {
+                    let idx = app
+                        .keymap
+                        .file
+                        .bindings
+                        .iter()
+                        .position(|b| crate::keymap::canonical(&b.keys) == r.keys && b.command == r.command && b.params == r.params);
+                    if let Some(i) = idx {
+                        let rec = app.keymap.recording == Some(Some(i));
+                        if crate::widgets::text_button(ui, &format!("keysRec-{n}"), if rec { "press…" } else { "rec." }, rec).clicked() {
+                            app.keymap.recording = if rec { None } else { Some(Some(i)) };
+                        }
+                        if crate::widgets::text_button(ui, &format!("keysDel-{n}"), "del.", false).clicked() {
+                            let mut g = app.keymap.file.clone();
+                            if i < g.bindings.len() {
+                                g.bindings.remove(i);
+                            }
+                            save_keymap(app, g);
+                        }
+                    }
+                } else if !r.overridden {
+                    // rebind a built-in / profile action to other keys, or switch its keys off
+                    if crate::widgets::text_button(ui, &format!("keysRec-{n}"), "rec.", false).clicked() {
+                        app.keymap.draft = crate::keymap::Binding::new("", &r.command, r.params.clone(), &r.label);
+                        app.keymap.recording = Some(None);
+                    }
+                    if crate::widgets::text_button(ui, &format!("keysOff-{n}"), "off.", false).clicked() {
+                        let mut g = app.keymap.file.clone();
+                        g.bindings.push(crate::keymap::Binding::new(&r.keys, "", Value::Null, ""));
+                        save_keymap(app, g);
+                    }
+                }
+            });
+        }
+        if q.is_empty() && f.profile == "classic" {
+            ui.add_space(6.0);
+            ui.label(RichText::new("Lightroom Classic keys with no LightCraft command").font(t.semibold(11.5)).color(t.text_label));
+            for (k, what) in crate::keymap::CLASSIC_SKIPPED {
+                hint(ui, t, &format!("{k} — {what}"));
+            }
+        }
+    });
+}
+
+// ------------------------------------------------------------------------------------ ctrl.
+
+fn controllers_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let mut f = app.keymap.file.clone();
+    let mut on = f.midi_enabled;
+    if check(ui, "settings.midiEnabled", &mut on, "MIDI in (Monogram Creator, any MIDI controller)") {
+        f.midi_enabled = on;
+        save_keymap(app, f.clone());
+    }
+    if !app.midi_status.is_empty() {
+        hint(ui, t, &app.midi_status);
+    }
+    hint(ui, t, "Mouse back / forward / middle: bind them on the shrt. page (rec., then click).");
+    row(ui, t, "Monogram", |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if crate::widgets::text_button(ui, "midiImportMonogram", "monogram.", false).clicked() {
+            let out = app.keymap.path.as_ref().and_then(|p| p.parent()).map(|d| d.join("LightCraft.monogram").display().to_string());
+            let r = crate::keymap::import(app, &json!({"source": "monogram", "write": out}));
+            import_result(app, r);
+        }
+        hint(ui, t, "maps the \"Lightroom 1\" profile (read only)");
+    });
+    ui.add_space(8.0);
+    // MIDI learn: move a control, then say what it does
+    let learn = app.keymap.learn;
+    row(ui, t, "Learn", |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        match learn {
+            None => {
+                if crate::widgets::text_button(ui, "midiLearn", "learn.", false).clicked() {
+                    app.keymap.learn = Some(None);
+                }
+            }
+            Some(None) => {
+                ui.label(RichText::new("move a slider or dial, or press a button…").color(t.text));
+                if crate::widgets::text_button(ui, "midiLearnCancel", "cancel.", false).clicked() {
+                    app.keymap.learn = None;
+                }
+            }
+            Some(Some(m)) => {
+                let what = match m.kind {
+                    crate::keymap::MidiKind::Cc => format!("cc {} · ch {}", m.number, m.channel),
+                    _ => format!("note {} · ch {}", m.number, m.channel),
+                };
+                ui.label(RichText::new(what).font(t.semibold(11.5)).color(t.text));
+                let key = egui::Id::new("midiLearnTarget");
+                let (mut control, mut dial, mut action): (String, bool, usize) =
+                    ui.data(|d| d.get_temp(key)).unwrap_or(("light.exposure".into(), false, 0));
+                let cc = m.kind == crate::keymap::MidiKind::Cc;
+                if cc {
+                    let r = egui::ComboBox::from_id_salt("midiLearnControl").width(150.0).selected_text(control.clone()).show_ui(ui, |ui| {
+                        for c in lightcraft_develop::controls::CONTROLS.iter().map(|c| c.id).chain(crate::keymap::CROP_PSEUDO.iter().copied()) {
+                            if ui.selectable_label(c == control, c).clicked() {
+                                control = c.to_string();
+                            }
+                        }
+                    });
+                    register(ui.ctx(), "combo:midiLearnControl", r.response.rect);
+                    check(ui, "midiLearnDial", &mut dial, "dial (endless)");
+                } else {
+                    let acts = crate::keymap::SUPER_ACTIONS;
+                    let r = egui::ComboBox::from_id_salt("midiLearnAction")
+                        .width(180.0)
+                        .selected_text(acts.get(action).map(|a| a.1).unwrap_or(""))
+                        .show_ui(ui, |ui| {
+                            for (i, a) in acts.iter().enumerate() {
+                                if ui.selectable_label(i == action, a.1).clicked() {
+                                    action = i;
+                                }
+                            }
+                        });
+                    register(ui.ctx(), "combo:midiLearnAction", r.response.rect);
+                }
+                ui.data_mut(|d| d.insert_temp(key, (control.clone(), dial, action)));
+                if crate::widgets::text_button(ui, "midiLearnAdd", "add.", false).clicked() {
+                    let (cmd, params) = crate::keymap::SUPER_ACTIONS
+                        .get(action)
+                        .map(|a| (a.2.to_string(), serde_json::from_str(a.3).unwrap_or(json!({}))))
+                        .unwrap_or_default();
+                    let b = crate::keymap::learned_binding(&m, if cc { &control } else { "" }, dial, &cmd, params);
+                    let mut g = app.keymap.file.clone();
+                    g.midi.retain(|x| !(x.midi == b.midi && x.number == b.number && x.channel == b.channel));
+                    g.midi.push(b);
+                    app.keymap.learn = None;
+                    save_keymap(app, g);
+                }
+                if crate::widgets::text_button(ui, "midiLearnCancel", "cancel.", false).clicked() {
+                    app.keymap.learn = None;
+                }
+            }
+        }
+    });
+    if let Some(m) = app.keymap.last_midi {
+        hint(ui, t, &format!("last message: {:?} {} = {} (ch {})", m.kind, m.number, m.value, m.channel));
+    }
+    ui.add_space(8.0);
+    egui::ScrollArea::vertical().id_salt("midiList").max_height(260.0).min_scrolled_height(260.0).auto_shrink([false, false]).show(ui, |ui| {
+        let list = app.keymap.file.midi.clone();
+        if list.is_empty() {
+            hint(ui, t, "No MIDI mappings yet: learn. one, or monogram. to bring in the Lightroom profile");
+        }
+        for (i, b) in list.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                cell(ui, 100.0, RichText::new(format!("{} {} · ch {}", b.midi, b.number, b.channel)).font(t.semibold(11.5)));
+                let what = if !b.control.is_empty() {
+                    let name = lightcraft_develop::controls::find(&b.control).map(|c| c.label.to_string()).unwrap_or(b.control.clone());
+                    format!("{name} ({})", if b.mode == "rel" { "dial" } else { "slider" })
+                } else {
+                    let p =
+                        b.params.as_object().filter(|o| !o.is_empty()).map(|o| {
+                            o.values().map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).collect::<Vec<_>>().join(", ")
+                        });
+                    match p {
+                        Some(p) => format!("{} · {p}", crate::keymap::command_label(&b.command)),
+                        None => crate::keymap::command_label(&b.command),
+                    }
+                };
+                cell(ui, 280.0, RichText::new(what).color(t.text));
+                cell(ui, 110.0, RichText::new(&b.label).size(10.5).color(t.text_dim));
+                if crate::widgets::text_button(ui, &format!("midiDel-{i}"), "del.", false).clicked() {
+                    let mut g = app.keymap.file.clone();
+                    if i < g.midi.len() {
+                        g.midi.remove(i);
+                    }
+                    save_keymap(app, g);
+                }
+            });
+        }
+    });
 }

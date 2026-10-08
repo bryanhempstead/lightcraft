@@ -29,3 +29,5 @@ rfd = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { workspace = true }
+# MIDI in (Settings ▸ ctrl.): CoreMIDI bindings, no C code compiled
+midir = "0.10"

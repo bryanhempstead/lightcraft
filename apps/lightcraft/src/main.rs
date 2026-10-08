@@ -24,6 +24,7 @@
 
 mod alloc_release;
 mod control_server;
+mod midi_in;
 #[cfg(target_os = "macos")]
 mod native_menu;
 
@@ -44,14 +45,15 @@ fn app_icon() -> egui::IconData {
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 
-struct App(LightcraftApp, PrefsWriter, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
+struct App(LightcraftApp, PrefsWriter, midi_in::MidiIn, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        if let Some(m) = self.2.as_mut() {
+        if let Some(m) = self.3.as_mut() {
             m.update(&mut self.0, ctx);
         }
+        self.2.tick(&mut self.0, ctx);
         self.0.logic(ctx);
         self.1.tick(&mut self.0, ctx);
     }
@@ -512,6 +514,14 @@ fn main() -> eframe::Result {
             // the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
             session.segmenter.mirrors_file = config_dir().map(|d| d.join("models").join("sam3-mirrors.txt"));
             let mut app = LightcraftApp::new(session, services());
+            // shortcuts, mouse buttons and MIDI mappings (Settings ▸ shrt. / ctrl.): <config>/keymap.json,
+            // or LIGHTCRAFT_KEYMAP; LIGHTCRAFT_NO_PREFS alone keeps them in memory (tests, scripts)
+            if std::env::var_os("LIGHTCRAFT_KEYMAP").is_some() || std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none() {
+                app.keymap = lightcraft_ui_egui::keymap::Keymap::at(lightcraft_ui_egui::keymap::Keymap::default_path());
+                if let Some(e) = app.keymap.error.clone() {
+                    app.notices.push(format!("{e}. LightCraft uses its standard shortcuts until the file is fixed."));
+                }
+            }
             if let Some(ui) = prefs {
                 app.ui = ui;
             }
@@ -549,6 +559,7 @@ fn main() -> eframe::Result {
             Ok(Box::new(App(
                 app,
                 writer,
+                midi_in::MidiIn::default(),
                 #[cfg(target_os = "macos")]
                 menu,
             )))

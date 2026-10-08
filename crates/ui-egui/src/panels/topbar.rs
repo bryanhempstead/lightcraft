@@ -33,6 +33,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let _ = app.run("view.back", json!({}));
                 }
                 icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, "Forward");
+                ui.add_space(8.0);
+                // back to the photo last worked on (its folder or album, the photo, the view)
+                let r = crate::widgets::text_button(ui, "leftOff", "left off.", false);
+                if r.clicked()
+                    && let Err(e) = app.run("view.resumeLastLeftOff", json!({}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
+                r.on_hover_text(crate::i18n::tr("Go to where I left off"));
                 if !app.native_menu {
                     // no native menu bar (web, Windows, Linux): menus in the top bar
                     ui.add_space(10.0);

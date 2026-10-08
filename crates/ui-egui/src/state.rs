@@ -313,6 +313,9 @@ pub struct UiState {
     pub curve_channel: String,
     /// Selected mixer mode: "hue" | "saturation" | "luminance" | "all".
     pub mixer_mode: String,
+    /// Where the work was left off, overall and per folder / album ([`crate::leftoff`]).
+    #[serde(deserialize_with = "crate::leftoff::lenient")]
+    pub left_off: crate::leftoff::LeftOff,
     /// Selected colour grading wheel: "3way" | "shadows" | "midtones" | "highlights" | "global".
     pub grading_mode: String,
     /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove".
@@ -593,6 +596,7 @@ impl Default for UiState {
             dragging_photos: None,
             curve_channel: "parametric".into(),
             mixer_mode: "hue".into(),
+            left_off: Default::default(),
             grading_mode: "3way".into(),
             tool: String::new(),
             brush_size: 0.04,

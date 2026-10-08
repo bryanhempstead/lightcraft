@@ -198,7 +198,14 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "ui.click" | "ui.drag" => {
             let a = egui::pos2(f("x").unwrap_or(0.0) as f32, f("y").unwrap_or(0.0) as f32);
             let m = modifiers(p);
-            let button = if s("button") == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
+            let button = match s("button") {
+                Some("right") => egui::PointerButton::Secondary,
+                Some("middle") => egui::PointerButton::Middle,
+                // mouse back / forward (MX Master thumb buttons)
+                Some("back") => egui::PointerButton::Extra1,
+                Some("forward") => egui::PointerButton::Extra2,
+                _ => egui::PointerButton::Primary,
+            };
             if req.method == "ui.drag" {
                 let b = egui::pos2(f("toX").unwrap_or(0.0) as f32, f("toY").unwrap_or(0.0) as f32);
                 push_drag(app, a, b, p.get("steps").and_then(Value::as_u64).unwrap_or(10), m);

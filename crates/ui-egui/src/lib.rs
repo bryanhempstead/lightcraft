@@ -13,6 +13,8 @@ pub mod headless;
 pub mod i18n;
 pub mod icons;
 pub mod import;
+pub mod keymap;
+pub mod leftoff;
 pub mod links;
 pub mod lr_migrate;
 pub mod menubar;
@@ -31,6 +33,8 @@ pub mod widgets;
 mod tests_curve;
 #[cfg(test)]
 mod tests_grid;
+#[cfg(test)]
+mod tests_keys;
 #[cfg(test)]
 mod tests_library_problem;
 #[cfg(test)]
@@ -204,6 +208,15 @@ pub struct LightcraftApp {
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,
+    /// Key, mouse-button and MIDI bindings over the built-ins (Settings ▸ shrt. / ctrl.). The host
+    /// points it at `<config>/keymap.json` ([`keymap::Keymap::default_path`]); in memory otherwise.
+    pub keymap: keymap::Keymap,
+    /// Raw MIDI messages from the host's MIDI input (desktop; Settings ▸ ctrl. ▸ midi in).
+    pub midi_rx: Option<Receiver<Vec<u8>>>,
+    /// The host's MIDI input status for the ctrl. page ("2 inputs: Monogram…", an error).
+    pub midi_status: String,
+    /// "Where I left off" tracking for this session ([`leftoff`]).
+    pub left_off: leftoff::Tracker,
 }
 
 impl LightcraftApp {
@@ -253,6 +266,10 @@ impl LightcraftApp {
             gpu_applied: None,
             memory_applied: None,
             library_problem: None,
+            keymap: keymap::Keymap::default(),
+            midi_rx: None,
+            midi_status: String::new(),
+            left_off: leftoff::Tracker::default(),
         }
     }
 
@@ -269,6 +286,9 @@ impl LightcraftApp {
             return r;
         }
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
+        if r.is_ok() && matches!(id, "library.source" | "library.browse") {
+            leftoff::entered(self);
+        }
         if let Err(e) = &r {
             log::warn!("{id}: {e}");
             self.ui.status = e.clone();
@@ -669,6 +689,16 @@ impl LightcraftApp {
         self.session.persist_if_dirty();
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
+        // keymap.json edited elsewhere: pick it up
+        if self.keymap.tick(now) {
+            if let Some(e) = self.keymap.error.clone() {
+                self.notices.push(format!("{e}. The shortcuts in use stay as they were until the file is fixed."));
+            } else {
+                self.toast(ctx, "Shortcuts reloaded");
+            }
+        }
+        keymap::poll_midi(self, ctx);
+        leftoff::tick(self);
         if self.fonts_ready {
             shortcuts::handle(self, ctx);
         }

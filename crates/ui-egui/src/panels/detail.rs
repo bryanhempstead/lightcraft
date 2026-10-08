@@ -1550,6 +1550,9 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 if sel {
                     p.rect_stroke(fr, 0.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
                 }
+                if app.left_off.marker == Some(*id) {
+                    crate::leftoff::paint_marker(p, &t, fr, true);
+                }
                 if app.ui.settings.film_badges
                     && let Some(ph) = app.session.catalog.photo(*id)
                 {

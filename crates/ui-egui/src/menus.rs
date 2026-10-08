@@ -175,6 +175,22 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.captureTime", "Edit Capture Time…", None, "Photo"),
     ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo"),
     ("app.exportPrevious", "Export with Previous", Some("Cmd+Alt+Shift+E"), "File"),
+    // Lightroom Classic modules and "super keys" (Settings ▸ shrt.; see keymap.rs)
+    ("view.develop", "Develop", None, ""),
+    ("view.colorMixer", "Color Mixer", None, ""),
+    ("view.resumeLastLeftOff", "Go to Where I Left Off", None, "View"),
+    ("preset.applyByName", "Apply Preset by Name", None, ""),
+    ("crop.nudge", "Nudge Crop", None, ""),
+    ("keys.nudge", "Nudge Slider", None, ""),
+    ("keys.macro", "Run Macro", None, ""),
+    ("keys.send", "Send Keys", None, ""),
+    ("keys.list", "List Key Bindings", None, ""),
+    ("keys.set", "Set Key Bindings", None, ""),
+    ("keys.add", "Add Key Binding", None, ""),
+    ("keys.record", "Record Keys", None, ""),
+    ("keys.import", "Import Shortcuts", None, ""),
+    ("keys.midi", "MIDI Message", None, ""),
+    ("keys.learn", "MIDI Learn", None, ""),
 ];
 
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
@@ -242,8 +258,65 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         crate::i18n::set_language(app.ui.language);
         return Some(Ok(json!(app.ui.language)));
     }
+    if let Some(r) = crate::keymap::run_command(app, id, p) {
+        return Some(r);
+    }
     let ctx = egui::Context::default();
     let r: Result<Value, String> = match id {
+        "view.develop" => {
+            // Lightroom Classic's Develop module (D): the loupe with the Edit panel, never a toggle
+            app.ui.view = ViewMode::Detail;
+            if !matches!(app.ui.right, RightPanel::Edit | RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye) {
+                app.ui.right = RightPanel::Edit;
+            }
+            Ok(Value::Null)
+        }
+        "view.colorMixer" => {
+            // {mode: hue|saturation|luminance|all|bw}: the Edit panel's Color Mixer (LrSuperKeys H/J/K/B)
+            app.ui.view = ViewMode::Detail;
+            app.ui.right = RightPanel::Edit;
+            if !app.ui.flyout_open("mixer") {
+                app.ui.toggle_flyout("mixer");
+            }
+            match p.get("mode").and_then(Value::as_str) {
+                Some(m @ ("hue" | "saturation" | "luminance" | "all")) => app.ui.mixer_mode = m.to_string(),
+                Some("bw") | None => {}
+                Some(other) => return Some(Err(format!("view.colorMixer: unknown mode `{other}`"))),
+            }
+            Ok(json!({"mode": app.ui.mixer_mode}))
+        }
+        "view.resumeLastLeftOff" => crate::leftoff::resume(app),
+        "preset.applyByName" => (|| {
+            // {name, amount?}: the preset called `name` (case-insensitive), as the Monogram / LrKeys
+            // presets name them
+            let name = p.get("name").and_then(Value::as_str).ok_or("preset.applyByName: missing `name`")?.trim().to_string();
+            let found = app.session.presets.iter().find(|x| x.name.trim().eq_ignore_ascii_case(&name)).map(|x| x.id.clone());
+            let id = found.ok_or_else(|| format!("No preset named \"{name}\""))?;
+            let mut q = json!({"id": id});
+            if let Some(a) = p.get("amount") {
+                q["amount"] = a.clone();
+            }
+            let r = app.run("preset.apply", q);
+            if r.is_ok() {
+                app.ui.toast = Some((name.clone(), app.last_time + 1.4));
+            }
+            r
+        })(),
+        "crop.nudge" => (|| {
+            // {x?, y?, scale?} in percent of the image: move the crop / zoom it in (+) or out (-)
+            let id = app.session.active().ok_or("no photo selected")?;
+            let d = app.session.develop_of(id).unwrap_or_default();
+            let r = d.crop.geometry.rect;
+            let f = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0) / 100.0;
+            let (mut x0, mut y0, mut x1, mut y1) = (r.x0, r.y0, r.x1, r.y1);
+            let k = (1.0 - f("scale")).clamp(0.05, 20.0);
+            let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+            let (hw, hh) = (((x1 - x0) * k / 2.0).min(0.5), ((y1 - y0) * k / 2.0).min(0.5));
+            (x0, x1, y0, y1) = (cx - hw + f("x"), cx + hw + f("x"), cy - hh + f("y"), cy + hh + f("y"));
+            // keep it on the photo: slide back inside
+            let (sx, sy) = ((-x0).max(0.0) - (x1 - 1.0).max(0.0), (-y0).max(0.0) - (y1 - 1.0).max(0.0));
+            app.run("crop.set", json!({"rect": [x0 + sx, y0 + sy, x1 + sx, y1 + sy]}))
+        })(),
         "view.photoGrid" => {
             app.ui.view = ViewMode::PhotoGrid;
             Ok(Value::Null)
@@ -417,7 +490,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.settings" => {
             let tab = p.get("tab").and_then(Value::as_str).unwrap_or("general");
             if !crate::panels::settings::TABS.iter().any(|(id, _)| *id == tab) {
-                return Some(Err(format!("unknown settings tab `{tab}` (general|import|performance|interface)")));
+                return Some(Err(format!("unknown settings tab `{tab}` (general|import|performance|interface|shortcuts|controllers)")));
             }
             app.ui.dialog = Some(Dialog::Settings { tab: tab.into() });
             Ok(Value::Null)
@@ -1299,7 +1372,7 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
             id: id.to_string(),
             label: label.to_string(),
             menu: m.split('>').map(str::to_string).collect(),
-            shortcut: sc.map(str::to_string),
+            shortcut: crate::keymap::menu_shortcut(app.keymap.overlay(), id, *sc),
             enabled: ui_enabled(app, id),
         })
         .collect();
@@ -1309,7 +1382,7 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
                 id: c.id.into(),
                 label: c.label.into(),
                 menu: c.menu.iter().map(|s| s.to_string()).collect(),
-                shortcut: c.shortcut.map(str::to_string),
+                shortcut: crate::keymap::menu_shortcut(app.keymap.overlay(), c.id, c.shortcut),
                 enabled: c.enabled,
             });
         }

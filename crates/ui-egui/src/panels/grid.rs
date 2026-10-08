@@ -511,6 +511,10 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         } else if selected {
             p.rect_stroke(fit, 0.0, Stroke::new(2.0, Color32::from_gray(170)), StrokeKind::Outside);
         }
+        // where the last visit to this folder / album ended
+        if app.left_off.marker == Some(id) {
+            crate::leftoff::paint_marker(p, &t, fit, false);
+        }
     } else {
         let ph = img_rect.shrink(if square { 20.0 } else { 0.0 });
         p.rect_filled(ph, 0.0, Color32::from_gray(38));
