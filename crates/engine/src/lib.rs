@@ -19,6 +19,7 @@ pub mod crs_masks;
 pub mod crs_spots;
 pub mod demo;
 pub mod devices;
+pub mod disks;
 pub mod export;
 pub mod files;
 pub mod fonts;

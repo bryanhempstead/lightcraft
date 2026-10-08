@@ -13,6 +13,9 @@ use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
 use crate::import::{ImportMode, ImportOptions, expand, import_with, is_supported};
 use crate::{LibrarySource, Result, Session};
 
+/// The most new files a dry run lists (for the app to import them in the background).
+const MAX_LISTED: usize = 200_000;
+
 /// The library's photos (not Local browse records, not in Recently Deleted) in `folder`, and in
 /// the folders inside it when `subfolders`.
 fn photos_in(s: &Session, folder: &str, subfolders: bool) -> Vec<lightcraft_catalog::PhotoId> {
@@ -93,9 +96,16 @@ fn sync(s: &mut Session, p: &Value) -> Result<Value> {
             _ => None,
         })
         .collect();
-    Ok(
-        json!({"path": folder, "new": new.len(), "imported": imported, "failed": failed, "missing": missing.len(), "missingFiles": missing.iter().take(50).collect::<Vec<_>>()}),
-    )
+    let new_files: Vec<&String> = if bool_or(p, "dryRun", false) { new.iter().take(MAX_LISTED).collect() } else { Vec::new() };
+    Ok(json!({
+        "path": folder,
+        "new": new.len(),
+        "newFiles": new_files,
+        "imported": imported,
+        "failed": failed,
+        "missing": missing.len(),
+        "missingFiles": missing.iter().take(50).collect::<Vec<_>>(),
+    }))
 }
 
 /// Find Missing Folder: the folder was moved or renamed (or its disk renamed): point every
@@ -195,7 +205,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "library.showSubfolders",
             "Show Photos in Subfolders",
-            ["Library"],
+            ["View"],
             None,
             "{on?: bool} (default: toggle) — choosing a folder shows the photos of the folders inside it too (on, the default) or only its own; its count follows. Kept in the library's preferences → {on, count}",
             always,
@@ -206,7 +216,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Synchronize Folder",
             [],
             None,
-            "{path, subfolders?: bool (default: Show Photos in Subfolders), dryRun?: bool} — add the files in the folder the library doesn't have yet (in place) and report its photos whose file is gone → {new, imported, failed, missing, missingFiles}",
+            "{path, subfolders?: bool (default: Show Photos in Subfolders), dryRun?: bool (only look: `newFiles` lists them, for a background import)} — add the files in the folder the library doesn't have yet (in place) and report its photos whose file is gone → {new, newFiles, imported, failed, missing, missingFiles}",
             always,
             sync
         ),

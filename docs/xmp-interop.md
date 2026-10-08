@@ -164,7 +164,7 @@ dependencies): the catalog and its `-wal` log are copied to a temporary folder a
 | `AgLibraryIPTC.caption`, `copyright`; `AgHarvestedIptcMetadata` creator, location, city, state, country | Info fields | |
 | files (`AgLibraryRootFolder` + `AgLibraryFolder` + `AgLibraryFile`) | photos, added in place | files on volumes that aren't mounted are counted per root folder (`missingByRoot`) |
 | virtual copies (`masterImage`, `copyName`) | virtual copies | Lightroom's own sync-conflict copies identical to their master are left out |
-| collections, collection sets | albums, folders | under an album folder "From Lightroom" |
+| collections, collection sets | albums, folders | the catalog's own tree: sets become album folders at the same place (no wrapper folder); the Quick Collection fills ours; `library.flattenLightroomCollections` undoes the "From Lightroom" wrapper of earlier versions |
 | smart collections | smart albums | rating, pick, label, keywords, file name / folder / text fields, camera, lens, ISO, aperture, focal length, GPS, edited, file type, capture / import / touch dates; other rules → reported, not created |
 | `Adobe_imageDevelopSettings.text` (Lua) | develop settings | the `crs:` tables above; crop edges, mask and spot positions are turned from the file's stored frame to the frame as shown; settings are applied to photos Lightroom shows as edited (history beyond the import, or a look that differs from its defaults; `developAll` for all) |
 | `Adobe_images.orientation` | `orientation` | only the turn beyond the file's own EXIF orientation |
