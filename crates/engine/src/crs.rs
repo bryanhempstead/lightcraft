@@ -125,6 +125,25 @@ fn curve(props: &Props, k: &str) -> Option<Value> {
     Some(if identity { json!([]) } else { Value::Array(pts) })
 }
 
+/// Our profile for one of the common base profiles (`Adobe Color`, `Camera Neutral`…), by name.
+fn base_profile(name: &str) -> Option<&'static str> {
+    let lower = name.trim().to_ascii_lowercase();
+    // the file's own rendering (DNG / ProRAW embedded profiles): our standard look
+    if ["embedded", "apple embedded color profile", "apple proraw"].contains(&lower.as_str()) {
+        return Some("lc.color");
+    }
+    let rest = lower.strip_prefix("adobe ").or_else(|| lower.strip_prefix("camera "))?;
+    Some(match rest.trim() {
+        "color" | "standard" | "faithful" | "default" | "standard v2" | "color v2" => "lc.color",
+        "neutral" | "flat" | "neutral v2" => "lc.neutral",
+        "vivid" | "vivid v2" | "vivid blue" | "vivid green" | "vivid red" => "lc.vivid",
+        "landscape" | "landscape v2" | "scenery" => "lc.landscape",
+        "portrait" | "portrait v2" | "natural" => "lc.portrait",
+        "monochrome" | "mono" | "monochrome v2" | "b&w" => "lc.mono",
+        _ => return None,
+    })
+}
+
 /// Map the `crs:` fields of an XMP packet to a partial develop-settings JSON object.
 ///
 /// `raw`: the target is a raw file (absolute Kelvin white balance) — `Some(false)` prefers the
@@ -236,7 +255,11 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     for (crs, ch) in
         [("ToneCurvePV2012", "master"), ("ToneCurvePV2012Red", "red"), ("ToneCurvePV2012Green", "green"), ("ToneCurvePV2012Blue", "blue")]
     {
-        if let Some(c) = curve(props, &format!("crs:{crs}")) {
+        // newer versions also keep each curve as `Extended…` (the same points): the fallback
+        let ext = format!("crs:Extended{crs}");
+        let c = curve(props, &format!("crs:{crs}")).or_else(|| curve(props, &ext));
+        note(&ext);
+        if let Some(c) = c {
             put(o, &format!("curve.{ch}"), c);
         }
     }
@@ -333,6 +356,35 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
         put(o, "geometry.upright", json!(mode));
     }
 
+    n(o, "LensProfileDistortionScale", "optics.profile_distortion");
+    n(o, "LensProfileVignettingScale", "optics.profile_vignetting");
+    n(o, "ChromaticAberrationR", "optics.ca_red");
+    n(o, "ChromaticAberrationB", "optics.ca_blue");
+
+    // ---- Profile: the base profiles map to ours by name; creative looks (their own colour
+    // tables) have no counterpart and stay unmapped
+    let look = first(props, "crs:Look/crs:Name");
+    let look_id = look.and_then(base_profile);
+    // (read without marking it read: an unknown camera profile is reported)
+    let camera_id = props.get("crs:CameraProfile").and_then(|v| v.first()).and_then(|n| base_profile(n));
+    match (look_id, camera_id) {
+        (Some(id), _) => {
+            note("crs:Look");
+            put(o, "profile.id", json!(id));
+            // `Amount` is 0..2 (1 = 100 %)
+            if let Some(a) = num(props, "crs:Look/crs:Amount") {
+                put(o, "profile.amount", json!((a * 100.0).clamp(0.0, 200.0)));
+            }
+        }
+        // a creative look (its own colour table) stays unmapped; the base profile underneath maps
+        (None, Some(id)) => put(o, "profile.id", json!(id)),
+        (None, None) => {}
+    }
+    if camera_id.is_some() || look_id.is_some() {
+        // the camera profile underneath a base look is what that look builds on
+        note("crs:CameraProfile");
+    }
+
     // ---- Crop (normalized edges of the unrotated image + straighten angle)
     match boolean(props, "crs:HasCrop") {
         Some(true) => {
@@ -373,8 +425,60 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
             mask_skips = skipped.into_iter().map(|k| format!("Mask: {k}")).collect();
         }
     }
-    // fields that only switch a panel on/off or name things: not adjustments by themselves
-    let quiet = |k: &str| k.starts_with("Enable") || k.starts_with("ToneCurveName") || k == "AutoTone" || k == "AutoGrayscaleMix";
+    let mut spot_skips = 0;
+    if let Some(values) = values
+        && values.keys().any(|k| crate::crs_spots::CONTAINERS.contains(&k.as_str()))
+    {
+        let (spots, skipped) = crate::crs_spots::spots(values);
+        if !spots.is_empty() {
+            put(&mut out, "spots", Value::Array(spots));
+        }
+        let points = crate::crs_spots::point_colors(values);
+        if !points.is_empty() {
+            put(&mut out, "point_colors", Value::Array(points));
+        }
+        read.extend(crate::crs_spots::CONTAINERS.iter().map(|c| c.to_string()));
+        spot_skips = skipped;
+    }
+    // HDR editing off: its sliders are inert
+    let hdr_off = props.get("crs:HDREditMode").and_then(|v| v.first()).is_none_or(|v| v.trim() == "0");
+    // fields that only switch a panel on/off, name things or record how a value was made (digests,
+    // the preset / profile applied, remembered custom values, guides, random seeds): not
+    // adjustments by themselves
+    let quiet = |k: &str| {
+        k.starts_with("Enable")
+            || k.starts_with("ToneCurveName")
+            || k == "AutoTone"
+            || k == "AutoGrayscaleMix"
+            || k.ends_with("Digest")
+            || k.starts_with("AutoToneDigest")
+            || (k.starts_with("Upright") && !k.starts_with("UprightTransform_"))
+            || k.starts_with("LensProfile")
+            || k.starts_with("ToggleStyle")
+            || k.starts_with("Custom")
+            || k.starts_with("CropConstrain")
+            || [
+                "OverrideLookVignette",
+                "GrainSeed",
+                "CompatibleVersion",
+                "Preset",
+                "AutoWhiteVersion",
+                "AllowFilters",
+                "LookTable",
+                "SupportsAmount",
+                "SupportsAmount2",
+                "RequiresRGBTables",
+                "Cluster",
+                "Description",
+                "SortName",
+                "ShowInPresets",
+                "ShowInQuickActions",
+                "AsShotTemperature",
+                "AsShotTint",
+            ]
+            .contains(&k)
+            || (hdr_off && (k.starts_with("HDR") || k.starts_with("SDR")))
+    };
     let mut unmapped: Vec<String> = props
         .keys()
         .filter(|k| k.starts_with("crs:"))
@@ -385,6 +489,9 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
         .collect();
     unmapped.dedup();
     unmapped.extend(mask_skips);
+    if spot_skips > 0 {
+        unmapped.push("Spot: unreadable".into());
+    }
     (out, unmapped)
 }
 

@@ -16,6 +16,7 @@ mod export;
 pub mod filters;
 pub mod keywords;
 pub mod library;
+pub mod lightroom;
 pub mod lut_profiles;
 pub mod manage;
 mod masks;
@@ -140,6 +141,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(missing::specs());
         v.extend(metadata::specs());
         v.extend(filters::specs());
+        v.extend(lightroom::specs());
         v
     })
 }

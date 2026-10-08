@@ -100,7 +100,12 @@ impl Lua {
 struct LuaParser<'a> {
     s: &'a [u8],
     i: usize,
+    /// Nesting depth of the value being read (bounded: hostile input can't exhaust the stack).
+    depth: usize,
 }
+
+/// Deepest nesting of tables (and prefix operators) a Lua literal may have.
+const LUA_MAX_DEPTH: usize = 64;
 
 impl LuaParser<'_> {
     fn err<T>(&self, what: &str) -> Result<T, String> {
@@ -210,6 +215,15 @@ impl LuaParser<'_> {
         std::str::from_utf8(&self.s[start..self.i]).ok().and_then(|t| t.parse().ok()).map_or_else(|| self.err("bad number"), Ok)
     }
     fn value(&mut self) -> Result<Lua, String> {
+        if self.depth >= LUA_MAX_DEPTH {
+            return self.err("nested too deeply");
+        }
+        self.depth += 1;
+        let v = self.value_inner();
+        self.depth -= 1;
+        v
+    }
+    fn value_inner(&mut self) -> Result<Lua, String> {
         self.skip_ws();
         let Some(&c) = self.s.get(self.i) else { return self.err("unexpected end") };
         match c {
@@ -315,7 +329,7 @@ impl LuaParser<'_> {
 
 /// Parse a Lua table literal, optionally preceded by `name =` or `return`.
 pub fn parse_lua(text: &str) -> Result<Lua, String> {
-    let mut p = LuaParser { s: text.as_bytes(), i: 0 };
+    let mut p = LuaParser { s: text.as_bytes(), i: 0, depth: 0 };
     p.skip_ws();
     let save = p.i;
     match p.ident().as_deref() {
@@ -334,7 +348,7 @@ pub fn parse_lua(text: &str) -> Result<Lua, String> {
 }
 
 /// A localisable string `"$$$/Key/Path=Default text"` → its default text.
-fn delocalize(s: &str) -> String {
+pub(crate) fn delocalize(s: &str) -> String {
     match s.strip_prefix("$$$/") {
         Some(rest) => rest.split_once('=').map_or(rest, |(_, t)| t).to_string(),
         None => s.to_string(),
@@ -348,33 +362,64 @@ pub fn lrtemplate_props(text: &str) -> Result<(Option<String>, Props, crate::crs
     let title = root.get("title").or_else(|| root.get("internalName")).and_then(Lua::str).map(delocalize).filter(|t| !t.trim().is_empty());
     let settings = root.get("value").and_then(|v| v.get("settings")).ok_or("no develop settings in this template")?;
     let Lua::Table(_, fields) = settings else { return Err("no develop settings in this template".into()) };
+    let (props, values) = settings_props(fields);
+    Ok((title, props, values))
+}
+
+/// A develop-settings table (`name = value` fields, as in an `.lrtemplate`'s `value.settings` or a
+/// catalog's develop text) as `crs:` properties: flat values, point curves as `"x, y"` items, struct
+/// fields as `crs:Name/crs:Field` (like XMP), plus the structured values of local corrections.
+pub fn settings_props(fields: &[(String, Lua)]) -> (Props, crate::crs_masks::Values) {
     let mut props = Props::new();
     let mut values = crate::crs_masks::Values::new();
     for (k, v) in fields {
         let key = format!("crs:{k}");
-        if crate::crs_masks::CONTAINERS.contains(&key.as_str()) {
+        if crate::crs_masks::CONTAINERS.contains(&key.as_str()) || crate::crs_spots::CONTAINERS.contains(&key.as_str()) {
             values.insert(key.clone(), crate::crs_masks::from_lua(v));
         }
-        let vals: Vec<String> = match v {
-            Lua::Num(n) => vec![format!("{n}")],
-            Lua::Bool(b) => vec![if *b { "True" } else { "False" }.to_string()],
-            Lua::Str(s) => vec![delocalize(s)],
-            // point curves are flat lists x1, y1, x2, y2, …
-            Lua::Table(arr, map) if map.is_empty() && !arr.is_empty() && arr.iter().all(|a| matches!(a, Lua::Num(_))) => arr
-                .chunks(2)
-                .filter_map(|c| match c {
-                    [Lua::Num(x), Lua::Num(y)] => Some(format!("{x}, {y}")),
-                    _ => None,
-                })
-                .collect(),
-            Lua::Table(a, m) if a.is_empty() && m.is_empty() => continue,
-            // anything else (local corrections, retouch…) is only reported
-            Lua::Table(..) => vec!["(table)".into()],
-            Lua::Nil => continue,
-        };
-        props.insert(key, vals);
+        lua_prop(&mut props, key, v, 0);
     }
-    Ok((title, props, values))
+    (props, values)
+}
+
+fn lua_prop(props: &mut Props, key: String, v: &Lua, depth: usize) {
+    let vals: Vec<String> = match v {
+        Lua::Num(n) => vec![format!("{n}")],
+        Lua::Bool(b) => vec![if *b { "True" } else { "False" }.to_string()],
+        Lua::Str(s) => vec![delocalize(s)],
+        // point curves are flat lists x1, y1, x2, y2, …
+        Lua::Table(arr, map) if map.is_empty() && !arr.is_empty() && arr.iter().all(|a| matches!(a, Lua::Num(_))) => arr
+            .chunks(2)
+            .filter_map(|c| match c {
+                [Lua::Num(x), Lua::Num(y)] => Some(format!("{x}, {y}")),
+                _ => None,
+            })
+            .collect(),
+        Lua::Table(a, m) if a.is_empty() && m.is_empty() => return,
+        // a struct (e.g. `Look = {Name = …, Amount = …}`): its fields, like XMP's `crs:Look/crs:Name`
+        Lua::Table(a, m) if a.is_empty() && depth < 4 => {
+            props.insert(key.clone(), vec!["(table)".into()]);
+            for (f, fv) in m {
+                lua_prop(props, format!("{key}/crs:{f}"), fv, depth + 1);
+            }
+            return;
+        }
+        // anything else (local corrections, retouch…) is only reported
+        Lua::Table(..) => vec!["(table)".into()],
+        Lua::Nil => return,
+    };
+    props.insert(key, vals);
+}
+
+/// A Lightroom Classic catalog's develop text (`s = { Exposure2012 = …, … }`) as `crs:` properties.
+pub fn develop_text_props(text: &str) -> Result<(Props, crate::crs_masks::Values), String> {
+    let Lua::Table(_, fields) = parse_lua(text.trim_start_matches('\u{feff}'))? else { return Err("develop settings are not a table".into()) };
+    let (mut props, values) = settings_props(&fields);
+    // the catalog keeps the crop edges without `HasCrop`
+    if !props.contains_key("crs:HasCrop") && ["Left", "Top", "Right", "Bottom", "Angle"].iter().any(|k| props.contains_key(&format!("crs:Crop{k}"))) {
+        props.insert("crs:HasCrop".into(), vec!["True".into()]);
+    }
+    Ok((props, values))
 }
 
 // ------------------------------------------------------------------------------- XMP in files
