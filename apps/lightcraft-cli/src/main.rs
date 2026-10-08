@@ -10,7 +10,7 @@
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
 //! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
-//! lightcraft-cli migrate-lightroom --library DIR [--catalog X.lrcat | --records R.json] [--limit N] [--dry-run] [--no-presets] [--develop-all] [--collections-only]
+//! lightcraft-cli migrate-lightroom --library DIR [--catalog X.lrcat | --records R.json] [--limit N] [--dry-run] [--no-presets] [--develop-all] [--collections-only] [--only-new]
 //! ```
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -112,6 +112,9 @@ USAGE:
                            Collection), for a library migrated already: nothing imported,
                            no photo or preset changed; also undoes earlier runs' extra
                            \"From Lightroom\" wrapper folder
+        --only-new         only photos this run imports (files an earlier run failed on, e.g.
+                           HEIC before macOS decoding); photos already in the library keep
+                           their ratings, metadata and edits
   lightcraft-cli --version | --help
 ";
 
@@ -626,6 +629,7 @@ fn migrate_lightroom(args: &[String]) -> Result<(), String> {
             "--no-presets" => p["presets"] = json!(false),
             "--develop-all" => p["developAll"] = json!(true),
             "--collections-only" => p["collectionsOnly"] = json!(true),
+            "--only-new" => p["onlyNew"] = json!(true),
             a => return Err(format!("unknown option `{a}`")),
         }
         i += 1;

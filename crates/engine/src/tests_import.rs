@@ -1007,3 +1007,45 @@ fn trashed_photo_ids(tag: &str) -> (Session, std::path::PathBuf, [u64; 1], u64) 
     let (s, src, id) = trashed_photo(tag);
     (s, src, [id], 0)
 }
+
+/// Files an import couldn't read are kept in the library's list and imported by a retry once they
+/// read (here: a damaged JPEG replaced by a good file at the same path). Offline files stay listed.
+#[test]
+fn failed_imports_are_remembered_and_retried() {
+    let src = temp_dir("retry-src");
+    let lib = temp_dir("retry-lib");
+    write_png(&src.join("ok.png"), 1);
+    std::fs::write(src.join("later.png"), "garbage").unwrap();
+    std::fs::write(src.join("gone.png"), "garbage").unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "failed")), (1, 2), "{r}");
+    let listed = s.execute("library.importFailures", &json!({})).unwrap();
+    assert_eq!(listed.as_array().map(Vec::len), Some(2), "{listed}");
+    assert_eq!(listed[0]["mode"], "add");
+
+    // nothing readable yet: still listed
+    let r = s.execute("library.retryFailedImports", &json!({})).unwrap();
+    assert_eq!((ids(&r, "imported"), ids(&r, "failed"), r["remaining"].as_u64()), (0, 2, Some(2)), "{r}");
+
+    write_png(&src.join("later.png"), 2);
+    std::fs::remove_file(src.join("gone.png")).unwrap();
+    let r = s.execute("library.retryFailedImports", &json!({})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    assert_eq!(ids(&r, "offline"), 1, "{r}");
+    assert_eq!(r["remaining"], 1, "{r}");
+    assert_eq!(s.catalog.len(), 2);
+    // a later ordinary import of the same folder doesn't list what it already has
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(s.execute("library.importFailures", &json!({})).unwrap().as_array().map(Vec::len), Some(1));
+    let r = s.execute("library.retryFailedImports", &json!({"forget": true})).unwrap();
+    assert_eq!(r["remaining"], 0, "{r}");
+    assert!(!lib.join(crate::import::FAILURES_FILE).exists());
+
+    // a damaged list reads as empty, never an error
+    std::fs::write(lib.join(crate::import::FAILURES_FILE), "{not json").unwrap();
+    assert_eq!(s.execute("library.importFailures", &json!({})).unwrap(), json!([]));
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}

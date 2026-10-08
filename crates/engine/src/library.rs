@@ -391,6 +391,7 @@ impl Session {
         if on_disk {
             self.media.attach_disk_cache(&dir.join("thumbs"), self.cache_bytes());
         }
+        crate::files::sysdecode::set_cache_dir(on_disk.then(|| dir.join("System Decodes")));
         let view_written = self.view_json();
         self.library = Some(Library {
             dir,

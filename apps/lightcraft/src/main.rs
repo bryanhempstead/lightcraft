@@ -337,13 +337,7 @@ fn services() -> Services {
         })),
         pick_files: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter(
-                    lightcraft_ui_egui::i18n::tr("Photos"),
-                    &[
-                        "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "raf", "orf", "rw2", "rwl", "raw",
-                        "pef", "psd", "jxl", "gif", "bmp",
-                    ],
-                )
+                .add_filter(lightcraft_ui_egui::i18n::tr("Photos"), &lightcraft_engine::import::extensions()[..])
                 .pick_files()
                 .unwrap_or_default()
                 .into_iter()

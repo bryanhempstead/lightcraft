@@ -135,6 +135,9 @@ pub struct MigrateOptions {
     /// Only the collections (albums, smart albums, sets, the Quick Collection): for a library
     /// migrated already. Nothing is imported, no photo is changed, no preset is read.
     pub collections_only: bool,
+    /// Only photos this run imports (e.g. files an earlier run failed on, now readable): photos
+    /// already in the library keep their ratings, metadata and develop settings untouched.
+    pub only_new: bool,
     /// Preset folders to import (none = no presets).
     pub preset_dirs: Vec<String>,
     /// Creative look name → one of our profile ids (e.g. a `.cube` imported with
@@ -907,11 +910,12 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
         }
     }
     let wanted: HashSet<i64> = masters.iter().map(|m| m.id).collect();
-    let copies: Vec<&LrImage> = rec.images.iter().filter(|i| i.master.is_some_and(|m| wanted.contains(&m))).collect();
+    let mut copies: Vec<&LrImage> = rec.images.iter().filter(|i| i.master.is_some_and(|m| wanted.contains(&m))).collect();
     let lr_by_id: HashMap<i64, &LrImage> = rec.images.iter().map(|i| (i.id, i)).collect();
 
     // ---- import (add: the files stay where they are)
     let mut import_report = Value::Null;
+    let before: HashSet<PhotoId> = if opts.only_new { s.catalog.photos().map(|p| p.id).collect() } else { HashSet::new() };
     if opts.import && !opts.dry_run && !opts.collections_only && !masters.is_empty() {
         let paths: Vec<String> = masters.iter().map(|m| m.path.clone()).collect();
         let r = crate::import::import_with(s, &paths, &crate::import::ImportOptions { mode: crate::import::ImportMode::Add, ..Default::default() })?;
@@ -920,7 +924,14 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
     let by_path = photos_by_path(s);
     // catalog image id → our photo
     let mut ids: HashMap<i64, PhotoId> = masters.iter().filter_map(|m| Some((m.id, *by_path.get(&m.path)?))).collect();
+    if opts.only_new {
+        ids.retain(|_, id| !before.contains(id));
+        masters.retain(|m| ids.contains_key(&m.id));
+    }
     let not_in_library = masters.len().saturating_sub(ids.len());
+    if opts.only_new {
+        copies.retain(|c| c.master.is_some_and(|m| ids.contains_key(&m)));
+    }
 
     // ---- virtual copies (sync-conflict copies identical to their master are left out)
     let mut copies_made = 0usize;

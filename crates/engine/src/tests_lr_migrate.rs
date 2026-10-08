@@ -553,3 +553,51 @@ fn collections_come_over_with_members_and_nesting() {
     assert!(s.catalog.album(top).is_some(), "one undo step");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `onlyNew`: a second run imports what the first couldn't read and applies Lightroom's data to
+/// those photos only; photos already in the library keep the changes made since.
+#[test]
+fn only_new_leaves_migrated_photos_alone() {
+    let dir = std::env::temp_dir().join(format!("lc-lrmig-new-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let photos = dir.join("shoot");
+    std::fs::create_dir_all(&photos).unwrap();
+    write_png(&photos.join("a.png"));
+    // b can't be read on the first run
+    std::fs::write(photos.join("b.png"), "not yet").unwrap();
+    let root = format!("{}/", dir.display());
+    let im = |id: i64, base: &str| json!({"id": id, "root": root, "folder": "shoot/", "base": base, "ext": "png", "develop": "s = { Exposure2012 = 1.25 }", "edits": 1, "rating": 3});
+    let cols = vec![json!({"id": 8, "name": "Trip", "kind": "com.adobe.ag.library.collection"})];
+    let ci = vec![json!({"collection": 8, "image": 1}), json!({"collection": 8, "image": 2})];
+    let rec = records_from_rows("t.lrcat", &[im(1, "a"), im(2, "b")], &[], &[], &cols, &ci, &[]);
+    let rec_path = dir.join("records.json");
+    std::fs::write(&rec_path, serde_json::to_vec(&rec).unwrap()).unwrap();
+    let rec_s = rec_path.to_string_lossy().to_string();
+
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false})).unwrap();
+    assert_eq!(s.catalog.len(), 1);
+    let a = s.catalog.photos().next().unwrap().id;
+    // since the migration: a re-rated and re-edited in LightCraft
+    s.commit("t", lightcraft_catalog::Op::SetRating { id: a, rating: 5 }).unwrap();
+    s.selection = crate::Selection::single(a);
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": -0.5})).unwrap();
+
+    let img = lightcraft_raster::Rgba8::filled(20, 16, [9, 9, 9, 255]);
+    std::fs::write(photos.join("b.png"), lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap())
+        .unwrap();
+    let r = s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false, "onlyNew": true})).unwrap();
+    assert_eq!(r["matched"], json!(1), "{r}");
+    assert_eq!(s.catalog.len(), 2);
+    let pa = s.catalog.photo(a).unwrap();
+    assert_eq!(pa.rating, 5, "kept");
+    assert_eq!(pa.develop.light.exposure, -0.5, "kept");
+    let b = s.catalog.photos().find(|p| p.id != a).unwrap();
+    assert_eq!(b.rating, 3);
+    assert_eq!(b.develop.light.exposure, 1.25);
+    let trip = s.catalog.albums().find(|al| al.name == "Trip").unwrap();
+    assert_eq!(trip.photos.len(), 2, "both in the collection, nothing duplicated");
+    assert_eq!(s.catalog.albums().filter(|al| al.name == "Trip").count(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

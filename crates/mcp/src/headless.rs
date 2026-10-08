@@ -10,10 +10,11 @@ use serde_json::{Value, json};
 
 use crate::backend::Backend;
 
-/// File extensions recognised as photos when expanding folders.
+/// The pure-Rust photo extensions (folders expand with [`lightcraft_engine::import::is_supported`],
+/// which adds HEIC and the other formats macOS decodes).
 pub const PHOTO_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2", "rwl", "raw", "pef", "psd", "jxl", "gif",
-    "bmp", "avif",
+    "bmp", "avif", "heic",
 ];
 
 /// Headless backend: a [`Session`] with filesystem hooks.
@@ -152,7 +153,7 @@ pub fn expand_paths(paths: &[String]) -> Vec<String> {
                     }
                 }
             }
-        } else if p.extension().is_some_and(|e| PHOTO_EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str())) {
+        } else if lightcraft_engine::import::is_supported(p) {
             out.push(std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string());
         }
     }

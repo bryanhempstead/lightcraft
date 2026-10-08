@@ -13,6 +13,8 @@ use lightcraft_raster::resample::{Filter, fit};
 
 use crate::media::{FileLoader, FileProbe, PreviewLoader, ProbeInfo};
 
+pub mod sysdecode;
+
 fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
     let shutter = m.exposure_time.map(|t| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) }).unwrap_or_default();
     let camera = [m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" ").trim().to_string();
@@ -394,7 +396,15 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let r = load_vec(bytes, max_edge);
+        let r = match sysdecode::route(path, &bytes) {
+            // (macOS can't read it either: a raw still has its embedded preview)
+            Some(_) => sysdecode::load(path, max_edge).or_else(|e| load_vec(bytes, max_edge).map_err(|_| e)),
+            // a raw the native decoder fails on (a damaged or unexpected stream): macOS may still read it
+            None => load_vec(bytes, max_edge).or_else(|e| match sysdecode::available() {
+                true => sysdecode::load(path, max_edge).map_err(|e2| format!("{e}; {e2}")),
+                false => Err(e),
+            }),
+        };
         // the file, the samples and the intermediate images are gone: give their pages back
         crate::memory::release();
         r
@@ -403,7 +413,10 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
         let _permit = crate::memory::work_gate().acquire(len);
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        probe_bytes(path, &bytes)
+        match sysdecode::route(path, &bytes) {
+            Some(why) => sysdecode::probe(path, &bytes, why).or_else(|e| probe_bytes(path, &bytes).map_err(|_| e)),
+            None => probe_bytes(path, &bytes),
+        }
     });
     (loader, probe)
 }

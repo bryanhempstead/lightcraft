@@ -313,7 +313,21 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
 }
 
 pub fn is_supported(path: &Path) -> bool {
-    path.extension().is_some_and(|e| EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str()))
+    path.extension().is_some_and(|e| {
+        let e = e.to_string_lossy().to_lowercase();
+        EXTENSIONS.contains(&e.as_str()) || crate::files::sysdecode::handles_extension(&e)
+    })
+}
+
+/// Every extension [`is_supported`] accepts here: [`EXTENSIONS`], plus on macOS the formats only
+/// its ImageIO reads ([`crate::files::sysdecode`]). For file dialogs.
+pub fn extensions() -> Vec<&'static str> {
+    let mut v = EXTENSIONS.to_vec();
+    if crate::files::sysdecode::available() {
+        v.extend(crate::files::sysdecode::EXTENSIONS);
+        v.extend(crate::files::sysdecode::RAW_EXTENSIONS);
+    }
+    v
 }
 
 /// Expand files and folders (recursively) into supported files. `skip` (e.g. the library folder)
@@ -990,7 +1004,142 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
+    if !opts.local {
+        remember_failures(s, opts.mode, &report.failed, now.as_str());
+    }
     Ok(report)
+}
+
+// ------------------------------------------------------------------ failed files, for a retry
+
+/// The library's list of files imports couldn't read (`library.importFailures`), so they can be
+/// retried once LightCraft reads them (`library.retryFailedImports`).
+pub const FAILURES_FILE: &str = "import-failures.json";
+
+/// A file an import couldn't read.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FailedImport {
+    pub path: String,
+    pub error: String,
+    /// When it last failed (ISO 8601).
+    pub at: String,
+    /// The import's mode: add | copy | move.
+    pub mode: String,
+}
+
+fn failures_path(s: &Session) -> Option<PathBuf> {
+    s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join(FAILURES_FILE))
+}
+
+/// The files imports into this library couldn't read (a damaged list reads as empty).
+pub fn failures(s: &Session) -> Vec<FailedImport> {
+    let Some(p) = failures_path(s) else { return Vec::new() };
+    std::fs::read(p).ok().and_then(|b| serde_json::from_slice::<Vec<FailedImport>>(&b).ok()).unwrap_or_default()
+}
+
+fn write_failures(s: &Session, list: &[FailedImport]) -> Result<(), String> {
+    let Some(p) = failures_path(s) else { return Ok(()) };
+    if list.is_empty() {
+        return match std::fs::remove_file(&p) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("{}: {e}", p.display())),
+            _ => Ok(()),
+        };
+    }
+    let json = serde_json::to_vec_pretty(list).map_err(|e| e.to_string())?;
+    let tmp = p.with_extension("json.tmp");
+    std::fs::write(&tmp, json).and_then(|()| std::fs::rename(&tmp, &p)).map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// Keep the list current after an import: this batch's failures are added (or updated), files
+/// that are in the library now are dropped. A list that can't be written is logged, never fatal.
+fn remember_failures(s: &Session, mode: ImportMode, failed: &[(String, String)], now: &str) {
+    if failures_path(s).is_none() {
+        return;
+    }
+    let mut list = failures(s);
+    if list.is_empty() && failed.is_empty() {
+        return;
+    }
+    let mode = match mode {
+        ImportMode::Add => "add",
+        ImportMode::Copy => "copy",
+        ImportMode::Move => "move",
+    };
+    for (path, error) in failed {
+        list.retain(|f| &f.path != path);
+        list.push(FailedImport { path: path.clone(), error: error.clone(), at: now.to_string(), mode: mode.into() });
+    }
+    let in_library: std::collections::HashSet<&str> = s
+        .catalog
+        .photos()
+        .filter(|p| !p.local)
+        .filter_map(|p| match &p.source {
+            Source::File { path } => Some(path.as_str()),
+            _ => None,
+        })
+        .collect();
+    list.retain(|f| !in_library.contains(f.path.as_str()));
+    if let Err(e) = write_failures(s, &list) {
+        log::warn!("import: can't keep the list of failed files: {e}");
+    }
+}
+
+/// Import again the files earlier imports failed on (all, or those of them in `only`), each in
+/// its import's mode. Files that are gone (an unplugged drive) stay on the list. `forget` clears
+/// the list instead. → `{retried, imported, duplicates, failed: [[path, error]], offline: [path],
+/// remaining}`.
+pub fn retry_failed(s: &mut Session, only: Option<&[String]>, forget: bool) -> crate::Result<serde_json::Value> {
+    use serde_json::json;
+    let list = failures(s);
+    if forget {
+        let keep: Vec<FailedImport> = match only {
+            Some(only) => list.iter().filter(|f| !only.contains(&f.path)).cloned().collect(),
+            None => Vec::new(),
+        };
+        write_failures(s, &keep).map_err(crate::EngineError::Other)?;
+        return Ok(json!({"forgotten": list.len() - keep.len(), "remaining": keep.len()}));
+    }
+    let wanted: Vec<&FailedImport> = list.iter().filter(|f| only.is_none_or(|o| o.contains(&f.path))).collect();
+    let mut offline = Vec::new();
+    let (mut imported, mut duplicates, mut failed) = (Vec::new(), 0usize, Vec::new());
+    for mode in [ImportMode::Add, ImportMode::Copy, ImportMode::Move] {
+        let name = match mode {
+            ImportMode::Add => "add",
+            ImportMode::Copy => "copy",
+            ImportMode::Move => "move",
+        };
+        let mut paths = Vec::new();
+        for f in wanted.iter().filter(|f| f.mode == name || (mode == ImportMode::Add && !["copy", "move"].contains(&f.mode.as_str()))) {
+            if Path::new(&f.path).is_file() {
+                paths.push(f.path.clone());
+            } else {
+                offline.push(f.path.clone());
+            }
+        }
+        if paths.is_empty() {
+            continue;
+        }
+        let r = import_with(s, &paths, &ImportOptions { mode, ..Default::default() })?;
+        imported.extend(r.imported);
+        duplicates += r.duplicates.len();
+        failed.extend(r.failed);
+    }
+    // duplicates are in the library already (by path or content): nothing left to retry
+    let mut left = failures(s);
+    if duplicates > 0 {
+        let failed_paths: std::collections::HashSet<&str> = failed.iter().map(|(p, _)| p.as_str()).collect();
+        left.retain(|f| !wanted.iter().any(|w| w.path == f.path) || failed_paths.contains(f.path.as_str()) || offline.contains(&f.path));
+        write_failures(s, &left).map_err(crate::EngineError::Other)?;
+    }
+    Ok(json!({
+        "retried": wanted.len() - offline.len(),
+        "imported": imported,
+        "duplicates": duplicates,
+        "failed": failed,
+        "offline": offline,
+        "remaining": left.len(),
+    }))
 }
 
 /// Move, after the commit: save the library, then remove each source whose destination is

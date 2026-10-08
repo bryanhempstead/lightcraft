@@ -1080,6 +1080,30 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"scanned": c.len(), "duplicates": dups, "candidates": c}))
             }
         ),
+        cmd!(query "library.importFailures", "Files Imports Couldn't Read", [], None, "{} → [{path, error, at, mode}] — files earlier imports into this library failed on (kept in import-failures.json until they import; retry with library.retryFailedImports)", always, |s, _| {
+            Ok(serde_json::to_value(crate::import::failures(s)).unwrap_or_default())
+        }),
+        cmd!(
+            "library.retryFailedImports",
+            "Retry Failed Imports",
+            ["File"],
+            None,
+            "{paths?: [path] (default: every file on library.importFailures), forget?: bool (drop them from the list instead)} — import again the files earlier imports couldn't read (e.g. HEIC before LightCraft could decode it), each in its import's mode; files that are offline stay on the list → {retried, imported: [photoId], duplicates, failed: [[path, error]], offline: [path], remaining}",
+            always,
+            |s, p| {
+                let only = p.get("paths").map(|_| strs(p, "paths"));
+                let undo0 = s.undo.len();
+                let r = crate::import::retry_failed(s, only.as_deref(), bool_or(p, "forget", false))?;
+                let n = s.undo.len().saturating_sub(undo0);
+                if n > 1 {
+                    s.merge_undo(n, "Retry Failed Imports");
+                }
+                if let Some(f) = r["imported"].get(0).and_then(Value::as_u64) {
+                    s.selection = Selection::single(PhotoId(f));
+                }
+                Ok(r)
+            }
+        ),
         cmd!(
             "library.import",
             "Import Photos",
