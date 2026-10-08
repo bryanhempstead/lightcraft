@@ -37,7 +37,8 @@ mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 | `ui.pointer` | `{events: [{kind: down\|drag\|up, x, y}], alt?, shift?, cmd?}` | Gesture in normalized image coordinates (Detail view) |
 | `ui.key` | `{key, cmd?, shift?, alt?, ctrl?}` | Key press |
 | `ui.text` | `{text}` | Text input |
-| `ui.scroll` | `{dx, dy}` | Mouse wheel |
+| `ui.scroll` | `{dx, dy, cmd?, ctrl?, shift?, alt?}` | Wheel / two-finger scroll at the current pointer; pans over the image, modifier-scroll zooms |
+| `ui.zoom` | `{factor}` | Pinch zoom at the current pointer (positive scale multiplier; 1 = unchanged). Position it first with `ui.move` or `ui.hoverWidget` |
 | `ui.set` | partial UI state, e.g. `{"view": "detail"}` | Resulting UI state |
 | `ui.dialog.confirm` / `ui.dialog.cancel` | — | Close the open dialog |
 | `ui.resize` | `{width, height}` | Resize the window |
@@ -50,6 +51,14 @@ mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 | `keys.import` | `{source: lrkeys\|superkeys\|monogram, path?, profile?, write?}` | Read LrKeys `bindings.json`, LrSuperKeys `Shortcuts.xml`+`SpeedKeys.xml`, or a Monogram `state.json` profile (read-only) into the keymap → `{mapped, skipped, …}`; `write` saves the generated Monogram profile |
 | `keys.midi` / `keys.learn` | `{midi: cc\|note, number, value?, channel?}` or `{bytes}` / `{on}` | A MIDI message as if from the MIDI input → what it did / MIDI learn |
 | super keys | `keys.nudge {control, dir, size: small\|large}` · `keys.macro {steps: [{command, params}]}` · `keys.send {keys}` · `preset.applyByName {name}` · `crop.nudge {x?, y?, scale?}` · `view.develop` · `view.colorMixer {mode}` · `view.resumeLastLeftOff` | Commands for keys, MIDI and the control channel (see `crates/ui-egui/src/keymap.rs`, `leftoff.rs`) |
+
+Image navigation is also available directly as the UI command `view.navigate`, with
+`{zoom?: "fit" | "fill" | {"percent": number}, pan?: [x, y]}`. Percentage zoom accepts fractional
+values greater than 0 and at most 800; pan is the normalized image centre, with coordinates from 0 to 1.
+Pinching keeps the image point under the pointer steady and zooms between Fit and 800%; two-finger
+scrolling pans in both axes and respects the operating system's scrolling direction and momentum.
+These gestures work in Detail (including editing tools and full-screen preview), Compare and Reference
+views, and only apply over their image areas. Panning stops at the image edges.
 
 ### When the library can't be saved
 
@@ -91,7 +100,10 @@ lightcraft-cli snapshot --library DIR --script tour.jsonl -o shot.png
 
   `tour.jsonl` holds one request per line (`#` comments allowed), e.g.
   `{"method": "ui.set", "params": {"view": "detail", "right": "edit", "openSections": ["optics"]}}`
-  then `{"method": "ui.screenshot"}`. Replies are printed to stdout. A `ui.screenshot` without
+  then `{"method": "ui.screenshot"}`. Replies are printed to stdout. A failed request
+  (`"ok": false`) does not stop the script — the remaining lines and the final screenshot still
+  run — but the exit status is non-zero when any request failed, as with `run --keep-going`, so
+  CI and nightly runs can judge a snapshot by its exit status. A `ui.screenshot` without
   `path` writes `-o` (then `OUT-2.png`, `OUT-3.png`, …); `ui.settle {timeoutMs?}` waits until no
   renders are in flight. Each request runs frames until it is answered and its injected input
   (clicks, keys, drags) has played out. Widget ids for `ui.clickWidget` come from `ui.widgets`

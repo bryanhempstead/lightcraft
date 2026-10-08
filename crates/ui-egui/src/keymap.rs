@@ -1361,7 +1361,7 @@ pub const BUNDLE_ID: &str = "ai.storyteller.lightcraft";
 
 /// A short on-canvas message from a command (no egui context at hand).
 fn say(app: &mut crate::LightcraftApp, text: impl Into<String>) {
-    app.ui.toast = Some((text.into(), app.last_time + 1.4));
+    app.ui.toast = Some((text.into(), app.last_time + 1.4, None));
 }
 
 /// Show a control's value after a nudge / MIDI move ("Exposure +0.35").

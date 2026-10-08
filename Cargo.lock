@@ -2930,6 +2930,7 @@ name = "lightcraft-engine"
 version = "0.4.0"
 dependencies = [
  "ab_glyph",
+ "harfrust",
  "libc",
  "lightcraft-catalog",
  "lightcraft-codecs",
@@ -3082,6 +3083,7 @@ dependencies = [
  "proptest",
  "rayon",
  "serde",
+ "sha2",
  "thiserror 2.0.21",
  "zune-core",
  "zune-jpeg",

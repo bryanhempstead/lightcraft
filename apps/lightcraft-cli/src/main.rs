@@ -72,6 +72,8 @@ USAGE:
                           per line: {\"method\": \"ui.set\", \"params\": {\"view\": \"detail\"}}.
                           Replies go to stdout. `ui.screenshot` without a path writes -o (then
                           OUT-2.png, OUT-3.png…); `ui.settle {timeoutMs?}` waits for renders.
+                          A failed request (\"ok\": false) does not stop the script, but the exit
+                          status is non-zero when any request failed.
         -o, --output OUT  PNG path (a final screenshot is written here if the script took none)
         --size WxH        window size in points (default 1600x1000)
         --scale S         pixels per point (default 1)
@@ -88,7 +90,7 @@ USAGE:
   lightcraft-cli controls [--json]   list every develop control id with its range
   lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
-      (Sony ARW, Nikon NEF): up to N files spread over the folders (default 300; 0 = all), pooled per
+      (Sony ARW, Nikon NEF, Fujifilm RAF): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
@@ -137,6 +139,9 @@ fn main() -> ExitCode {
         dhat::Profiler::builder().file_name(file).build()
     };
     alloc_release::install();
+    // Warnings (a GPU render redone on the CPU, an unknown backend name) on stderr; LIGHTCRAFT_LOG
+    // or RUST_LOG picks another level (#168).
+    lightcraft_engine::logging::install("lightcraft-cli");
     let args: Vec<String> = std::env::args().skip(1).collect();
     let r = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
@@ -170,7 +175,8 @@ fn main() -> ExitCode {
 
 /// Raw files below `path` (or `path` itself), skipping hidden and NAS metadata folders.
 fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
-    let is_raw = |p: &Path| p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["arw", "nef", "nrw"].iter().any(|x| e.eq_ignore_ascii_case(x)));
+    let is_raw =
+        |p: &Path| p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["arw", "nef", "nrw", "raf"].iter().any(|x| e.eq_ignore_ascii_case(x)));
     if path.is_file() {
         if is_raw(path) {
             out.push(path.to_path_buf());
@@ -709,7 +715,7 @@ fn render(args: &[String]) -> Result<(), String> {
     for (k, v) in opts {
         p[k] = v;
     }
-    let mut o = ExportOptions::from_json(&p);
+    let mut o = ExportOptions::from_params(&p).map_err(|e| e.to_string())?;
     if p.get("format").is_none() {
         let ext = Path::new(&output).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
         o.format = ExportFormat::parse(&ext)
@@ -805,6 +811,9 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         Some(p.with_file_name(format!("{stem}-{shots}.{ext}")).to_string_lossy().to_string())
     };
     let mut wrote_output = false;
+    // Issue #166: a scripted request that fails still gets its reply printed and the run carries
+    // on (like `run --keep-going`), but the exit status reports it — CI judges by exit status.
+    let mut failed = 0usize;
     if let Some(script) = &script {
         let text = std::fs::read_to_string(script).map_err(|e| format!("{script}: {e}"))?;
         let mut out = std::io::stdout().lock();
@@ -837,6 +846,9 @@ fn snapshot(args: &[String]) -> Result<(), String> {
                 }
                 _ => h.request(&method, params, timeout),
             };
+            if reply["ok"] != true {
+                failed += 1;
+            }
             if let Some(o) = reply.as_object_mut() {
                 o.insert("id".into(), id);
                 // wall time of the request (incl. the frames it ran), and since the start
@@ -873,7 +885,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         }
     }
     eprintln!("lightcraft-cli snapshot: done in {:.2} s ({} frames)", t0.elapsed().as_secs_f64(), h.frames());
-    Ok(())
+    if failed > 0 { Err(format!("{failed} scripted request(s) failed")) } else { Ok(()) }
 }
 
 fn commands(args: &[String]) -> Result<(), String> {

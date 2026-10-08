@@ -82,6 +82,7 @@ pub fn source_key(app: &LightcraftApp) -> String {
         LibrarySource::Picks => "picks".into(),
         LibrarySource::Folder => format!("folder:{}", app.session.browse.as_ref().map(|b| b.path.as_str()).unwrap_or("")),
         LibrarySource::Missing => "missing".into(),
+        LibrarySource::LibraryFolder => format!("libraryFolder:{}", app.session.library_folder.as_deref().unwrap_or("")),
     }
 }
 
@@ -100,7 +101,7 @@ fn engine_resume_point(app: &mut LightcraftApp, source: &str) -> Option<PhotoId>
     lightcraft_engine::find_command("library.resumePoint")?;
     let p = if let Some(a) = source.strip_prefix("album:") {
         json!({"album": a.parse::<u64>().ok()?})
-    } else if let Some(f) = source.strip_prefix("folder:") {
+    } else if let Some(f) = source.strip_prefix("folder:").or_else(|| source.strip_prefix("libraryFolder:")) {
         json!({"folder": f})
     } else {
         json!({})
@@ -191,6 +192,8 @@ pub fn resume(app: &mut LightcraftApp) -> Result<Value, String> {
             app.run("library.source", json!({"kind": "album", "id": a.parse::<u64>().unwrap_or(0)}))
         } else if let Some(f) = spot.source.strip_prefix("folder:") {
             app.run("library.browse", json!({"path": f}))
+        } else if let Some(f) = spot.source.strip_prefix("libraryFolder:") {
+            app.run("library.source", json!({"kind": "libraryFolder", "path": f}))
         } else {
             app.run("library.source", json!({"kind": spot.source}))
         };
