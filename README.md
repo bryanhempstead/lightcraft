@@ -25,6 +25,11 @@
   <a href="ROADMAP.md"><img alt="Status: young and moving fast" src="https://img.shields.io/badge/status-young%20%26%20moving%20fast-f2a516?style=flat-square"></a>
 </p>
 
+> **This is Bryan Hempstead's personal fork, and it diverges from upstream.** Since 2026-10-09 it is no longer
+> clean-room or pure Rust: it links Adobe's DNG SDK (fetched from adobe.com, never committed) and reads the Adobe
+> camera, look and lens profiles installed on the Mac at runtime, so that it renders Lightroom Classic edits the way
+> Lightroom does. No Adobe data is in this repository. Upstream: [storytold/lightcraft](https://github.com/storytold/lightcraft).
+
 <p align="center">
   <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
 </p>
@@ -414,13 +419,13 @@ egui frontend is one swappable crate; nothing below it knows a UI exists. `mcp` 
 
 Humans and agents follow the same rules, so read [AGENTS.md](AGENTS.md) first. The short version:
 
-- **Clean-room.** Never read Adobe binaries or GPL raw/photo code (darktable, RawTherapee, LibRaw, rawspeed, dcraw…);
-  work from public specs and black-box observation.
-- **No Adobe assets, ever:** no icons, screenshots, presets, profiles, LUTs or fonts from Adobe products. Every
+- **This fork:** Adobe's DNG SDK and the Adobe profiles installed on the user's Mac may be used at runtime (see
+  AGENTS.md → *Fork rules*); none of Adobe's files are committed. GPL raw/photo code is still not copied.
+- **No Adobe assets in the repo, ever:** no icons, screenshots, presets, profiles, LUTs or fonts from Adobe products. Every
   image, icon and font in the repo is original, public domain, Creative Commons, OFL or permissively licensed, and has
   an entry in [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) added in the same commit. New fonts go to
   [storytold/craft-fonts](https://github.com/storytold/craft-fonts), not here.
-- **Pure Rust**, enforced crate layering, everything is a command, and `cargo xtask ci` green before every commit
+- Enforced crate layering, everything is a command, and `cargo xtask ci` green before every commit
   (one task id per commit).
 - **Never crash.** Non-test code returns errors instead of panicking: no `unwrap()`, `expect()`, `panic!` or
   `unsafe`, checked indexing on anything derived from input, and a regression test with every crash fix. Details in

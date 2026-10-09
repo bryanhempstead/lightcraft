@@ -1,6 +1,10 @@
 # LightCraft — instructions for agents
 
-LightCraft is a clean-room, open-source, pure-Rust photo library + non-destructive raw developer targeting Adobe Lightroom parity (and beyond). Native on macOS, Windows, Linux; web via WASM. Sibling of `../pdfcraft` (Acrobat), `../photocraft` (Photoshop), `../vectorcraft` (Illustrator) and `../filmcraft` (Premiere), with the same conventions.
+LightCraft is a photo library + non-destructive raw developer targeting Adobe Lightroom parity (and beyond).
+**This checkout is Bryan's personal fork** (`origin` = github.com/bryanhempstead/lightcraft, `upstream` =
+storytold/lightcraft). Since 2026-10-09 it is his own app and no longer follows upstream's clean-room / pure-Rust rules
+(his words: "break it off from the main application … and take that rule out"); the goal is that it renders his
+Lightroom Classic edits the same as Lightroom does. Upstream merges are optional cherry-picks now, not a duty. Native on macOS, Windows, Linux; web via WASM. Sibling of `../pdfcraft` (Acrobat), `../photocraft` (Photoshop), `../vectorcraft` (Illustrator) and `../filmcraft` (Premiere), with the same conventions.
 
 ## Start every session here
 1. Read `plan/STATUS.md` (current milestone, next unchecked task, blockers).
@@ -34,7 +38,8 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
   "unsupported" error or is disabled. Sole exception: a provably infallible literal, as `#[allow(clippy::expect_used)]`
   + `.expect("why it can't fail")`.
 - **`unsafe` lives only in `crates/sysmem`** (one FFI call, `malloc_zone_pressure_relief`, that returns freed
-  allocator pages to macOS after raw decodes). Every other production crate root has `#![forbid(unsafe_code)]`. A new
+  allocator pages to macOS after raw decodes) **and `crates/dng-sdk-sys`** (the C ABI shim over Adobe's DNG SDK; see
+  *Fork rules*). Every other production crate root has `#![forbid(unsafe_code)]`. A new
   unsafe need goes in an isolated, well-tested helper crate like it: `// SAFETY:` on every block, a safe API, a safe
   fallback where possible, and a line here naming it.
 - **Input-derived numbers are hostile:** `get()` instead of `[i]`/`[a..b]` for offsets from files, users, agents or
@@ -50,16 +55,30 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
   clippy::unimplemented, clippy::todo, clippy::unreachable)]`. Not `[workspace.lints]`: those would also hit
   integration tests, examples and benches. New crates start with the attribute.
 
+## Fork rules (Bryan's fork, 2026-10-09)
+- **Adobe's own code and data are allowed — at runtime, from his Mac.** Adobe's DNG SDK and other C/C++ dependencies
+  may be linked (`crates/dng-sdk-sys`, built from `vendor/dng_sdk`, fetched by `tools/fetch-dng-sdk.sh` from adobe.com
+  and checksum-pinned). At runtime LightCraft may read the Adobe data installed on this Mac: Camera Raw / Lightroom
+  camera profiles (`.dcp`), Look / creative profiles (`.xmp`), lens profiles (`.lcp`), his presets and catalogs.
+- **Never commit Adobe's proprietary data or the SDK into the repo**: no `.dcp`, `.lcp`, Adobe profile `.xmp`, SDK
+  sources or binaries (`vendor/` is gitignored; `cargo xtask assets` still rejects Adobe formats). Anything derived
+  from his catalog stays on his machine (`~/Library/Application Support/LightCraft/`).
+- Every Adobe-backed path has a fallback: no SDK, no installed profile, an odd DCP or an SDK error → the previous
+  LightCraft path with a notice, never a panic or a blank render.
+- Lightroom's data stays read-only (it syncs his personal library: never import/edit/rate/delete there; work on
+  copies). GPL code (darktable, RawTherapee, LibRaw, …) is still not copied: the fork stays MIT OR Apache-2.0 for its
+  own code.
+
 ## Non-negotiables
-- **Clean-room.** Never read/disassemble anything inside Adobe app bundles (names/listings only). Never copy Adobe icons, presets, profiles (DCP), lens profiles (LCP), camera matrices, fonts. Observation of the installed Lightroom is read-only (it syncs the user's personal library: never import/edit/rate/delete there). Never copy GPL/LGPL/AGPL code (darktable, RawTherapee, ART, LibRaw, rawspeed, rawloader, rawler, lensfun, dcraw-derived GPL code…).
-- **Pure Rust** in the product. No C/C++ dependencies.
 - **Layering** (`plan/architecture.md` §3, enforced by `cargo xtask layers`): nothing below L5 depends on egui/eframe/winit/rfd.
+  `dng-sdk-sys` is an L0 helper (no LightCraft deps); `color`/`pipeline` use it behind its safe API.
 - **Everything is a command** (`crates/engine`): id, label, menu path, shortcut, params, enabled(), run(). UI, CLI, control channel and MCP all dispatch by id. Every slider is a `develop` control spec.
 - **Resolution independence:** settings use normalized image coordinates and relative radii; previews and exports must match.
 - **Quality gates** before every commit: `cargo xtask ci` (fmt, clippy -D warnings, tests, layers, assets, wasm).
 - **Commits:** one task id per commit (`M2.3: local Laplacian highlights/shadows`). Only green states. End messages with the attribution line required by the environment.
 
 ## Assets: icons, images, fonts (ABSOLUTE RULE — never violate)
+(Applies to what is *committed*. Reading his installed Adobe profiles at runtime is allowed — see *Fork rules*.)
 - **Never use any iconography, image, artwork, font, sound or other asset from Adobe products** (no Lightroom/Creative Cloud icons, no screenshots, no presets/profiles/LUTs, no UI bitmaps — not even as a temporary placeholder or "reference copy"). Observing Adobe's UI to imitate *layout and behaviour* is allowed; copying or tracing its assets is not.
 - **This includes Adobe's open-licensed assets**: no Source Sans/Serif/Code or Source Han fonts, no Adobe Fonts, no
   Adobe-published icon sets, sample photos, colour profiles or LUTs — even when OFL/MIT. The UI font is Inter (OFL);

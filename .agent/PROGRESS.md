@@ -1,8 +1,9 @@
 # Progress — Bryan's LightCraft (his copy of storytold/lightcraft, ~/crafts/lightcraft)
 
 Bryan wants LightCraft to replace Lightroom Classic for him: same shortcuts, presets, catalog data, devices.
-Upstream rules are in AGENTS.md (never crash, pure Rust, everything is a command). This board is for his changes.
-Commit locally on `main` (no push until he OKs a fork). Pull upstream with `git pull` and merge.
+Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Since 2026-10-09 this is his own fork
+(origin = bryanhempstead/lightcraft): Adobe's DNG SDK + his installed Adobe profiles are allowed at runtime, no Adobe
+files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
 - [ ] (colour agent round 2, 2026-10-09) **Bryan runs** — replaces step 1 of the round-1 item below (steps 2–3 there stay done). App closed, after `cargo build --release -p lightcraft-cli -p lightcraft`. Reads copies of the catalog/previews, writes only `~/Library/Application Support/LightCraft/camera-profiles/` and scratch folders in /tmp; never the library. Order matters (calibrate rewrites the profiles; wbmap / lensfit add to them):
