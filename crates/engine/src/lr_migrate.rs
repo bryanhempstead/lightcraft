@@ -187,6 +187,78 @@ fn recorded_looks(s: &Session) -> HashMap<PhotoId, (String, f64)> {
         .unwrap_or_default()
 }
 
+/// Repair a library migrated by an earlier version, from the catalog's records:
+/// - `crops`: crops whose straighten angle is still exactly the mirror of Lightroom's (an earlier
+///   version read `crs:CropAngle` the wrong way round) get the right one;
+/// - `unedited`: photos Lightroom shows unedited but that carry other settings (taken from an XMP
+///   sidecar next to the file at import) get Lightroom's settings.
+///
+/// Photos (and virtual copies) changed here since the migration are left alone. One undo step.
+pub fn repair_migration(s: &mut Session, rec: &Records, crops: bool, unedited: bool, dry_run: bool) -> crate::Result<Value> {
+    let by_path = photos_by_path(s);
+    let lr_by_id: HashMap<i64, &LrImage> = rec.images.iter().map(|i| (i.id, i)).collect();
+    let migrated_at = s
+        .library
+        .as_ref()
+        .filter(|l| l.on_disk)
+        .and_then(|l| std::fs::read(l.dir.join(RESUME_FILE)).ok())
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|d| d["migrated"].as_str().map(str::to_string));
+    let (mut fixed, mut kept, mut reset, mut ops) = (0usize, 0usize, 0usize, Vec::new());
+    for im in &rec.images {
+        let target = match im.master {
+            None => by_path.get(&im.path).copied(),
+            Some(m) => {
+                let master = lr_by_id.get(&m).and_then(|mi| by_path.get(&mi.path).copied());
+                let name = im.copy_name.clone().unwrap_or_else(|| "Copy 1".into());
+                master.and_then(|mid| {
+                    s.catalog.photos().find(|p| p.copy_of == Some(mid) && p.copy_name.as_deref() == Some(name.as_str())).map(|p| p.id)
+                })
+            }
+        };
+        let Some(p) = target.and_then(|id| s.catalog.photo(id)) else { continue };
+        let aspect = (p.width > 0 && p.height > 0).then(|| p.width as f64 / p.height as f64);
+        let prep = prepare_image(im, aspect);
+        let Some(partial) = prep.develop else { continue };
+        let changed_here = match (&p.edited, &migrated_at) {
+            (Some(e), Some(m)) => e.as_str() > m.as_str(),
+            _ => false,
+        };
+        // Lightroom shows it unedited: its settings are Lightroom's defaults
+        if unedited && im.edits == 0 && !prep.custom && im.master.is_none() && p.is_edited() {
+            if changed_here {
+                kept += 1;
+                continue;
+            }
+            reset += 1;
+            if !dry_run {
+                let d = lightcraft_develop::apply_partial(&p.camera_defaults(), &partial, 1.0);
+                ops.push(Op::SetDevelop { id: p.id, settings: Arc::new(d), label: "Lightroom Settings".into(), edited: None });
+            }
+            continue;
+        }
+        let Some(want) = partial["crop"]["geometry"]["angle"].as_f64().filter(|_| crops) else { continue };
+        let have = p.develop.crop.geometry.angle;
+        if want == 0.0 || (have - want).abs() < 1e-9 {
+            continue;
+        }
+        if (have + want).abs() > 1e-6 {
+            kept += 1;
+            continue;
+        }
+        fixed += 1;
+        if !dry_run {
+            let mut d = (*p.develop).clone();
+            d.crop.geometry.angle = want;
+            ops.push(Op::SetDevelop { id: p.id, settings: Arc::new(d), label: "Fix Lightroom Crop".into(), edited: p.edited.clone() });
+        }
+    }
+    if !ops.is_empty() {
+        s.commit("Repair Lightroom Migration", Op::Batch { ops })?;
+    }
+    Ok(json!({"dryRun": dry_run, "cropsFixed": fixed, "uneditedReset": reset, "keptChangedHere": kept}))
+}
+
 /// Give photos the imported creative profile their Lightroom look names (Summer Fields,
 /// Nautica, … imported from XMP profiles or `.cube` files): for a library migrated before those
 /// profiles were imported. Profiles in `profile_dirs` are imported first. The looks come from the
@@ -885,6 +957,8 @@ struct DevelopStats {
     /// Creative looks used (name → photos), and how many found a profile here.
     looks: BTreeMap<String, usize>,
     looks_matched: usize,
+    /// Unedited in Lightroom, but given settings from an XMP sidecar on import: reset to Lightroom's.
+    sidecar_reset: usize,
 }
 
 impl DevelopStats {
@@ -1020,10 +1094,12 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
     // ---- import (add: the files stay where they are)
     let mut import_report = Value::Null;
     let before: HashSet<PhotoId> = if opts.only_new { s.catalog.photos().map(|p| p.id).collect() } else { HashSet::new() };
+    let mut imported_now: HashSet<u64> = HashSet::new();
     if opts.import && !opts.dry_run && !opts.collections_only && !masters.is_empty() {
         let paths: Vec<String> = masters.iter().map(|m| m.path.clone()).collect();
         let r = crate::import::import_with(s, &paths, &crate::import::ImportOptions { mode: crate::import::ImportMode::Add, ..Default::default() })?;
         import_report = json!({"imported": r.imported.len(), "duplicates": r.duplicates.len(), "failed": r.failed.len(), "failedFiles": r.failed.iter().take(50).collect::<Vec<_>>()});
+        imported_now = r.imported.iter().copied().collect();
     }
     let by_path = photos_by_path(s);
     // catalog image id → our photo
@@ -1116,9 +1192,15 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
             } else if prep.custom {
                 dev.by_look += 1;
             }
-            if im.edits > 0 || prep.custom || opts.develop_all {
+            // a photo Lightroom shows unedited that this import gave settings from an XMP sidecar
+            // next to it (often another file's, or another program's): Lightroom's catalog wins
+            let from_sidecar = target.as_ref().is_some_and(|p| imported_now.contains(&p.id.0) && *p.develop != p.camera_defaults());
+            if im.edits > 0 || prep.custom || opts.develop_all || from_sidecar {
                 dev.note(&unmapped);
                 develop = Some(partial);
+                if from_sidecar && im.edits == 0 && !prep.custom {
+                    dev.sidecar_reset += 1;
+                }
             } else {
                 dev.unedited += 1;
             }
@@ -1263,6 +1345,7 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
             "rotated": dev.rotated,
             "creativeLooks": dev.looks,
             "creativeLooksMatched": dev.looks_matched,
+            "sidecarSettingsReplaced": dev.sidecar_reset,
             "failed": dev.failed,
             "photosWithUnmapped": dev.photos_with_unmapped,
             "unmapped": unmapped.into_iter().map(|(k, n)| json!({"key": k, "photos": n})).collect::<Vec<_>>(),

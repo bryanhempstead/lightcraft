@@ -385,7 +385,9 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
         note("crs:CameraProfile");
     }
 
-    // ---- Crop (normalized edges of the unrotated image + straighten angle)
+    // ---- Crop (normalized edges of the unrotated image + straighten angle). `crs:CropAngle`
+    // turns the other way round from ours (measured against Lightroom's renders: a 1.35°
+    // straighten came out 2.7° off with the sign kept).
     match boolean(props, "crs:HasCrop") {
         Some(true) => {
             let e = |k: &str, d: f64| num(props, &format!("crs:Crop{k}")).unwrap_or(d).clamp(0.0, 1.0);
@@ -394,7 +396,7 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
                 put(
                     o,
                     "crop.geometry",
-                    json!({"rect": {"x0": l, "y0": t, "x1": r, "y1": b}, "angle": num(props, "crs:CropAngle").unwrap_or(0.0).clamp(-45.0, 45.0)}),
+                    json!({"rect": {"x0": l, "y0": t, "x1": r, "y1": b}, "angle": -num(props, "crs:CropAngle").unwrap_or(0.0).clamp(-45.0, 45.0)}),
                 );
             }
         }
@@ -588,7 +590,7 @@ mod tests {
             (-7.0, 12.0, 20.0, -5.0, 3.0, -15.0, 25.0)
         );
         let c = s.crop.geometry;
-        assert_eq!((c.rect.x0, c.rect.y0, c.rect.x1, c.rect.y1, c.angle), (0.05, 0.1, 0.8, 0.9, 1.5));
+        assert_eq!((c.rect.x0, c.rect.y0, c.rect.x1, c.rect.y1, c.angle), (0.05, 0.1, 0.8, 0.9, -1.5), "crs:CropAngle turns the other way");
     }
 
     #[test]

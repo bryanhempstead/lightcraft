@@ -6,7 +6,7 @@ use serde_json::Value;
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
 use crate::lr_migrate::{
     MigrateOptions, Records, default_catalog, default_preset_dirs, dump_catalog, flatten_wrapper, migrate, read_records, rematch_profiles,
-    resume_point,
+    repair_migration, resume_point,
 };
 use crate::{Result, Session};
 
@@ -113,6 +113,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "{profileDirs?: [folders/files] (default: Camera Raw / Lightroom profile and preset folders), profiles?: bool (default true: import those first), catalog?: path.lrcat | records?: path | readCatalog?: bool (also read the catalog, default the newest, for photos the migration didn't record), lookMap?: {lookName: profileId}, force?: bool (also photos whose profile was changed since), dryRun?: bool} — give migrated photos the creative profile their Lightroom look names (Summer Fields, Nautica…), once it is imported; one undo step → {matched, byLook, keptOwnProfile, unmatched: {look: photos}, profiles}",
             always,
             rematch
+        ),
+        cmd!(
+            "library.repairLightroomMigration",
+            "Repair Lightroom Migration",
+            [],
+            None,
+            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom) | records?: path, crops?: bool (default true: straighten angles an earlier version mirrored), unedited?: bool (default true: photos Lightroom shows unedited that got settings from an XMP sidecar at import get Lightroom's), dryRun?: bool} — repair a library migrated by an earlier version; photos changed here since the migration are left alone; one undo step → {cropsFixed, uneditedReset, keptChangedHere}",
+            always,
+            |s, p| {
+                let rec = load_records(p).map_err(|e| bad("library.repairLightroomMigration", e))?;
+                repair_migration(s, &rec, bool_or(p, "crops", true), bool_or(p, "unedited", true), bool_or(p, "dryRun", false))
+            }
         ),
         cmd!(
             "library.flattenLightroomCollections",

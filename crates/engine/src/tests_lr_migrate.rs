@@ -45,7 +45,7 @@ fn develop_text_maps_like_a_preset() {
     assert_eq!(p["wb"]["temp"], json!(5200.0));
     // the catalog has crop edges without HasCrop
     assert_eq!(p["crop"]["geometry"]["rect"]["x0"], json!(0.1));
-    assert_eq!(p["crop"]["geometry"]["angle"], json!(1.5));
+    assert_eq!(p["crop"]["geometry"]["angle"], json!(-1.5));
     // a base look maps to our profile with its amount
     assert_eq!(p["profile"]["id"], json!("lc.mono"));
     assert_eq!(p["profile"]["amount"], json!(80.0));
@@ -686,5 +686,97 @@ fn creative_profiles_match_on_migration_and_later() {
     assert_eq!((r["matched"].clone(), r["keptOwnProfile"].clone()), (json!(0), json!(1)), "{r}");
     let r = s2.execute("library.rematchProfiles", &json!({"profileDirs": [pdir], "records": rec_s, "force": true})).unwrap();
     assert_eq!(r["matched"], json!(1), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Libraries migrated while `crs:CropAngle` was read with the wrong sign are repaired in place;
+/// a crop changed here since is left alone.
+#[test]
+fn crop_angles_from_older_migrations_are_fixed() {
+    let dir = std::env::temp_dir().join(format!("lc-lrcrop-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let photos = dir.join("shoot");
+    std::fs::create_dir_all(&photos).unwrap();
+    for (name, v) in [("a.png", 120u8), ("b.png", 60)] {
+        let img = lightcraft_raster::Rgba8::filled(24, 16, [v, v, v, 255]);
+        let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(photos.join(name), bytes).unwrap();
+    }
+    let root = format!("{}/", dir.display());
+    let dev = "s = { CropAngle = 1.35,\nCropBottom = 0.9,\nCropLeft = 0.1,\nCropRight = 0.9,\nCropTop = 0.1,\nHasCrop = true }";
+    let images = vec![
+        json!({"id": 1, "root": root, "folder": "shoot/", "base": "a", "ext": "png", "develop": dev, "edits": 2}),
+        json!({"id": 2, "root": root, "folder": "shoot/", "base": "b", "ext": "png", "develop": dev, "edits": 2}),
+    ];
+    let rec = records_from_rows("t.lrcat", &images, &[], &[], &[], &[], &[]);
+    let rec_path = dir.join("records.json");
+    std::fs::write(&rec_path, serde_json::to_vec(&rec).unwrap()).unwrap();
+    let rec_s = rec_path.to_string_lossy().to_string();
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false})).unwrap();
+    let id = |s: &Session, n: char| s.catalog.photos().find(|p| p.file_name.starts_with(n)).unwrap().id;
+    let (a, b) = (id(&s, 'a'), id(&s, 'b'));
+    assert_eq!(s.catalog.photo(a).unwrap().develop.crop.geometry.angle, -1.35);
+    // an older migration's mirror image (written as that migration did), and a crop changed here since
+    let pa = s.catalog.photo(a).unwrap().clone();
+    let mut d = (*pa.develop).clone();
+    d.crop.geometry.angle = 1.35;
+    s.catalog
+        .apply(lightcraft_catalog::Op::SetDevelop { id: a, settings: std::sync::Arc::new(d), label: "old".into(), edited: pa.edited.clone() })
+        .unwrap();
+    s.selection = crate::Selection::single(b);
+    s.execute("develop.merge", &json!({"settings": {"crop": {"geometry": {"rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}, "angle": 3.0}}}}))
+        .unwrap();
+    let r = s.execute("library.repairLightroomMigration", &json!({"records": rec_s, "dryRun": true})).unwrap();
+    assert_eq!((r["cropsFixed"].clone(), r["keptChangedHere"].clone()), (json!(1), json!(1)), "{r}");
+    assert_eq!(s.catalog.photo(a).unwrap().develop.crop.geometry.angle, 1.35, "dry run");
+    s.execute("library.repairLightroomMigration", &json!({"records": rec_s})).unwrap();
+    assert_eq!(s.catalog.photo(a).unwrap().develop.crop.geometry.angle, -1.35);
+    assert_eq!(s.catalog.photo(b).unwrap().develop.crop.geometry.angle, 3.0);
+    assert_eq!(s.execute("library.repairLightroomMigration", &json!({"records": rec_s})).unwrap()["cropsFixed"], json!(0), "nothing twice");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A photo Lightroom shows unedited that picked up settings from an XMP sidecar on import gets
+/// Lightroom's settings (the catalog wins).
+#[test]
+fn sidecar_settings_lose_to_the_catalog() {
+    let dir = std::env::temp_dir().join(format!("lc-lrside-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let photos = dir.join("shoot");
+    std::fs::create_dir_all(&photos).unwrap();
+    let img = lightcraft_raster::Rgba8::filled(24, 16, [90, 90, 90, 255]);
+    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(photos.join("a.png"), bytes).unwrap();
+    std::fs::write(
+        photos.join("a.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+1.50" crs:Contrast2012="+40"/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let root = format!("{}/", dir.display());
+    let images =
+        vec![json!({"id": 1, "root": root, "folder": "shoot/", "base": "a", "ext": "png", "develop": "s = { Exposure2012 = 0 }", "edits": 0})];
+    let rec = records_from_rows("t.lrcat", &images, &[], &[], &[], &[], &[]);
+    let rec_path = dir.join("records.json");
+    std::fs::write(&rec_path, serde_json::to_vec(&rec).unwrap()).unwrap();
+    let rec_s = rec_path.to_string_lossy().to_string();
+    // a fresh migration: the catalog wins over the sidecar
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    let r = s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false})).unwrap();
+    let p = s.catalog.photos().next().unwrap().clone();
+    assert_eq!(p.develop.light.exposure, 0.0, "{r}");
+    assert_eq!(r["develop"]["sidecarSettingsReplaced"], json!(1), "{r}");
+    // a library imported (with the sidecar) and migrated without that rule: repaired
+    let mut s2 = Session::new().with_fs();
+    s2.open_library(dir.join("lib2"), false).unwrap();
+    s2.execute("library.import", &json!({"paths": [photos.join("a.png").to_string_lossy()]})).unwrap();
+    let id = s2.catalog.photos().next().unwrap().id;
+    assert_eq!(s2.catalog.photo(id).unwrap().develop.light.exposure, 1.5, "the sidecar was read");
+    let r = s2.execute("library.repairLightroomMigration", &json!({"records": rec_s, "dryRun": true})).unwrap();
+    assert_eq!(r["uneditedReset"], json!(1), "{r}");
+    s2.execute("library.repairLightroomMigration", &json!({"records": rec_s})).unwrap();
+    assert_eq!(s2.catalog.photo(id).unwrap().develop.light.exposure, 0.0);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -181,6 +181,12 @@ profiles and gives every photo the profile its look names (from that record, or 
 `records` from the catalog); photos whose profile was changed here since keep it unless `force`. One undo step.
 Running the migration again adds nothing twice.
 
+Photos Lightroom shows unedited keep Lightroom's settings even when an XMP sidecar next to the file
+(often another file's or another program's) gave them settings at import (`sidecarSettingsReplaced`).
+`crs:CropAngle` turns the other way round from our straighten angle (measured: `docs/lr-match.md`).
+`library.repairLightroomMigration {catalog? | records?, crops?, unedited?, dryRun?}` fixes a library
+migrated before either was handled; photos changed here since the migration are left alone.
+
 ## Local corrections (masks)
 
 Masks stored as `crs:` structures are read from sidecars, DNG-embedded XMP, XMP presets and `.lrtemplate` files
@@ -253,8 +259,8 @@ folder; a profile already imported (same colour table, or same name and group) i
   bought profile packs): decoded by `crates/engine/src/crs_table.rs` — the encoding was worked out from the data
   (base 85 with the Z85 digits, `` ` ' | `` standing in for `& < >`, little-endian groups; a `u32` length and a zlib
   stream; a header, n³ `u16` deltas from the identity, then the table's colour space, encoding and the blend at
-  amounts 0 % / 200 %; `crs:RGBTableAmount` is the blend at 100 %). The table applies as part of the profile: after
-  the base rendering's tone map, before the user's colour adjustments and tone curves, in its own primaries and
-  encoding (`crates/pipeline/src/lut.rs`, `LutStage::Profile`). Profiles that are only a hue/saturation `LookTable`,
+  amounts 0 % / 200 %; `crs:RGBTableAmount` is the blend at 100 %). The table applies to the finished colour — after
+  the colour adjustments and tone curves, before grain — in its own primaries and encoding
+  (`crates/pipeline/src/lut.rs`, `LutStage::Profile`; placement measured against Lightroom, `docs/lr-match.md`). Profiles that are only a hue/saturation `LookTable`,
   and a look's other settings, are not read. These files are the user's own data, read at runtime; none ship with
   LightCraft. Adobe's camera profiles (`.dcp`) and Adobe's own built-in profiles are not read.
