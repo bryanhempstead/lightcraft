@@ -42,11 +42,19 @@ pub struct CameraProfile {
     matrix: [[f64; 3]; 3],
     /// Hue/saturation/value correction after `matrix` (linear ProPhoto RGB).
     pub hue_sat: Option<HsvTable>,
+    /// Tone and chroma curve, for a profile fitted to Lightroom's renders
+    /// (`calibrate --lightroom`): the camera's starting look then comes wholly from the profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<lightcraft_pipeline::tone::CameraTone>,
+    /// What the profile was fitted to: `"lightroom"` (the user's Lightroom previews), else the
+    /// camera's own JPEGs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 impl CameraProfile {
     pub fn new(model: &str, files: usize, samples: usize, matrix: Mat3, hue_sat: Option<HsvTable>) -> CameraProfile {
-        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat }
+        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat, tone: None, source: None }
     }
 
     pub fn matrix(&self) -> Mat3 {
@@ -190,10 +198,14 @@ pub fn cache_key() -> u64 {
     })
 }
 
-/// Per camera model: the photos read and their pooled colour pairs.
+type Pairs = Vec<([f64; 3], [f64; 3])>;
+
+/// Per camera model: the photos read and their pooled colour pairs (and, for Lightroom
+/// calibration, the pairs including highlights).
 #[derive(Default)]
 pub struct Pool {
-    models: HashMap<String, (usize, Vec<([f64; 3], [f64; 3])>)>,
+    models: HashMap<String, (usize, Pairs)>,
+    lightroom: HashMap<String, (usize, Pairs, Pairs)>,
 }
 
 /// Most colour pairs kept per photo, so a few busy photos can't dominate a profile.
@@ -213,6 +225,46 @@ impl Pool {
         entry.0 += 1;
         entry.1.extend(pairs.into_iter().step_by(step));
         Ok(Some(model.to_owned()))
+    }
+
+    /// Add one raw file against Lightroom's preview of it (`preview`: the JPEG Lightroom keeps in
+    /// its previews cache, Adobe RGB, in the raw's stored orientation) rendered at Lightroom's
+    /// default settings. `Ok(None)` when the pair can't contribute (frames differ, too little
+    /// colour).
+    pub fn add_lightroom(&mut self, raw_bytes: &[u8], preview: &[u8]) -> Result<Option<String>, String> {
+        let mut raw = lightcraft_raw::decode(raw_bytes).map_err(|e| e.to_string())?;
+        raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+        let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
+        let opts = lightcraft_codecs::DecodeOptions { max_size: Some((1024, 1024)), max_pixels: 64_000_000 };
+        let decoded =
+            lightcraft_codecs::decode_jpeg_with_fallback(preview, opts, lightcraft_codecs::NamedSpace::AdobeRgb).map_err(|e| e.to_string())?;
+        let Some((pairs, bright)) = crate::camera_preview::lightroom_pairs(&raw, decoded.to_working()) else { return Ok(None) };
+        let step = pairs.len().div_ceil(PAIRS_PER_FILE).max(1);
+        let bstep = bright.len().div_ceil(PAIRS_PER_FILE).max(1);
+        let entry = self.lightroom.entry(model.to_owned()).or_default();
+        entry.0 += 1;
+        entry.1.extend(pairs.into_iter().step_by(step));
+        entry.2.extend(bright.into_iter().step_by(bstep));
+        Ok(Some(model.to_owned()))
+    }
+
+    /// Fit a Lightroom-matched profile (colour, tone and chroma) per model with at least
+    /// `min_files` photos.
+    pub fn fit_lightroom(&self, min_files: usize) -> Vec<Result<CameraProfile, String>> {
+        let mut models: Vec<_> = self.lightroom.iter().collect();
+        models.sort_by(|a, b| a.0.cmp(b.0));
+        models
+            .into_iter()
+            .filter(|(_, (files, _, _))| *files >= min_files)
+            .map(|(model, (files, pairs, bright))| {
+                let (matrix, hue_sat, tone) =
+                    crate::camera_preview::fit_lightroom_profile(pairs, bright).ok_or_else(|| format!("{model}: no usable colour fit"))?;
+                let mut p = CameraProfile::new(model, *files, pairs.len(), matrix, hue_sat);
+                p.tone = Some(tone);
+                p.source = Some("lightroom".into());
+                Ok(p)
+            })
+            .collect()
     }
 
     /// Fit a profile per model with at least `min_files` photos.
@@ -236,11 +288,18 @@ impl Pool {
             entry.0 += files;
             entry.1.extend(pairs);
         }
+        for (model, (files, pairs, bright)) in other.lightroom {
+            let entry = self.lightroom.entry(model).or_default();
+            entry.0 += files;
+            entry.1.extend(pairs);
+            entry.2.extend(bright);
+        }
     }
 
     /// Photos read per model.
     pub fn files(&self) -> Vec<(String, usize)> {
-        let mut v: Vec<_> = self.models.iter().map(|(m, (n, _))| (m.clone(), *n)).collect();
+        let mut v: Vec<_> =
+            self.models.iter().map(|(m, (n, _))| (m.clone(), *n)).chain(self.lightroom.iter().map(|(m, (n, _, _))| (m.clone(), *n))).collect();
         v.sort();
         v
     }
@@ -277,6 +336,16 @@ mod tests {
             t.data.truncate(3);
         }
         assert!(bad(p), "table data doesn't match its shape");
+        // a Lightroom-matched profile keeps its tone curve
+        let mut p = profile();
+        p.tone = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+            let x = 2f32.powf(-10.0 + 10.5 * i as f32 / 31.0);
+            [x, x / (1.0 + x)]
+        }));
+        p.source = Some("lightroom".into());
+        let path2 = save(&p, &dir).unwrap();
+        assert_eq!(load(&path2).unwrap(), p);
+        let _ = std::fs::remove_file(path2);
         let mut p = profile();
         p.version = 99;
         assert!(bad(p), "unknown version");
@@ -310,6 +379,8 @@ mod tests {
     fn pool_skips_files_that_cannot_contribute() {
         let mut pool = Pool::default();
         assert!(pool.add(b"not a raw file").is_err());
+        assert!(pool.add_lightroom(b"not a raw file", b"not a jpeg").is_err());
+        assert!(pool.fit_lightroom(1).is_empty());
         assert!(pool.fit(1).is_empty());
         assert!(pool.files().is_empty());
     }

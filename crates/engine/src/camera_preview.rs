@@ -62,7 +62,13 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
 fn proxies(raw: &RawImage, bytes: &[u8], transform: &CameraTransform, size: usize) -> Option<(Rgb32f, Rgb32f)> {
     let edge = (2 * size).max(384) as u32;
     let decoded = crate::files::decode_raw_preview(bytes, lightcraft_codecs::DecodeOptions { max_size: Some((edge, edge)), max_pixels: 64_000_000 })?;
-    let mut reference = decoded.to_working();
+    proxies_with(raw, decoded.to_working(), transform, size)
+}
+
+/// [`proxies`] against a given reference rendering (linear Rec.2020, in the raw's stored
+/// orientation, framed like the raw's default crop).
+fn proxies_with(raw: &RawImage, mut reference: Rgb32f, transform: &CameraTransform, size: usize) -> Option<(Rgb32f, Rgb32f)> {
+    let edge = (2 * size).max(384) as u32;
     let (a, crop) = (raw.active_area, raw.crop.clipped(raw.active_area.width, raw.active_area.height));
     if crop.width == 0 || crop.height == 0 || reference.width == 0 || reference.height == 0 {
         return None;
@@ -250,6 +256,144 @@ pub(crate) fn profile_pairs(raw: &RawImage, bytes: &[u8]) -> Option<Vec<([f64; 3
     let to_camera = transform.matrix.inverse()?;
     let (pairs, _) = collect_pairs(&sensor, &reference, 0.05, None)?;
     Some(pairs.into_iter().map(|(x, y)| (to_camera.apply(x), y)).collect())
+}
+
+/// Colour training pairs of one raw against Lightroom's own render of it at default settings
+/// (`reference`: its preview, linear Rec.2020, in the raw's stored orientation and framed like
+/// its default crop): white-balanced camera RGB (with the baseline exposure) → the render, for
+/// midtones and (second) including highlights. Pixels on edges are left out (lens corrections
+/// move them). `None` when the frames don't match or the photo has too little colour.
+pub(crate) fn lightroom_pairs(raw: &RawImage, reference: Rgb32f) -> Option<(Pairs, Pairs)> {
+    let transform = lightcraft_raw::color::camera_transform(raw, lightcraft_raw::color::as_shot_white_xy(raw));
+    let (sensor, reference) = proxies_with(raw, reference, &transform, PROFILE_PROXY)?;
+    let to_camera = transform.matrix.inverse()?;
+    let (pairs, _) = collect_pairs(&sensor, &reference, 0.02, Some(EDGE_CONTRAST))?;
+    // tone and chroma: every unclipped pixel away from edges, down to deep shadows
+    let wide: Pairs = sensor
+        .data
+        .iter()
+        .zip(&reference.data)
+        .enumerate()
+        .filter(|(i, (x, y))| {
+            x.iter().all(|v| v.is_finite() && *v > 0.0 && *v < 1.5)
+                && y.iter().all(|v| v.is_finite() && *v >= 0.0)
+                && (0.0005..=1.0).contains(&luminance_2020(**y))
+                && local_contrast(&sensor, *i) <= EDGE_CONTRAST
+                && local_contrast(&reference, *i) <= EDGE_CONTRAST
+        })
+        .map(|(_, (x, y))| (x.map(f64::from), y.map(f64::from)))
+        .collect();
+    let back = |v: Pairs| v.into_iter().map(|(x, y)| (to_camera.apply(x), y)).collect::<Pairs>();
+    Some((back(pairs), back(wide)))
+}
+
+/// A tone curve through the median output of log-spaced input bins (so shadows get as many
+/// knots as midtones), made monotone; `None` with too few samples.
+fn fit_tone_log(pairs: &[(f64, f64)]) -> Option<CameraTone> {
+    let mut xs: Vec<f64> = pairs.iter().map(|p| p.0).filter(|x| x.is_finite() && *x > 0.0).collect();
+    if xs.len() < 512 {
+        return None;
+    }
+    xs.sort_by(f64::total_cmp);
+    let lo = xs.get(xs.len() / 500).copied()?.max(1e-5).ln();
+    let hi = xs.get(xs.len() - 1 - xs.len() / 500).copied()?.ln();
+    if hi - lo < 1.0 {
+        return None;
+    }
+    const BINS: usize = 32;
+    let mut bins: Vec<(Vec<f64>, Vec<f64>)> = vec![(Vec::new(), Vec::new()); BINS];
+    for &(x, y) in pairs {
+        if !(x.is_finite() && x > 0.0 && y.is_finite()) {
+            continue;
+        }
+        let t = ((x.ln() - lo) / (hi - lo) * BINS as f64).floor();
+        if (0.0..BINS as f64).contains(&t) {
+            let b = &mut bins[t as usize];
+            b.0.push(x);
+            b.1.push(y);
+        }
+    }
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    for (mut bx, mut by) in bins {
+        if bx.len() >= 24 {
+            pts.push((median(&mut bx)?, median(&mut by)?));
+        }
+    }
+    if pts.len() < 8 {
+        return None;
+    }
+    // isotonic (pool adjacent violators) on y
+    let mut blocks: Vec<(f64, usize)> = Vec::new();
+    for &(_, y) in &pts {
+        blocks.push((y, 1));
+        while blocks.len() >= 2 {
+            let (a, an) = blocks[blocks.len() - 2];
+            let (b, bn) = blocks[blocks.len() - 1];
+            if a <= b {
+                break;
+            }
+            blocks.truncate(blocks.len() - 2);
+            blocks.push(((a * an as f64 + b * bn as f64) / (an + bn) as f64, an + bn));
+        }
+    }
+    let mut i = 0;
+    for (y, n) in blocks {
+        for p in pts.get_mut(i..i + n)? {
+            p.1 = y;
+        }
+        i += n;
+    }
+    // resample to 32 knots, log-spaced over the fitted range; strictly increasing y below 1
+    let at = |x: f64| -> f64 {
+        let lx = x.ln();
+        let k = pts.iter().position(|p| p.0.ln() >= lx).unwrap_or(pts.len() - 1);
+        if k == 0 {
+            return pts[0].1 * x / pts[0].0;
+        }
+        let (a, b) = (pts[k - 1], pts[k]);
+        if lx >= b.0.ln() {
+            return b.1;
+        }
+        a.1 + (b.1 - a.1) * (lx - a.0.ln()) / (b.0.ln() - a.0.ln()).max(1e-12)
+    };
+    let (l0, l1) = (pts[0].0.ln(), pts[pts.len() - 1].0.ln());
+    let mut knots = [[0.0f32; 2]; 32];
+    let mut prev = 0.0f32;
+    for (j, k) in knots.iter_mut().enumerate() {
+        let x = (l0 + (l1 - l0) * j as f64 / 31.0).exp();
+        let y = (at(x) as f32).clamp(0.0, 0.9995).max(prev + 1e-6).min(0.9995);
+        prev = y;
+        *k = [x as f32, y];
+    }
+    CameraTone::new(knots)
+}
+
+/// A Lightroom-matched camera profile fitted to pooled [`lightroom_pairs`]: matrix from
+/// white-balanced camera RGB, hue/saturation table, and tone + chroma curve.
+pub(crate) fn fit_lightroom_profile(pairs: &[([f64; 3], [f64; 3])], bright: &[([f64; 3], [f64; 3])]) -> Option<(Mat3, Option<HsvTable>, CameraTone)> {
+    let matrix = fit_matrix(pairs)?;
+    let hue_sat = fit_hue_sat(pairs, &matrix);
+    let correction = hue_sat.as_ref().and_then(HueSat::new);
+    let colour = |x: [f64; 3]| {
+        let p = matrix.apply(x);
+        correction.as_ref().map_or(p, |c| c.apply(p.map(|v| v as f32)).map(f64::from))
+    };
+    let tone_pairs: Vec<_> = bright.iter().map(|(x, y)| (luma(colour(*x).map(|v| v.max(0.0))), luma(*y))).collect();
+    let tone = fit_tone_log(&tone_pairs)?;
+    let mut look = CameraLook { matrix, tone, hue_sat: hue_sat.clone() };
+    if let Some(t) = fit_chroma(bright, &look) {
+        look.tone = t;
+    }
+    Some((matrix, hue_sat, look.tone))
+}
+
+/// The look of a raw whose camera has a Lightroom-matched profile (`lightcraft-cli calibrate
+/// --lightroom`): its colour model and tone replace both the file's own matrices and the
+/// per-photo camera-JPEG fit, so the photo starts out as Lightroom rendered that camera.
+pub(crate) fn lightroom_look(raw: &RawImage, transform: &CameraTransform) -> Option<CameraLook> {
+    let profile = raw.metadata.model.as_deref().and_then(crate::camera_profiles::get)?;
+    let tone = profile.tone?;
+    Some(CameraLook { matrix: profile.matrix().mul(&transform.matrix.inverse()?), tone, hue_sat: profile.hue_sat.clone() })
 }
 
 /// A camera profile's colour model (matrix from white-balanced camera RGB, hue/saturation table)
@@ -725,6 +869,20 @@ fn fit_tone(mut pairs: Vec<(f64, f64)>) -> Option<CameraTone> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_tone_fit_follows_shadows_and_rejects_too_little_data() {
+        let curve = |x: f64| x * 1.4 / (1.0 + x * 1.4);
+        let pairs: Vec<(f64, f64)> = (0..4000).map(|i| 2f64.powf(-11.0 + 11.0 * i as f64 / 3999.0)).map(|x| (x, curve(x))).collect();
+        let tone = fit_tone_log(&pairs).unwrap();
+        for x in [0.001f64, 0.01, 0.05, 0.18, 0.6] {
+            let y = f64::from(tone.apply(x as f32));
+            assert!((y - curve(x)).abs() < 0.01 + 0.05 * curve(x), "{x}: {y} vs {}", curve(x));
+        }
+        assert!(fit_tone_log(&pairs[..100]).is_none());
+        assert!(fit_tone_log(&vec![(f64::NAN, 0.5); 1000]).is_none());
+        assert!(fit_tone_log(&vec![(0.2, 0.5); 1000]).is_none(), "no range");
+    }
 
     #[test]
     fn linear_arw_gets_a_sensor_proxy_without_demosaicing() {

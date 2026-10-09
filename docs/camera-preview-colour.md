@@ -77,6 +77,21 @@ One photo can show too little of a colour for its own fit to learn it: in a seco
 Profiles are JSON files `<model>.json` in `$LIGHTCRAFT_CAMERA_PROFILES`, else `<config>/camera-profiles` (macOS `~/Library/Application Support/LightCraft/camera-profiles`); a local profile replaces a built-in one. Built-in profiles live in `assets/camera-profiles/` (listed in `assets/ATTRIBUTION.md`) and are compiled in, so the app, CLI and web build share them: ILCE-7M4, fitted to 597 photos (2.2 million colour pairs) shot in 2026, mostly with the Standard creative style and DRO Auto; X-H2S, 201 photos; X-T4, 545 photos. They hold aggregate colour statistics only. A photo of a profiled model takes its colour from the profile and fits only its own tone and chroma curves (DRO and picture styles vary per shot); the acceptance gates still apply. A rejected profile fit retries the photo's own colour and tone fit before falling back to neutral rendering. Files are read once per process and validated (version, bounded invertible matrix, table shape and finite data); a damaged file is ignored with a warning. The profiles folder's contents are part of the render cache keys, so thumbnails rendered before a profile existed are redone; smart previews built before keep their colour until rebuilt.
 
 
+### Lightroom-matched profiles (`calibrate --lightroom`)
+
+For someone moving from Lightroom Classic the reference is not the camera's JPEG but Lightroom's own render.
+`lightcraft-cli calibrate --lightroom LIST.json [--out DIR] [--min-files N]` fits the same kind of profile — matrix from
+white-balanced camera RGB, hue/saturation/value table — plus a tone and chroma curve, pooled per camera model from raws
+and the previews Lightroom keeps of them (`[{"raw": path, "preview": path}]`; the preview JPEGs are Adobe RGB, in the
+raw's stored orientation). Use photos at Lightroom's default settings: `tools/lr-compare/lr_compare.py calibrate`
+picks them from a catalog (no slider, crop or curve changed, as-shot white balance) and writes the list. The tone curve
+is fitted on log-spaced bins of every unclipped pixel away from edges, down to deep shadows. A profile with a tone
+curve (`"source": "lightroom"`) takes over the camera's look for every raw format, DNG included: its colour model
+replaces the file's matrices, DNG profile tables and the per-photo camera-JPEG fit. These profiles are fitted from the
+user's own photos and previews and stay in their profiles folder; none are built in. Fujifilm RAFs now carry the
+camera's raw exposure bias (header record `0x9650`, e.g. −1.72 EV for DR200) as their baseline exposure, so photos
+shot at different dynamic-range settings start out at the same brightness.
+
 ## Nikon crop and preview colour metadata
 
 Nikon maker-note `CropArea` (0x0045) supplies the default `[left, top, width, height]` crop. The decoder validates the rectangle against the active sensor area and falls back to that area for missing or invalid values. The CFA origin is unchanged; cropping follows demosaicing.

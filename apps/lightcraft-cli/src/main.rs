@@ -9,7 +9,7 @@
 //! lightcraft-cli synth-merge hdr|panorama -o DIR
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
-//! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+//! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES… | --lightroom LIST.json [--out DIR]
 //! lightcraft-cli migrate-lightroom --library DIR [--catalog X.lrcat | --records R.json] [--limit N] [--dry-run] [--no-presets] [--develop-all] [--collections-only] [--only-new]
 //! ```
 #![forbid(unsafe_code)]
@@ -94,6 +94,11 @@ USAGE:
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
+      --lightroom LIST.json [--min-files N]: instead fit Lightroom-matched profiles (colour, tone
+      and chroma, any raw format) from raws and Lightroom's previews of them rendered at default
+      settings: [{\"raw\": path, \"preview\": path to the preview JPEG}, …] (tools/lr-compare
+      `calibrate` writes the list from a catalog). Raws of a profiled model then start out as
+      Lightroom rendered that camera.
   lightcraft-cli migrate-lightroom --library DIR [OPTIONS]
       Migrate from Lightroom Classic into the library DIR (created if needed): the catalog's
       photos are added in place (never copied or moved), with ratings, flags, colour labels,
@@ -208,19 +213,82 @@ fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
     }
 }
 
+/// `calibrate --lightroom LIST.json`: Lightroom-matched camera profiles from raws and
+/// Lightroom's previews of them at default settings.
+fn calibrate_lightroom(list: &str, out: Option<std::path::PathBuf>, min_files: usize) -> Result<(), String> {
+    let text = std::fs::read_to_string(list).map_err(|e| format!("{list}: {e}"))?;
+    let items: Vec<Value> = serde_json::from_str(&text).map_err(|e| format!("{list}: {e}"))?;
+    let pairs: Vec<(String, String)> =
+        items.iter().filter_map(|v| Some((v.get("raw")?.as_str()?.to_string(), v.get("preview")?.as_str()?.to_string()))).collect();
+    if pairs.is_empty() {
+        return Err(format!("{list}: expected [{{\"raw\": path, \"preview\": path}}, …]"));
+    }
+    let dir = out.or_else(lightcraft_engine::camera_profiles::dir).ok_or("no profiles folder: pass --out DIR")?;
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 4);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let pools: Vec<lightcraft_engine::camera_profiles::Pool> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut pool = lightcraft_engine::camera_profiles::Pool::default();
+                    while let Some((raw, preview)) = pairs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                        let r = std::fs::read(raw)
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| std::fs::read(preview).map_err(|e| e.to_string()).map(|p| (r, p)))
+                            .and_then(|(r, p)| pool.add_lightroom(&r, &p));
+                        match r {
+                            Ok(Some(model)) => eprintln!("{raw} ({model})"),
+                            Ok(None) => eprintln!("{raw}: skipped (frame differs from the preview, or too little colour)"),
+                            Err(e) => eprintln!("{raw}: {e}"),
+                        }
+                    }
+                    pool
+                })
+            })
+            .collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
+    let mut pool = lightcraft_engine::camera_profiles::Pool::default();
+    for p in pools {
+        pool.merge(p);
+    }
+    let mut written = 0;
+    for result in pool.fit_lightroom(min_files) {
+        match result {
+            Ok(profile) => {
+                let path = lightcraft_engine::camera_profiles::save(&profile, &dir)?;
+                println!("{}: {} photos, {} colour pairs (Lightroom-matched) → {}", profile.model, profile.files, profile.samples, path.display());
+                written += 1;
+            }
+            Err(e) => eprintln!("calibrate: {e}"),
+        }
+    }
+    if written == 0 {
+        return Err("no profile written".into());
+    }
+    Ok(())
+}
+
 fn calibrate(args: &[String]) -> Result<(), String> {
     let mut max = 300usize;
     let mut out: Option<std::path::PathBuf> = None;
+    let mut lightroom: Option<String> = None;
+    let mut min_files = 3usize;
     let mut inputs = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--max" => max = take_value(args, &mut i, "--max")?.parse().map_err(|_| "--max needs a number".to_string())?,
             "--out" => out = Some(take_value(args, &mut i, "--out")?.into()),
+            "--lightroom" => lightroom = Some(take_value(args, &mut i, "--lightroom")?.to_string()),
+            "--min-files" => min_files = take_value(args, &mut i, "--min-files")?.parse().map_err(|_| "--min-files needs a number".to_string())?,
             a if a.starts_with("--") => return Err(format!("unknown option `{a}`")),
             f => inputs.push(f.to_string()),
         }
         i += 1;
+    }
+    if let Some(list) = lightroom {
+        return calibrate_lightroom(&list, out, min_files);
     }
     if inputs.is_empty() {
         return Err("calibrate needs folders or raw files".into());

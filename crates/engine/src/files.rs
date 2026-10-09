@@ -240,7 +240,9 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
         let t = lightcraft_raw::color::camera_transform(&raw, xy);
-        let camera_look = crate::camera_preview::fit_preview(&raw, &bytes, &t);
+        let lightroom = crate::camera_preview::lightroom_look(&raw, &t);
+        let from_lightroom = lightroom.is_some();
+        let camera_look = lightroom.or_else(|| crate::camera_preview::fit_preview(&raw, &bytes, &t));
         drop(bytes);
         // Previews and thumbnails bin the mosaic straight to (about) the size they need; only
         // larger levels (exports, 1:1) demosaic the whole sensor.
@@ -267,7 +269,12 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         let gain = 2f32.powf(t.baseline_exposure as f32);
         let wb = t.wb;
         // A DNG's own profile look (hue/saturation map, look table), DNG spec chapter 6.
-        let tables = lightcraft_raw::profile::ProfileTables::new(&raw.color.profile, lightcraft_raw::color::illuminant_weight(&raw.color, xy));
+        // (a Lightroom-matched camera profile replaces the file's own profile look)
+        let tables = if from_lightroom {
+            None
+        } else {
+            lightcraft_raw::profile::ProfileTables::new(&raw.color.profile, lightcraft_raw::color::illuminant_weight(&raw.color, xy))
+        };
         img.map_in_place(|p| {
             let c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
             let rgb = [

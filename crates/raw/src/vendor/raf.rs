@@ -29,6 +29,10 @@ use rayon::prelude::*;
 const CROP_TOP_LEFT: u16 = 0x0110;
 const CROPPED_SIZE: u16 = 0x0111;
 const XTRANS_LAYOUT: u16 = 0x0131;
+/// Header record: the exposure the camera held back for its dynamic-range setting (DR200 / DR400
+/// underexpose the raw by 1 / 2 stops), two big-endian `i16` (numerator, denominator); ExifTool
+/// calls it RawExposureBias.
+const RAW_EXPOSURE_BIAS: u16 = 0x9650;
 
 /// The fixed-position header pointers.
 pub(crate) struct Header<'a> {
@@ -72,6 +76,13 @@ pub(crate) fn header(b: &[u8]) -> Result<Header<'_>> {
 
 fn record<'a>(h: &Header<'a>, tag: u16) -> Option<&'a [u8]> {
     h.records.iter().find(|r| r.0 == tag).map(|r| r.1)
+}
+
+/// The raw exposure bias in stops (negative: the raw was exposed darker), if recorded.
+fn raw_exposure_bias(h: &Header) -> Option<f64> {
+    let d = record(h, RAW_EXPOSURE_BIAS).filter(|d| d.len() >= 4)?;
+    let (n, den) = (i16::from_be_bytes([d[0], d[1]]), i16::from_be_bytes([d[2], d[3]]));
+    (den > 0).then(|| (f64::from(n) / f64::from(den)).clamp(-4.0, 4.0))
 }
 
 /// A record holding two big-endian `u16`s.
@@ -204,7 +215,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area: active,
         crop: Rect::new(0, 0, active.width, active.height),
         orientation,
-        color: ColorData::default(),
+        color: ColorData { baseline_exposure: raw_exposure_bias(&h).map_or(0.0, |b| -b), ..ColorData::default() },
         wb_multipliers: wb,
         linearized: false,
         opcodes: OpcodeLists::default(),
@@ -283,6 +294,19 @@ pub(super) mod tests {
         out.extend_from_slice(&dir);
         out.extend_from_slice(&block);
         out
+    }
+
+    #[test]
+    fn raw_exposure_bias_record() {
+        let h = |d: &'static [u8]| Header { jpeg: None, records: vec![(RAW_EXPOSURE_BIAS, d)], raw: None };
+        // -72/100 (DR100 on an X-T2), -172/100 (DR200)
+        assert_eq!(raw_exposure_bias(&h(&[0xff, 0xb8, 0x00, 0x64])), Some(-0.72));
+        assert_eq!(raw_exposure_bias(&h(&[0xff, 0x54, 0x00, 0x64])), Some(-1.72));
+        assert_eq!(raw_exposure_bias(&h(&[0x00, 0x01, 0x00, 0x00])), None, "zero denominator");
+        assert_eq!(raw_exposure_bias(&h(&[0x00, 0x01, 0xff, 0xff])), None, "negative denominator");
+        assert_eq!(raw_exposure_bias(&h(&[0x00])), None, "truncated");
+        assert_eq!(raw_exposure_bias(&h(&[0x7f, 0xff, 0x00, 0x01])), Some(4.0), "clamped");
+        assert_eq!(raw_exposure_bias(&Header { jpeg: None, records: Vec::new(), raw: None }), None);
     }
 
     fn pack(px: &[u16], bits: u32) -> Vec<u8> {
