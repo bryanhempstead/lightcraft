@@ -13,6 +13,7 @@ repository = "https://github.com/storytold/lightcraft"
 # internal
 lightcraft-geom = { path = "crates/geom" }
 lightcraft-sysmem = { path = "crates/sysmem" }
+lightcraft-dng-sdk-sys = { path = "crates/dng-sdk-sys" }
 lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 lightcraft-tiff = { path = "crates/tiff" }

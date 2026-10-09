@@ -1,0 +1,21 @@
+[package]
+name = "lightcraft-dng-sdk-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bryan's fork (L0): Adobe's DNG SDK (camera profiles, colour spec, Temp/Tint, hue/sat maps, tone curves, Camera Raw look tables) behind a small C ABI shim and a safe API. Built from vendor/dng_sdk_1_7_1 (fetched by tools/fetch-dng-sdk.sh, never committed); without it every call reports \"unavailable\"."
+links = "lcdngsdk"
+build = "build.rs"
+
+# The workspace's second crate allowed `unsafe` (FFI into the C ABI shim), like lightcraft-sysmem.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+
+[build-dependencies]
+cc = { version = "1.2", features = ["parallel"] }
