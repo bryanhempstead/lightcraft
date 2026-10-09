@@ -34,7 +34,6 @@ pub use dates::{DateRun, GroupBy};
 pub use folders::FolderNode;
 pub use journal::{Journal, LoadReport, PersistStats, SnapshotPolicy, SnapshotTiming};
 pub use keywords::KeywordNode;
-pub use shoots::Shoot;
 use lightcraft_develop::DevelopSettings;
 pub use local::{DEFAULT_FORGET_DAYS, ForgetPlan, folder_of};
 pub use lock::{LibraryLock, LockError, LockOwner};
@@ -42,6 +41,7 @@ pub use model::*;
 pub use query::{DateGroup, Filter, Person, RatingOp, Sort, SortKey, mix64};
 pub use rules::{Match, Rule, RuleSet};
 use serde::{Deserialize, Serialize};
+pub use shoots::Shoot;
 pub use store::{FsStore, MemStore, Store};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -684,5 +684,7 @@ mod tests_journal;
 mod tests_local;
 #[cfg(test)]
 mod tests_lock;
+#[cfg(test)]
+mod tests_shoots;
 #[cfg(test)]
 mod tests_torn_append;
