@@ -24,4 +24,5 @@ pollster = { workspace = true }
 bytemuck = { workspace = true }
 
 [dev-dependencies]
+lightcraft-raw = { workspace = true }
 lightcraft-scenes = { workspace = true }

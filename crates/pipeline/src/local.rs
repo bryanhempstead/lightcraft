@@ -44,6 +44,10 @@ pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]
 /// White balance in camera space ([`crate::CameraWb`]): the as-shot balance moved to the
 /// neutral of `temp` / `tint`, expressed in the working space; neutral luminance is kept.
 fn camera_wb_matrix(cw: &crate::CameraWb, temp: f64, tint: f64) -> Option<[[f32; 3]; 3]> {
+    // Bryan's fork: the camera profile's own colour at the new white (Adobe's colour spec)
+    if let Some(m) = cw.exact.and_then(|k| crate::adobe::wb_matrix(k, temp, tint)) {
+        return Some(m.map(|r| r.map(|v| v as f32)));
+    }
     let n = cw.neutral(temp, tint);
     let d: [f64; 3] = std::array::from_fn(|i| cw.shot[i] as f64 / n[i]);
     if !d.iter().all(|v| v.is_finite() && *v > 0.0) {
@@ -393,7 +397,14 @@ mod tests {
     fn wb_model() -> crate::CameraWb {
         let m = lightcraft_color::SRGB.to_space(&REC2020).to_f32();
         let inv = REC2020.to_space(&lightcraft_color::SRGB).to_f32();
-        let cw = crate::CameraWb { r: [-1.2, 1.5, 0.0, 0.0, 0.0], b: [0.1, -1.4, 0.0, 0.3, 0.0], to_working: m, from_working: inv, shot: [1.0; 3] };
+        let cw = crate::CameraWb {
+            r: [-1.2, 1.5, 0.0, 0.0, 0.0],
+            b: [0.1, -1.4, 0.0, 0.3, 0.0],
+            to_working: m,
+            from_working: inv,
+            shot: [1.0; 3],
+            exact: None,
+        };
         let shot = cw.neutral(5000.0, 0.0).map(|v| v as f32);
         crate::CameraWb { shot, ..cw }
     }

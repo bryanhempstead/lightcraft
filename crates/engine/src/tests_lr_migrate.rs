@@ -47,7 +47,7 @@ fn develop_text_maps_like_a_preset() {
     assert_eq!(p["crop"]["geometry"]["rect"]["x0"], json!(0.1));
     assert_eq!(p["crop"]["geometry"]["angle"], json!(-1.5));
     // a base look maps to our profile with its amount
-    assert_eq!(p["profile"]["id"], json!("lc.mono"));
+    assert_eq!(p["profile"]["id"], json!("adobe:Adobe Monochrome"));
     assert_eq!(p["profile"]["amount"], json!(80.0));
     // one spot (the legacy RetouchInfo copy is not doubled), its source relative to the path
     let spots = p["spots"].as_array().unwrap();
@@ -65,7 +65,7 @@ fn develop_text_maps_like_a_preset() {
     let d = lightcraft_develop::apply_partial(&lightcraft_develop::DevelopSettings::default(), p, 1.0);
     assert_eq!(d.spots.len(), 1);
     assert_eq!(d.point_colors.len(), 1);
-    assert_eq!(d.profile.id, "lc.mono");
+    assert_eq!(d.profile.id, "adobe:Adobe Monochrome");
 }
 
 #[test]
@@ -74,7 +74,8 @@ fn creative_looks_are_reported_and_default_settings_are_not_a_look() {
     let m = map_develop(t, true, 1.5).unwrap();
     assert_eq!(m.creative_look, Some(("Summer Fields".to_string(), 1.0)));
     assert!(m.unmapped.contains(&"Look".to_string()));
-    assert_eq!(m.partial["profile"]["id"], json!("lc.color"));
+    // (the base profile underneath the creative look: Adobe's own)
+    assert_eq!(m.partial["profile"]["id"], json!("adobe:Adobe Standard"));
     // Lightroom's defaults only: not an edit
     let plain = r#"s = { Exposure2012 = 0, Contrast2012 = 0, Sharpness = 40, WhiteBalance = "As Shot", ToneCurvePV2012 = { 0, 0, 255, 255 },
         Look = { Name = "Adobe Color", Amount = 1 } }"#;

@@ -169,6 +169,7 @@ impl WbFit {
             to_working: to_working.to_f32(),
             from_working: from.to_f32(),
             shot: shot.map(|v| v as f32),
+            exact: None,
         })
     }
 
@@ -400,6 +401,13 @@ pub fn cache_key() -> u64 {
         }
         for (model, json) in BUNDLED {
             h.str(model).str(json);
+        }
+        // Bryan's fork: sources decoded through Adobe's profiles (and their exposure offsets)
+        h.u64(crate::adobe::VERSION).u64(crate::adobe::enabled() as u64);
+        if let Some(p) = config_dir().map(|d| d.join("adobe-exposure.json"))
+            && let Ok(meta) = std::fs::metadata(&p)
+        {
+            h.u64(meta.len()).u64(meta.modified().ok().and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs()));
         }
         h.finish().0 as u64
     })

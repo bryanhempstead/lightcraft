@@ -132,6 +132,18 @@ fn base_profile(name: &str) -> Option<&'static str> {
     if ["embedded", "apple embedded color profile", "apple proraw"].contains(&lower.as_str()) {
         return Some("lc.color");
     }
+    // Bryan's fork: Adobe's own base profile and Adobe Raw looks, rendered from the profiles
+    // installed with Lightroom (`crate::adobe`; our nearest look stands in without them)
+    match lower.as_str() {
+        "adobe standard" => return Some("adobe:Adobe Standard"),
+        "adobe color" => return Some("adobe:Adobe Color"),
+        "adobe monochrome" => return Some("adobe:Adobe Monochrome"),
+        "adobe neutral" => return Some("adobe:Adobe Neutral"),
+        "adobe portrait" => return Some("adobe:Adobe Portrait"),
+        "adobe landscape" => return Some("adobe:Adobe Landscape"),
+        "adobe vivid" => return Some("adobe:Adobe Vivid"),
+        _ => {}
+    }
     let rest = lower.strip_prefix("adobe ").or_else(|| lower.strip_prefix("camera "))?;
     Some(match rest.trim() {
         "color" | "standard" | "faithful" | "default" | "standard v2" | "color v2" => "lc.color",

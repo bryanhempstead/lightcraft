@@ -76,6 +76,15 @@ const FIELDS: &[(&str, usize)] = &[
     ("OUT_Y", 3),
     ("OUT_TRC", 1),
     ("OUT_GAMMA", 1),
+    // Adobe camera base (Bryan's fork, `lightcraft_pipeline::adobe::Finish`): ProPhoto matrices,
+    // exposure-ramp black, look tables (count; per table: aux offset, hue/sat/val divisions,
+    // sRGB-encoded value axis, unused)
+    ("ADOBE", 1),
+    ("AD_TO_PP", 9),
+    ("AD_FROM_PP", 9),
+    ("AD_BLACK", 1),
+    ("AD_NT", 1),
+    ("AD_T", 12),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
 ];
@@ -124,6 +133,12 @@ impl Block {
     fn b(&mut self, name: &str, v: bool) {
         self.u(name, v as u32);
     }
+    fn us(&mut self, name: &str, v: &[u32]) {
+        let Some(i) = index(name) else { return };
+        for (slot, x) in self.0.iter_mut().skip(i).zip(v) {
+            *slot = *x;
+        }
+    }
     fn fs(&mut self, name: &str, v: &[f32]) {
         let Some(i) = index(name) else { return };
         for (slot, x) in self.0.iter_mut().skip(i).zip(v) {
@@ -158,6 +173,18 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let hs_off = aux.len();
     if let Some(t) = &fp.hs_lut {
         aux.extend_from_slice(t);
+    }
+    // Adobe look tables (value-major, hue, saturation-minor; three floats per entry)
+    let mut ad_t = [0u32; 12];
+    if let Some(a) = &fp.adobe {
+        for (k, t) in a.tables.iter().take(2).enumerate() {
+            ad_t[k * 6] = aux.len() as u32;
+            ad_t[k * 6 + 1] = t.hue_divisions as u32;
+            ad_t[k * 6 + 2] = t.sat_divisions as u32;
+            ad_t[k * 6 + 3] = t.val_divisions as u32;
+            ad_t[k * 6 + 4] = t.srgb_value as u32;
+            aux.extend(t.data.iter().flatten());
+        }
     }
     let mask_off = aux.len();
     for m in masks {
@@ -239,6 +266,14 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.fs("CALIB_M", m.as_flattened());
     }
     p.f("SHADOW_TINT", fp.shadow_tint);
+    if let Some(a) = &fp.adobe {
+        p.b("ADOBE", true);
+        p.fs("AD_TO_PP", a.to_pp.as_flattened());
+        p.fs("AD_FROM_PP", a.from_pp.as_flattened());
+        p.f("AD_BLACK", a.base.black);
+        p.u("AD_NT", a.tables.len().min(2) as u32);
+        p.us("AD_T", &ad_t);
+    }
     p.fs("OUT_M", fp.to_out.as_flattened());
     p.fs("OUT_Y", &fp.out_luma);
     let (trc, gamma) = fp.out_trc.code();

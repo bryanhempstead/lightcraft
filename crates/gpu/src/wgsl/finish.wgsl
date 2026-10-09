@@ -31,6 +31,207 @@ fn chroma_scale(o: f32) -> f32 {
     return a + (b - a) * t;
 }
 
+// ---- Adobe camera base (`lightcraft_pipeline::adobe`, Bryan's fork)
+
+fn ad_lin_to_srgb(v: f32) -> f32 {
+    if (v <= 0.0031308) {
+        return v * 12.92;
+    }
+    return 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
+fn ad_srgb_to_lin(v: f32) -> f32 {
+    if (v <= 0.04045) {
+        return v / 12.92;
+    }
+    return pow((v + 0.055) / 1.055, 2.4);
+}
+
+fn ad_mat(f: u32) -> array<vec3<f32>, 3> {
+    return array<vec3<f32>, 3>(
+        vec3<f32>(pf(f), pf(f + 1u), pf(f + 2u)),
+        vec3<f32>(pf(f + 3u), pf(f + 4u), pf(f + 5u)),
+        vec3<f32>(pf(f + 6u), pf(f + 7u), pf(f + 8u)),
+    );
+}
+
+// `adobe::ramp`
+fn ad_ramp(x: f32, black: f32) -> f32 {
+    if (black <= 0.0) {
+        return x;
+    }
+    let slope = 1.0 / (1.0 - black);
+    let radius = min(0.5 * black, 1.0 / 16.0 / slope);
+    if (x <= black - radius) {
+        return 0.0;
+    }
+    if (x >= black + radius) {
+        return (x - black) * slope;
+    }
+    let y = x - (black - radius);
+    return slope / (4.0 * radius) * y * y;
+}
+
+fn ad_entry(t: u32, v: u32, h: u32, s: u32) -> vec3<f32> {
+    let b = F_AD_T + t * 6u;
+    let i = pu(b) + ((v * pu(b + 1u) + h) * pu(b + 2u) + s) * 3u;
+    return vec3<f32>(aux[i], aux[i + 1u], aux[i + 2u]);
+}
+
+// `HsvTable::lookup` axis: (i0, i1, t)
+fn ad_axis(x: f32, n: u32) -> vec3<f32> {
+    let f = clamp(x, 0.0, 1.0) * f32(n - 1u);
+    let lo = select(0u, n - 2u, n >= 2u);
+    let i0 = min(u32(f), lo);
+    let i1 = min(i0 + 1u, n - 1u);
+    return vec3<f32>(f32(i0), f32(i1), clamp(f - f32(i0), 0.0, 1.0));
+}
+
+fn ad_lookup(t: u32, h: f32, s: f32, v: f32) -> vec3<f32> {
+    let b = F_AD_T + t * 6u;
+    let hd = pu(b + 1u);
+    let sd = pu(b + 2u);
+    let vd = pu(b + 3u);
+    let hf = clamp(rem_euclid(h, 360.0) / 360.0 * f32(hd), 0.0, f32(hd));
+    let h0 = min(u32(hf), hd - 1u);
+    let h1 = (h0 + 1u) % hd;
+    let th = clamp(hf - f32(h0), 0.0, 1.0);
+    let sa = ad_axis(s, sd);
+    let s0 = u32(sa.x);
+    let s1 = u32(sa.y);
+    var v0 = 0u;
+    var v1 = 0u;
+    var tv = 0.0;
+    if (vd > 1u) {
+        let va = ad_axis(v, vd);
+        v0 = u32(va.x);
+        v1 = u32(va.y);
+        tv = va.z;
+    }
+    let lo0 = mix(ad_entry(t, v0, h0, s0), ad_entry(t, v0, h0, s1), sa.z);
+    let hi0 = mix(ad_entry(t, v0, h1, s0), ad_entry(t, v0, h1, s1), sa.z);
+    let p0 = mix(lo0, hi0, th);
+    if (v0 == v1) {
+        return p0;
+    }
+    let lo1 = mix(ad_entry(t, v1, h0, s0), ad_entry(t, v1, h0, s1), sa.z);
+    let hi1 = mix(ad_entry(t, v1, h1, s0), ad_entry(t, v1, h1, s1), sa.z);
+    return mix(p0, mix(lo1, hi1, th), tv);
+}
+
+fn ad_limited(x: f32, k: f32) -> f32 {
+    if (x <= 1.0) {
+        return min(x * k, 1.0);
+    }
+    return x * min(k, 1.0);
+}
+
+fn ad_hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
+    let hp = rem_euclid(h, 360.0) / 60.0;
+    let sector = min(u32(hp), 5u);
+    let f = hp - f32(sector);
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+    switch sector {
+        case 0u: { return vec3<f32>(v, t, p); }
+        case 1u: { return vec3<f32>(q, v, p); }
+        case 2u: { return vec3<f32>(p, v, t); }
+        case 3u: { return vec3<f32>(p, q, v); }
+        case 4u: { return vec3<f32>(t, p, v); }
+        default: { return vec3<f32>(v, p, q); }
+    }
+}
+
+// `HsvTable::apply` (linear ProPhoto)
+fn ad_table(t: u32, rgb: vec3<f32>) -> vec3<f32> {
+    let mx = max(rgb.x, max(rgb.y, rgb.z));
+    if (!(mx > 0.0) || mx > 3.0e38) {
+        return rgb;
+    }
+    let mn = min(rgb.x, min(rgb.y, rgb.z));
+    let d = mx - mn;
+    var hue = 0.0;
+    if (d > 0.0) {
+        var hh = 0.0;
+        if (mx == rgb.x) {
+            hh = rem_euclid((rgb.y - rgb.z) / d, 6.0);
+        } else if (mx == rgb.y) {
+            hh = (rgb.z - rgb.x) / d + 2.0;
+        } else {
+            hh = (rgb.x - rgb.y) / d + 4.0;
+        }
+        hue = hh * 60.0;
+    }
+    let sat = d / mx;
+    let srgbv = pu(F_AD_T + t * 6u + 4u) != 0u;
+    var vi = mx;
+    if (srgbv) {
+        vi = ad_lin_to_srgb(min(mx, 1.0));
+    }
+    let k = ad_lookup(t, hue, sat, vi);
+    let s2 = ad_limited(sat, k.y);
+    var v2 = 0.0;
+    if (srgbv && mx <= 1.0) {
+        v2 = ad_srgb_to_lin(min(ad_lin_to_srgb(mx) * k.z, 1.0));
+    } else if (srgbv) {
+        v2 = mx * min(ad_srgb_to_lin(min(k.z, 1.0)), 1.0);
+    } else {
+        v2 = ad_limited(mx, k.z);
+    }
+    return ad_hsv_to_rgb(hue + k.x, s2, v2);
+}
+
+// `adobe::rgb_tone` with the tone table: hue-preserving, on the largest and smallest channel
+fn ad_tone3(hi: f32, mid: f32, lo: f32) -> vec3<f32> {
+    let th = tone_apply(hi);
+    let tl = tone_apply(lo);
+    return vec3<f32>(th, tl + (th - tl) * (mid - lo) / (hi - lo), tl);
+}
+
+fn ad_rgb_tone(c0: vec3<f32>) -> vec3<f32> {
+    let c = clamp(c0, vec3<f32>(0.0), vec3<f32>(1.0));
+    let r = c.x;
+    let g = c.y;
+    let b = c.z;
+    if (r >= g) {
+        if (g > b) {
+            let o = ad_tone3(r, g, b);
+            return vec3<f32>(o.x, o.y, o.z);
+        } else if (b > r) {
+            let o = ad_tone3(b, r, g);
+            return vec3<f32>(o.y, o.z, o.x);
+        } else if (b > g) {
+            let o = ad_tone3(r, b, g);
+            return vec3<f32>(o.x, o.z, o.y);
+        }
+        let gg = tone_apply(g);
+        return vec3<f32>(tone_apply(r), gg, gg);
+    }
+    if (r >= b) {
+        let o = ad_tone3(g, r, b);
+        return vec3<f32>(o.y, o.x, o.z);
+    } else if (b > g) {
+        let o = ad_tone3(b, g, r);
+        return vec3<f32>(o.z, o.y, o.x);
+    }
+    let o = ad_tone3(g, b, r);
+    return vec3<f32>(o.z, o.x, o.y);
+}
+
+fn adobe_tone(c: vec3<f32>) -> vec3<f32> {
+    var p = mul3(ad_mat(F_AD_TO_PP), c);
+    let black = pf(F_AD_BLACK);
+    if (black > 0.0) {
+        p = vec3<f32>(ad_ramp(p.x, black), ad_ramp(p.y, black), ad_ramp(p.z, black));
+    }
+    let nt = pu(F_AD_NT);
+    for (var t = 0u; t < nt; t += 1u) {
+        p = ad_table(t, p);
+    }
+    return mul3(ad_mat(F_AD_FROM_PP), ad_rgb_tone(p));
+}
+
 fn encode_srgb(v: f32) -> f32 {
     let o = pu(F_SRGB_OFF);
     let f = clamp(v, 0.0, 1.0) * f32(SRGB_N);
@@ -452,21 +653,26 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         c = calibrate(c);
     }
 
-    // --- tone map on luminance, highlight desaturation
-    let yl = lum2020(c);
-    let o = tone_apply(yl);
+    // --- tone map: an Adobe base's curve channel-wise in ProPhoto (after its look tables), else
+    // on luminance with highlight desaturation
     var d = vec3<f32>(0.0);
-    if (yl > 1e-9) {
-        d = c * o / yl;
-    }
-    let k = chroma_scale(o);
-    if (k != 1.0) {
-        d = vec3<f32>(o) + (d - vec3<f32>(o)) * k;
-    }
-    let mx = max(d.x, max(d.y, d.z));
-    if (mx > 1.0) {
-        let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
-        d = d + (o - d) * t;
+    if (pu(F_ADOBE) != 0u) {
+        d = adobe_tone(c);
+    } else {
+        let yl = lum2020(c);
+        let o = tone_apply(yl);
+        if (yl > 1e-9) {
+            d = c * o / yl;
+        }
+        let k = chroma_scale(o);
+        if (k != 1.0) {
+            d = vec3<f32>(o) + (d - vec3<f32>(o)) * k;
+        }
+        let mx = max(d.x, max(d.y, d.z));
+        if (mx > 1.0) {
+            let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
+            d = d + (o - d) * t;
+        }
     }
 
     // --- colour

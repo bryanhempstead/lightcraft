@@ -23,9 +23,11 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod adobe;
 pub mod auto;
 pub mod colorops;
 pub mod cull;
+pub mod dump;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
@@ -75,6 +77,9 @@ pub struct SourceInfo {
     /// The source's own long edge in pixels (the file's full resolution; 0 = unknown): sharpening
     /// radii are in these pixels, as in Lightroom.
     pub native_long: f32,
+    /// An Adobe camera base registered in [`adobe`] (Bryan's fork): the decoded pixels are the
+    /// profile's linear rendering, and the per-pixel stage applies its look tables and tone curve.
+    pub adobe: Option<u64>,
 }
 
 /// How a camera's neutral (raw RGB of a white surface, green = 1) follows Lightroom's Temp /
@@ -90,11 +95,17 @@ pub struct CameraWb {
     pub from_working: [[f32; 3]; 3],
     /// The as-shot neutral (green = 1).
     pub shot: [f32; 3],
+    /// Exact neutrals (Bryan's fork): a white-balance function registered with
+    /// [`adobe::register_wb`] (Adobe's DNG SDK colour spec), used instead of the polynomial.
+    pub exact: Option<u64>,
 }
 
 impl CameraWb {
     /// The camera neutral for `temp` (K) and `tint`.
     pub fn neutral(&self, temp: f64, tint: f64) -> [f64; 3] {
+        if let Some(n) = self.exact.and_then(|k| adobe::wb_neutral(k, temp, tint)) {
+            return n;
+        }
         let m = 1000.0 / temp.clamp(1500.0, 50000.0);
         let t = tint.clamp(-150.0, 150.0) / 100.0;
         let f = |c: &[f32; 5]| (c[0] as f64 + c[1] as f64 * m + c[2] as f64 * m * m + c[3] as f64 * t + c[4] as f64 * m * t).clamp(-6.0, 6.0).exp();
@@ -143,6 +154,7 @@ impl Default for SourceInfo {
             camera_wb: None,
             wb_map: None,
             native_long: 0.0,
+            adobe: None,
         }
     }
 }

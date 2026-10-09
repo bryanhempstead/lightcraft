@@ -188,6 +188,21 @@ pub mod lr {
     pub const BLACKS: [f32; N] = [-0.097, -0.011, 0.084, 0.199, 0.338, 0.481, 0.58, 0.575, 0.475, 0.304, 0.11, -0.031, -0.104, -0.133, -0.148];
     pub const EXPOSURE: [f32; N] =
         [0.055, -0.041, -0.142, -0.25, -0.352, -0.409, -0.353, -0.173, -0.052, -0.033, -0.07, -0.157, -0.202, -0.202, -0.184];
+    /// The same moves over an Adobe base ([`super::ToneMap::adobe_lr`], Bryan's fork), fitted on
+    /// the exact base (`docs/lr-match.md` → Round 3): Lightroom's default tone over the profile's
+    /// curve ([`ADOBE_BASE`], at zero sliders) on default-setting photos, the sliders on edited
+    /// ones (split A + training photos; reported on the held-out split B).
+    pub const ADOBE_BASE: [f32; N] = [0.065, 0.149, 0.231, 0.302, 0.350, 0.349, 0.263, 0.099, 0.067, -0.031, 0.009, -0.003, -0.147, -0.258, -0.357];
+    pub const ADOBE_EXPOSURE: [f32; N] =
+        [-0.065, -0.200, -0.333, -0.454, -0.545, -0.577, -0.138, -0.043, 0.006, 0.022, 0.046, -0.057, -0.162, -0.290, -0.404];
+    pub const ADOBE_CONTRAST: [f32; N] =
+        [-0.278, -0.652, -1.018, -1.343, -1.563, -1.569, -1.180, -0.717, -0.461, -0.046, 0.346, 0.664, 0.992, 1.199, 1.361];
+    pub const ADOBE_HIGHLIGHTS: [f32; N] =
+        [-1.575, -1.580, -1.532, -1.326, -0.840, -0.137, 0.134, 0.261, 0.262, 0.615, 1.063, 1.482, 2.394, 3.259, 4.349];
+    pub const ADOBE_SHADOWS: [f32; N] = [1.252, 1.431, 1.569, 1.574, 1.385, 1.336, 1.407, 0.920, 0.435, 0.549, 0.789, 0.644, 0.946, 1.288, 1.434];
+    pub const ADOBE_WHITES: [f32; N] = [0.346, 0.418, 0.479, 0.503, 0.449, 0.257, -0.147, -0.161, 0.342, 0.597, 0.644, 1.205, 1.833, 2.213, 2.509];
+    pub const ADOBE_BLACKS: [f32; N] =
+        [-0.702, -0.720, -0.713, -0.636, -0.417, 0.038, 0.757, 0.783, 0.406, 0.637, 0.293, -0.152, -0.526, -0.804, -1.047];
     /// The key (after exposure) at which [`HIGHLIGHTS`] / [`SHADOWS`] are tabulated: the median
     /// key of the photos they were fitted on.
     pub const KEY_REF: f32 = -2.243;
@@ -231,11 +246,20 @@ pub mod lr {
     /// from `EV0`, after exposure), applied per pixel on the edge-aware base. `key_offset`: the
     /// photo's key after exposure minus [`KEY_REF`] (0 = tabulated as fitted).
     pub fn hs_lut(highlights: f32, shadows: f32, key_offset: f32) -> Vec<f32> {
+        hs_lut_with(&HIGHLIGHTS, &SHADOWS, highlights, shadows, key_offset)
+    }
+
+    /// [`hs_lut`] over an Adobe base ([`ADOBE_HIGHLIGHTS`], [`ADOBE_SHADOWS`]).
+    pub fn adobe_hs_lut(highlights: f32, shadows: f32, key_offset: f32) -> Vec<f32> {
+        hs_lut_with(&ADOBE_HIGHLIGHTS, &ADOBE_SHADOWS, highlights, shadows, key_offset)
+    }
+
+    fn hs_lut_with(ht: &[f32; N], st: &[f32; N], highlights: f32, shadows: f32, key_offset: f32) -> Vec<f32> {
         let off = if key_offset.is_finite() { key_offset.clamp(-12.0, 12.0) } else { 0.0 };
         (0..HS_N)
             .map(|i| {
                 let ev = EV0 + i as f32 * 0.25 - off;
-                highlights * at(&HIGHLIGHTS, ev) + shadows * at(&SHADOWS, ev)
+                highlights * at(ht, ev) + shadows * at(st, ev)
             })
             .collect()
     }
@@ -285,6 +309,24 @@ impl ToneMap {
             })
             .collect();
         ToneMap { lut, chroma: curve.chroma }
+    }
+
+    /// [`ToneMap::camera_lr`] over an Adobe base's tone curve ([`crate::adobe::Base`]): the
+    /// table is then applied channel-wise in ProPhoto (`RefBaselineRGBTone`), not on luminance.
+    pub fn adobe_lr(base: &crate::adobe::Base, exposure: f64, contrast: f64, whites: f64, blacks: f64) -> ToneMap {
+        let (e, c, w, b) = (exposure as f32, (contrast / 100.0) as f32, (whites / 100.0) as f32, (blacks / 100.0) as f32);
+        let lut = (0..LUT_N)
+            .map(|i| {
+                let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
+                let d = lr::at(&lr::ADOBE_BASE, ev)
+                    + e * lr::at(&lr::ADOBE_EXPOSURE, ev)
+                    + c * lr::at(&lr::ADOBE_CONTRAST, ev)
+                    + w * lr::at(&lr::ADOBE_WHITES, ev)
+                    + b * lr::at(&lr::ADOBE_BLACKS, ev);
+                base.curve_at(GREY * 2f32.powf(ev + d))
+            })
+            .collect();
+        ToneMap { lut, chroma: NO_CHROMA }
     }
 
     /// `contrast`, `whites`, `blacks` in −100..100 (Lightroom slider units).

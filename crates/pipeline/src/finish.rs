@@ -27,7 +27,23 @@ const PARAMETRIC_AMOUNT: f32 = 0.11;
 const PARAMETRIC_WIDTH: f32 = 1.05;
 
 /// Parametric region curve (encoded domain) composed with the master point curve.
-fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
+/// The user's tone curves as per-channel tables, under a look profile's own curves (`look`:
+/// master, red, green, blue point curves, applied first — Bryan's fork, [`crate::adobe::Look`]).
+fn curve_luts(c: &ToneCurve, look: Option<&[Vec<Point>; 4]>) -> Option<[Lut1; 3]> {
+    let user = curve_luts_user(c);
+    let look_pts = look.filter(|l| l.iter().any(|p| !ToneCurve::point_curve_is_identity(p)))?;
+    const N: usize = 1024;
+    let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
+    let lut = |p: &[Point]| if ToneCurve::point_curve_is_identity(p) { Lut1::identity(N) } else { MonotoneCurve::new(&to_pts(p)).to_lut(N) };
+    let master = lut(&look_pts[0]);
+    let pre: [Lut1; 3] = std::array::from_fn(|i| lut(&look_pts[i + 1]).compose(&master));
+    Some(match user {
+        Some(u) => std::array::from_fn(|i| u[i].compose(&pre[i])),
+        None => pre,
+    })
+}
+
+fn curve_luts_user(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
     let master = !ToneCurve::point_curve_is_identity(&c.master);
     let chans = [&c.red, &c.green, &c.blue].map(|p| !ToneCurve::point_curve_is_identity(p));
@@ -277,6 +293,9 @@ pub struct FinishParams {
     /// Lightroom-matched Highlights / Shadows ([`crate::tone::lr::hs_lut`]): replaces `hl` / `sh`
     /// (which are then 0) for raw files with a camera tone curve.
     pub hs_lut: Option<Vec<f32>>,
+    /// An Adobe camera base (+ look) for this render ([`crate::adobe::Finish`]): look tables and
+    /// the base curve channel-wise in ProPhoto instead of the luminance tone map.
+    pub adobe: Option<crate::adobe::Finish>,
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
@@ -328,16 +347,20 @@ impl FinishParams {
         // raw files with a camera tone curve take Lightroom-matched Basic tone
         // raw files with a camera tone curve, and rendered files seen through the reference
         // curve (`tone::rendered_reference`), take Lightroom-matched Basic tone
-        let lr_tone = info.camera_tone.is_some();
+        let adobe = crate::adobe::Finish::new(info.adobe, &s.profile.id, s.profile.amount / 100.0);
+        let lr_tone = info.camera_tone.is_some() || adobe.is_some();
         let (hl, sh) = ((s.light.highlights / 100.0) as f32, (s.light.shadows / 100.0) as f32);
         // Lightroom's Highlights / Shadows follow the photo's own key (after exposure)
         let key_offset = tone_key.map_or(0.0, |k| k + s.light.exposure as f32 - crate::tone::lr::KEY_REF);
-        let hs_lut = (lr_tone && (hl != 0.0 || sh != 0.0)).then(|| crate::tone::lr::hs_lut(hl, sh, key_offset));
+        let hs_lut = (lr_tone && (hl != 0.0 || sh != 0.0))
+            .then(|| if adobe.is_some() { crate::tone::lr::adobe_hs_lut(hl, sh, key_offset) } else { crate::tone::lr::hs_lut(hl, sh, key_offset) });
         let (hl, sh) = if lr_tone { (0.0, 0.0) } else { (hl, sh) };
         FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
-            tone: if let Some(curve) = info.camera_tone.as_ref() {
+            tone: if let Some(a) = adobe.as_ref() {
+                ToneMap::adobe_lr(&a.base, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks)
+            } else if let Some(curve) = info.camera_tone.as_ref() {
                 ToneMap::camera_lr(curve, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks)
             } else if info.raw {
                 ToneMap::new(s.light.contrast, s.light.whites, s.light.blacks)
@@ -349,7 +372,12 @@ impl FinishParams {
                 (l, k)
             }),
             ops: ColorOps::new(s),
-            curves: curve_luts(&s.curve),
+            // an Adobe look's own curves go under the user's (with an Adobe base only: the looks
+            // are raw-only in Lightroom too)
+            curves: match adobe.as_ref().and(crate::adobe::look_for(&s.profile.id)) {
+                Some(look) => curve_luts(&s.curve, Some(&look.curves)).or_else(|| curve_luts_user(&s.curve)),
+                None => curve_luts_user(&s.curve),
+            },
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
@@ -359,6 +387,7 @@ impl FinishParams {
             hl,
             sh,
             hs_lut,
+            adobe,
             clar,
             tex,
             dehaze,
@@ -443,6 +472,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
         let m = l.matrices();
         (l, k, m)
     });
+
     // output primaries → working (for the profile table)
     let from_out = lightcraft_color::Mat3(fp.to_out.map(|r| r.map(f64::from)))
         .inverse()
@@ -477,6 +507,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
     let srgb = srgb_lut();
     let mut out = vec![T::default(); w * h];
+    // measurement hook for tools/lr-compare (`LIGHTCRAFT_LR_DUMP=<file>`, CPU renders only): per
+    // pixel the source colour, base, tone input EV, mask weight, encoded result, position, log L
+    let dump = crate::dump::Dump::from_env(w, h);
     for_rows(&mut out, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
             let i = y * w + x;
@@ -562,6 +595,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 Some(t) => wb * crate::tone::lr::hs_at(t, base) + (1.0 - wb) * crate::tone::lr::hs_at(t, l1),
                 None => 0.0f32,
             };
+            let hs_delta = delta;
             let (hh, ss) = (hl + l_hl, sh + l_sh);
             if hh != 0.0 || ss != 0.0 {
                 let legacy = |b: f32| {
@@ -611,29 +645,38 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let det = l_pre - b.data[i];
                 delta -= l_noise.clamp(-1.0, 1.0) * 0.9 * det * (1.0 - smooth(0.1, 0.5, det.abs()));
             }
+            let local_delta = delta;
             if delta != 0.0 {
                 let g = delta.exp2();
                 c = c.map(|v| v * g);
             }
 
+            let tone_in = c;
             // --- calibration (scene linear, before the tone map)
             if fp.calib.is_some() || fp.shadow_tint != 0.0 {
                 c = crate::colorops::calibrate(c, fp.calib.as_ref(), fp.shadow_tint);
             }
 
-            // --- tone map on luminance, highlight desaturation
-            let yl = luminance_2020(c);
-            let o = tone.apply(yl);
-            let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
-            let k = tone.chroma_scale(o);
-            if k != 1.0 {
-                d = d.map(|v| o + (v - o) * k);
-            }
-            let mx = d[0].max(d[1]).max(d[2]);
-            if mx > 1.0 {
-                let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
-                d = d.map(|v| v + (o - v) * t);
-            }
+            // --- tone map: an Adobe base's curve channel-wise in ProPhoto (after its look
+            // tables), else on luminance with highlight desaturation
+            let mut d = match &fp.adobe {
+                Some(a) => a.post_tone(crate::adobe::rgb_tone(a.pre_tone(c), |v| tone.apply(v))),
+                None => {
+                    let yl = luminance_2020(c);
+                    let o = tone.apply(yl);
+                    let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+                    let k = tone.chroma_scale(o);
+                    if k != 1.0 {
+                        d = d.map(|v| o + (v - o) * k);
+                    }
+                    let mx = d[0].max(d[1]).max(d[2]);
+                    if mx > 1.0 {
+                        let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+                        d = d.map(|v| v + (o - v) * t);
+                    }
+                    d
+                }
+            };
 
             // --- colour
             d = ops.apply(d, l_sat, l_hue);
@@ -705,6 +748,14 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let t = mul3(to_out, l.apply_linear(lin, *k, m));
                 e = t.map(|v| if exact { linear_to_srgb(v.clamp(0.0, 1.0)) } else { encode_srgb(srgb, v) });
             }
+            if let Some(d) = &dump {
+                let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                let asum: f32 = p.masks.iter().map(|m| m.alpha.data[i].max(0.0)).sum();
+                let ev_in = (luminance_2020(tone_in).max(1e-12) / crate::tone::GREY).log2();
+                let (mx, mn) = (tone_in[0].max(tone_in[1]).max(tone_in[2]), tone_in[0].min(tone_in[1]).min(tone_in[2]));
+                let sat = if mx > 1e-12 { (mx - mn) / mx } else { 0.0 };
+                d.put(i, [l0, hs_delta, local_delta, base, l1, wb, ev_in, asum, e[0], e[1], e[2], n.x as f32, n.y as f32, sat, l_exp, 0.0]);
+            }
             if let Some((amt, cell, rough, seed)) = *grain {
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
                 let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
@@ -725,6 +776,10 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             *px = store(warn.unwrap_or(e));
         }
     });
+    if let Some(d) = dump {
+        let key = p.tone_key.map_or(f32::NAN, |k| k + ev - crate::tone::lr::KEY_REF);
+        d.write([fp.ow as f32, fp.oh as f32, ev, key, 0.0, 0.0]);
+    }
     out
 }
 

@@ -10,6 +10,7 @@
 //! run them off the UI thread.
 #![forbid(unsafe_code)]
 
+pub mod adobe;
 pub mod availability;
 mod camera_preview;
 pub mod camera_profiles;
@@ -27,6 +28,7 @@ pub mod fonts;
 pub mod guard;
 pub mod import;
 mod import_move;
+pub mod lcp;
 pub mod library;
 pub mod logging;
 pub mod lr_migrate;

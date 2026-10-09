@@ -89,6 +89,9 @@ pub struct Lut3d {
     pub transfer: LutTransfer,
     /// Blend at amount 0 %, 100 % and 200 % (1 = the table as is); in between it is linear.
     pub strength: [f32; 3],
+    /// Colours outside the table's gamut are clipped to it (a camera-raw table's "gamut clip"),
+    /// instead of keeping their offset ("gamut extend").
+    pub clip: bool,
 }
 
 impl Lut3d {
@@ -141,6 +144,7 @@ impl Lut3d {
             primaries: LutPrimaries::Srgb,
             transfer: LutTransfer::Srgb,
             strength: [0.0, 1.0, 2.0],
+            clip: false,
         })
     }
 
@@ -169,8 +173,12 @@ impl Lut3d {
         let t = mul(&m.0, c);
         let e = t.map(|v| self.transfer.encode(v));
         let o = self.apply(e);
-        let d: [f32; 3] = std::array::from_fn(|i| self.transfer.decode(e[i] + (o[i] - e[i]) * k) - self.transfer.decode(e[i]));
-        let r = mul(&m.1, [t[0] + d[0], t[1] + d[1], t[2] + d[2]]);
+        let r = if self.clip {
+            mul(&m.1, std::array::from_fn(|i| self.transfer.decode(e[i] + (o[i] - e[i]) * k)))
+        } else {
+            let d: [f32; 3] = std::array::from_fn(|i| self.transfer.decode(e[i] + (o[i] - e[i]) * k) - self.transfer.decode(e[i]));
+            mul(&m.1, [t[0] + d[0], t[1] + d[1], t[2] + d[2]])
+        };
         r.map(|v| if v.is_finite() { v } else { 0.0 })
     }
 

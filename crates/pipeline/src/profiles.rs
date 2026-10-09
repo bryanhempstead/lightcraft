@@ -41,12 +41,62 @@ fn fade(pts: &mut Vec<Point>, black: f64, white: f64, k: f64) {
     }
 }
 
+/// An Adobe look's hidden settings on top of the user's (scaled by the amount `k` when the look
+/// supports it). Its look table and curves are applied by the per-pixel stage.
+fn adobe_look<'a>(s: &'a DevelopSettings, look: &crate::adobe::Look, k: f64) -> Cow<'a, DevelopSettings> {
+    if look.deltas.is_empty() && !look.grayscale {
+        return Cow::Borrowed(s);
+    }
+    let k = if look.supports_amount { k } else { 1.0 };
+    let mut e = s.clone();
+    for (path, v) in &look.deltas {
+        let d = v * k;
+        let (slot, lo, hi): (&mut f64, f64, f64) = match path.as_str() {
+            "light.exposure" => (&mut e.light.exposure, -5.0, 5.0),
+            "light.contrast" => (&mut e.light.contrast, -100.0, 100.0),
+            "light.highlights" => (&mut e.light.highlights, -100.0, 100.0),
+            "light.shadows" => (&mut e.light.shadows, -100.0, 100.0),
+            "light.whites" => (&mut e.light.whites, -100.0, 100.0),
+            "light.blacks" => (&mut e.light.blacks, -100.0, 100.0),
+            "effects.clarity" => (&mut e.effects.clarity, -100.0, 100.0),
+            "effects.texture" => (&mut e.effects.texture, -100.0, 100.0),
+            "effects.dehaze" => (&mut e.effects.dehaze, -100.0, 100.0),
+            "color.vibrance" => (&mut e.color.vibrance, -100.0, 100.0),
+            "color.saturation" => (&mut e.color.saturation, -100.0, 100.0),
+            _ => continue,
+        };
+        *slot = (*slot + d).clamp(lo, hi);
+    }
+    if look.grayscale {
+        e.treatment = Treatment::Bw;
+    }
+    Cow::Owned(e)
+}
+
 /// The settings the pipeline actually renders: user settings plus the profile's look.
 pub fn effective(s: &DevelopSettings) -> Cow<'_, DevelopSettings> {
     let k = (s.profile.amount / 100.0).clamp(0.0, 2.0);
     let id = s.profile.id.as_str();
     if id == "lc.color" || id.is_empty() || k == 0.0 {
         return Cow::Borrowed(s);
+    }
+    // Adobe look profiles (Bryan's fork): the look's hidden settings, added to the user's; without
+    // Adobe's data the nearest look of our own
+    if crate::adobe::is_adobe_look(id) {
+        if let Some(look) = crate::adobe::look(id) {
+            return adobe_look(s, &look, k);
+        }
+        let ours = match id.trim_start_matches("adobe:").to_ascii_lowercase().as_str() {
+            "adobe neutral" => "lc.neutral",
+            "adobe vivid" => "lc.vivid",
+            "adobe landscape" => "lc.landscape",
+            "adobe portrait" => "lc.portrait",
+            "adobe monochrome" => "lc.mono",
+            _ => return Cow::Borrowed(s),
+        };
+        let mut t = s.clone();
+        t.profile.id = ours.into();
+        return Cow::Owned(effective(&t).into_owned());
     }
     let mut e = s.clone();
     let add = |v: &mut f64, d: f64| *v = (*v + d * k).clamp(-100.0, 100.0);

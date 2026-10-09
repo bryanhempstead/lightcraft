@@ -138,7 +138,7 @@ pub fn rgb_table(b: &[u8], amount: f64) -> Result<Lut3d, String> {
             }
         }
     }
-    let (prim, enc) = (u32_at(b, body), u32_at(b, body + 4));
+    let (prim, enc, gamut) = (u32_at(b, body), u32_at(b, body + 4), u32_at(b, body + 8));
     let (lo, hi) = (f64_at(b, body + 12), f64_at(b, body + 20));
     let primaries = match prim {
         Some(p) => primaries(p).ok_or_else(|| format!("colour table in an unknown colour space ({p})"))?,
@@ -162,6 +162,8 @@ pub fn rgb_table(b: &[u8], amount: f64) -> Result<Lut3d, String> {
         primaries,
         transfer,
         strength: [lo, mid, hi],
+        // gamut handling 0 = clip to the table's space (as the DNG SDK applies it), 1 = extend
+        clip: gamut == Some(0),
     })
 }
 
@@ -287,12 +289,24 @@ pub(crate) mod tests {
     #[test]
     fn identity_table_changes_nothing() {
         let lut = rgb_table(&table_bytes(5, |c| c, (0, 1, 0.0, 2.0)), 1.0).unwrap();
+        assert!(lut.clip, "gamut handling 0 clips to the table's space");
         let m = lut.matrices();
-        for c in [[0.01f32, 0.2, 0.7], [0.5, 0.5, 0.5], [1.4, 0.2, -0.05]] {
+        for c in [[0.3f32, 0.25, 0.2], [0.5, 0.5, 0.5], [0.05, 0.1, 0.08]] {
             let o = lut.apply_linear(c, 1.0, &m);
             for k in 0..3 {
                 assert!((o[k] - c[k]).abs() < 2e-3, "{c:?} → {o:?}");
             }
+        }
+        // outside the table's gamut: clipped to it (as the DNG SDK applies a "gamut clip" table)…
+        let wide = [1.4f32, 0.2, -0.05];
+        let clipped = lut.apply_linear(wide, 1.0, &m);
+        let back = lightcraft_color::WORKING.to_space(&lightcraft_color::SRGB).apply(clipped.map(f64::from));
+        assert!(back.iter().all(|v| (-1e-3..=1.0 + 1e-3).contains(v)), "{back:?}");
+        // …or, for a "gamut extend" table, keeping its offset
+        let extend = rgb_table(&table_bytes(5, |c| c, (0, 1, 0.0, 2.0)), 1.0).map(|l| Lut3d { clip: false, ..l }).unwrap();
+        let o = extend.apply_linear(wide, 1.0, &m);
+        for k in 0..3 {
+            assert!((o[k] - wide[k]).abs() < 2e-3, "{wide:?} → {o:?}");
         }
     }
 

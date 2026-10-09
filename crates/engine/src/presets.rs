@@ -400,7 +400,9 @@ pub struct ProfileInfo {
     pub group: &'static str,
 }
 
-/// Our base profiles (rendering looks). Implemented in the pipeline.
+/// Our base profiles (rendering looks). Implemented in the pipeline. Bryan's fork: the Adobe Raw
+/// profiles last (rendered from the Adobe profiles installed with Lightroom, `crate::adobe`;
+/// our nearest look stands in where they aren't installed).
 pub const PROFILES: &[ProfileInfo] = &[
     ProfileInfo { id: "lc.color", name: "Color", group: "Basic" },
     ProfileInfo { id: "lc.neutral", name: "Neutral", group: "Basic" },
@@ -424,6 +426,13 @@ pub const PROFILES: &[ProfileInfo] = &[
     ProfileInfo { id: "lc.bw.red-filter", name: "Mono Red Filter", group: "B&W" },
     ProfileInfo { id: "lc.bw.soft", name: "Mono Soft", group: "B&W" },
     ProfileInfo { id: "lc.bw.sepia", name: "Sepia Tone", group: "B&W" },
+    ProfileInfo { id: "adobe:Adobe Color", name: "Adobe Color", group: "Adobe Raw" },
+    ProfileInfo { id: "adobe:Adobe Standard", name: "Adobe Standard", group: "Adobe Raw" },
+    ProfileInfo { id: "adobe:Adobe Landscape", name: "Adobe Landscape", group: "Adobe Raw" },
+    ProfileInfo { id: "adobe:Adobe Neutral", name: "Adobe Neutral", group: "Adobe Raw" },
+    ProfileInfo { id: "adobe:Adobe Portrait", name: "Adobe Portrait", group: "Adobe Raw" },
+    ProfileInfo { id: "adobe:Adobe Vivid", name: "Adobe Vivid", group: "Adobe Raw" },
+    ProfileInfo { id: "adobe:Adobe Monochrome", name: "Adobe Monochrome", group: "Adobe Raw" },
 ];
 
 /// Profile groups in menu/browser order.
@@ -518,10 +527,10 @@ mod tests {
         let mut ids = std::collections::HashSet::new();
         for p in PROFILES {
             assert!(ids.insert(p.id), "{}", p.id);
-            assert!(p.id == "lc.color" || looks.contains(&p.id), "{} has no look", p.id);
+            assert!(p.id == "lc.color" || looks.contains(&p.id) || crate::pipeline::adobe::is_adobe_look(p.id), "{} has no look", p.id);
         }
         assert!(PROFILES.len() >= 22);
-        assert_eq!(profile_groups(), ["Basic", "Film", "Cinematic", "Muted", "B&W"]);
+        assert_eq!(profile_groups(), ["Basic", "Film", "Cinematic", "Muted", "B&W", "Adobe Raw"]);
     }
 
     #[test]

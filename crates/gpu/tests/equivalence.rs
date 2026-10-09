@@ -665,3 +665,61 @@ fn tint_directions_match_cpu_for_raw_and_rendered_sources() {
         }
     }
 }
+
+/// Bryan's fork: an Adobe camera base (look tables + base curve applied channel-wise in ProPhoto)
+/// and an Adobe look profile (its own table, curve and hidden settings) render the same on both.
+#[test]
+fn adobe_base_and_look() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_pipeline::adobe;
+    use lightcraft_raw::profile::HsvTable;
+    let src = scene(1, 320, 240);
+    // a 3D table on an sRGB value axis (like a DCP's LookTable) and a 2.5D one
+    let dcp = HsvTable {
+        hue_divisions: 36,
+        sat_divisions: 8,
+        val_divisions: 16,
+        data: (0..36 * 8 * 16)
+            .map(|i| [((i % 36) as f32 * 0.37).sin() * 6.0, 1.0 + ((i % 8) as f32 * 0.05), 1.0 - ((i / 288) as f32 * 0.01)])
+            .collect(),
+        srgb_value: true,
+    };
+    let curve: Vec<f32> = (0..=adobe::CURVE_N).map(|i| (i as f32 / adobe::CURVE_N as f32).powf(0.45)).collect();
+    assert!(adobe::register_base(0xad0be, adobe::Base { look: Some(dcp), curve, black: 0.005 }));
+    adobe::register_look(
+        "adobe:Test Look",
+        adobe::Look {
+            name: "Test Look".into(),
+            table: Some(HsvTable {
+                hue_divisions: 90,
+                sat_divisions: 30,
+                val_divisions: 1,
+                data: (0..2700).map(|i| [-(i as f32 * 0.11).cos() * 4.0, 0.9 + (i % 30) as f32 * 0.008, 1.0]).collect(),
+                srgb_value: false,
+            }),
+            amount_range: [0.0, 2.0],
+            supports_amount: true,
+            curves: [
+                vec![Point::new(0.0, 0.0), Point::new(0.1, 0.07), Point::new(0.5, 0.5), Point::new(0.9, 0.93), Point::new(1.0, 1.0)],
+                vec![],
+                vec![],
+                vec![],
+            ],
+            deltas: vec![("effects.clarity".into(), 10.0)],
+            grayscale: false,
+        },
+    );
+    let info = SourceInfo { raw: true, adobe: Some(0xad0be), ..Default::default() };
+    let mut s = DevelopSettings::default();
+    check("adobe base", &src, &info, &s, &RenderRequest::fit(320, 240));
+    s.profile.id = "adobe:Test Look".into();
+    s.profile.amount = 70.0;
+    check("adobe look", &src, &info, &s, &RenderRequest::fit(320, 240));
+    typical(&mut s);
+    s.light.contrast = 30.0;
+    s.light.whites = -20.0;
+    s.light.blacks = 15.0;
+    check("adobe look edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+}

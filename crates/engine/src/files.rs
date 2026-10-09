@@ -240,6 +240,16 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
         let t = lightcraft_raw::color::camera_transform(&raw, xy);
+        // Bryan's fork: the camera's Adobe Standard profile, through Adobe's DNG SDK
+        let adobe = raw
+            .metadata
+            .model
+            .as_deref()
+            .and_then(|m| crate::adobe::standard_for(raw.metadata.make.as_deref(), m))
+            .and_then(|cam| crate::adobe::decode_color(&cam, &raw).map(|c| (cam, c)));
+        if let Some((cam, color)) = adobe {
+            return load_adobe(raw, lens, max_edge, &cam, color);
+        }
         let lightroom = crate::camera_preview::lightroom_look(&raw, &t);
         let from_lightroom = lightroom.is_some();
         let camera_look = lightroom.or_else(|| crate::camera_preview::fit_preview(&raw, &bytes, &t));
@@ -362,6 +372,7 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
                     camera_wb: Some(cw),
                     wb_map,
                     native_long,
+                    adobe: None,
                 },
             ));
         }
@@ -377,6 +388,7 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
                 camera_wb: None,
                 wb_map,
                 native_long,
+                adobe: None,
             },
         ));
     }
@@ -397,6 +409,88 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         }
     }
     Ok((img.into_oriented(Orientation::from_exif(d.orientation)), SourceInfo { camera_tone, ..SourceInfo::default() }))
+}
+
+/// The raw decode with an Adobe camera base ([`crate::adobe`]): the profile's matrix for the
+/// as-shot white, its hue/sat map and the baseline exposure here; look tables and tone curve in
+/// the per-pixel stage ([`lightcraft_pipeline::adobe`]).
+fn load_adobe(
+    mut raw: lightcraft_raw::RawImage,
+    lens: Option<lightcraft_develop::EmbeddedLens>,
+    max_edge: usize,
+    cam: &crate::adobe::Camera,
+    color: crate::adobe::DecodeColor,
+) -> Result<(Rgb32f, SourceInfo), String> {
+    let t0 = web_time::Instant::now();
+    let binned = match bin_factor(&raw, max_edge) {
+        Some(k) => raw.develop_binned(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,
+        None => None,
+    };
+    let mut img = match binned {
+        Some(img) => img,
+        None => {
+            let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
+            raw.develop(method).map_err(|e| e.to_string())?
+        }
+    };
+    raw.data = lightcraft_raw::RawData::U16(Vec::new());
+    lightcraft_raw::highlight::reconstruct(&mut img, color.wb, HIGHLIGHT_CLIP);
+    let m = color.matrix.to_f32();
+    let wb = color.wb;
+    let gain = 2f32.powf(color.gain_ev as f32);
+    let tables = color.hue_sat.clone().and_then(|h| {
+        let look = lightcraft_raw::profile::ProfileLook { hue_sat_map: [Some(h), None], ..Default::default() };
+        lightcraft_raw::profile::ProfileTables::new(&look, 1.0)
+    });
+    img.map_in_place(|p| {
+        let c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
+        let rgb = [
+            m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
+            m[1][0] * c[0] + m[1][1] * c[1] + m[1][2] * c[2],
+            m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
+        ];
+        match &tables {
+            Some(t) => t.apply(rgb, gain),
+            None => rgb.map(|v| v * gain),
+        }
+        .map(|v| v.max(0.0))
+    });
+    let img = fit(&img, max_edge, max_edge, Filter::Box).into_oriented(raw.orientation);
+    if lightcraft_pipeline::profiling() {
+        eprintln!(
+            "[profile] raw source (Adobe {}) {}×{} in {:.1} ms",
+            cam.info.unique_model,
+            img.width,
+            img.height,
+            t0.elapsed().as_secs_f64() * 1e3
+        );
+    }
+    let (native_w, native_h) = {
+        let c = raw.crop.clipped(raw.active_area.width, raw.active_area.height);
+        if c.width > 1 && c.height > 1 { (c.width, c.height) } else { (raw.active_area.width, raw.active_area.height) }
+    };
+    // no lens opcodes in the file: the lens's Adobe profile (applied with Enable Profile Corrections)
+    let lens = lens.or_else(|| crate::lcp::for_raw(&raw.metadata, native_w as f64, native_h as f64));
+    // the base curve as a camera tone too (smart previews and anything without the registry)
+    let knots: [[f32; 2]; 32] = std::array::from_fn(|i| {
+        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+        [x, lightcraft_pipeline::adobe::base(cam.key).map_or(x, |b| b.curve_at(x)).min(0.9995)]
+    });
+    Ok((
+        img,
+        SourceInfo {
+            raw: true,
+            as_shot_temp: color.as_shot_temp.round(),
+            as_shot_tint: color.as_shot_tint.round(),
+            lens,
+            relative_wb: false,
+            camera_tone: lightcraft_pipeline::tone::CameraTone::new(knots),
+            camera_wb: Some(color.camera_wb),
+            wb_map: None,
+            native_long: native_w.max(native_h) as f32,
+            adobe: Some(cam.key),
+        },
+    ))
 }
 
 /// A DNG `ProfileToneCurve` (linear in, linear out, 1.0 = white after exposure compensation) as the
