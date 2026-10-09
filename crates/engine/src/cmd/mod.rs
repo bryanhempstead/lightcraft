@@ -30,6 +30,7 @@ mod preset_files;
 pub mod previews;
 mod query;
 pub mod shoot;
+pub mod shoots;
 mod xmp;
 
 use serde::Serialize;
@@ -146,6 +147,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(filters::specs());
         v.extend(lightroom::specs());
         v.extend(shoot::specs());
+        v.extend(shoots::specs());
         v
     })
 }

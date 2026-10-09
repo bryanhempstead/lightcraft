@@ -104,6 +104,8 @@ struct ViewFile {
     browse: Option<crate::Browse>,
     /// The folder a `libraryFolder` source shows.
     library_folder: Option<String>,
+    /// Its subfolders shown or not, whatever Show Photos in Subfolders says (a shoot's choice).
+    library_folder_subfolders: Option<bool>,
     // No filter: a library opens unfiltered. A date, keyword or person left over from the last session
     // would silently hide photos, with only a small badge to say so.
     sort: lightcraft_catalog::Sort,
@@ -164,6 +166,8 @@ struct PrefsFile {
     empty_folders: Vec<String>,
     /// Folders added with Add Parent Folder.
     folder_parents: Vec<String>,
+    /// Library ▸ Shoots: pins, removed shoots, own names, sort.
+    shoots: crate::cmd::shoots::ShootPrefs,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -318,6 +322,7 @@ impl Session {
         self.selection = Selection::default();
         self.source = LibrarySource::All;
         self.library_folder = None;
+        self.library_folder_subfolders = None;
         if report.created && seed_demo {
             crate::demo::load(self);
             journal.snapshot(&self.catalog)?;
@@ -343,6 +348,7 @@ impl Session {
         self.library_subfolders = prefs.show_subfolders.unwrap_or(true);
         self.empty_folders = prefs.empty_folders;
         self.folder_parents = prefs.folder_parents;
+        self.shoot_prefs = prefs.shoots;
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
@@ -366,6 +372,7 @@ impl Session {
             self.source = v.source;
             self.browse = v.browse;
             self.library_folder = v.library_folder.filter(|f| !f.trim().is_empty());
+            self.library_folder_subfolders = v.library_folder_subfolders;
             if self.source == LibrarySource::LibraryFolder {
                 // a folder that is gone (or none): everything, not an empty grid
                 let f = lightcraft_catalog::Filter { library_folder: self.library_folder.clone(), ..Default::default() };
@@ -528,6 +535,7 @@ impl Session {
             browse: self.browse.clone(),
             // only while it is shown: a leftover would be a stale choice nobody made
             library_folder: self.library_folder.clone().filter(|_| self.source == LibrarySource::LibraryFolder),
+            library_folder_subfolders: self.library_folder_subfolders.filter(|_| self.source == LibrarySource::LibraryFolder),
             sort: self.sort,
             selection: self.selection.clone(),
         };
@@ -572,6 +580,7 @@ impl Session {
             show_subfolders: Some(self.library_subfolders),
             empty_folders: self.empty_folders.clone(),
             folder_parents: self.folder_parents.clone(),
+            shoots: self.shoot_prefs.clone(),
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };

@@ -260,10 +260,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Source",
             [],
             None,
-            "{kind: all|recentlyAdded|previousImport|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder)}",
+            "{kind: all|recentlyAdded|previousImport|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder), subfolders?: bool (libraryFolder: show the folders inside it or not, whatever Show Photos in Subfolders says)}",
             always,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("all");
+                let subfolders = match p.get("subfolders") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Bool(b)) => Some(*b),
+                    Some(_) => return Err(bad("library.source", "`subfolders` is true or false")),
+                };
                 s.source = match kind {
                     "all" => LibrarySource::All,
                     "recentlyAdded" => LibrarySource::RecentlyAdded,
@@ -293,6 +298,7 @@ pub fn specs() -> Vec<CommandSpec> {
                             return Err(bad("library.source", format!("{path} holds other disks as well: choose a disk or a folder on one")));
                         }
                         s.library_folder = Some(path.to_string());
+                        s.library_folder_subfolders = subfolders;
                         // one folder at a time: a folder filter left over would be ignored
                         s.filter.library_folder = None;
                         LibrarySource::LibraryFolder

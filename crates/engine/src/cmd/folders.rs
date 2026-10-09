@@ -144,6 +144,13 @@ fn locate(s: &mut Session, p: &Value) -> Result<Value> {
     let name = Path::new(&to).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     s.commit(&format!("Find Missing Folder “{name}”"), Op::Batch { ops })?;
     super::browse::follow_folder(s, &from, &to);
+    // a pinned, removed or renamed shoot in it keeps that choice (prefs.json is written with the
+    // next preference change if it can't be now; the relink above is done either way)
+    let before = s.shoot_prefs.clone();
+    s.shoot_prefs.follow(&from, &to);
+    if s.shoot_prefs != before {
+        let _ = s.save_prefs();
+    }
     Ok(json!({"path": to, "relinked": n, "stillMissing": still}))
 }
 

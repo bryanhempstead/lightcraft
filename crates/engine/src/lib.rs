@@ -171,6 +171,12 @@ pub struct Session {
     /// Folders added to Folders with Add Parent Folder: listed above the folders they hold, which
     /// would otherwise be the top of their disk's tree.
     pub folder_parents: Vec<String>,
+    /// With a [`LibrarySource::LibraryFolder`] source: whether the photos of the folders inside it
+    /// show, whatever Show Photos in Subfolders says (`None`: the setting). Shoots set it: a shoot
+    /// is everything in its folder, a container's loose photos only its own.
+    pub library_folder_subfolders: Option<bool>,
+    /// Library ▸ Shoots: pinned and removed shoots, names of their own, the sort (prefs.json).
+    pub shoot_prefs: cmd::shoots::ShootPrefs,
     /// Copied metadata (`photo.copyMetadata`): photo.setMeta params.
     pub meta_clipboard: Option<Value>,
     /// The photo that was active before the current one (Paste Settings from Previous).
@@ -275,6 +281,8 @@ impl Session {
             library_subfolders: true,
             empty_folders: Vec::new(),
             folder_parents: Vec::new(),
+            library_folder_subfolders: None,
+            shoot_prefs: Default::default(),
             previous_active: None,
             copy_groups: lightcraft_develop::SettingsGroup::default_copy(),
             presets: presets::builtin(),
@@ -653,7 +661,10 @@ impl Session {
     pub fn visible(&mut self) -> &[PhotoId] {
         let mut key = (
             self.catalog.revision,
-            format!("{:?}|{:?}|{:?}|{:?}|{:?}|{}", self.source, self.filter, self.sort, self.browse, self.library_folder, self.library_subfolders),
+            format!(
+                "{:?}|{:?}|{:?}|{:?}|{:?}|{}|{:?}",
+                self.source, self.filter, self.sort, self.browse, self.library_folder, self.library_subfolders, self.library_folder_subfolders
+            ),
         );
         if self.source == LibrarySource::Missing && self.media.availability.is_background() {
             // the view fills in as the background checks find files gone
@@ -672,7 +683,7 @@ impl Session {
             if self.source == LibrarySource::LibraryFolder {
                 // no folder chosen: nothing (`.` names no folder)
                 f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
-                f.library_folder_only = !self.library_subfolders;
+                f.library_folder_only = !self.library_folder_subfolders.unwrap_or(self.library_subfolders);
             }
             let mut visible = self.catalog.query(&f, &self.sort);
             if visible.is_empty() && self.source == LibrarySource::LibraryFolder && !self.folder_holds_photos() {
@@ -731,7 +742,10 @@ impl Session {
         if self.source == LibrarySource::Missing {
             return None;
         }
-        let key = (self.catalog.revision, format!("{:?}|{:?}|{:?}|{}", self.source, self.browse, self.library_folder, self.library_subfolders));
+        let key = (
+            self.catalog.revision,
+            format!("{:?}|{:?}|{:?}|{}|{:?}", self.source, self.browse, self.library_folder, self.library_subfolders, self.library_folder_subfolders),
+        );
         if self.total.as_ref().map(|t| &t.0) != Some(&key) {
             let mut f = self.source.to_filter(&Filter::default(), &self.catalog);
             if self.source == LibrarySource::Folder {
@@ -741,7 +755,7 @@ impl Session {
             }
             if self.source == LibrarySource::LibraryFolder {
                 f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
-                f.library_folder_only = !self.library_subfolders;
+                f.library_folder_only = !self.library_folder_subfolders.unwrap_or(self.library_subfolders);
             }
             let n = self.catalog.query(&f, &self.sort).len();
             self.total = Some((key, n));
