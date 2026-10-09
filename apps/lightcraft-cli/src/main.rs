@@ -99,7 +99,9 @@ USAGE:
       settings: [{\"raw\": path, \"preview\": path to the preview JPEG, \"temp\"/\"tint\": Lightroom's
       as-shot white balance}, …]; items without a preview only feed the white-balance model (tools/lr-compare
       `calibrate` writes the list from a catalog). Raws of a profiled model then start out as
-      Lightroom rendered that camera.
+      Lightroom rendered that camera. A camera with no default-setting renders can take another's
+      look on its own colour matrices: {\"raw\": path, \"colorimetric\": true} items for both
+      cameras and {\"transfer\": {\"from\": model, \"to\": model}}.
   lightcraft-cli migrate-lightroom --library DIR [OPTIONS]
       Migrate from Lightroom Classic into the library DIR (created if needed): the catalog's
       photos are added in place (never copied or moved), with ratings, flags, colour labels,
@@ -219,15 +221,25 @@ fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
 fn calibrate_lightroom(list: &str, out: Option<std::path::PathBuf>, min_files: usize) -> Result<(), String> {
     let text = std::fs::read_to_string(list).map_err(|e| format!("{list}: {e}"))?;
     let items: Vec<Value> = serde_json::from_str(&text).map_err(|e| format!("{list}: {e}"))?;
-    // (raw, preview, Lightroom's as-shot temp / tint)
-    type Item = (String, Option<String>, Option<(f64, f64)>);
+    // (raw, preview, Lightroom's as-shot temp / tint, colorimetric transform wanted)
+    type Item = (String, Option<String>, Option<(f64, f64)>, bool);
     let pairs: Vec<Item> = items
         .iter()
         .filter_map(|v| {
             let raw = v.get("raw")?.as_str()?.to_string();
             let preview = v.get("preview").and_then(Value::as_str).map(str::to_string);
             let wb = v.get("temp").and_then(Value::as_f64).map(|k| (k, v.get("tint").and_then(Value::as_f64).unwrap_or(0.0)));
-            (preview.is_some() || wb.is_some()).then_some((raw, preview, wb))
+            let colorimetric = v.get("colorimetric").and_then(Value::as_bool).unwrap_or(false);
+            (preview.is_some() || wb.is_some() || colorimetric).then_some((raw, preview, wb, colorimetric))
+        })
+        .collect();
+    // {"transfer": {"from": model, "to": model}}: a profile for a camera with no default-setting
+    // renders, carried over from another camera's Lightroom-matched one (`Pool::transfer`)
+    let transfers: Vec<(String, String)> = items
+        .iter()
+        .filter_map(|v| {
+            let t = v.get("transfer")?;
+            Some((t.get("from")?.as_str()?.to_string(), t.get("to")?.as_str()?.to_string()))
         })
         .collect();
     if pairs.is_empty() {
@@ -241,11 +253,16 @@ fn calibrate_lightroom(list: &str, out: Option<std::path::PathBuf>, min_files: u
             .map(|_| {
                 scope.spawn(|| {
                     let mut pool = lightcraft_engine::camera_profiles::Pool::default();
-                    while let Some((raw, preview, wb)) = pairs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
-                        let r = std::fs::read(raw).map_err(|e| e.to_string()).and_then(|r| match (preview, wb) {
-                            (Some(preview), _) => std::fs::read(preview).map_err(|e| e.to_string()).and_then(|p| pool.add_lightroom(&r, &p, *wb)),
-                            (None, Some((k, t))) => pool.add_wb(&r, *k, *t),
-                            (None, None) => Ok(None),
+                    while let Some((raw, preview, wb, colorimetric)) = pairs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                        let r = std::fs::read(raw).map_err(|e| e.to_string()).and_then(|r| {
+                            if *colorimetric {
+                                pool.add_colorimetric(&r)?;
+                            }
+                            match (preview, wb) {
+                                (Some(preview), _) => std::fs::read(preview).map_err(|e| e.to_string()).and_then(|p| pool.add_lightroom(&r, &p, *wb)),
+                                (None, Some((k, t))) => pool.add_wb(&r, *k, *t),
+                                (None, None) => Ok(None),
+                            }
                         });
                         match r {
                             Ok(Some(model)) => eprintln!("{raw} ({model})"),
@@ -264,9 +281,11 @@ fn calibrate_lightroom(list: &str, out: Option<std::path::PathBuf>, min_files: u
         pool.merge(p);
     }
     let mut written = 0;
+    let mut fitted: Vec<lightcraft_engine::camera_profiles::CameraProfile> = Vec::new();
     for result in pool.fit_lightroom(min_files) {
         match result {
             Ok(profile) => {
+                fitted.push(profile.clone());
                 let path = lightcraft_engine::camera_profiles::save(&profile, &dir)?;
                 let wb = profile
                     .wb
@@ -282,6 +301,20 @@ fn calibrate_lightroom(list: &str, out: Option<std::path::PathBuf>, min_files: u
                 written += 1;
             }
             Err(e) => eprintln!("calibrate: {e}"),
+        }
+    }
+    for (from, to) in transfers {
+        let source = match fitted.iter().find(|p| p.model == from) {
+            Some(p) => Ok(p.clone()),
+            None => lightcraft_engine::camera_profiles::load(&dir.join(lightcraft_engine::camera_profiles::file_name(&from))),
+        };
+        match source.and_then(|src| pool.transfer(&src, &to)) {
+            Ok(profile) => {
+                let path = lightcraft_engine::camera_profiles::save(&profile, &dir)?;
+                println!("{to}: Lightroom-matched look carried over from {from} → {}", path.display());
+                written += 1;
+            }
+            Err(e) => eprintln!("calibrate: {to}: {e}"),
         }
     }
     if written == 0 {

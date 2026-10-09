@@ -181,7 +181,11 @@ pub struct CameraTransform {
 
 /// Camera transform for white `wb_xy`: `rec2020 = matrix · (wb ⊙ camera)`.
 pub fn camera_transform(raw: &RawImage, wb_xy: Xy) -> CameraTransform {
-    let color = &raw.color;
+    camera_transform_of(&raw.color, wb_xy)
+}
+
+/// [`camera_transform`] from a raw's colour data alone (e.g. a header-only [`crate::RawInfo`]).
+pub fn camera_transform_of(color: &ColorData, wb_xy: Xy) -> CameraTransform {
     let fallback = !has_matrix(color);
     let wb = wb_multipliers(color, wb_xy);
     let to_d50 = camera_to_xyz_d50(color, wb_xy);

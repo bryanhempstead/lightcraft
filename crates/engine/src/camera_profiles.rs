@@ -309,6 +309,9 @@ pub struct Pool {
     lightroom: HashMap<String, (usize, Pairs, Pairs)>,
     /// Per model: (Lightroom's as-shot temp, tint, the raw's as-shot camera neutral).
     wb: HashMap<String, Vec<(f64, f64, [f64; 3])>>,
+    /// Per model: the files' own colorimetric transforms (white-balanced camera RGB → linear
+    /// Rec.2020 at their as-shot white), for [`Pool::transfer`].
+    colorimetric: HashMap<String, Vec<Mat3>>,
 }
 
 /// The as-shot camera neutral (green = 1) of a raw's header data.
@@ -376,6 +379,55 @@ impl Pool {
         Ok(Some(model.to_owned()))
     }
 
+    /// Add a raw's own colorimetric transform (headers only) for [`Pool::transfer`]. `Ok(None)`
+    /// when the file has no model name or no colour matrices of its own.
+    pub fn add_colorimetric(&mut self, raw_bytes: &[u8]) -> Result<Option<String>, String> {
+        let info = lightcraft_raw::probe_info(raw_bytes).map_err(|e| e.to_string())?;
+        let Some(model) = info.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
+        let t = lightcraft_raw::color::camera_transform_of(&info.color, lightcraft_raw::color::as_shot_white_xy_of(&info));
+        if t.matrix_is_fallback || !t.matrix.0.iter().flatten().all(|v| v.is_finite()) {
+            // no matrices in the file (Fujifilm RAF): nothing colorimetric to carry a look onto
+            // (a matrix fitted to the camera's JPEGs measured worse than keeping its profile)
+            return Ok(None);
+        }
+        self.colorimetric.entry(model.to_owned()).or_default().push(t.matrix);
+        Ok(Some(model.to_owned()))
+    }
+
+    /// The colorimetric transform of `model`: the mean of its files' own.
+    fn colorimetric_of(&self, model: &str) -> Result<Mat3, String> {
+        let v = self.colorimetric.get(model).filter(|v| !v.is_empty()).ok_or_else(|| format!("{model}: no raw with colour matrices of its own"))?;
+        let mut acc = [[0.0; 3]; 3];
+        for t in v {
+            for (a, b) in acc.iter_mut().flatten().zip(t.0.iter().flatten()) {
+                *a += b / v.len() as f64;
+            }
+        }
+        Ok(Mat3(acc))
+    }
+
+    /// A Lightroom-matched profile for `model` (a camera with no photos at Lightroom's default
+    /// settings to calibrate on) carried over from `from`, another camera's Lightroom-matched
+    /// profile: Lightroom's default rendering is one look applied to each camera's colorimetric
+    /// colour, so `from`'s look (its matrix relative to its camera's own colorimetric transform,
+    /// its hue/saturation table and tone curve) is put on `model`'s colorimetric transform. Both
+    /// models need [`Pool::add_colorimetric`] files; `model`'s white-balance model comes from its
+    /// [`Pool::add_wb`] photos.
+    pub fn transfer(&self, from: &CameraProfile, model: &str) -> Result<CameraProfile, String> {
+        let mean = |m: &str| self.colorimetric_of(m);
+        let src = mean(&from.model)?.inverse().ok_or_else(|| format!("{}: singular colour transform", from.model))?;
+        let look = from.matrix().mul(&src);
+        let matrix = look.mul(&mean(model)?);
+        let mut p = CameraProfile::new(model, 0, 0, matrix, from.hue_sat.clone());
+        p.tone = from.tone;
+        p.source = Some(format!("lightroom-transfer:{}", from.model));
+        p.wb = self.wb.get(model).and_then(|w| WbFit::fit(w));
+        if !p.valid() {
+            return Err(format!("{model}: transferred profile out of range"));
+        }
+        Ok(p)
+    }
+
     /// Fit a Lightroom-matched profile (colour, tone and chroma) per model with at least
     /// `min_files` photos.
     pub fn fit_lightroom(&self, min_files: usize) -> Vec<Result<CameraProfile, String>> {
@@ -420,6 +472,9 @@ impl Pool {
         for (model, w) in other.wb {
             self.wb.entry(model).or_default().extend(w);
         }
+        for (model, t) in other.colorimetric {
+            self.colorimetric.entry(model).or_default().extend(t);
+        }
         for (model, (files, pairs, bright)) in other.lightroom {
             let entry = self.lightroom.entry(model).or_default();
             entry.0 += files;
@@ -444,6 +499,34 @@ mod tests {
     fn profile() -> CameraProfile {
         let table = HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[5.0, 1.2, 1.0]; 8], srgb_value: false };
         CameraProfile::new("ILCE-7M4", 12, 3456, Mat3([[1.6, -0.5, -0.1], [-0.2, 1.3, -0.1], [-0.1, -0.2, 1.3]]), Some(table))
+    }
+
+    #[test]
+    fn transfer_puts_the_look_on_the_other_cameras_colorimetric_transform() {
+        let src = profile();
+        let (ts, td) = (Mat3([[1.2, -0.1, -0.1], [-0.1, 1.1, 0.0], [0.0, -0.2, 1.2]]), Mat3([[0.9, 0.2, -0.1], [0.05, 0.9, 0.05], [0.0, 0.1, 0.9]]));
+        let mut pool = Pool::default();
+        pool.colorimetric.insert("ILCE-7M4".into(), vec![ts, ts]);
+        pool.colorimetric.insert("GR".into(), vec![td]);
+        pool.wb.insert("GR".into(), (0..40).map(|i| (3000.0 + 100.0 * i as f64, (i % 7) as f64, [0.4 + 0.01 * i as f64, 1.0, 0.6 - 0.005 * i as f64])).collect());
+        let p = pool.transfer(&src, "GR").unwrap();
+        let want = src.matrix().mul(&ts.inverse().unwrap()).mul(&td);
+        for (a, b) in p.matrix().0.iter().flatten().zip(want.0.iter().flatten()) {
+            assert!((a - b).abs() < 1e-9);
+        }
+        // a colour seen through the source camera's transform renders the same on the target
+        let x = [0.3, 0.5, 0.2];
+        let (via_src, via_dst) = (src.matrix().apply(ts.inverse().unwrap().apply(x)), p.matrix().apply(td.inverse().unwrap().apply(x)));
+        assert!(via_src.iter().zip(via_dst).all(|(a, b)| (a - b).abs() < 1e-9));
+        assert_eq!((p.hue_sat.clone(), p.tone, p.model.as_str()), (src.hue_sat.clone(), src.tone, "GR"));
+        assert_eq!(p.source.as_deref(), Some("lightroom-transfer:ILCE-7M4"));
+        assert!(p.wb.is_some());
+        // no colour matrices of its own: an error, never a panic or a guess
+        assert!(pool.transfer(&src, "X-T2").is_err());
+        let mut singular = Pool::default();
+        singular.colorimetric.insert("ILCE-7M4".into(), vec![Mat3([[0.0; 3]; 3])]);
+        singular.colorimetric.insert("GR".into(), vec![td]);
+        assert!(singular.transfer(&src, "GR").is_err());
     }
 
     #[test]

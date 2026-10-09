@@ -336,6 +336,7 @@ def calibrate(a):
             seen.add(img)
     random.seed(a.seed)
     items = []
+    fitted_counts = {}
     for model, rows in sorted(by_model.items()):
         random.shuffle(rows)
         got = 0
@@ -363,6 +364,28 @@ def calibrate(a):
         for iid, path, wb in extra[: a.wb_per_camera]:
             items.append({"raw": path, "temp": wb[0], "tint": wb[1], "model": model, "id": iid})
         print(f"{model}: {got} of {len(rows)} default-setting photos, {min(len(extra), a.wb_per_camera)} more as-shot for white balance", file=sys.stderr)
+        fitted_counts[model] = (got, len(rows))
+    # cameras with too few default-setting renders get the best-calibrated camera's look carried
+    # over onto their own colorimetric matrices (lightcraft-cli calibrate: "transfer")
+    if not a.no_transfer and fitted_counts:
+        src = a.transfer_from or max(fitted_counts, key=fitted_counts.get)
+        if fitted_counts.get(src, (0, 0))[0] >= a.min_files:
+            for it in items:
+                if it.get("model") == src and "preview" in it:
+                    it["colorimetric"] = True
+            for model in sorted({m for _, m in paths.values()} - {m for m, n in fitted_counts.items() if n[0] >= a.min_files}):
+                if a.camera and model not in a.camera.split(","):
+                    continue
+                raws = sorted({p for p, m in paths.values() if m == model and os.path.isfile(p)})
+                random.shuffle(raws)
+                if not raws:
+                    continue
+                items.extend({"raw": r, "model": model, "colorimetric": True} for r in raws[:20])
+                if not any(i.get("model") == model and "temp" in i for i in items):
+                    extra = [r for r in wb_only.get(model, []) if os.path.isfile(r[1])]
+                    items.extend({"raw": path, "temp": wb[0], "tint": wb[1], "model": model, "id": iid} for iid, path, wb in extra[: a.wb_per_camera])
+                items.append({"transfer": {"from": src, "to": model}})
+                print(f"{model}: look carried over from {src}", file=sys.stderr)
     for f in ("c.lrcat", "c.lrcat-wal"):
         if os.path.exists(os.path.join(cdir, f)):
             os.remove(os.path.join(cdir, f))
@@ -656,6 +679,8 @@ def main():
     p.add_argument("--exclude", action="append", help="sample.json whose photos are left out (held-out test sets)")
     p.add_argument("--seed", type=int, default=11)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--transfer-from", help="camera whose Lightroom-matched look is carried over to cameras without default-setting renders (default: the one with most)")
+    p.add_argument("--no-transfer", action="store_true")
     p.set_defaults(fn=calibrate)
     p = sub.add_parser("compare")
     p.add_argument("--work", required=True)
