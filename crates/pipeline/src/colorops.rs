@@ -217,6 +217,14 @@ impl ColorOps {
             return self.grade(lab);
         }
         let [mut l, mut c, mut h] = lab_to_lch(lab);
+        if let Some(bw) = &self.bw {
+            // Lightroom's B&W mix works on the colour as it is: in B&W, Saturation, Vibrance and
+            // the HSL sliders don't apply (they are hidden there)
+            let w = band_weights(h);
+            let mix: f32 = (0..8).map(|i| w[i] * bw[i]).sum();
+            let l = (l + mix * (c / 0.2).min(1.0) * BW_GAIN).max(0.0);
+            return self.grade(lch_to_lab([l, 0.0, h]));
+        }
         if self.mixer {
             let w = band_weights(h);
             let (mut dh, mut ds, mut dl) = (0.0, 0.0, 0.0);
@@ -242,12 +250,6 @@ impl ColorOps {
             c *= (1.0 + self.saturation + local_sat).max(0.0);
         }
         h += local_hue;
-        if let Some(bw) = &self.bw {
-            let w = band_weights(h);
-            let mix: f32 = (0..8).map(|i| w[i] * bw[i]).sum();
-            l = (l + mix * (c / 0.2).min(1.0) * 0.25).max(0.0);
-            c = 0.0;
-        }
         self.grade(lch_to_lab([l, c, h]))
     }
 
@@ -301,6 +303,10 @@ pub fn calibration_matrix(c: &Calibration) -> Option<[[f32; 3]; 3]> {
 }
 
 /// Shadows-tint strength at ±100: the green channel's relative change in deep shadows.
+/// B&W mix: OkLab lightness change at full chroma per unit of a band's slider (−1..1), fitted
+/// against Lightroom's renders of 45 B&W photos (0.25 → 1.0: mean dE 4.80 → 4.57).
+pub const BW_GAIN: f32 = 1.0;
+
 pub const SHADOW_TINT: f32 = 0.3;
 
 /// Calibration in scene-linear light (before tone mapping): the primaries matrix, then the shadows
@@ -366,6 +372,13 @@ mod tests {
         s.bw_mix.blue = 80.0;
         let b2 = ColorOps::new(&s).apply([0.05, 0.1, 0.5], 0.0, 0.0);
         assert!(b2[1] > b[1]);
+        // as in Lightroom, Saturation and the HSL sliders don't touch a B&W conversion
+        let mut t = s.clone();
+        t.color.saturation = -60.0;
+        t.mixer.blue.sat = -80.0;
+        t.mixer.blue.lum = 50.0;
+        let b3 = ColorOps::new(&t).apply([0.05, 0.1, 0.5], 0.0, 0.0);
+        assert!(b3.iter().zip(b2).all(|(x, y)| (x - y).abs() < 1e-6), "{b3:?} vs {b2:?}");
     }
 
     #[test]

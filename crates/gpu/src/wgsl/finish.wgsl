@@ -107,6 +107,16 @@ fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
     var l = lab0.x;
     var c = sqrt(lab0.y * lab0.y + lab0.z * lab0.z);
     var h = atan2(lab0.z, lab0.y);
+    if (pu(F_BW) != 0u) {
+        // B&W: the mix reads the colour as it is (Saturation / Vibrance / HSL don't apply)
+        let w = band_weights(h);
+        var mix = 0.0;
+        for (var i = 0u; i < 8u; i++) {
+            mix += w[i] * pf(F_BW_MIX + i);
+        }
+        l = max(l + mix * min(c / 0.2, 1.0) * BW_GAIN, 0.0);
+        return grade_lab(vec3<f32>(l, 0.0, 0.0));
+    }
     if (pu(F_MIXER) != 0u) {
         let w = band_weights(h);
         var dh = 0.0;
@@ -143,16 +153,12 @@ fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
         c *= max(1.0 + sat + local_sat, 0.0);
     }
     h += local_hue;
-    if (pu(F_BW) != 0u) {
-        let w = band_weights(h);
-        var mix = 0.0;
-        for (var i = 0u; i < 8u; i++) {
-            mix += w[i] * pf(F_BW_MIX + i);
-        }
-        l = max(l + mix * min(c / 0.2, 1.0) * 0.25, 0.0);
-        c = 0.0;
-    }
-    var lab = vec3<f32>(l, c * cos(h), c * sin(h));
+    return grade_lab(vec3<f32>(l, c * cos(h), c * sin(h)));
+}
+
+// `ColorOps::grade`: colour grading on OkLab, then back to linear Rec.2020.
+fn grade_lab(lab_in: vec3<f32>) -> vec3<f32> {
+    var lab = lab_in;
     if (pu(F_GRADING) != 0u) {
         let m = 0.5 - pf(F_BALANCE) * 0.25;
         let width = 0.15 + pf(F_BLENDING) * 0.5;
