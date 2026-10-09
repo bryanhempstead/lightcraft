@@ -112,6 +112,11 @@ USAGE:
                            Collection), for a library migrated already: nothing imported,
                            no photo or preset changed; also undoes earlier runs' extra
                            \"From Lightroom\" wrapper folder
+        --profiles DIR     import creative profiles from DIR (repeatable; default: the Camera
+                           Raw / Lightroom profile and preset folders, when presets are
+                           imported) so photos whose Lightroom look is one of them (Summer
+                           Fields, Nautica…) match
+        --no-profiles      don't import creative profiles
         --only-new         only photos this run imports (files an earlier run failed on, e.g.
                            HEIC before macOS decoding); photos already in the library keep
                            their ratings, metadata and edits
@@ -630,6 +635,14 @@ fn migrate_lightroom(args: &[String]) -> Result<(), String> {
             "--develop-all" => p["developAll"] = json!(true),
             "--collections-only" => p["collectionsOnly"] = json!(true),
             "--only-new" => p["onlyNew"] = json!(true),
+            "--no-profiles" => p["profiles"] = json!(false),
+            "--profiles" => {
+                let d = take_value(args, &mut i, "--profiles")?.to_string();
+                match p["profileDirs"].as_array_mut() {
+                    Some(a) => a.push(json!(d)),
+                    None => p["profileDirs"] = json!([d]),
+                }
+            }
             a => return Err(format!("unknown option `{a}`")),
         }
         i += 1;

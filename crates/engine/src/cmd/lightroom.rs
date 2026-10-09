@@ -5,7 +5,8 @@ use serde_json::Value;
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
 use crate::lr_migrate::{
-    MigrateOptions, Records, default_catalog, default_preset_dirs, dump_catalog, flatten_wrapper, migrate, read_records, resume_point,
+    MigrateOptions, Records, default_catalog, default_preset_dirs, dump_catalog, flatten_wrapper, migrate, read_records, rematch_profiles,
+    resume_point,
 };
 use crate::{Result, Session};
 
@@ -36,6 +37,43 @@ pub fn preset_dirs(p: &Value, catalog: &str) -> Vec<String> {
     }
 }
 
+/// The profile folders a call asks for: `profileDirs`, else (unless `profiles` is false; it
+/// defaults to `default_on`) the default Lightroom / Camera Raw folders (as for presets).
+pub fn profile_dirs(p: &Value, catalog: Option<&str>, default_on: bool) -> Vec<String> {
+    if p.get("profileDirs").is_none() && !bool_or(p, "profiles", default_on) {
+        return Vec::new();
+    }
+    match p.get("profileDirs").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        None => default_preset_dirs(catalog.map(std::path::Path::new)),
+    }
+}
+
+fn look_map(p: &Value) -> std::collections::HashMap<String, String> {
+    p.get("lookMap")
+        .and_then(Value::as_object)
+        .map(|m| m.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect())
+        .unwrap_or_default()
+}
+
+fn rematch(s: &mut Session, p: &Value) -> Result<Value> {
+    const R: &str = "library.rematchProfiles";
+    // the catalog is read only when asked for (the migration's record covers migrated photos)
+    let rec = if str_param(p, "catalog").is_some() || str_param(p, "records").is_some() || bool_or(p, "readCatalog", false) {
+        Some(load_records(p).map_err(|e| bad(R, e))?)
+    } else {
+        None
+    };
+    let catalog = rec.as_ref().map(|r| r.catalog.clone()).or_else(|| default_catalog().map(|c| c.display().to_string()));
+    let opts = MigrateOptions {
+        dry_run: bool_or(p, "dryRun", false),
+        look_map: look_map(p),
+        profile_dirs: profile_dirs(p, catalog.as_deref(), true),
+        ..Default::default()
+    };
+    rematch_profiles(s, rec.as_ref(), &opts, bool_or(p, "force", false))
+}
+
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let rec = load_records(p).map_err(|e| bad(C, e))?;
     if let Some(out) = str_param(p, "recordsOut").filter(|o| !o.trim().is_empty()) {
@@ -50,11 +88,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         collections_only: bool_or(p, "collectionsOnly", false),
         only_new: bool_or(p, "onlyNew", false),
         preset_dirs: preset_dirs(p, &rec.catalog),
-        look_map: p
-            .get("lookMap")
-            .and_then(Value::as_object)
-            .map(|m| m.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect())
-            .unwrap_or_default(),
+        look_map: look_map(p),
+        profile_dirs: profile_dirs(p, Some(&rec.catalog), bool_or(p, "presets", true)),
     };
     migrate(s, &rec, &opts)
 }
@@ -66,9 +101,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Migrate from Lightroom Classic…",
             ["File"],
             None,
-            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy with the system sqlite3, the catalog itself is never opened) | records?: records JSON (from recordsOut), recordsOut?: path, import?: bool (default true: add the files in place; false when they were imported already), limit?: N (only the first N photos whose files exist), dryRun?: bool, developAll?: bool (also photos never edited in Lightroom), collectionsOnly?: bool (only the collections, for a library migrated already: nothing imported, no photo changed, no presets), onlyNew?: bool (only the photos this run imports — e.g. files an earlier run failed on — photos already in the library are left as they are), lookMap?: {lookName: profileId} (creative looks → our profiles; an imported .cube profile named like the look matches by itself), presets?: bool (default true), presetDirs?: [folders] (default: Lightroom Settings/{Settings, Develop Presets, Keyword Sets} next to the catalog + Camera Raw / Lightroom preset folders)} → {found, missing, missingByRoot, matched, rated, flagged, labelled, keyworded, virtualCopies, develop: {applied, unmapped: [{key, photos}], photosWithUnmapped…}, albums: {albums, smart, sets, quick, skipped}, presets} — ratings, flags, colour labels, keywords, caption/copyright/creator/location, collections (the catalog's own tree: sets as album folders, smart collections whose rules map, the Quick Collection into ours), virtual copies, develop settings and Lightroom's edit times; one undo step",
+            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy with the system sqlite3, the catalog itself is never opened) | records?: records JSON (from recordsOut), recordsOut?: path, import?: bool (default true: add the files in place; false when they were imported already), limit?: N (only the first N photos whose files exist), dryRun?: bool, developAll?: bool (also photos never edited in Lightroom), collectionsOnly?: bool (only the collections, for a library migrated already: nothing imported, no photo changed, no presets), onlyNew?: bool (only the photos this run imports — e.g. files an earlier run failed on — photos already in the library are left as they are), lookMap?: {lookName: profileId} (creative looks → our profiles; an imported profile named like the look matches by itself), profiles?: bool (default: as presets; first import the creative profiles — XMP Look profiles with a colour table such as Summer Fields / Nautica, presets carrying one, .cube files — from profileDirs?: [folders] (default: the preset folders below) so photos using them match), presets?: bool (default true), presetDirs?: [folders] (default: Lightroom Settings/{Settings, Develop Presets, Keyword Sets} next to the catalog + Camera Raw / Lightroom preset folders)} → {found, missing, missingByRoot, matched, rated, flagged, labelled, keyworded, virtualCopies, develop: {applied, unmapped: [{key, photos}], photosWithUnmapped…}, albums: {albums, smart, sets, quick, skipped}, presets} — ratings, flags, colour labels, keywords, caption/copyright/creator/location, collections (the catalog's own tree: sets as album folders, smart collections whose rules map, the Quick Collection into ours), virtual copies, develop settings and Lightroom's edit times; one undo step",
             always,
             run
+        ),
+        cmd!(
+            "library.rematchProfiles",
+            "Match Lightroom Profiles",
+            [],
+            None,
+            "{profileDirs?: [folders/files] (default: Camera Raw / Lightroom profile and preset folders), profiles?: bool (default true: import those first), catalog?: path.lrcat | records?: path | readCatalog?: bool (also read the catalog, default the newest, for photos the migration didn't record), lookMap?: {lookName: profileId}, force?: bool (also photos whose profile was changed since), dryRun?: bool} — give migrated photos the creative profile their Lightroom look names (Summer Fields, Nautica…), once it is imported; one undo step → {matched, byLook, keptOwnProfile, unmatched: {look: photos}, profiles}",
+            always,
+            rematch
         ),
         cmd!(
             "library.flattenLightroomCollections",

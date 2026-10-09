@@ -143,6 +143,110 @@ pub struct MigrateOptions {
     /// Creative look name → one of our profile ids (e.g. a `.cube` imported with
     /// `profile.import`). Looks with an imported profile of the same name match by themselves.
     pub look_map: HashMap<String, String>,
+    /// Folders (and files, zips) whose creative profiles — camera-raw XMP "Look" profiles with a
+    /// colour table, presets carrying one, `.cube` files — are imported first so photos using
+    /// them match (`profile.import`; one already imported isn't imported twice).
+    pub profile_dirs: Vec<String>,
+}
+
+/// The profile one of our profiles a creative look `name` matches: `look_map`'s choice, else an
+/// imported profile of that name (case-insensitive).
+fn matching_profile(s: &Session, look_map: &HashMap<String, String>, name: &str) -> Option<String> {
+    look_map.get(name).cloned().or_else(|| s.lut_profiles.iter().find(|l| l.name.eq_ignore_ascii_case(name.trim())).map(|l| l.id.clone()))
+}
+
+/// Import the creative profiles in `dirs` (none on a dry run: their names are returned instead,
+/// to count matches).
+fn import_profiles(s: &mut Session, dirs: &[String], dry: bool) -> crate::Result<(Value, Vec<String>)> {
+    if dirs.is_empty() {
+        return Ok((Value::Null, Vec::new()));
+    }
+    if dry {
+        let names = crate::cmd::lut_profiles::profile_names(dirs);
+        return Ok((json!({"found": names.len()}), names));
+    }
+    let r = crate::cmd::lut_profiles::import_paths(s, dirs)?;
+    Ok((json!({"imported": r.imported, "alreadyImported": r.known, "failed": r.failed}), Vec::new()))
+}
+
+/// The creative look each photo had in Lightroom, as the migration recorded it in
+/// [`RESUME_FILE`] (`looks: {photoId: {name, amount}}`).
+fn recorded_looks(s: &Session) -> HashMap<PhotoId, (String, f64)> {
+    let Some(dir) = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone()) else { return HashMap::new() };
+    let doc: Value = std::fs::read(dir.join(RESUME_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
+    doc["looks"]
+        .as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| {
+                    let id = PhotoId(k.parse().ok()?);
+                    Some((id, (v["name"].as_str()?.to_string(), v["amount"].as_f64().filter(|a| a.is_finite()).unwrap_or(1.0))))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Give photos the imported creative profile their Lightroom look names (Summer Fields,
+/// Nautica, … imported from XMP profiles or `.cube` files): for a library migrated before those
+/// profiles were imported. Profiles in `profile_dirs` are imported first. The looks come from the
+/// migration's record ([`RESUME_FILE`]) or, for photos it doesn't list, from `rec` (the catalog).
+/// A photo whose profile was changed here since (anything but the default) keeps it unless
+/// `force`. One undo step.
+pub fn rematch_profiles(s: &mut Session, rec: Option<&Records>, opts: &MigrateOptions, force: bool) -> crate::Result<Value> {
+    let (profiles, dry_names) = import_profiles(s, &opts.profile_dirs, opts.dry_run)?;
+    let mut looks = recorded_looks(s);
+    if let Some(rec) = rec {
+        let by_path = photos_by_path(s);
+        for im in rec.images.iter().filter(|i| i.master.is_none()) {
+            let Some(&id) = by_path.get(&im.path) else { continue };
+            if looks.contains_key(&id) {
+                continue;
+            }
+            if let Some(look) = prepare_image(im, None).creative_look {
+                looks.insert(id, look);
+            }
+        }
+    }
+    let default_id = lightcraft_develop::Profile::default().id;
+    let (mut matched, mut kept, mut unmatched) = (0usize, 0usize, BTreeMap::<String, usize>::new());
+    let mut by_look: BTreeMap<String, usize> = BTreeMap::new();
+    let mut ops = Vec::new();
+    let mut ids: Vec<PhotoId> = looks.keys().copied().collect();
+    ids.sort();
+    for id in ids {
+        let Some((name, amount)) = looks.get(&id) else { continue };
+        let Some(p) = s.catalog.photo(id) else { continue };
+        let target = if opts.dry_run {
+            dry_names.iter().any(|n| n.eq_ignore_ascii_case(name.trim())).then(|| format!("lut:{name}"))
+        } else {
+            matching_profile(s, &opts.look_map, name)
+        };
+        let Some(pid) = target else {
+            *unmatched.entry(name.clone()).or_default() += 1;
+            continue;
+        };
+        let current = p.develop.profile.id.as_str();
+        let current_name = s.lut_profiles.iter().find(|l| l.id == current).map(|l| l.name.as_str());
+        if current == pid || current_name.is_some_and(|n| n.eq_ignore_ascii_case(name.trim())) {
+            continue;
+        }
+        if !force && !(current.is_empty() || current == default_id) {
+            kept += 1;
+            continue;
+        }
+        matched += 1;
+        *by_look.entry(name.clone()).or_default() += 1;
+        if !opts.dry_run {
+            let mut d = (*p.develop).clone();
+            d.profile = lightcraft_develop::Profile { id: pid, amount: (amount * 100.0).clamp(0.0, 200.0) };
+            ops.push(Op::SetDevelop { id, settings: Arc::new(d), label: "Match Profiles".into(), edited: p.edited.clone() });
+        }
+    }
+    if !ops.is_empty() {
+        s.commit("Match Lightroom Profiles", Op::Batch { ops })?;
+    }
+    Ok(json!({"dryRun": opts.dry_run, "profiles": profiles, "matched": matched, "byLook": by_look, "keptOwnProfile": kept, "unmatched": unmatched}))
 }
 
 // ---------------------------------------------------------------------------------- reading
@@ -961,6 +1065,11 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
         }
     }
 
+    // ---- creative profiles (so photos using them match)
+    let (profiles_report, dry_names) =
+        if opts.collections_only { (Value::Null, Vec::new()) } else { import_profiles(s, &opts.profile_dirs, opts.dry_run)? };
+    let mut looks_used = Map::new();
+
     // ---- per photo: rating, flag, label, text, keywords, develop
     let mut ops = Vec::new();
     let mut dev = DevelopStats::default();
@@ -988,11 +1097,14 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
             // a creative look: an imported LUT profile of that name (or `lookMap`'s choice)
             if let Some((name, amount)) = &prep.creative_look {
                 *dev.looks.entry(name.clone()).or_default() += 1;
-                let id = opts
-                    .look_map
-                    .get(name)
-                    .cloned()
-                    .or_else(|| s.lut_profiles.iter().find(|l| l.name.eq_ignore_ascii_case(name)).map(|l| l.id.clone()));
+                if let Some(t) = &target {
+                    looks_used.insert(t.id.0.to_string(), json!({"name": name, "amount": amount}));
+                }
+                let id = if opts.dry_run && !dry_names.is_empty() {
+                    dry_names.iter().any(|n| n.eq_ignore_ascii_case(name.trim())).then(|| format!("lut:{name}"))
+                } else {
+                    matching_profile(s, &opts.look_map, name)
+                };
                 if let Some(id) = id {
                     partial["profile"] = json!({"id": id, "amount": (amount * 100.0).clamp(0.0, 200.0)});
                     unmapped.retain(|k| k != "Look");
@@ -1108,7 +1220,7 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
         }
         doc["catalog"] = json!(rec.catalog);
         doc["migrated"] = json!(now);
-        for (k, src) in [("touched", touched), ("edited", edited_at)] {
+        for (k, src) in [("touched", touched), ("edited", edited_at), ("looks", looks_used)] {
             if !doc[k].is_object() {
                 doc[k] = json!({});
             }
@@ -1158,6 +1270,7 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
         "albums": cols.report,
         "changes": changes,
         "presets": presets,
+        "profiles": profiles_report,
     }))
 }
 

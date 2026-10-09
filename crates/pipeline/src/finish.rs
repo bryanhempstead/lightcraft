@@ -150,7 +150,8 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
 /// Everything the per-pixel stage computes once per render: the CPU loop below and the GPU kernel
 /// (`lightcraft-gpu`) both read their parameters from here, so the two cannot drift apart.
 pub struct FinishParams {
-    /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
+    /// A LUT profile and its blend (the amount 0..2 through [`crate::lut::Lut3d::blend`]):
+    /// applied to the display-encoded colour or, for a profile table, after the tone map.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
     pub ops: ColorOps,
@@ -228,7 +229,10 @@ impl FinishParams {
             } else {
                 ToneMap::display(s.light.contrast, s.light.whites, s.light.blacks)
             },
-            lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
+            lut: crate::lut::get(&s.profile.id).map(|l| {
+                let k = l.blend((s.profile.amount / 100.0) as f32);
+                (l, k)
+            }),
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
@@ -317,7 +321,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     store: impl Fn([f32; 3]) -> T + Sync + Send,
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
-    let p_lut = fp.lut.clone();
+    let p_lut = fp.lut.clone().filter(|(l, k)| l.stage == crate::lut::LutStage::Output && *k > 0.0);
+    let profile_lut = fp.lut.clone().filter(|(l, k)| l.stage == crate::lut::LutStage::Profile && *k > 0.0).map(|(l, k)| {
+        let m = l.matrices();
+        (l, k, m)
+    });
     let FinishParams {
         tone,
         ops,
@@ -491,6 +499,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             if mx > 1.0 {
                 let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
                 d = d.map(|v| v + (o - v) * t);
+            }
+
+            // --- the profile's colour table (a creative profile's look)
+            if let Some((l, k, m)) = &profile_lut {
+                d = l.apply_linear(d, *k, m);
             }
 
             // --- colour

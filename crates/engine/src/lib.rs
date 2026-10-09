@@ -17,6 +17,7 @@ pub mod cmd;
 pub mod crs;
 pub mod crs_masks;
 pub mod crs_spots;
+pub mod crs_table;
 pub mod demo;
 pub mod devices;
 pub mod disks;

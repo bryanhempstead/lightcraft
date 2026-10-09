@@ -147,7 +147,8 @@ Values pass through our control specs, so anything outside our slider ranges get
 reported as unmapped: digests, `LensProfile*` names, `Upright*` guide data, `GrainSeed`, `Custom*` remembered white
 balance, `ToggleStyle*`, `Preset`, HDR fields while `HDREditMode` is 0, preset descriptions and sort names.
 
-**Not mapped:** creative profiles (looks with their own colour tables, e.g. third-party profile packs), red eye, lens
+**Not mapped:** creative profiles whose colour table isn't imported (see *Profiles* below: an imported one matches by
+name), red eye, lens
 blur, guided Upright lines (`UprightTransform_*`), process-version 2010 field names, and AI features.
 
 ## Lightroom Classic catalogs
@@ -171,7 +172,13 @@ dependencies): the catalog and its `-wal` log are copied to a temporary folder a
 | last develop-history time, `touchTime` | `edited`; `<library>/lightroom-migration.json` | for `library.resumePoint` |
 | preset folders | presets, keyword sets | dedupe by `crs:UUID`, then name + group |
 
-A creative look matches an imported `.cube` profile of the same name (`profile.import`), or `lookMap: {look: profileId}`.
+A creative look (Summer Fields, Nautica…) matches an imported profile of the same name, or `lookMap: {look: profileId}`.
+Before the photos are matched the migration imports the creative profiles in `profileDirs` (default: the preset
+folders above, when presets are imported; `profiles: false` / `--no-profiles` skips them) — XMP Look profiles with an
+RGB colour table, presets that carry one, `.cube` files — and records each photo's look in
+`<library>/lightroom-migration.json` (`looks`). For a library migrated earlier, `library.rematchProfiles` imports the
+profiles and gives every photo the profile its look names (from that record, or with `readCatalog: true` / `catalog` /
+`records` from the catalog); photos whose profile was changed here since keep it unless `force`. One undo step.
 Running the migration again adds nothing twice.
 
 ## Local corrections (masks)
@@ -232,11 +239,22 @@ with a blend mode other than Normal or with a mask are reported, not applied. Bi
 | Vignette `Amount`, `Vignette Size` | `vignette.amount`, `vignette.midpoint` |
 | Grain `Amount` | `grain.amount` |
 
-## Profiles: 3D LUTs (`.cube`)
+## Profiles: 3D LUTs (`.cube`) and creative XMP profiles
 
-`profile.import {paths}` (File ▸ Import Profiles & Presets…, drag & drop) reads `.cube` 3D LUTs — single files, folders
-or `.zip` bundles — as creative profiles: they appear in the profile browser under their folder's (or zip's) name and
-take the Amount slider (0–200 %) like the built-in looks. The LUT is applied to the finished, display-encoded colour
-(trilinear; `DOMAIN_MIN` / `DOMAIN_MAX` honoured; 1D LUTs are not supported); photos with a LUT profile render on the
-CPU. A library on disk keeps a copy of each file in its `Profiles/` folder. Adobe's own profile formats (`.dcp`, XMP
-camera/creative profiles with embedded tables) are deliberately not read.
+`profile.import {paths}` (File ▸ Import Profiles & Presets…, drag & drop) reads `.cube` 3D LUTs and creative ("Look")
+XMP profiles — single files, folders or `.zip` bundles — as creative profiles: they appear in the profile browser under
+their group (the profile's `crs:Group`, else the folder's or zip's name) and take the Amount slider (0–200 %) like the
+built-in looks. Photos with one render on the CPU. A library on disk keeps a copy of each file in its `Profiles/`
+folder; a profile already imported (same colour table, or same name and group) is skipped.
+
+- `.cube`: applied to the finished, display-encoded colour (trilinear; `DOMAIN_MIN` / `DOMAIN_MAX` honoured; 1D LUTs
+  are not supported).
+- XMP creative profiles whose look is an RGB colour table (`crs:RGBTable="<md5>"` naming `crs:Table_<md5>`; e.g.
+  bought profile packs): decoded by `crates/engine/src/crs_table.rs` — the encoding was worked out from the data
+  (base 85 with the Z85 digits, `` ` ' | `` standing in for `& < >`, little-endian groups; a `u32` length and a zlib
+  stream; a header, n³ `u16` deltas from the identity, then the table's colour space, encoding and the blend at
+  amounts 0 % / 200 %; `crs:RGBTableAmount` is the blend at 100 %). The table applies as part of the profile: after
+  the base rendering's tone map, before the user's colour adjustments and tone curves, in its own primaries and
+  encoding (`crates/pipeline/src/lut.rs`, `LutStage::Profile`). Profiles that are only a hue/saturation `LookTable`,
+  and a look's other settings, are not read. These files are the user's own data, read at runtime; none ship with
+  LightCraft. Adobe's camera profiles (`.dcp`) and Adobe's own built-in profiles are not read.

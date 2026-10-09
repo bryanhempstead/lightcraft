@@ -601,3 +601,90 @@ fn only_new_leaves_migrated_photos_alone() {
     assert_eq!(s.catalog.albums().filter(|al| al.name == "Trip").count(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Creative looks (camera-raw XMP "Look" profiles with a colour table): imported by the
+/// migration and matched by name, or matched later by `library.rematchProfiles`.
+#[test]
+fn creative_profiles_match_on_migration_and_later() {
+    use crate::crs_table::tests::{encode_text, table_bytes, xmp};
+    let dir = std::env::temp_dir().join(format!("lc-lrlook-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let photos = dir.join("shoot");
+    let profiles = dir.join("profiles");
+    std::fs::create_dir_all(&photos).unwrap();
+    std::fs::create_dir_all(&profiles).unwrap();
+    for (name, v) in [("a.png", 120u8), ("b.png", 90)] {
+        let img = lightcraft_raster::Rgba8::filled(20, 16, [v, v, v, 255]);
+        let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(photos.join(name), bytes).unwrap();
+    }
+    // a warm look, and a preset that only names it (no table: nothing to import)
+    let text = encode_text(&table_bytes(5, |c| [(c[0] * 1.1 + 0.05).min(1.0), c[1], c[2] * 0.8], (0, 1, 0.0, 1.0)));
+    std::fs::write(profiles.join("Fields.xmp"), xmp("Fields Test", "AA11", &text, "0.5")).unwrap();
+    std::fs::write(profiles.join("broken.xmp"), xmp("Broken", "BB22", "#####", "1")).unwrap();
+    let root = format!("{}/", dir.display());
+    let look =
+        |name: &str| format!("s = {{ Exposure2012 = 0.5,\nLook = {{ Amount = 0.8,\nName = \"{name}\",\nParameters = {{ RGBTable = \"AA11\" }} }} }}");
+    let images = vec![
+        json!({"id": 1, "root": root, "folder": "shoot/", "base": "a", "ext": "png", "develop": look("Fields Test"), "edits": 2}),
+        json!({"id": 2, "root": root, "folder": "shoot/", "base": "b", "ext": "png", "develop": look("Other Look"), "edits": 2}),
+    ];
+    let rec = records_from_rows("t.lrcat", &images, &[], &[], &[], &[], &[]);
+    let rec_path = dir.join("records.json");
+    std::fs::write(&rec_path, serde_json::to_vec(&rec).unwrap()).unwrap();
+    let rec_s = rec_path.to_string_lossy().to_string();
+    let pdir = profiles.to_string_lossy().to_string();
+
+    // migration imports the profile and matches it
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    let dry = s.execute("library.migrateLightroom", &json!({"records": rec_s, "dryRun": true, "presets": false, "profileDirs": [pdir]})).unwrap();
+    assert_eq!(dry["develop"]["creativeLooksMatched"], json!(1), "{dry}");
+    assert!(s.lut_profiles.is_empty(), "a dry run imports nothing");
+    let r = s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false, "profileDirs": [pdir]})).unwrap();
+    assert_eq!(r["develop"]["creativeLooksMatched"], json!(1), "{r}");
+    assert_eq!(r["profiles"]["failed"].as_array().map(Vec::len), Some(1), "the broken table is reported: {r}");
+    let a = s.catalog.photos().find(|p| p.file_name.starts_with('a')).cloned().unwrap();
+    assert!(a.develop.profile.id.starts_with("lut:"), "{:?}", a.develop.profile);
+    assert_eq!(a.develop.profile.amount, 80.0);
+    assert_eq!(s.profile_info(&a.develop.profile.id), Some(("Fields Test", "Grp")));
+    // the look renders: warmer than the same photo at Amount 0
+    let warm = s.render_now(a.id, 24, 16).unwrap().image;
+    s.selection = crate::Selection::single(a.id);
+    s.execute("develop.profile", &json!({"id": a.develop.profile.id, "amount": 0})).unwrap();
+    let plain = s.render_now(a.id, 24, 16).unwrap().image;
+    let mean = |img: &lightcraft_raster::Rgba8, k: usize| img.data.iter().map(|p| p[k] as f64).sum::<f64>() / img.data.len() as f64;
+    assert!(mean(&warm, 0) > mean(&plain, 0) && mean(&warm, 2) < mean(&plain, 2), "warmer");
+
+    // a library migrated without the profile: matched afterwards, from the migration's record
+    let mut s2 = Session::new().with_fs();
+    s2.open_library(dir.join("lib2"), false).unwrap();
+    let r = s2.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false})).unwrap();
+    assert_eq!(r["develop"]["creativeLooksMatched"], json!(0), "{r}");
+    let r = s2.execute("library.rematchProfiles", &json!({"profileDirs": [pdir], "dryRun": true})).unwrap();
+    assert_eq!((r["matched"].clone(), r["unmatched"]["Other Look"].clone()), (json!(1), json!(1)), "{r}");
+    assert!(s2.catalog.photos().all(|p| !p.develop.profile.id.starts_with("lut:")), "dry run");
+    let r = s2.execute("library.rematchProfiles", &json!({"profileDirs": [pdir]})).unwrap();
+    assert_eq!(r["byLook"]["Fields Test"], json!(1), "{r}");
+    let a2 = s2.catalog.photos().find(|p| p.file_name.starts_with('a')).cloned().unwrap();
+    assert!(a2.develop.profile.id.starts_with("lut:") && a2.develop.profile.amount == 80.0);
+    assert_eq!(a2.develop.light.exposure, 0.5, "the rest of the settings stay");
+    s2.undo_step().unwrap();
+    assert!(!s2.catalog.photo(a2.id).unwrap().develop.profile.id.starts_with("lut:"), "one undo step");
+    // …or from the catalog (records) when the migration didn't record looks
+    let resume = dir.join("lib2").join(RESUME_FILE);
+    let mut doc: Value = serde_json::from_slice(&std::fs::read(&resume).unwrap()).unwrap();
+    doc.as_object_mut().unwrap().remove("looks");
+    std::fs::write(&resume, serde_json::to_vec(&doc).unwrap()).unwrap();
+    assert_eq!(s2.execute("library.rematchProfiles", &json!({"profileDirs": [pdir]})).unwrap()["matched"], json!(0));
+    let r = s2.execute("library.rematchProfiles", &json!({"profileDirs": [pdir], "records": rec_s})).unwrap();
+    assert_eq!(r["matched"], json!(1), "{r}");
+    // a profile chosen here since is kept unless forced
+    s2.selection = crate::Selection::single(a2.id);
+    s2.execute("develop.profile", &json!({"id": "lc.vivid", "amount": 100})).unwrap();
+    let r = s2.execute("library.rematchProfiles", &json!({"profileDirs": [pdir], "records": rec_s})).unwrap();
+    assert_eq!((r["matched"].clone(), r["keptOwnProfile"].clone()), (json!(0), json!(1)), "{r}");
+    let r = s2.execute("library.rematchProfiles", &json!({"profileDirs": [pdir], "records": rec_s, "force": true})).unwrap();
+    assert_eq!(r["matched"], json!(1), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
