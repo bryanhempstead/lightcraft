@@ -213,6 +213,7 @@ impl FinishParams {
         h: usize,
         px_per_long: f64,
         air_pre: f32,
+        tone_key: Option<f32>,
         space: OutputSpace,
     ) -> FinishParams {
         let effects = s.section_enabled("effects");
@@ -231,7 +232,9 @@ impl FinishParams {
         // raw files with a camera tone curve take Lightroom-matched Basic tone
         let lr_tone = info.raw && info.camera_tone.is_some();
         let (hl, sh) = ((s.light.highlights / 100.0) as f32, (s.light.shadows / 100.0) as f32);
-        let hs_lut = (lr_tone && (hl != 0.0 || sh != 0.0)).then(|| crate::tone::lr::hs_lut(hl, sh));
+        // Lightroom's Highlights / Shadows follow the photo's own key (after exposure)
+        let key_offset = tone_key.map_or(0.0, |k| k + s.light.exposure as f32 - crate::tone::lr::KEY_REF);
+        let hs_lut = (lr_tone && (hl != 0.0 || sh != 0.0)).then(|| crate::tone::lr::hs_lut(hl, sh, key_offset));
         let (hl, sh) = if lr_tone { (0.0, 0.0) } else { (hl, sh) };
         FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
@@ -280,7 +283,7 @@ impl FinishParams {
 
 pub(crate) fn finish(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &SourceInfo, space: OutputSpace, proof: Option<crate::Proof>) -> Rgba8 {
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
+    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.tone_key, space);
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let data = finish_with(p, &fp, false, |e| match trc {
@@ -306,7 +309,7 @@ pub(crate) fn finish_deep(
 ) -> DeepImage {
     use lightcraft_color::transfer::srgb_to_linear;
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, space);
+    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.tone_key, space);
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let samples = match depth {

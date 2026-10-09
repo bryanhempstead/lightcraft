@@ -45,6 +45,8 @@ struct Planes {
     texture: Option<(u32, Arc<Buf>)>,
     dark: Option<(u32, Arc<Buf>, f32)>,
     chroma: Option<(u32, Arc<Buf>)>,
+    /// The image key of `log_l` (`tone::lr::image_key`).
+    tone_key: Option<f32>,
 }
 
 impl GpuStages {
@@ -590,7 +592,7 @@ pub fn render(
     lap("masks", &mut t, &mut cx);
 
     // 5. per-pixel stage
-    let fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, req.space);
+    let fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, prep.tone_key, req.space);
     let present = Present {
         clarity: prep.clarity.is_some(),
         texture: prep.texture.is_some(),
@@ -744,6 +746,7 @@ struct Prep {
     /// Blurred chromaticity (local Moiré / Noise).
     chroma: Option<Arc<Buf>>,
     air: f32,
+    tone_key: Option<f32>,
 }
 
 fn plane_at(slot: &mut Option<(u32, Arc<Buf>)>, sigma: f32, f: impl FnOnce() -> Buf) -> Arc<Buf> {
@@ -776,6 +779,21 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
         Some(sg) => plane_at(&mut planes.base, sg, || guided_fast(cx, &log_l, w, h, sg, local::BASE_EPS)),
         None => log_l.clone(),
     };
+    // the image key, from the same every-KEY_STEP-th values the CPU reads
+    let tone_key = match (sig.base.is_some(), planes.tone_key) {
+        (true, None) => {
+            let step = lightcraft_pipeline::tone::lr::KEY_STEP;
+            let m = n.div_ceil(step);
+            let sub = cx.gpu.buffer(m);
+            map(cx, "subsample", m, &[step as u32], [Some(&log_l), None, None], &sub);
+            let v: Vec<f32> = cx.read(&sub, m);
+            cx.flush();
+            let k = lightcraft_pipeline::tone::lr::key_of(v.into_iter());
+            planes.tone_key = k;
+            k
+        }
+        (_, k) => k,
+    };
     let clarity = sig.clarity.map(|sg| plane_at(&mut planes.clarity, sg, || guided_fast(cx, &log_l, w, h, sg, local::CLARITY_EPS)));
     let texture = sig.texture.map(|sg| plane_at(&mut planes.texture, sg, || gaussian(cx, &log_l, w, h, 1, sg)));
     let (dark, air) = match sig.dark {
@@ -805,7 +823,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
             gaussian(cx, &ch, w, h, 3, sg)
         })
     });
-    Prep { log_l, base, clarity, texture, dark, chroma, air }
+    Prep { log_l, base, clarity, texture, dark, chroma, air, tone_key }
 }
 
 /// Most brush dabs the mask kernel evaluates per pixel (more: the CPU rasterizes the brush).

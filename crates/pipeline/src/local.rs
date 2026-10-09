@@ -226,6 +226,8 @@ pub fn log_lum(c: [f32; 3]) -> f32 {
 pub(crate) struct Planes {
     pub key: u64,
     pub log_l: Option<Arc<Plane>>,
+    /// The image key of `log_l` ([`crate::tone::lr::image_key`]).
+    pub tone_key: Option<f32>,
     pub base: Option<(u32, Arc<Plane>)>,
     pub clarity: Option<(u32, Arc<Plane>)>,
     pub texture: Option<(u32, Arc<Plane>)>,
@@ -341,6 +343,14 @@ pub(crate) fn prepare(img: Arc<Rgb32f>, s: &DevelopSettings, frame: &Frame, px_p
             )
         },
     );
+    let tone_key = match (base.is_some(), planes.tone_key) {
+        (true, None) => {
+            let k = crate::tone::lr::image_key(&log_l.data);
+            planes.tone_key = k;
+            k
+        }
+        (_, k) => k,
+    };
     let base = base.unwrap_or_else(|| log_l.clone());
     let (dark, air) = match dark {
         Some((d, air)) => (Some(d), air),
@@ -348,7 +358,7 @@ pub(crate) fn prepare(img: Arc<Rgb32f>, s: &DevelopSettings, frame: &Frame, px_p
     };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev));
-    Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
+    Prepared { img, log_l, base, tone_key, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
 }
 
 /// The airlight is estimated from every `AIRLIGHT_STEP`-th value of the dark channel.

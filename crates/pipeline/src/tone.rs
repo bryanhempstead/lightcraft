@@ -88,22 +88,45 @@ impl CameraTone {
 }
 
 /// Lightroom-matched Basic tone for raw files with a camera tone curve: how many EV each slider
-/// moves a tone at post-exposure scene EV `LR_EV0`, `LR_EV0 + 1` … (relative to middle grey),
-/// per 100 slider units (Exposure: per EV, on top of its gain). Fitted (ridge regression on
-/// smooth piecewise-linear functions) to the neutral pixels of ~100 raw photos and Lightroom
-/// Classic's own renders of them (`tools/lr-compare`, `docs/lr-match.md`); black-box
+/// moves a tone at EV `EV0`, `EV0 + 1` … (relative to middle grey), per 100 slider units
+/// (Exposure: per EV, on top of its gain). Exposure, Contrast, Whites and Blacks act on the
+/// scene EV after exposure (and after Highlights / Shadows); Highlights and Shadows act on the
+/// edge-aware local base relative to the photo's own key ([`image_key`]): Lightroom's are image
+/// adaptive, so a dark photo's "highlights" sit lower than a bright one's. Fitted (robust ridge
+/// regression on smooth piecewise-linear functions, held-out split) to ~300 raw photos and
+/// Lightroom Classic's own renders of them (`tools/lr-compare`, `docs/lr-match.md`); black-box
 /// observation of output only.
 pub mod lr {
     pub const EV0: f32 = -10.0;
     pub const N: usize = 15;
-    pub const CONTRAST: [f32; N] =
-        [-1.368, -1.204, -1.022, -0.828, -0.676, -0.627, -0.666, -0.683, -0.569, -0.278, 0.057, 0.356, 0.542, 0.664, 0.765];
-    pub const HIGHLIGHTS: [f32; N] = [0.99, 0.602, 0.217, -0.084, -0.239, -0.278, -0.213, -0.112, 0.032, 0.221, 0.401, 0.561, 0.645, 0.675, 0.688];
-    pub const SHADOWS: [f32; N] = [2.703, 2.744, 2.733, 2.617, 2.353, 1.837, 1.092, 0.433, -0.057, -0.238, -0.262, -0.301, -0.323, -0.325, -0.32];
-    pub const WHITES: [f32; N] = [-0.165, -0.195, -0.216, -0.194, -0.118, -0.036, 0.004, 0.028, 0.104, 0.172, 0.198, 0.206, 0.195, 0.172, 0.145];
-    pub const BLACKS: [f32; N] = [1.027, 0.927, 0.823, 0.757, 0.758, 0.774, 0.747, 0.621, 0.403, 0.155, -0.022, -0.155, -0.241, -0.299, -0.347];
-    pub const EXPOSURE: [f32; N] =
-        [-1.618, -1.193, -0.756, -0.381, -0.132, -0.015, -0.009, -0.11, -0.122, -0.176, -0.285, -0.322, -0.303, -0.257, -0.206];
+    pub const CONTRAST: [f32; N] = [0.154, -0.01, -0.19, -0.4, -0.636, -0.852, -0.947, -0.806, -0.488, -0.137, 0.123, 0.232, 0.239, 0.198, 0.143];
+    pub const HIGHLIGHTS: [f32; N] = [0.0, -0.036, -0.073, -0.106, -0.126, -0.111, -0.029, 0.146, 0.382, 0.613, 0.806, 0.913, 0.886, 0.772, 0.618];
+    pub const SHADOWS: [f32; N] = [-0.126, 0.023, 0.185, 0.37, 0.573, 0.755, 0.835, 0.738, 0.546, 0.439, 0.352, 0.232, 0.062, -0.13, -0.316];
+    pub const WHITES: [f32; N] = [0.055, -0.007, -0.074, -0.151, -0.237, -0.312, -0.337, -0.253, -0.027, 0.265, 0.479, 0.518, 0.429, 0.286, 0.13];
+    pub const BLACKS: [f32; N] = [-0.092, 0.002, 0.104, 0.226, 0.364, 0.495, 0.563, 0.499, 0.334, 0.128, -0.057, -0.154, -0.173, -0.153, -0.12];
+    pub const EXPOSURE: [f32; N] = [0.051, -0.059, -0.174, -0.294, -0.399, -0.442, -0.354, -0.158, -0.035, -0.002, -0.03, -0.094, -0.124, -0.123, -0.112];
+    /// The key (after exposure) at which [`HIGHLIGHTS`] / [`SHADOWS`] are tabulated: the median
+    /// key of the photos they were fitted on.
+    pub const KEY_REF: f32 = -2.401;
+    /// [`image_key`] reads every `KEY_STEP`-th pixel.
+    pub const KEY_STEP: usize = 7;
+
+    /// A photo's key: the mean log2 luminance relative to grey (each clamped to −14..10 EV) of
+    /// every [`KEY_STEP`]-th value of its log-luminance plane, before exposure. `None` when
+    /// there are no finite values.
+    pub fn image_key(log_l: &[f32]) -> Option<f32> {
+        key_of(log_l.iter().step_by(KEY_STEP).copied())
+    }
+
+    /// [`image_key`] of values already taken every [`KEY_STEP`]-th (the GPU reads them back so).
+    pub fn key_of(values: impl Iterator<Item = f32>) -> Option<f32> {
+        let (mut sum, mut n) = (0.0f64, 0usize);
+        for v in values.filter(|v| v.is_finite()) {
+            sum += f64::from(v.clamp(-14.0, 10.0));
+            n += 1;
+        }
+        (n > 0).then(|| (sum / n as f64) as f32)
+    }
 
     /// `t` at scene EV `ev` (linear between knots, constant beyond).
     #[inline]
@@ -122,11 +145,13 @@ pub mod lr {
     pub const HS_N: usize = (N - 1) * 4 + 1;
 
     /// Highlights and Shadows (−1..1) as a table of EV changes by local base EV (quarter stops
-    /// from `EV0`), applied per pixel on the edge-aware base.
-    pub fn hs_lut(highlights: f32, shadows: f32) -> Vec<f32> {
+    /// from `EV0`, after exposure), applied per pixel on the edge-aware base. `key_offset`: the
+    /// photo's key after exposure minus [`KEY_REF`] (0 = tabulated as fitted).
+    pub fn hs_lut(highlights: f32, shadows: f32, key_offset: f32) -> Vec<f32> {
+        let off = if key_offset.is_finite() { key_offset.clamp(-12.0, 12.0) } else { 0.0 };
         (0..HS_N)
             .map(|i| {
-                let ev = EV0 + i as f32 * 0.25;
+                let ev = EV0 + i as f32 * 0.25 - off;
                 highlights * at(&HIGHLIGHTS, ev) + shadows * at(&SHADOWS, ev)
             })
             .collect()
@@ -305,7 +330,7 @@ mod tests {
             assert!((plain.apply(y) - curve.apply(y)).abs() < 1e-3, "{y}");
         }
         let lifted = ToneMap::camera_lr(&curve, 0.0, 0.0, 0.0, 60.0);
-        assert!(lifted.apply(0.003) > plain.apply(0.003) * 1.2, "Blacks + lifts the shadows");
+        assert!(lifted.apply(0.01) > plain.apply(0.01) * 1.2, "Blacks + lifts the shadows");
         let flat = ToneMap::camera_lr(&curve, 0.0, -80.0, 0.0, 0.0);
         assert!(flat.apply(0.01) > plain.apply(0.01), "Contrast − lifts the darks");
         // (the exposure gain itself comes before the tone map; its curve rolls the ends off)
@@ -317,12 +342,33 @@ mod tests {
             assert!(lut.windows(2).all(|w| w[1] >= w[0] - 1e-6) && lut.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
         }
         // Highlights / Shadows: shadows lift dark bases, highlights − pulls bright ones down
-        let t = lr::hs_lut(-0.9, 0.5);
+        let t = lr::hs_lut(-0.9, 0.5, 0.0);
         assert_eq!(t.len(), lr::HS_N);
         assert!(lr::hs_at(&t, -6.0) > 0.3 && lr::hs_at(&t, 1.0) < 0.0, "{t:?}");
         assert_eq!(lr::hs_at(&t, f32::NAN), 0.0);
         assert_eq!(lr::hs_at(&[], 1.0), 0.0);
         assert!((lr::hs_at(&t, 100.0) - t[t.len() - 1]).abs() < 1e-6 && (lr::hs_at(&t, -100.0) - t[0]).abs() < 1e-6, "clamped");
+    }
+
+    #[test]
+    fn highlights_and_shadows_follow_the_photos_own_key() {
+        // a photo 3 EV darker than the reference key: its "highlights" sit 3 EV lower
+        let (mid, dark) = (lr::hs_lut(-0.8, 0.0, 0.0), lr::hs_lut(-0.8, 0.0, -3.0));
+        for b in [-6.0f32, -3.0, 0.0] {
+            assert!((lr::hs_at(&dark, b - 3.0) - lr::hs_at(&mid, b)).abs() < 1e-5, "{b}");
+        }
+        assert!(lr::hs_at(&dark, -2.0) < lr::hs_at(&mid, -2.0) - 0.1, "Highlights − reaches lower in a dark photo");
+        // hostile offsets: finite tables, never a panic
+        for off in [f32::NAN, f32::INFINITY, -1e9] {
+            assert!(lr::hs_lut(1.0, 1.0, off).iter().all(|v| v.is_finite()));
+        }
+        // the key: mean clamped log luminance of every KEY_STEP-th value, None when empty
+        assert_eq!(lr::image_key(&[]), None);
+        assert_eq!(lr::image_key(&[f32::NAN; 20]), None);
+        let plane: Vec<f32> = (0..70).map(|i| if i % 7 == 0 { -2.0 } else { 99.0 }).collect();
+        assert!((lr::image_key(&plane).unwrap() + 2.0).abs() < 1e-6);
+        assert_eq!(lr::key_of(plane.iter().step_by(lr::KEY_STEP).copied()), lr::image_key(&plane));
+        assert_eq!(lr::image_key(&[-40.0]), Some(-14.0));
     }
 
     fn knots() -> [[f32; 2]; 32] {

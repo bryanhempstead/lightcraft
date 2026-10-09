@@ -41,6 +41,11 @@ fn camera_tone_and_relative_wb() {
     s.wb.mode = WbMode::Custom;
     s.wb.temp = 8000.0;
     check("camera tone edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    // Lightroom-matched Highlights / Shadows: tables shifted by the photo's key (read back)
+    let mut hs = s.clone();
+    hs.light.highlights = -70.0;
+    hs.light.shadows = 55.0;
+    check("camera tone highlights/shadows", &src, &info, &hs, &RenderRequest::fit(320, 240));
     // a camera chroma curve: richer shadows, highlights bleached toward white
     let curve = curve.with_chroma([1.4, 1.3, 1.1, 1.0, 0.7, 0.4, 0.25, 0.2]).unwrap();
     let info = SourceInfo { camera_tone: Some(curve), ..info };
