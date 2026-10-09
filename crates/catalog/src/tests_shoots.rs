@@ -134,9 +134,9 @@ fn folders_that_gather_shoots_are_not_shoots() {
         "/Volumes/HEMPSTEAD/- High Priority Edit/-current/Bismarck Street Photos/e.jpg",
         "/Volumes/HEMPSTEAD/- High Priority Edit/-current/chicago/-raw/f.jpg",
         "/Volumes/HEMPSTEAD/- High Priority Edit/-current/edit now/g.jpg",
-        "/Volumes/HEMPSTEAD/- High Priority Edit/Iceland - Our Wedding/Photos - Iceland/Canon R6/h.jpg",
-        "/Volumes/HEMPSTEAD/- High Priority Edit/Iceland - Our Wedding/Photos - Iceland/FUJI/i.jpg",
-        "/Volumes/HEMPSTEAD/- High Priority Edit/Iceland - Our Wedding/Photos - Iceland/iPhone/Wild Terra/j.jpg",
+        "/Volumes/HEMPSTEAD/- High Priority Edit/Iceland - Our Wedding/Photos - Iceland - Our Wedding - Photos/Canon R6/h.jpg",
+        "/Volumes/HEMPSTEAD/- High Priority Edit/Iceland - Our Wedding/Photos - Iceland - Our Wedding - Photos/FUJI/i.jpg",
+        "/Volumes/HEMPSTEAD/- High Priority Edit/Iceland - Our Wedding/Photos - Iceland - Our Wedding - Photos/iPhone/Wild Terra/j.jpg",
         "/Volumes/BONUSBOY/sean photos/k.jpg",
         "/Volumes/BONUSBOY/*lifeedit/raw/l.jpg",
     ]);
@@ -153,7 +153,7 @@ fn folders_that_gather_shoots_are_not_shoots() {
             ("Bismarck Street Photos", 1, true),
             ("chicago", 1, true),
             ("edit now", 1, true),
-            ("Photos - Iceland", 3, true),
+            ("Iceland - Our Wedding", 3, true),
         ]
     );
     assert_eq!(got[0].disk, "/");

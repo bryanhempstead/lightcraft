@@ -398,7 +398,15 @@ fn walk(n: &FolderNode, parent: Option<&str>, disk: &FolderNode, out: &mut Vec<S
     if n.count == 0 || !n.selectable {
         return;
     }
-    let at = chain.iter().rposition(|c| !is_generic_name(&c.name)).unwrap_or(0);
+    let mut at = chain.iter().rposition(|c| !is_generic_name(&c.name)).unwrap_or(0);
+    // a folder that repeats the one above it (`Iceland…/Photos - Iceland… - Photos`) says no more
+    while at > 0
+        && let (Some(lower), Some(upper)) = (chain.get(at), chain.get(at - 1))
+        && !is_generic_name(&upper.name)
+        && lower.name.to_lowercase().contains(upper.name.trim().to_lowercase().as_str())
+    {
+        at -= 1;
+    }
     let above = if at == 0 { parent } else { chain.get(at - 1).map(|c| c.name.as_str()) };
     let node = chain.get(at).copied().unwrap_or(n);
     out.push(shoot(node, above, true, n.count));
