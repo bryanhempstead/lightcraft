@@ -383,8 +383,20 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
     let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).map_err(|e| e.to_string())?;
     drop(bytes);
     let img = d.to_working();
-    let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), SourceInfo::default()))
+    let mut img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
+    // a rendered file is taken back to scene-like values through the reference curve, which
+    // renders it again: unedited it comes out as it went in, and Basic tone acts on it as
+    // Lightroom's does (as on a raw)
+    // (only 8-bit display-referred files — JPEG, HEIC, PNG…: deeper or float files, e.g. the
+    // 16-bit TIFF a merged panorama's DNG decodes to, measured worse through it)
+    let rendered = !d.float && d.bit_depth <= 8 && !matches!(d.format, lightcraft_codecs::Format::RawTiffLike | lightcraft_codecs::Format::RawOther);
+    let camera_tone = rendered.then(lightcraft_pipeline::tone::rendered_reference).flatten();
+    if let Some(curve) = &camera_tone {
+        for p in img.data.iter_mut() {
+            *p = lightcraft_pipeline::tone::rendered_to_scene(curve, *p);
+        }
+    }
+    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), SourceInfo { camera_tone, ..SourceInfo::default() }))
 }
 
 /// A DNG `ProfileToneCurve` (linear in, linear out, 1.0 = white after exposure compensation) as the

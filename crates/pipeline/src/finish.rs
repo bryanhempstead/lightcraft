@@ -326,7 +326,9 @@ impl FinishParams {
             .then(|| grain_params(s.grain.amount, s.grain.size, s.grain.roughness, s.grain.seed, px_per_long, info.native_long));
         let calibration = s.section_enabled("calibration");
         // raw files with a camera tone curve take Lightroom-matched Basic tone
-        let lr_tone = info.raw && info.camera_tone.is_some();
+        // raw files with a camera tone curve, and rendered files seen through the reference
+        // curve (`tone::rendered_reference`), take Lightroom-matched Basic tone
+        let lr_tone = info.camera_tone.is_some();
         let (hl, sh) = ((s.light.highlights / 100.0) as f32, (s.light.shadows / 100.0) as f32);
         // Lightroom's Highlights / Shadows follow the photo's own key (after exposure)
         let key_offset = tone_key.map_or(0.0, |k| k + s.light.exposure as f32 - crate::tone::lr::KEY_REF);
@@ -335,7 +337,7 @@ impl FinishParams {
         FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
-            tone: if let Some(curve) = info.camera_tone.as_ref().filter(|_| info.raw) {
+            tone: if let Some(curve) = info.camera_tone.as_ref() {
                 ToneMap::camera_lr(curve, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks)
             } else if info.raw {
                 ToneMap::new(s.light.contrast, s.light.whites, s.light.blacks)

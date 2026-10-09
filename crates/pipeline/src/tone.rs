@@ -67,6 +67,30 @@ impl CameraTone {
         &self.chroma
     }
 
+    /// The scene value this curve maps to display value `o` (inverse of [`CameraTone::apply`];
+    /// `o` is held below 1, which the shoulder only approaches).
+    pub fn invert(&self, o: f32) -> f32 {
+        if !o.is_finite() || o <= 0.0 {
+            return 0.0;
+        }
+        let o = o.min(0.9995);
+        let mut previous = [0.0, 0.0];
+        for p in self.knots {
+            if o <= p[1] {
+                let d = p[1] - previous[1];
+                let t = if d > 0.0 { (o - previous[1]) / d } else { 0.0 };
+                return previous[0] + t * (p[0] - previous[0]);
+            }
+            previous = p;
+        }
+        let a = self.knots[30];
+        let b = self.knots[31];
+        let slope = ((b[1] - a[1]) / (b[0] - a[0])).clamp(0.1, 16.0);
+        let room = (1.0 - b[1]).max(0.01);
+        let r = ((1.0 - o) / (1.0 - b[1]).max(1e-6)).clamp(1e-6, 1.0);
+        b[0] - r.ln() * room / slope
+    }
+
     pub fn apply(&self, y: f32) -> f32 {
         if !y.is_finite() || y <= 0.0 {
             return 0.0;
@@ -85,6 +109,64 @@ impl CameraTone {
         let slope = ((b[1] - a[1]) / (b[0] - a[0])).clamp(0.1, 16.0);
         1.0 - (1.0 - b[1]) * (-(y - b[0]) * slope / (1.0 - b[1]).max(0.01)).exp()
     }
+}
+
+/// The curve rendered (display-referred) files are seen through, so that Lightroom-matched Basic
+/// tone acts on them as on raws (Lightroom's sliders act on a JPEG's tones as on a raw's): the
+/// file is taken back to scene-like values by its inverse ([`rendered_to_scene`]) and this
+/// curve renders it again, so an unedited file comes out as it went in. The knots are a typical
+/// default raw tone (scene → display linear) as Lightroom renders one (fitted black-box from a
+/// user's previews, `docs/lr-match.md`); measured on iPhone JPEGs with his presets, a camera-like
+/// curve here matches Lightroom better than LightCraft's own filmic one.
+pub const RENDERED_REFERENCE: [[f32; 2]; 32] = [
+    [0.00307039, 0.000670656],
+    [0.00370867, 0.00099296],
+    [0.00447963, 0.00141501],
+    [0.00541086, 0.00196295],
+    [0.00653567, 0.00258562],
+    [0.00789432, 0.00318626],
+    [0.00953539, 0.00399587],
+    [0.0115176, 0.0051065],
+    [0.0139119, 0.00666682],
+    [0.0168039, 0.00926836],
+    [0.0202971, 0.0131438],
+    [0.0245165, 0.0189117],
+    [0.029613, 0.0271389],
+    [0.035769, 0.0381187],
+    [0.0432047, 0.0527594],
+    [0.0521861, 0.0714381],
+    [0.0630346, 0.0955155],
+    [0.0761383, 0.126497],
+    [0.091966, 0.165215],
+    [0.111084, 0.214393],
+    [0.134176, 0.274017],
+    [0.162069, 0.342229],
+    [0.19576, 0.418042],
+    [0.236455, 0.500454],
+    [0.285609, 0.584237],
+    [0.344982, 0.667193],
+    [0.416697, 0.746025],
+    [0.50332, 0.814484],
+    [0.60795, 0.872135],
+    [0.734332, 0.917933],
+    [0.886985, 0.949045],
+    [1.07137, 0.974309],
+];
+
+/// [`RENDERED_REFERENCE`] as a camera tone (`None` only if the table were invalid).
+pub fn rendered_reference() -> Option<CameraTone> {
+    CameraTone::new(RENDERED_REFERENCE)
+}
+
+/// A display-referred linear Rec.2020 colour taken back to scene-like values through
+/// [`rendered_reference`] (luminance-wise, hue and saturation kept).
+pub fn rendered_to_scene(curve: &CameraTone, c: [f32; 3]) -> [f32; 3] {
+    let y = lightcraft_color::luminance_2020(c);
+    if !(y.is_finite() && y > 1e-9) {
+        return [0.0; 3];
+    }
+    let k = curve.invert(y) / y;
+    c.map(|v| (v * k).max(0.0))
 }
 
 /// Lightroom-matched Basic tone for raw files with a camera tone curve: how many EV each slider
@@ -370,6 +452,24 @@ mod tests {
         assert!((lr::image_key(&plane).unwrap() + 2.0).abs() < 1e-6);
         assert_eq!(lr::key_of(plane.iter().step_by(lr::KEY_STEP).copied()), lr::image_key(&plane));
         assert_eq!(lr::image_key(&[-40.0]), Some(-14.0));
+    }
+
+    #[test]
+    fn rendered_files_round_trip_through_the_reference_curve() {
+        let curve = rendered_reference().unwrap();
+        for y in [0.0005f32, 0.003, 0.02, 0.18, 0.5, 0.9, 0.99] {
+            let back = curve.apply(curve.invert(y));
+            assert!((back - y).abs() < 1e-4 * y.max(0.01), "{y} -> {back}");
+        }
+        // a colour keeps its hue and saturation, scaled to scene-like values
+        let c = rendered_to_scene(&curve, [0.4, 0.2, 0.1]);
+        assert!((c[0] / c[1] - 2.0).abs() < 1e-4 && (c[1] / c[2] - 2.0).abs() < 1e-4);
+        // hostile values: finite, never negative, never a panic
+        for v in [f32::NAN, f32::INFINITY, -1.0, 0.0, 1.0, 2.0] {
+            let x = curve.invert(v);
+            assert!(x.is_finite() && x >= 0.0, "{v} -> {x}");
+            assert!(rendered_to_scene(&curve, [v; 3]).iter().all(|c| c.is_finite() && *c >= 0.0));
+        }
     }
 
     fn knots() -> [[f32; 2]; 32] {
