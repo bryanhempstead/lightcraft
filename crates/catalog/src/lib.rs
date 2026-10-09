@@ -23,6 +23,7 @@ pub mod model;
 pub mod query;
 pub mod rules;
 pub mod safe_file;
+pub mod shoots;
 pub mod stacks;
 pub mod store;
 
@@ -33,6 +34,7 @@ pub use dates::{DateRun, GroupBy};
 pub use folders::FolderNode;
 pub use journal::{Journal, LoadReport, PersistStats, SnapshotPolicy, SnapshotTiming};
 pub use keywords::KeywordNode;
+pub use shoots::Shoot;
 use lightcraft_develop::DevelopSettings;
 pub use local::{DEFAULT_FORGET_DAYS, ForgetPlan, folder_of};
 pub use lock::{LibraryLock, LockError, LockOwner};

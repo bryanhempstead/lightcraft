@@ -71,10 +71,10 @@ struct Level {
 }
 
 /// Where a stored folder path lies: its volume and the folder names below it.
-struct Placed {
-    mount: String,
-    volume: String,
-    names: Vec<String>,
+pub(crate) struct Placed {
+    pub(crate) mount: String,
+    pub(crate) volume: String,
+    pub(crate) names: Vec<String>,
 }
 
 /// A gvfs mount's name made readable: `smb-share:server=tokyo,share=photos` → `photos on tokyo`;
@@ -93,7 +93,7 @@ fn mount_name(n: &str) -> String {
 /// The volume `dir` lies on and the folder names below it, read the way [`folder_key`] reads a
 /// path (so a row and the filter that chooses it never disagree). `None` for a path that is not
 /// absolute or names no share.
-fn place(dir: &str) -> Option<Placed> {
+pub(crate) fn place(dir: &str) -> Option<Placed> {
     let sp = split_path(dir, false);
     let names: Vec<&str> = sp.parts.iter().map(String::as_str).collect();
     let named = |mount: String, volume: &str, used: usize| (mount, volume.to_string(), used);

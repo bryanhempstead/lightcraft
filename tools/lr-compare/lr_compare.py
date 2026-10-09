@@ -24,6 +24,13 @@ Steps (all writes go to WORK; the catalog and previews are only read, from copie
       mismatch, reported apart from colour); writes W/results-T.json and prints a table (with
       the change vs --base);
       --strip writes W/strips/<id>.jpg: Lightroom | base | T side by side.
+  lr_compare.py detail   --work W --tags T0,T1 [--min-px 1800]
+      detail at the preview's full size (render with --max-size 0): ratios to Lightroom of fine
+      texture in flat areas (grain, noise), mottling, edge sharpness, edge halos and chroma
+      noise, plus 1:1 crop triplets in W/crops/
+  lr_compare.py wbmap    --work W1,W2 [--out DIR] [--exclude sample.json]
+      per camera, how Lightroom's Temp / Tint read in LightCraft (writes `wb_map` into the
+      camera profiles; run after calibrate)
 
 Needs numpy + Pillow, and `lightcraft-cli` (LIGHTCRAFT_CLI, default target/release/lightcraft-cli).
 Adobe RGB (1998) and sRGB are converted from their published primaries / transfer curves; no
@@ -752,6 +759,107 @@ def wbmap(a):
         print(msg + f" -> {fn}")
 
 
+# ---------------------------------------------------------------- detail (1:1)
+DETAIL_SIGMAS = (0.6, 1.2, 2.4, 4.8)
+
+
+def _gblur(a, sigma):
+    """Gaussian blur (reflect padded) via FFT."""
+    n = int(3 * sigma) + 1
+    p = np.pad(a, n, mode="reflect")
+    fy, fx = np.fft.fftfreq(p.shape[0])[:, None], np.fft.fftfreq(p.shape[1])[None, :]
+    g = np.exp(-2 * (np.pi * sigma) ** 2 * (fx ** 2 + fy ** 2))
+    return np.real(np.fft.ifft2(np.fft.fft2(p) * g))[n:-n, n:-n].astype(np.float32)
+
+
+def detail_metrics(prev, space, ours):
+    """Detail at the preview's full size: ratios (ours / Lightroom) of band-pass L* energy in flat
+    areas (fine: grain and noise; mottle: blotches) and along edges (sharp: sharpening; halo:
+    rims), and of high-pass a*/b* in flat areas (chroma noise). 1 = like Lightroom."""
+    a = Image.open(prev).convert("RGB")
+    b = Image.open(ours).convert("RGB")
+    if b.size != a.size:
+        b = b.resize(a.size, Image.LANCZOS)
+    al = align(a, b)
+    if abs(al["scale"] - 1) > 0.002 or abs(al["rot"]) > 0.05 or max(abs(al["dx"]), abs(al["dy"])) > 0.5:
+        b = _warp(b, al["scale"], al["rot"], al["dx"], al["dy"], a.size, Image.BICUBIC)
+    la = to_lab(np.asarray(a).astype(np.float32), space).astype(np.float32)
+    lb = to_lab(np.asarray(b).astype(np.float32), "srgb").astype(np.float32)
+    def bands(l):
+        g = [l] + [_gblur(l, s_) for s_ in DETAIL_SIGMAS]
+        return [g[i] - g[i + 1] for i in range(len(DETAIL_SIGMAS))]
+    ba, bb = bands(la[..., 0]), bands(lb[..., 0])
+    coarse = np.abs(_gblur(la[..., 0], 2.0) - _gblur(la[..., 0], 12.0))
+    H, W = coarse.shape
+    m = int(0.04 * max(H, W))
+    flat, edge = coarse < np.percentile(coarse, 30), coarse > np.percentile(coarse, 90)
+    for k in (flat, edge):
+        k[:m] = k[-m:] = False
+        k[:, :m] = k[:, -m:] = False
+    ratio = lambda x, y, k: float(np.std(x[k]) / max(np.std(y[k]), 1e-6))
+    fb = [ratio(x, y, flat) for x, y in zip(bb, ba)]
+    eb = [ratio(x, y, edge) for x, y in zip(bb, ba)]
+    hp = lambda l, c: l[..., c] - _gblur(l[..., c], 2.4)
+    chroma = np.mean([ratio(hp(lb, c), hp(la, c), flat) for c in (1, 2)])
+    r = lambda v: round(float(v), 3)
+    return {"fine": r(np.mean(fb[:2])), "mottle": r(np.mean(fb[2:])), "sharp": r(np.mean(eb[:2])), "halo": r(np.mean(eb[2:])), "chroma_noise": r(chroma),
+            "flat_bands": [r(v) for v in fb], "edge_bands": [r(v) for v in eb]}, la, np.asarray(a), np.asarray(b)
+
+
+def detail(a):
+    """Detail metrics per photo for --tags (renders at the preview's full size: `render
+    --max-size 0`), and 1:1 crop triplets (Lightroom | each tag) of the most detailed, a flat
+    midtone and a flat dark region: W/crops/<file>.png."""
+    sample = json.load(open(os.path.join(a.work, "sample.json")))
+    tags = a.tags.split(",")
+    os.makedirs(os.path.join(a.work, "crops"), exist_ok=True)
+    out = []
+    for p in sample:
+        if p.get("lrRender") is False:
+            continue
+        if a.only and os.path.basename(p["path"]) not in a.only.split(","):
+            continue
+        files = [os.path.join(a.work, "renders", t, f"{p['id']}.jpg") for t in tags]
+        if not all(os.path.exists(f) for f in files) or max(Image.open(p["preview"]).size) < a.min_px:
+            continue
+        row = {"id": p["id"], "file": os.path.basename(p["path"]), "model": p["model"]}
+        imgs = []
+        for t, f in zip(tags, files):
+            m, la, a8, b8 = detail_metrics(p["preview"], p.get("previewSpace", "adobe"), f)
+            row[t] = m
+            imgs.append(b8)
+        out.append(row)
+        print(f"{row['file'][:18]:<19}{(p['model'] or '?')[:14]:<15}" + "  ".join(f"{t}: fine {row[t]['fine']:.2f} mottle {row[t]['mottle']:.2f} sharp {row[t]['sharp']:.2f} halo {row[t]['halo']:.2f} chroma {row[t]['chroma_noise']:.2f}" for t in tags))
+        # 1:1 crops
+        l = la[..., 0]
+        det = _gblur(np.abs(l - _gblur(l, 2.0)), 20.0)
+        lo = _gblur(l, 20.0)
+        s_, gap = 320, 6
+        H, W = l.shape
+        mm = s_ // 2 + int(0.04 * max(H, W))
+        def best(score):
+            sc = score.copy()
+            sc[:mm] = sc[-mm:] = -1e9
+            sc[:, :mm] = sc[:, -mm:] = -1e9
+            return np.unravel_index(np.argmax(sc), sc.shape)
+        picks = [best(det), best(-det - np.abs(lo - 60) * 0.2), best(-det - np.abs(lo - 25) * 0.2)]
+        lr_view = a8
+        if p.get("previewSpace", "adobe") == "adobe":
+            xyz = adobe_decode(a8.astype(np.float64) / 255) @ ADOBE_TO_XYZ.T
+            lin = np.clip(xyz @ np.linalg.inv(SRGB_TO_XYZ).T, 0, 1)
+            lr_view = (np.where(lin <= 0.0031308, 12.92 * lin, 1.055 * lin ** (1 / 2.4) - 0.055) * 255 + 0.5).astype(np.uint8)
+        grid = Image.new("RGB", ((s_ + gap) * (1 + len(tags)) - gap, (s_ + gap) * len(picks) - gap), (40, 40, 40))
+        for i, (y, x) in enumerate(picks):
+            y0, x0 = max(0, y - s_ // 2), max(0, x - s_ // 2)
+            for j, im in enumerate([lr_view] + imgs):
+                grid.paste(Image.fromarray(np.ascontiguousarray(im[y0:y0 + s_, x0:x0 + s_])), (j * (s_ + gap), i * (s_ + gap)))
+        grid.save(os.path.join(a.work, "crops", f"{os.path.splitext(row['file'])[0]}-{'_'.join(tags)}.png"))
+    json.dump(out, open(os.path.join(a.work, f"detail-{'_'.join(tags)}.json"), "w"), indent=1)
+    for t in tags:
+        if out:
+            print(t, "mean:", {k: round(float(np.mean([r[t][k] for r in out])), 3) for k in ("fine", "mottle", "sharp", "halo", "chroma_noise")}, "(1 = Lightroom)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -771,7 +879,7 @@ def main():
         p.add_argument("--tag", required=True)
         p.add_argument("--lib")
         p.add_argument("--profiles", action="append", help="(migrate) profile folders/files to import first")
-        p.add_argument("--max-size", type=int, default=1200, help="(render) longest edge rendered (compare works at 512 px)")
+        p.add_argument("--max-size", type=int, default=1200, help="(render) longest edge rendered (compare works at 512 px; 0 = the preview's own size, for `detail`)")
         p.set_defaults(fn=fn)
     p = sub.add_parser("calibrate", help="fit Lightroom-matched camera profiles from default-setting photos")
     p.add_argument("--work", required=True)
@@ -798,6 +906,12 @@ def main():
     p.add_argument("--min-photos", type=int, default=8)
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(fn=wbmap)
+    p = sub.add_parser("detail", help="1:1 detail metrics (grain, noise, sharpening, halos) and crop triplets")
+    p.add_argument("--work", required=True)
+    p.add_argument("--tags", required=True, help="comma-separated render tags (render them with --max-size 0)")
+    p.add_argument("--min-px", type=int, default=1800, help="only photos whose preview is at least this big")
+    p.add_argument("--only", help="comma-separated file names")
+    p.set_defaults(fn=detail)
     p = sub.add_parser("compare")
     p.add_argument("--work", required=True)
     p.add_argument("--tag", required=True)

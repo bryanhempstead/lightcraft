@@ -90,6 +90,102 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
     })
 }
 
+/// Sharpening gain per unit of Amount/150 (fitted against Lightroom's renders, `docs/lr-match.md`).
+pub const SHARPEN_GAIN: f32 = 1.0;
+/// Gaussian sigma per unit of Radius, in the source's own pixels.
+pub const SHARPEN_SIGMA: f32 = 0.8;
+/// Largest kernel half-width (taps each side): radii beyond ~1.6 source px are truncated there.
+pub const SHARPEN_TAPS: usize = 4;
+
+/// Lightroom-style capture sharpening: an unsharp mask of log luminance whose radius is in the
+/// source's own pixels (so a preview shows what the full-size file gets, scaled), with Detail
+/// damping large differences (halos) and Masking limiting it to edges. The kernel is read
+/// straight from the log-luminance plane (CPU and GPU alike), `r` taps each side.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sharpen {
+    /// Taps each side (0 = the radius is below a pixel's worth at this scale: no effect).
+    pub r: u32,
+    /// 1-D Gaussian weights for offsets 0..=r (normalised so the 2-D kernel sums to 1).
+    pub w: [f32; SHARPEN_TAPS + 1],
+    /// Detail: differences larger than about `t` EV are damped (`d / (1 + |d| / t)`).
+    pub t: f32,
+}
+
+impl Sharpen {
+    pub fn new(radius: f64, detail: f64, px_per_long: f64, native_long: f32) -> Sharpen {
+        let native = if native_long.is_finite() && native_long > 16.0 { native_long } else { 6000.0 };
+        let scale = (px_per_long as f32 / native).clamp(0.0, 4.0);
+        let fin = |v: f64, d: f32| if v.is_finite() { v as f32 } else { d };
+        let sigma = SHARPEN_SIGMA * fin(radius, 1.0).clamp(0.5, 3.0) * if scale.is_finite() { scale } else { 0.0 };
+        let t = 0.04 + 0.5 * (fin(detail, 25.0) / 100.0).clamp(0.0, 1.0);
+        let mut w = [0.0; SHARPEN_TAPS + 1];
+        if !(sigma.is_finite() && sigma >= 0.25) {
+            return Sharpen { r: 0, w, t };
+        }
+        let r = ((2.5 * sigma).ceil() as usize).clamp(1, SHARPEN_TAPS);
+        for (k, v) in w.iter_mut().enumerate().take(r + 1) {
+            *v = (-((k * k) as f32) / (2.0 * sigma * sigma)).exp();
+        }
+        let sum: f32 = w[0] + 2.0 * w[1..=r].iter().sum::<f32>();
+        for v in w.iter_mut() {
+            *v /= sum;
+        }
+        Sharpen { r: r as u32, w, t }
+    }
+
+    /// (blurred log luminance, 3×3 range) around `(x, y)` of the `w × h` plane `l`.
+    #[inline]
+    pub fn sample(&self, l: &[f32], w: usize, h: usize, x: usize, y: usize) -> (f32, f32) {
+        if w == 0 || h == 0 {
+            return (0.0, 0.0);
+        }
+        let r = self.r as i64;
+        let (mut acc, mut lo, mut hi) = (0.0f32, f32::INFINITY, f32::NEG_INFINITY);
+        for dy in -r..=r {
+            let yy = (y as i64 + dy).clamp(0, h as i64 - 1) as usize;
+            let wy = self.w.get(dy.unsigned_abs() as usize).copied().unwrap_or(0.0);
+            for dx in -r..=r {
+                let xx = (x as i64 + dx).clamp(0, w as i64 - 1) as usize;
+                let v = l.get(yy * w + xx).copied().unwrap_or(0.0);
+                acc += wy * self.w.get(dx.unsigned_abs() as usize).copied().unwrap_or(0.0) * v;
+                if dx.abs() <= 1 && dy.abs() <= 1 {
+                    lo = lo.min(v);
+                    hi = hi.max(v);
+                }
+            }
+        }
+        (acc, hi - lo)
+    }
+}
+
+/// How far (EV) a pixel may stray from the local base before Highlights / Shadows follow the
+/// pixel itself instead (see [`halo_weight`]).
+pub const HALO_TAU: f32 = 0.3;
+
+/// Weight of the local base for a pixel `d` EV from it: 1 in texture, falling to 0 next to edges
+/// the base blurred across (where a base-driven change would draw a halo).
+#[inline]
+pub fn halo_weight(d: f32) -> f32 {
+    let q = d / HALO_TAU;
+    if q.is_finite() { (-(q * q)).exp() } else { 0.0 }
+}
+
+/// Grain amplitude per unit of Amount/100, on encoded values (fitted against Lightroom's renders).
+pub const GRAIN_GAIN: f32 = 0.36;
+
+/// Grain as Lightroom renders it: film grain whose cells are a size in the source's own pixels
+/// (Size 0 → 0.6 px, 100 → 4.6 px), so a smaller render averages several cells into each pixel and
+/// shows finer, weaker grain (amplitude × cell size in output pixels, below one pixel) — fine,
+/// luminance-only, on the finished image. Returns (amplitude, cells per long edge, roughness, seed).
+pub fn grain_params(amount: f64, size: f64, roughness: f64, seed: u32, px_per_long: f64, native_long: f32) -> (f32, f32, f32, u32) {
+    let native = if native_long.is_finite() && native_long > 16.0 { native_long } else { 6000.0 };
+    let fin = |v: f64, d: f32| if v.is_finite() { v as f32 } else { d };
+    let cell_native = 0.6 + 0.04 * fin(size, 25.0).clamp(0.0, 100.0);
+    let cell_out = cell_native * (fin(px_per_long, native) / native);
+    let amp = (fin(amount, 0.0) / 100.0).clamp(0.0, 1.0) * GRAIN_GAIN * if cell_out.is_finite() { cell_out.clamp(0.05, 1.0) } else { 1.0 };
+    (amp, native / cell_native, (fin(roughness, 50.0) / 100.0).clamp(0.0, 1.0), seed)
+}
+
 /// Hash constants of [`grain_noise`] (shared with the GPU kernel).
 pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
 
@@ -105,7 +201,7 @@ fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
         (v & 0xffff) as f32 / 32768.0 - 1.0
     };
     let (i, j) = (x0 as i32, y0 as i32);
-    let (u, v) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+    let (u, v) = (fx, fy);
     let a = h(i, j) + (h(i + 1, j) - h(i, j)) * u;
     let b = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * u;
     a + (b - a) * v
@@ -184,14 +280,16 @@ pub struct FinishParams {
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
+    /// Sharpening ([`Sharpen`]): amount gain, edge masking 0..1 and the kernel.
     pub sharpen: f32,
     pub sharpen_mask: f32,
+    pub sharp: Sharpen,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
     pub gain: f32,
     pub ev: f32,
-    /// Grain: amount, cell size (px), roughness, seed.
+    /// Grain ([`grain_params`]): amplitude, cells per long edge, roughness, seed.
     pub grain: Option<(f32, f32, f32, u32)>,
     /// Output px → normalized oriented coordinates.
     pub out_to_norm: lightcraft_geom::Affine,
@@ -224,10 +322,8 @@ impl FinishParams {
         };
         let ev = s.light.exposure as f32;
         let gain = 2f32.powf(ev);
-        let grain = (s.grain.amount > 0.0 && effects).then(|| {
-            let cell = (0.0006 + (s.grain.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
-            ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
-        });
+        let grain = (s.grain.amount > 0.0 && effects)
+            .then(|| grain_params(s.grain.amount, s.grain.size, s.grain.roughness, s.grain.seed, px_per_long, info.native_long));
         let calibration = s.section_enabled("calibration");
         // raw files with a camera tone curve take Lightroom-matched Basic tone
         let lr_tone = info.raw && info.camera_tone.is_some();
@@ -264,8 +360,9 @@ impl FinishParams {
             clar,
             tex,
             dehaze,
-            sharpen: (s.detail.sharpen_amount / 150.0) as f32,
+            sharpen: (s.detail.sharpen_amount / 150.0) as f32 * SHARPEN_GAIN,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
+            sharp: Sharpen::new(s.detail.sharpen_radius, s.detail.sharpen_detail, px_per_long, info.native_long),
             air: air_pre * gain,
             air_pre,
             gain,
@@ -455,15 +552,22 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             let l1 = if dz != 0.0 || l_exp != 0.0 { log_lum(c) } else { l0 };
             let shift = l1 - l0;
             let base = p.base.data[i] + ev + shift;
+            // Highlights / Shadows act on the edge-aware base, falling back to the pixel's own
+            // level where it strays from the base (next to an edge the base filter blurred): no
+            // halos, while texture keeps its local contrast
+            let wb = halo_weight(l1 - base);
             let mut delta = match &fp.hs_lut {
-                Some(t) => crate::tone::lr::hs_at(t, base),
+                Some(t) => wb * crate::tone::lr::hs_at(t, base) + (1.0 - wb) * crate::tone::lr::hs_at(t, l1),
                 None => 0.0f32,
             };
             let (hh, ss) = (hl + l_hl, sh + l_sh);
             if hh != 0.0 || ss != 0.0 {
-                let ws = 1.0 - smooth(-4.8, 0.3, base);
-                let wh = smooth(-1.0, 2.8, base);
-                delta += ss * 1.7 * ws * ws.sqrt() + hh * 1.7 * wh;
+                let legacy = |b: f32| {
+                    let ws = 1.0 - smooth(-4.8, 0.3, b);
+                    let wh = smooth(-1.0, 2.8, b);
+                    ss * 1.7 * ws * ws.sqrt() + hh * 1.7 * wh
+                };
+                delta += wb * legacy(base) + (1.0 - wb) * legacy(l1);
             }
             if l_wh != 0.0 {
                 delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);
@@ -483,17 +587,20 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
             }
             let tx = tex + l_tex;
-            let sp = l_sharp * 0.6 + sharpen;
-            if (tx != 0.0 || sp != 0.0)
+            if tx != 0.0
                 && let Some(b) = &p.texture_blur
             {
                 let det = l_pre - b.data[i];
                 let tame = 1.0 - 0.6 * smooth(0.4, 1.6, det.abs());
                 delta += tx * 1.1 * det.clamp(-1.0, 1.0) * tame;
-                if sp != 0.0 {
-                    let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
-                    delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m;
-                }
+            }
+            let sp = l_sharp * 0.6 * SHARPEN_GAIN + sharpen;
+            if sp != 0.0 && fp.sharp.r > 0 {
+                let (blur, range) = fp.sharp.sample(&p.log_l.data, w, h, x, y);
+                let det = l_pre - blur;
+                let det = det / (1.0 + det.abs() / fp.sharp.t);
+                let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.12, sharpen_mask * 0.12 + 0.08, range) } else { 1.0 };
+                delta += sp * det * m;
             }
             // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
             if l_noise != 0.0
@@ -599,9 +706,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             if let Some((amt, cell, rough, seed)) = *grain {
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
                 let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
-                let sc = fp.px_per_long as f32 / cell;
+                let sc = cell;
                 let mut g = grain_noise(gx * sc, gy * sc, seed);
-                g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55) * rough * 0.7;
+                g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc / 2.3, gy * sc / 2.3, seed ^ 0x55) * rough * 0.7;
                 let lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
                 let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
                 e = e.map(|v| v + k);
@@ -730,6 +837,45 @@ mod tests {
         // luma is kept
         let y = |e: [f32; 3]| 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
         assert!((y(r) - y(after)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn sharpening_radius_is_in_source_pixels() {
+        // full size: Radius 1 → about a pixel; a 1/8-size preview has nothing left to sharpen
+        let full = Sharpen::new(1.0, 25.0, 6000.0, 6000.0);
+        assert!(full.r >= 1 && full.r as usize <= SHARPEN_TAPS);
+        let sum = full.w[0] + 2.0 * full.w[1..=full.r as usize].iter().sum::<f32>();
+        assert!((sum - 1.0).abs() < 1e-5, "{sum}");
+        assert_eq!(Sharpen::new(1.0, 25.0, 750.0, 6000.0).r, 0);
+        assert!(Sharpen::new(3.0, 25.0, 6000.0, 6000.0).r as usize <= SHARPEN_TAPS, "kernel stays bounded");
+        assert!(Sharpen::new(1.0, 100.0, 6000.0, 6000.0).t > full.t, "Detail lets bigger differences through");
+        // a flat plane has nothing to sharpen; a step reads as a step
+        let flat = vec![0.5f32; 64];
+        let (b, range) = full.sample(&flat, 8, 8, 3, 3);
+        assert!((b - 0.5).abs() < 1e-6 && range == 0.0);
+        let step: Vec<f32> = (0..64).map(|i| if i % 8 < 4 { 0.0 } else { 1.0 }).collect();
+        let (b, range) = full.sample(&step, 8, 8, 3, 3);
+        assert!(b > 0.0 && b < 0.5 && range == 1.0, "{b} {range}");
+        // hostile values: no panic, nothing applied
+        for (r, ppl, n) in [(f64::NAN, 6000.0, 6000.0), (1.0, f64::INFINITY, 6000.0), (1.0, 6000.0, f32::NAN), (1.0, -5.0, 0.0)] {
+            let k = Sharpen::new(r, f64::NAN, ppl, n);
+            assert!(k.r as usize <= SHARPEN_TAPS && k.w.iter().all(|v| v.is_finite()) && k.t.is_finite());
+        }
+        assert_eq!(full.sample(&[], 0, 0, 0, 0).0, 0.0);
+    }
+
+    #[test]
+    fn grain_is_finer_and_weaker_in_smaller_renders() {
+        let (big, cells, _, _) = grain_params(31.0, 11.0, 43.0, 7, 6000.0, 6000.0);
+        let (small, cells2, _, _) = grain_params(31.0, 11.0, 43.0, 7, 1000.0, 6000.0);
+        assert_eq!(cells, cells2, "cells sit in the image, not on the output grid");
+        assert!(small < big * 0.5 && small > 0.0, "{small} vs {big}");
+        let (coarse, coarse_cells, _, _) = grain_params(31.0, 80.0, 43.0, 7, 6000.0, 6000.0);
+        assert!(coarse_cells < cells && coarse >= big);
+        for v in [f64::NAN, f64::INFINITY, -1e9] {
+            let (a, c, r, _) = grain_params(v, v, v, 1, v, f32::NAN);
+            assert!(a.is_finite() && c.is_finite() && r.is_finite());
+        }
     }
 
     #[test]

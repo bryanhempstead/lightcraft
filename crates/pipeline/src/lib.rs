@@ -72,6 +72,9 @@ pub struct SourceInfo {
     pub camera_wb: Option<CameraWb>,
     /// The camera's Lightroom white-balance scale (set white balances only, see [`WbMap`]).
     pub wb_map: Option<WbMap>,
+    /// The source's own long edge in pixels (the file's full resolution; 0 = unknown): sharpening
+    /// radii are in these pixels, as in Lightroom.
+    pub native_long: f32,
 }
 
 /// How a camera's neutral (raw RGB of a white surface, green = 1) follows Lightroom's Temp /
@@ -130,7 +133,7 @@ impl CameraWb {
 
 impl Default for SourceInfo {
     fn default() -> Self {
-        Self { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, lens: None, relative_wb: false, camera_tone: None, camera_wb: None, wb_map: None }
+        Self { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, lens: None, relative_wb: false, camera_tone: None, camera_wb: None, wb_map: None, native_long: 0.0 }
     }
 }
 

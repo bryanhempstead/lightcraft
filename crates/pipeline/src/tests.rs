@@ -384,3 +384,47 @@ fn tint_negative_is_green_and_positive_is_magenta() {
         }
     }
 }
+
+/// Mean encoded luminance of columns `x0..x1` of the middle rows of `img`.
+fn band_luma(img: &lightcraft_raster::Rgba8, x0: usize, x1: usize) -> f32 {
+    let (w, h) = (img.width, img.height);
+    let mut s = 0.0;
+    let mut n = 0.0;
+    for y in h / 4..3 * h / 4 {
+        for x in x0..x1 {
+            let p = img.data[y * w + x];
+            s += 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32;
+            n += 1.0;
+        }
+    }
+    s / n
+}
+
+/// Lightroom's Highlights / Shadows are local but halo-free: at any slider value, the pixels
+/// next to an edge render like those far from it (no dark rim on the dark side, no bright rim on
+/// the bright side), for strong and weak edges.
+#[test]
+fn highlights_and_shadows_leave_no_halos_at_edges() {
+    let curve = crate::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 2f32.powf(-12.0 + 12.5 * i as f32 / 31.0);
+        [x, (x / (x + 0.2)).min(0.999)]
+    }))
+    .unwrap();
+    let info = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+    let (w, h) = (600usize, 120usize);
+    for (dark, bright) in [(0.01f32, 0.6f32), (0.05, 0.09), (0.12, 0.5)] {
+        let src = Rgb32f::from_fn(w, h, |x, _| [if x < w / 2 { dark } else { bright }; 3]);
+        for (hl, sh) in [(-100.0, 100.0), (100.0, -100.0), (-90.0, 43.0), (-100.0, 0.0), (0.0, 100.0)] {
+            let mut s = DevelopSettings::default();
+            s.light.highlights = hl;
+            s.light.shadows = sh;
+            let img = render(&src, &info, &s, &RenderRequest::fit(w, h)).image;
+            let (far_l, near_l) = (band_luma(&img, 20, 60), band_luma(&img, w / 2 - 6, w / 2 - 1));
+            let (near_r, far_r) = (band_luma(&img, w / 2 + 1, w / 2 + 6), band_luma(&img, w - 60, w - 20));
+            assert!(
+                (near_l - far_l).abs() <= 2.0 && (near_r - far_r).abs() <= 2.0,
+                "edge {dark}/{bright}, H {hl} S {sh}: dark side {far_l:.1} far vs {near_l:.1} at the edge, bright side {far_r:.1} vs {near_r:.1}"
+            );
+        }
+    }
+}

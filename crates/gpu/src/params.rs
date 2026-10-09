@@ -30,6 +30,9 @@ const FIELDS: &[(&str, usize)] = &[
     ("DEHAZE", 1),
     ("SHARPEN", 1),
     ("SHARPEN_MASK", 1),
+    ("SHARP_R", 1),
+    ("SHARP_T", 1),
+    ("SHARP_W", 5),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
     ("HAS_DARK", 1),
@@ -183,6 +186,9 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("DEHAZE", fp.dehaze);
     p.f("SHARPEN", fp.sharpen);
     p.f("SHARPEN_MASK", fp.sharpen_mask);
+    p.u("SHARP_R", fp.sharp.r);
+    p.f("SHARP_T", fp.sharp.t);
+    p.fs("SHARP_W", &fp.sharp.w);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
     p.b("HAS_DARK", present.dark);
@@ -241,7 +247,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     if let Some((amt, cell, rough, seed)) = fp.grain {
         p.b("GRAIN", true);
         p.f("GRAIN_AMT", amt);
-        p.f("GRAIN_SC", fp.px_per_long as f32 / cell);
+        p.f("GRAIN_SC", cell);
         p.f("GRAIN_ROUGH", rough);
         p.u("GRAIN_SEED", seed);
         let long = fp.ow.max(fp.oh);

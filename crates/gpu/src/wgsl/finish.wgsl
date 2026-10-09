@@ -221,11 +221,27 @@ fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     let fy = y - y0;
     let i = i32(x0);
     let j = i32(y0);
-    let u = fx * fx * (3.0 - 2.0 * fx);
-    let v = fy * fy * (3.0 - 2.0 * fy);
+    let u = fx;
+    let v = fy;
     let a = ghash(i, j, seed) + (ghash(i + 1, j, seed) - ghash(i, j, seed)) * u;
     let b = ghash(i, j + 1, seed) + (ghash(i + 1, j + 1, seed) - ghash(i, j + 1, seed)) * u;
     return a + (b - a) * v;
+}
+
+// Lightroom-matched Highlights / Shadows: EV by base EV, quarter stops from -10
+fn hs_lut_at(ev: f32) -> f32 {
+    let n = 57u;
+    let f = clamp((ev + 10.0) * 4.0, 0.0, f32(n - 1u));
+    let k = min(u32(f), n - 2u);
+    let t = f - f32(k);
+    let o = pu(F_HS_OFF) + k;
+    return aux[o] + (aux[o + 1u] - aux[o]) * t;
+}
+
+fn legacy_hs(b: f32, hh: f32, ss: f32) -> f32 {
+    let ws = 1.0 - sstep(-4.8, 0.3, b);
+    let wh = sstep(-1.0, 2.8, b);
+    return ss * 1.7 * ws * sqrt(ws) + hh * 1.7 * wh;
 }
 
 fn enc8(v: f32) -> u32 {
@@ -354,21 +370,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let shift = l1 - l0;
     let base = base_p[i] + ev + shift;
     var delta = 0.0;
+    // Highlights / Shadows on the base, falling back to the pixel next to edges (`finish::halo_weight`)
+    let hq = (l1 - base) / HALO_TAU;
+    let wb = exp(-(hq * hq));
     if (pu(F_HS_LUT) != 0u) {
-        // Lightroom-matched Highlights / Shadows: EV by base EV, quarter stops from -10
-        let n = 57u;
-        let f = clamp((base + 10.0) * 4.0, 0.0, f32(n - 1u));
-        let k = min(u32(f), n - 2u);
-        let t = f - f32(k);
-        let o = pu(F_HS_OFF) + k;
-        delta += aux[o] + (aux[o + 1u] - aux[o]) * t;
+        delta += wb * hs_lut_at(base) + (1.0 - wb) * hs_lut_at(l1);
     }
     let hh = pf(F_HL) + lt[4];
     let ss = pf(F_SH) + lt[5];
     if (hh != 0.0 || ss != 0.0) {
-        let ws = 1.0 - sstep(-4.8, 0.3, base);
-        let wh = sstep(-1.0, 2.8, base);
-        delta += ss * 1.7 * ws * sqrt(ws) + hh * 1.7 * wh;
+        delta += wb * legacy_hs(base, hh, ss) + (1.0 - wb) * legacy_hs(l1, hh, ss);
     }
     if (lt[6] != 0.0) {
         delta += lt[6] * 0.8 * sstep(0.5, 3.0, l1);
@@ -387,19 +398,39 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
     }
     let tx = pf(F_TEX) + lt[8];
-    let sp = lt[13] * 0.6 + pf(F_SHARPEN);
-    if ((tx != 0.0 || sp != 0.0) && pu(F_HAS_TEX) != 0u) {
+    if (tx != 0.0 && pu(F_HAS_TEX) != 0u) {
         let det = l_pre - tex[i];
         let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
         delta += tx * 1.1 * clamp(det, -1.0, 1.0) * tame;
-        if (sp != 0.0) {
-            let sm = pf(F_SHARPEN_MASK);
-            var mk = 1.0;
-            if (sm > 0.0) {
-                mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
+    }
+    // capture sharpening: an unsharp mask read straight from log_l (`finish::Sharpen`)
+    let sp = lt[13] * 0.6 * SHARPEN_GAIN + pf(F_SHARPEN);
+    let sr = i32(pu(F_SHARP_R));
+    if (sp != 0.0 && sr > 0) {
+        var acc = 0.0;
+        var lo = 1e30;
+        var hi = -1e30;
+        for (var dy = -sr; dy <= sr; dy++) {
+            let yy = u32(clamp(i32(y) + dy, 0, i32(h) - 1));
+            let wy = pf(F_SHARP_W + u32(abs(dy)));
+            for (var dx = -sr; dx <= sr; dx++) {
+                let xx = u32(clamp(i32(x) + dx, 0, i32(w) - 1));
+                let v = log_l[yy * w + xx];
+                acc += wy * pf(F_SHARP_W + u32(abs(dx))) * v;
+                if (abs(dx) <= 1 && abs(dy) <= 1) {
+                    lo = min(lo, v);
+                    hi = max(hi, v);
+                }
             }
-            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
         }
+        var det = l_pre - acc;
+        det = det / (1.0 + abs(det) / pf(F_SHARP_T));
+        let sm = pf(F_SHARPEN_MASK);
+        var mk = 1.0;
+        if (sm > 0.0) {
+            mk = sstep(sm * 0.12, sm * 0.12 + 0.08, hi - lo);
+        }
+        delta += sp * det * mk;
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
     if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {
@@ -515,7 +546,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let rough = pf(F_GRAIN_ROUGH);
         let seed = pu(F_GRAIN_SEED);
         var g = grain_noise(gx * sc, gy * sc, seed);
-        g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55u) * rough * 0.7;
+        g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc / 2.3, gy * sc / 2.3, seed ^ 0x55u) * rough * 0.7;
         let lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
         let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
         e = e + k;

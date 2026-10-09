@@ -159,6 +159,9 @@ pub struct NrColor {
     pub t: f32,
 }
 
+/// Colour noise reduction: how fast the mix towards the blurred chromaticity rises with Color.
+pub const NR_COLOR_MIX: f32 = 4.0;
+
 /// Noise-reduction parameters at an output long edge of `out_long` px (see [`denoise`]).
 pub fn nr_params(s: &DevelopSettings, src_long: usize, out_long: usize) -> (Option<NrLum>, Option<NrColor>) {
     let lum = (s.detail.nr_luminance / 100.0) as f32;
@@ -171,7 +174,9 @@ pub fn nr_params(s: &DevelopSettings, src_long: usize, out_long: usize) -> (Opti
     let c = (col > 0.0).then(|| {
         let sigma = (1.5 + 6.0 * col) * scale.max(0.35) * (1.0 + (s.detail.nr_color_smoothness / 100.0) as f32);
         let keep = (s.detail.nr_color_detail / 100.0) as f32 * 0.5;
-        NrColor { sigma, t: col * (1.0 - keep) }
+        // Lightroom's Color 25 (its raw default) leaves about as little chroma noise as a full
+        // mix here (measured against its renders, docs/lr-match.md)
+        NrColor { sigma, t: (NR_COLOR_MIX * col).min(1.0) * (1.0 - keep) }
     });
     (l, c)
 }
@@ -294,9 +299,7 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
     let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity)).then(|| (0.012 * ppl).max(1.0));
     // local Noise and Defringe read the fine detail band too
     let texture = (s.effects.texture != 0.0
-        || s.detail.sharpen_amount != 0.0
         || local_any(|a| a.texture)
-        || local_any(|a| a.sharpness)
         || local_any(|a| a.noise)
         || s.masks.iter().any(|m| m.adjust.defringe > 0.0))
     .then(|| (0.0018 * ppl).max(0.6));
