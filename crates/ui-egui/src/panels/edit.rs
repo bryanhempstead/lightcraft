@@ -1028,6 +1028,7 @@ fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     if !bw {
         let mut pick = None;
         egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 20, top: 6, bottom: 2 }).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
             pick = crate::widgets::segmented(ui, "hslTab", &[("HSL", "hsl"), ("Color", "color")], Some(usize::from(!hsl_tab)), 2);
         });
         match pick {
@@ -1041,12 +1042,13 @@ fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
         let mut pick = None;
         let cur = attrs.iter().position(|a| *a == app.ui.mixer_mode);
         egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 20, top: 2, bottom: 4 }).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
             pick = crate::widgets::segmented(
                 ui,
                 "hslAttr",
                 &[("Hue", "hue"), ("Saturation", "saturation"), ("Luminance", "luminance"), ("All", "all")],
                 cur,
-                4,
+                2,
             );
         });
         if let Some(i) = pick {
