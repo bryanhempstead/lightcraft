@@ -254,6 +254,8 @@ fn folders_app_sized(paths: &[&str], size: [f32; 2]) -> Headless {
     let mut h = Headless::new(app, size, 1.0);
     let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
     assert_eq!(r["ok"], true, "{r}");
+    // shoots. folded: these tests are about Folders (tests_shoots.rs covers shoots.)
+    h.app.ui.toggle_sidebar_section("shoots");
     h.settle(SETTLE);
     h
 }

@@ -333,6 +333,18 @@ pub fn context_label(path: &str, name: &str) -> String {
 pub fn find_shoots(tree: &[FolderNode]) -> Vec<Shoot> {
     let mut out = Vec::new();
     for v in tree {
+        // photos lying loose at the top of a disk (not the startup disk: its path covers the others)
+        if v.own > 0 && v.selectable {
+            out.push(Shoot {
+                name: v.name.clone(),
+                path: v.path.clone(),
+                deep: false,
+                disk: v.path.clone(),
+                disk_name: v.name.clone(),
+                count: v.own,
+                latest: String::new(),
+            });
+        }
         for c in &v.children {
             walk(c, None, v, &mut out, 0);
         }

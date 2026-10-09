@@ -345,6 +345,9 @@ pub struct UiState {
     /// Left-sidebar sections folded shut by their header (`albums`, `local`, `byDate`,
     /// `keywords`); the rest are open.
     pub collapsed_sidebar: Vec<String>,
+    /// Folders rows opened or closed by hand (folder key → open); the rest keep their default
+    /// (a disk open, a folder closed).
+    pub folders_open: std::collections::BTreeMap<String, bool>,
     /// Local sidebar locations hidden with “Remove from Local” (folders on disk are untouched).
     pub hidden_locations: Vec<String>,
     /// Copies opened in an external editor this session (reloaded when the window is focused
@@ -682,6 +685,7 @@ impl Default for UiState {
             show_counts: true,
             face_boxes: true,
             collapsed_sidebar: Vec::new(),
+            folders_open: Default::default(),
             hidden_locations: Vec::new(),
             dragging_control: None,
             external_edits: Vec::new(),

@@ -459,6 +459,19 @@ fn source_column(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, d: &mut Im
                 folder_rows(ui, d, &name, &path, 0);
             }
         }
+        // looking without importing lives here, next to the folders it would import from
+        if app.services.pick_folder.is_some() {
+            ui.add_space(8.0);
+            egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 8, top: 0, bottom: 0 }).show(ui, |ui| {
+                let resp = crate::widgets::text_button(ui, "importBrowse", "Browse Folder Without Importing…", false)
+                    .on_hover_text(crate::i18n::tr("Look at a folder's photos in place (Local); nothing is added to the library"));
+                if resp.clicked()
+                    && let Some(path) = app.services.pick_folder.as_mut().and_then(|f| f())
+                {
+                    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::new("import-browse"), path));
+                }
+            });
+        }
         ui.add_space(12.0);
     });
 }
@@ -470,6 +483,21 @@ fn pending_source(ctx: &egui::Context, path: &str) {
 
 /// A source chosen in the window this frame: read it.
 pub fn take_pending_source(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // Browse Folder Without Importing…: the window closes and Local shows the folder
+    if let Some(path) = ctx.data_mut(|m| m.remove_temp::<String>(egui::Id::new("import-browse"))) {
+        if let Some(t) = app.scan.take() {
+            t.cancel();
+        }
+        app.ui.dialog = None;
+        match app.run("library.browse", json!({"path": path})) {
+            Ok(r) => {
+                let dir = r["path"].as_str().unwrap_or(&path).to_string();
+                let _ = app.run("local.addRoot", json!({"path": dir}));
+            }
+            Err(e) => app.toast(ctx, e),
+        }
+        return;
+    }
     let Some(path) = ctx.data_mut(|m| m.remove_temp::<String>(egui::Id::new("import-pending-source"))) else { return };
     if let Err(e) = choose_source(app, &json!({"path": path})) {
         app.toast(ctx, e);

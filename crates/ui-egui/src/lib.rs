@@ -55,6 +55,8 @@ mod tests_quit_unsaved;
 #[cfg(test)]
 mod tests_scroll;
 #[cfg(test)]
+mod tests_shoots;
+#[cfg(test)]
 mod tests_switch_library;
 #[cfg(test)]
 mod tests_unsaved;
@@ -968,6 +970,7 @@ mod drop_tests {
 pub struct Caches {
     keyword_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::KeywordNode>>)>,
     folder_tree: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::FolderNode>>)>,
+    shoots: Option<(u64, std::sync::Arc<Vec<lightcraft_engine::cmd::shoots::ShootRow>>)>,
     people: Option<(u64, lightcraft_catalog::Filter, std::sync::Arc<Vec<lightcraft_catalog::Person>>)>,
     suggestions: Option<(u64, std::sync::Arc<Vec<String>>)>,
     counts: Option<(u64, LibraryCounts)>,
@@ -1013,8 +1016,26 @@ impl Caches {
         match &self.folder_tree {
             Some((r, t)) if *r == k => t.clone(),
             _ => {
-                let t = std::sync::Arc::new(lightcraft_engine::cmd::folders::folder_view(s, true));
+                let mut tree = lightcraft_engine::cmd::folders::folder_view(s, true);
+                // a disk's root folders in the order their rows read: a camera folder by its shoot
+                // (`Erika and Connor wedding › raw` sorts under E, not R)
+                for v in &mut tree {
+                    v.children.sort_by_cached_key(|c| lightcraft_catalog::shoots::context_label(&c.path, &c.name).to_lowercase());
+                }
+                let t = std::sync::Arc::new(tree);
                 self.folder_tree = Some((k, t.clone()));
+                t
+            }
+        }
+    }
+    /// Library ▸ Shoots, the removed ones included (`library.shoots {hidden: true}`).
+    pub fn shoots(&mut self, s: &lightcraft_engine::Session) -> std::sync::Arc<Vec<lightcraft_engine::cmd::shoots::ShootRow>> {
+        let k = key_of((s.catalog.revision, &s.empty_folders, &s.shoot_prefs));
+        match &self.shoots {
+            Some((r, t)) if *r == k => t.clone(),
+            _ => {
+                let t = std::sync::Arc::new(lightcraft_engine::cmd::shoots::list(s, true));
+                self.shoots = Some((k, t.clone()));
                 t
             }
         }

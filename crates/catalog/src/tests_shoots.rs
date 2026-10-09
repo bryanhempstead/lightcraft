@@ -228,6 +228,10 @@ fn odd_paths_never_crash_or_make_empty_shoots() {
     assert!(total <= c.photos().count());
     assert!(s.iter().any(|s| s.name == "🎉 party 🎉"));
     assert!(s.iter().any(|s| s.name == "Wedding"), "{s:?}");
+    // loose photos at the top of a disk are that disk's own shoot (only those photos)
+    let top = library(&["/Volumes/nas/1.jpg", "/Volumes/nas/trip/2.jpg"]);
+    let rows: Vec<(String, usize, bool)> = names(&top);
+    assert_eq!(rows, vec![("nas".to_string(), 1, false), shoot("trip", 1)]);
     // a folder made in the library that is still empty is no shoot
     assert!(Catalog::new().shoots(&["/Volumes/X/New".into()]).is_empty());
     for n in ["\u{0}", "\u{FFFD}", "-", "x".repeat(10_000).as_str(), "../..", "a/b\\c"] {
