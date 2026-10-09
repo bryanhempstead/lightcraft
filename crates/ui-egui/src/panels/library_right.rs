@@ -178,11 +178,12 @@ fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     for (label, ctl, small, big) in QUICK_ROWS {
         row(ui, label, &mut |ui| {
             for (key, glyph, d) in [("ll", "◀◀", -big), ("l", "◀", -small), ("r", "▶", small), ("rr", "▶▶", big)] {
-                let (r, resp) = ui.allocate_exact_size(vec2(30.0, 22.0), Sense::click());
+                // Classic-size nudge buttons (Bryan, 2026-10-08: "make those arrow buttons smaller and fit better")
+                let (r, resp) = ui.allocate_exact_size(vec2(20.0, 16.0), Sense::click());
                 register(ui.ctx(), format!("button:quick-{ctl}-{key}"), r);
                 let fill = if resp.hovered() { t.hover } else { t.button };
                 ui.painter().rect(r, 3.0, fill, Stroke::new(1.0, t.button_border), egui::StrokeKind::Inside);
-                ui.painter().text(r.center(), Align2::CENTER_CENTER, glyph, t.font(9.5), t.text_label);
+                ui.painter().text(r.center(), Align2::CENTER_CENTER, glyph, t.font(7.5), t.text_label);
                 let tip =
                     crate::i18n::tr_format!("{label} {d:+} on every selected photo", d = (d * 100.0).round() / 100.0, label = crate::i18n::tr(label));
                 if resp.on_hover_text(tip).clicked() {
