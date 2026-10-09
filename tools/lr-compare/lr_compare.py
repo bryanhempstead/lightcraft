@@ -772,6 +772,9 @@ def wbmap(a):
             continue
         th = solve(rs, kind)
         prof = json.load(open(fn))
+        # the renders already went through the profile's current map: the fit is what remains
+        cur = prof.get("wb_map") or {}
+        th = th + np.stack([np.array(cur.get("mired", [0.0] * 3), dtype=float), np.array(cur.get("tint", [0.0] * 3), dtype=float)], 1)
         prof["wb_map"] = {"mired": [round(float(v), 4) for v in th[:, 0]], "tint": [round(float(v), 4) for v in th[:, 1]], "photos": len(rs)}
         if not a.dry_run:
             json.dump(prof, open(fn, "w"), indent=1)
@@ -856,6 +859,9 @@ def lensfit(a):
             print(msg + ": no profile to write into", file=sys.stderr)
             continue
         prof = json.load(open(fn))
+        # the renders already carry the profile's current correction: the fit is what remains
+        old = prof.get("lenses", {}).get(lens, {}).get("vignette_ev", [0.0, 0.0, 0.0])
+        coef = coef + np.array(old, dtype=float)
         prof.setdefault("lenses", {})[lens] = {"vignette_ev": [round(float(v), 4) for v in coef], "photos": len(rows)}
         if not a.dry_run:
             json.dump(prof, open(fn, "w"), indent=1)

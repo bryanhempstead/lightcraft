@@ -83,3 +83,88 @@ Before → after (mean CIEDE2000 per photo at 512 px; `dE128` in brackets):
 - **The Adobe Color / Adobe Standard split**: profiles are fitted to Adobe Color photos (the default);
   creative looks sit on Adobe Standard in Lightroom. Removing the Color look's curve made things
   worse, so the same base is used for both.
+
+## Round 2 (2026-10-09)
+
+### The ground truth was partly wrong
+
+`previews.db` keeps, for photos Lightroom never rendered, the **camera's embedded JPEG**
+(`Pyramid.quality` `embedded` / `thumbnail` / `bigThumbnail`, sRGB). Round 1 read those as
+Lightroom's Adobe RGB renders: 34 of its 167 test photos, all 27 "default settings" photos, and
+the calibration sets of the GR III, X-T2 and most of the Leica (5,223 of its 5,383 default photos
+only have the camera JPEG). `lr-compare` now takes only previews Lightroom rendered from the
+current settings (quality `smallRender` / `standard` / `final` / `full` and the preview digest =
+the develop-settings digest), records `previewQuality` / `previewSpace` / `lrRender` in
+`sample.json`, and `compare` skips the rest (`--all-previews` decodes them in their own space).
+A new held-out set `w6` has 40 default-setting photos Lightroom actually rendered.
+
+### Method
+
+Report set: the 166 round-1 photos (127 with a real Lightroom render) + `w6`, split by a fixed
+hash stratified by camera and look into **A** (63, may be fitted on) and **B** (103, held out;
+all of `w6`). Fitting also uses 335 extra edited photos (`t1`), 45 B&W photos (`t2`), 6 no-grain
+Leica defaults with big previews (`w7`) and 60 R6 defaults with lens corrections (`w8`); none of
+them is in B. Analysis: a debug build dumps the per-pixel pipeline state (scene colour, base,
+tone output, mask alpha, image coordinates) next to Lightroom's preview; tone targets come from
+a linearised per-pixel inversion (ΔL* over our own dL*/dEV).
+
+### What changed (held-out split B, mean ΔE2000 / p95 / photos passing)
+
+| change | effect |
+|---|---|
+| calibrate only on real Lightroom renders (Leica, R6) | default-setting photos (w6) 3.00 → 2.34, Leica 6.41 → 5.53 |
+| `calibrate` carries the Leica look onto cameras with no default renders, on their own DNG matrices (`Pool::transfer`; GR III, iPhone ProRAW); `--same-sensor X100F=X-T2` | GR III 7.42 → 5.68, iPhone 13 Pro ProRAW 22.5 → 11.6, X100F 9.8 → 8.1 |
+| Highlights / Shadows relative to the photo's key (`tone::lr::image_key`), all six tables refitted (twice) on real renders | B 5.28 → 4.93 (first fit), 4.63 → 4.51 (second) |
+| per-camera white-balance map (`lr-compare wbmap`, `wb_map` in the profile) | X-T2 8.09 → 7.12, B 4.93 → 4.83 |
+| detail: sharpening radius in source pixels (`finish::Sharpen`), fine film grain in source-pixel cells, halo-free Highlights/Shadows (`finish::halo_weight`), colour NR strength | 1:1 metrics below; B 4.83 → 4.71 |
+| tight crops decode enough of the original (`media::source_edge_needed`) | no upscaled preview in the loupe |
+| lens vignetting per camera + lens (`lr-compare lensfit`, `lenses` in the profile) | R6 4.26 → 4.09, passing 0 → 4 |
+| B&W mix from the unadjusted colour, gain fitted on `t2` | t2 4.80 → 4.57, L1004995 17.2 → 11.2 |
+| 8-bit rendered files through a reference curve, so Basic tone acts on them as on raws | iPhone JPEGs 8.49 → 7.22 |
+
+| group | n | round 1 ΔE / p95 / pass | round 2 ΔE / p95 / pass |
+|---|---|---|---|
+| split A (fit) | 63 | 8.05 / 16.3 / 3 | 6.23 / 13.3 / 3 |
+| **split B (held out)** | 103 | 5.88 / 13.5 / 2 | **4.46 / 10.7 / 21** |
+| all | 166 | 6.70 / 14.6 / 5 | 5.13 / 11.7 / 24 |
+| B · Canon EOS R6 | 33 | 4.27 / 11.3 / 0 | 3.79 / 9.7 / 4 |
+| B · Leica M Typ 262 | 34 | 4.99 / 12.0 / 1 | 3.35 / 8.6 / 16 |
+| B · Ricoh GR III | 18 | 7.41 / 18.2 / 0 | 5.30 / 14.7 / 0 |
+| B · Fujifilm X-T2 | 6 | 7.87 / 13.6 / 0 | 7.04 / 12.3 / 0 |
+| B · Fujifilm X100F | 7 | 8.44 / 15.0 / 0 | 6.39 / 12.8 / 0 |
+| B · iPhone 13 Pro (ProRAW) | 1 | 22.55 / 31.7 / 0 | 9.92 / 13.0 / 0 |
+| B · iPhone 13 Pro Max (JPEG) | 4 | 8.29 / 14.4 / 1 | 6.88 / 12.9 / 1 |
+| B · Adobe Color | 50 | 3.85 / 8.7 / 1 | 2.84 / 6.8 / 20 |
+| B · Summer Fields | 46 | 7.69 / 17.5 / 0 | 5.84 / 13.9 / 0 |
+| B · Nautica | 3 | 11.95 / 25.9 / 0 | 10.15 / 24.9 / 0 |
+| B · default settings | 40 | 2.98 / 7.0 / 1 | 2.16 / 5.4 / 19 |
+| B · edited | 63 | 7.73 / 17.5 / 1 | 5.92 / 14.1 / 2 |
+
+### Detail at 1:1 (`lr-compare detail`)
+
+Band-pass L* energy at the preview's full size (28 photos with previews ≥ 2,400 px; ratio to
+Lightroom, 1 = same): fine texture in flat areas (grain, noise) 0.79 → 0.98, mid-scale mottling
+1.84 → 1.35, edge rims (halos) 1.13 → 0.81, chroma noise 1.6 → 0.87. Round 1's sharpening
+used the 7 px texture band (Radius ignored) and drew dark rims and an "HDR" look at Bryan's
+Sharpening 126; its grain was smooth value noise in 3.5 px cells (blotchy); colour NR 25 left
+twice Lightroom's chroma noise. Regression test: `highlights_and_shadows_leave_no_halos_at_edges`.
+
+### What still misses, and why
+
+- **Edited photos are still ~6 ΔE off on average and almost none pass p95 ≤ 5.** Per pixel,
+  a per-photo exposure offset (sd ~0.35 EV) is only about half explained by the slider model:
+  Lightroom's Basic tone is image adaptive beyond the image key we model. Most of his presets
+  share one slider set, so the six tables are poorly separable. p95 is dominated by local
+  structure: masks (approximated), Lightroom's local tone operator (edge contrast at mid scale is
+  ~20 % lower here), heavy grain (random, never pixel-identical) and geometry (lens distortion is
+  not corrected for CR3/RAF: the alignment search absorbs scale, not barrel shape).
+- **Nautica on iPhone JPEGs** (~16 ΔE): the base JPEG and Lightroom agree in brightness; the gap
+  is the Nautica table / incremental white balance on rendered files.
+- **X-T2** keeps round 1's profile (fitted to its camera JPEGs; RAF has no colour matrices to
+  carry a look onto). X100F uses it too.
+- **Extreme white balance** (46,000 K, tint −105) and Adobe Color's own look table on edited
+  photos remain far off; **merged panoramas** (16-bit TIFF from macOS) keep the display path.
+- R6 tone was calibrated on lens-corrected previews, so its curve partly includes the vignetting
+  correction that `lensfit` now also applies (default R6 photos read ~1 L* bright).
+- Leica Q2 (219 photos) and Canon 5D Mark II (172) are not in the sample: `calibrate` gives the
+  Q2 the transferred look automatically; the 5D is unmeasured.
