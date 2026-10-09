@@ -153,10 +153,23 @@ fn folders_that_gather_shoots_are_not_shoots() {
             ("Bismarck Street Photos", 1, true),
             ("chicago", 1, true),
             ("edit now", 1, true),
-            ("Iceland - Our Wedding", 3, true),
+            ("Photos - Iceland", 3, true),
         ]
     );
     assert_eq!(got[0].disk, "/");
+}
+
+#[test]
+fn a_folder_that_only_leads_somewhere_is_named_by_where_it_leads() {
+    // one client so far: the shoot is the client's folder, and stays it when a second turns up
+    let one = library(&["/Volumes/X/Work/Clients/A wedding/raw/1.jpg"]);
+    assert_eq!(names(&one), vec![shoot("A wedding", 1)]);
+    let two = library(&["/Volumes/X/Work/Clients/A wedding/raw/1.jpg", "/Volumes/X/Work/Clients/B wedding/2.jpg"]);
+    assert_eq!(names(&two), vec![shoot("A wedding", 1), shoot("B wedding", 1)]);
+    assert_eq!(one.shoots(&[])[0].path, two.shoots(&[])[0].path);
+    // a folder deep in system folders (a temporary folder on the startup disk)
+    let tmp = library(&["/var/folders/ab/T/lc/Shoot 2/photos/1.jpg", "/var/folders/ab/T/lc/Shoot 3/2.jpg"]);
+    assert_eq!(names(&tmp), vec![shoot("Shoot 2", 1), shoot("Shoot 3", 1)]);
 }
 
 #[test]

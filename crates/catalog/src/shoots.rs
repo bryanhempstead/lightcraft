@@ -13,6 +13,10 @@
 //!   own whose subfolders (two or more) all have meaningful names (`- High Priority Edit` holding
 //!   `Bismarck Street Photos` and `Iceland…`). Its subfolders are looked at in turn; photos lying
 //!   loose in a container are a shoot of their own that shows only those photos (`deep: false`).
+//! * A folder that only leads to one other (no photos of its own) goes with where it leads: a
+//!   chain ending in a container is a container (`Work/Clients/{A, B}`); otherwise the chain is
+//!   one shoot named by its lowest meaningful folder (`Erika…/raw/M262` → `Erika…`), so a shoot
+//!   keeps its folder (and its pin or name) when a sibling turns up later.
 //! * Anything else that holds photos is a shoot, with everything inside it.
 //!
 //! The rules only read names: a shoot that is split or merged the wrong way is still exactly the
@@ -337,25 +341,55 @@ pub fn find_shoots(tree: &[FolderNode]) -> Vec<Shoot> {
 }
 
 fn walk(n: &FolderNode, parent: Option<&str>, disk: &FolderNode, out: &mut Vec<Shoot>, depth: usize) {
-    let shoot = |deep: bool, count: usize| Shoot {
-        name: shoot_name(n, parent),
-        path: n.path.clone(),
+    let shoot = |at: &FolderNode, parent: Option<&str>, deep: bool, count: usize| Shoot {
+        name: shoot_name(at, parent),
+        path: at.path.clone(),
         deep,
         disk: disk.path.clone(),
         disk_name: disk.name.clone(),
         count,
         latest: String::new(),
     };
-    if depth < MAX_DEPTH && is_container(n) {
+    if depth >= MAX_DEPTH {
+        if n.count > 0 && n.selectable {
+            out.push(shoot(n, parent, true, n.count));
+        }
+        return;
+    }
+    if is_container(n) {
         if n.own > 0 && n.selectable {
-            out.push(shoot(false, n.own));
+            out.push(shoot(n, parent, false, n.own));
         }
         for c in &n.children {
             walk(c, Some(&n.name), disk, out, depth + 1);
         }
-    } else if n.count > 0 && n.selectable {
-        out.push(shoot(true, n.count));
+        return;
     }
+    // a folder that only leads to one other (no photo of its own): the chain down to where it
+    // ends decides — a container there makes the whole chain one (`Work/Clients/{A, B}`), else
+    // the chain is one shoot, named by its lowest meaningful folder (`Erika…/raw/M262` →
+    // `Erika…`), which stays the same when a sibling turns up later
+    let mut chain: Vec<&FolderNode> = vec![n];
+    let mut last = n;
+    while let [only] = last.children.as_slice()
+        && last.own == 0
+        && chain.len() < MAX_DEPTH
+    {
+        if is_container(only) {
+            let above = chain.last().map(|c| c.name.as_str());
+            walk(only, above, disk, out, depth + chain.len());
+            return;
+        }
+        chain.push(only);
+        last = only;
+    }
+    if n.count == 0 || !n.selectable {
+        return;
+    }
+    let at = chain.iter().rposition(|c| !is_generic_name(&c.name)).unwrap_or(0);
+    let above = if at == 0 { parent } else { chain.get(at - 1).map(|c| c.name.as_str()) };
+    let node = chain.get(at).copied().unwrap_or(n);
+    out.push(shoot(node, above, true, n.count));
 }
 
 impl Catalog {
