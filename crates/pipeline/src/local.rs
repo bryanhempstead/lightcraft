@@ -29,6 +29,9 @@ pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]
     if (t - info.as_shot_temp).abs() < 1e-6 && (tint - info.as_shot_tint).abs() < 1e-6 {
         return None;
     }
+    if let Some(cw) = info.camera_wb.as_ref().filter(|_| info.raw) {
+        return camera_wb_matrix(cw, t, tint);
+    }
     let set = wb_matrix(&REC2020, temp_tint_to_xy(t, tint));
     let shot = wb_matrix(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint));
     let m = set.mul(&shot.inverse().unwrap_or(lightcraft_color::Mat3::IDENTITY));
@@ -36,6 +39,26 @@ pub fn wb_matrix_for(info: &SourceInfo, s: &DevelopSettings) -> Option<[[f32; 3]
     let g = m.apply([1.0, 1.0, 1.0]);
     let y = g[0] * 0.2627 + g[1] * 0.6780 + g[2] * 0.0593;
     Some(m.mul(&lightcraft_color::Mat3::diag(1.0 / y, 1.0 / y, 1.0 / y)).to_f32())
+}
+
+/// White balance in camera space ([`crate::CameraWb`]): the as-shot balance moved to the
+/// neutral of `temp` / `tint`, expressed in the working space; neutral luminance is kept.
+fn camera_wb_matrix(cw: &crate::CameraWb, temp: f64, tint: f64) -> Option<[[f32; 3]; 3]> {
+    let n = cw.neutral(temp, tint);
+    let d: [f64; 3] = std::array::from_fn(|i| cw.shot[i] as f64 / n[i]);
+    if !d.iter().all(|v| v.is_finite() && *v > 0.0) {
+        return None;
+    }
+    let to = lightcraft_color::Mat3(cw.to_working.map(|r| r.map(f64::from)));
+    let from = lightcraft_color::Mat3(cw.from_working.map(|r| r.map(f64::from)));
+    let m = to.mul(&lightcraft_color::Mat3::diag(d[0], d[1], d[2])).mul(&from);
+    let g = m.apply([1.0, 1.0, 1.0]);
+    let y = g[0] * 0.2627 + g[1] * 0.6780 + g[2] * 0.0593;
+    if !(y.is_finite() && y > 1e-6) {
+        return None;
+    }
+    let out = m.mul(&lightcraft_color::Mat3::diag(1.0 / y, 1.0 / y, 1.0 / y)).to_f32();
+    out.iter().flatten().all(|v| v.is_finite()).then_some(out)
 }
 
 fn wb_gain(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, gain: f32) {
@@ -350,6 +373,41 @@ pub fn airlight_of(mut v: Vec<f32>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A camera whose neutral moves bluer with temperature: ln(r/g) falls and ln(b/g) rises with
+    /// mireds; tint moves green.
+    fn wb_model() -> crate::CameraWb {
+        let m = lightcraft_color::SRGB.to_space(&REC2020).to_f32();
+        let inv = REC2020.to_space(&lightcraft_color::SRGB).to_f32();
+        let cw = crate::CameraWb { r: [-1.2, 1.5, 0.0, 0.0, 0.0], b: [0.1, -1.4, 0.0, 0.3, 0.0], to_working: m, from_working: inv, shot: [1.0; 3] };
+        let shot = cw.neutral(5000.0, 0.0).map(|v| v as f32);
+        crate::CameraWb { shot, ..cw }
+    }
+
+    #[test]
+    fn camera_white_balance_model() {
+        let cw = wb_model();
+        let (k, t) = cw.temp_tint(cw.neutral(5000.0, 0.0)).unwrap();
+        assert!((k - 5000.0).abs() < 1.0 && t.abs() < 0.1, "{k} {t}");
+        let (k, t) = cw.temp_tint(cw.neutral(3200.0, 12.0)).unwrap();
+        assert!((k - 3200.0).abs() < 1.0 && (t - 12.0).abs() < 0.1, "{k} {t}");
+        assert!(cw.temp_tint([f64::NAN, 1.0, 1.0]).is_none() && cw.temp_tint([0.0, 1.0, 1.0]).is_none());
+        let info = SourceInfo { raw: true, as_shot_temp: 5000.0, as_shot_tint: 0.0, camera_wb: Some(cw), ..Default::default() };
+        let mut s = DevelopSettings::for_raw(5000.0, 0.0);
+        s.wb.mode = lightcraft_develop::WbMode::Custom;
+        assert!(wb_matrix_for(&info, &s).is_none(), "as shot");
+        // warmer setting: a neutral turns warm (more red, less blue), luminance kept
+        s.wb.temp = 6500.0;
+        let m = wb_matrix_for(&info, &s).unwrap();
+        let g = [0.18f32; 3];
+        let o: [f32; 3] = std::array::from_fn(|r| m[r][0] * g[0] + m[r][1] * g[1] + m[r][2] * g[2]);
+        assert!(o[0] > o[2], "{o:?}");
+        assert!((lightcraft_color::luminance_2020(o) - 0.18).abs() < 1e-3, "{o:?}");
+        // hostile coefficients: no matrix rather than NaN
+        let bad = crate::CameraWb { r: [f32::NAN; 5], ..cw };
+        let info = SourceInfo { camera_wb: Some(bad), ..info };
+        assert!(wb_matrix_for(&info, &s).is_none_or(|m| m.iter().flatten().all(|v| v.is_finite())));
+    }
 
     #[test]
     fn guided_preserves_step_edges_and_flattens_texture() {

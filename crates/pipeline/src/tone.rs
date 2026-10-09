@@ -87,6 +87,65 @@ impl CameraTone {
     }
 }
 
+/// Lightroom-matched Basic tone for raw files with a camera tone curve: how many EV each slider
+/// moves a tone at post-exposure scene EV `LR_EV0`, `LR_EV0 + 1` … (relative to middle grey),
+/// per 100 slider units (Exposure: per EV, on top of its gain). Fitted (ridge regression on
+/// smooth piecewise-linear functions) to the neutral pixels of ~100 raw photos and Lightroom
+/// Classic's own renders of them (`tools/lr-compare`, `docs/lr-match.md`); black-box
+/// observation of output only.
+pub mod lr {
+    pub const EV0: f32 = -10.0;
+    pub const N: usize = 15;
+    pub const CONTRAST: [f32; N] =
+        [-1.368, -1.204, -1.022, -0.828, -0.676, -0.627, -0.666, -0.683, -0.569, -0.278, 0.057, 0.356, 0.542, 0.664, 0.765];
+    pub const HIGHLIGHTS: [f32; N] = [0.99, 0.602, 0.217, -0.084, -0.239, -0.278, -0.213, -0.112, 0.032, 0.221, 0.401, 0.561, 0.645, 0.675, 0.688];
+    pub const SHADOWS: [f32; N] = [2.703, 2.744, 2.733, 2.617, 2.353, 1.837, 1.092, 0.433, -0.057, -0.238, -0.262, -0.301, -0.323, -0.325, -0.32];
+    pub const WHITES: [f32; N] = [-0.165, -0.195, -0.216, -0.194, -0.118, -0.036, 0.004, 0.028, 0.104, 0.172, 0.198, 0.206, 0.195, 0.172, 0.145];
+    pub const BLACKS: [f32; N] = [1.027, 0.927, 0.823, 0.757, 0.758, 0.774, 0.747, 0.621, 0.403, 0.155, -0.022, -0.155, -0.241, -0.299, -0.347];
+    pub const EXPOSURE: [f32; N] =
+        [-1.618, -1.193, -0.756, -0.381, -0.132, -0.015, -0.009, -0.11, -0.122, -0.176, -0.285, -0.322, -0.303, -0.257, -0.206];
+
+    /// `t` at scene EV `ev` (linear between knots, constant beyond).
+    #[inline]
+    pub fn at(t: &[f32; N], ev: f32) -> f32 {
+        if !ev.is_finite() {
+            return 0.0;
+        }
+        let f = (ev - EV0).clamp(0.0, (N - 1) as f32);
+        let i = (f as usize).min(N - 2);
+        let k = f - i as f32;
+        let (a, b) = (t.get(i).copied().unwrap_or(0.0), t.get(i + 1).copied().unwrap_or(0.0));
+        a + (b - a) * k
+    }
+
+    /// Entries of [`hs_lut`]: EV0..EV0+N-1 in quarter stops.
+    pub const HS_N: usize = (N - 1) * 4 + 1;
+
+    /// Highlights and Shadows (−1..1) as a table of EV changes by local base EV (quarter stops
+    /// from `EV0`), applied per pixel on the edge-aware base.
+    pub fn hs_lut(highlights: f32, shadows: f32) -> Vec<f32> {
+        (0..HS_N)
+            .map(|i| {
+                let ev = EV0 + i as f32 * 0.25;
+                highlights * at(&HIGHLIGHTS, ev) + shadows * at(&SHADOWS, ev)
+            })
+            .collect()
+    }
+
+    /// [`hs_lut`] at base EV `ev`.
+    #[inline]
+    pub fn hs_at(t: &[f32], ev: f32) -> f32 {
+        if t.len() < 2 || !ev.is_finite() {
+            return 0.0;
+        }
+        let f = ((ev - EV0) * 4.0).clamp(0.0, (t.len() - 1) as f32);
+        let i = (f as usize).min(t.len() - 2);
+        let k = f - i as f32;
+        let (a, b) = (t.get(i).copied().unwrap_or(0.0), t.get(i + 1).copied().unwrap_or(0.0));
+        a + (b - a) * k
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ToneMap {
     lut: Vec<f32>,
@@ -106,6 +165,20 @@ impl ToneMap {
             .collect();
         ToneMap { lut, chroma: curve.chroma }
     }
+    /// A raw file's camera tone with Lightroom-matched Basic tone ([`lr`]): `exposure` in EV,
+    /// `contrast`, `whites`, `blacks` in −100..100, as global moves in EV before the camera curve.
+    pub fn camera_lr(curve: &CameraTone, exposure: f64, contrast: f64, whites: f64, blacks: f64) -> ToneMap {
+        let (e, c, w, b) = (exposure as f32, (contrast / 100.0) as f32, (whites / 100.0) as f32, (blacks / 100.0) as f32);
+        let lut = (0..LUT_N)
+            .map(|i| {
+                let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
+                let d = e * lr::at(&lr::EXPOSURE, ev) + c * lr::at(&lr::CONTRAST, ev) + w * lr::at(&lr::WHITES, ev) + b * lr::at(&lr::BLACKS, ev);
+                curve.apply(GREY * 2f32.powf(ev + d))
+            })
+            .collect();
+        ToneMap { lut, chroma: curve.chroma }
+    }
+
     /// `contrast`, `whites`, `blacks` in −100..100 (Lightroom slider units).
     pub fn new(contrast: f64, whites: f64, blacks: f64) -> ToneMap {
         let c = (contrast / 100.0) as f32;
@@ -219,6 +292,38 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lightroom_tone_is_the_camera_curve_at_zero_and_moves_the_right_way() {
+        let curve = CameraTone::new(std::array::from_fn(|i| {
+            let x = 2f32.powf(-12.0 + 12.5 * i as f32 / 31.0);
+            [x, (x / (x + 0.2)).min(0.999)]
+        }))
+        .unwrap();
+        let plain = ToneMap::camera_lr(&curve, 0.0, 0.0, 0.0, 0.0);
+        for y in [0.001f32, 0.02, 0.18, 0.9] {
+            assert!((plain.apply(y) - curve.apply(y)).abs() < 1e-3, "{y}");
+        }
+        let lifted = ToneMap::camera_lr(&curve, 0.0, 0.0, 0.0, 60.0);
+        assert!(lifted.apply(0.003) > plain.apply(0.003) * 1.2, "Blacks + lifts the shadows");
+        let flat = ToneMap::camera_lr(&curve, 0.0, -80.0, 0.0, 0.0);
+        assert!(flat.apply(0.01) > plain.apply(0.01), "Contrast − lifts the darks");
+        // (the exposure gain itself comes before the tone map; its curve rolls the ends off)
+        let up = ToneMap::camera_lr(&curve, 1.0, 0.0, 0.0, 0.0);
+        assert!(up.apply(0.1) > plain.apply(0.05), "Exposure + brightens");
+        assert!(up.apply(8.0) < plain.apply(8.0) + 1e-6, "and rolls the highlights off");
+        for t in [&lifted, &flat, &up] {
+            let lut = t.lut();
+            assert!(lut.windows(2).all(|w| w[1] >= w[0] - 1e-6) && lut.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+        }
+        // Highlights / Shadows: shadows lift dark bases, highlights − pulls bright ones down
+        let t = lr::hs_lut(-0.9, 0.5);
+        assert_eq!(t.len(), lr::HS_N);
+        assert!(lr::hs_at(&t, -6.0) > 0.3 && lr::hs_at(&t, 1.0) < 0.0, "{t:?}");
+        assert_eq!(lr::hs_at(&t, f32::NAN), 0.0);
+        assert_eq!(lr::hs_at(&[], 1.0), 0.0);
+        assert!((lr::hs_at(&t, 100.0) - t[t.len() - 1]).abs() < 1e-6 && (lr::hs_at(&t, -100.0) - t[0]).abs() < 1e-6, "clamped");
+    }
 
     fn knots() -> [[f32; 2]; 32] {
         std::array::from_fn(|i| {

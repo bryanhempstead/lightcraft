@@ -20,6 +20,12 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Parametric curve: peak change of a region at ±100 (encoded values, before the `4x(1 − x)`
+/// envelope) and the half-width of its window relative to the region. Matched to Lightroom's
+/// renders (`docs/lr-match.md`; were 0.22 and 0.75).
+const PARAMETRIC_AMOUNT: f32 = 0.11;
+const PARAMETRIC_WIDTH: f32 = 1.05;
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -37,10 +43,10 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
             if amt == 0.0 {
                 continue;
             }
-            let (ctr, half) = ((a + b) / 2.0, (b - a) * 0.75 + 0.05);
+            let (ctr, half) = ((a + b) / 2.0, (b - a) * PARAMETRIC_WIDTH + 0.05);
             let t = ((x - ctr) / half).clamp(-1.0, 1.0);
             let win = 0.5 + 0.5 * (t * std::f32::consts::PI).cos();
-            d += (amt / 100.0) as f32 * 0.22 * win;
+            d += (amt / 100.0) as f32 * PARAMETRIC_AMOUNT * win;
         }
         (x + d * 4.0 * x * (1.0 - x)).clamp(0.0, 1.0)
     });
@@ -172,6 +178,9 @@ pub struct FinishParams {
     pub proof: Option<crate::output::ProofParams>,
     pub hl: f32,
     pub sh: f32,
+    /// Lightroom-matched Highlights / Shadows ([`crate::tone::lr::hs_lut`]): replaces `hl` / `sh`
+    /// (which are then 0) for raw files with a camera tone curve.
+    pub hs_lut: Option<Vec<f32>>,
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
@@ -219,11 +228,16 @@ impl FinishParams {
             ((s.grain.amount / 100.0) as f32 * 0.13, cell.max(0.6), (s.grain.roughness / 100.0) as f32, s.grain.seed)
         });
         let calibration = s.section_enabled("calibration");
+        // raw files with a camera tone curve take Lightroom-matched Basic tone
+        let lr_tone = info.raw && info.camera_tone.is_some();
+        let (hl, sh) = ((s.light.highlights / 100.0) as f32, (s.light.shadows / 100.0) as f32);
+        let hs_lut = (lr_tone && (hl != 0.0 || sh != 0.0)).then(|| crate::tone::lr::hs_lut(hl, sh));
+        let (hl, sh) = if lr_tone { (0.0, 0.0) } else { (hl, sh) };
         FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: if let Some(curve) = info.camera_tone.as_ref().filter(|_| info.raw) {
-                ToneMap::camera(curve, s.light.contrast, s.light.whites, s.light.blacks)
+                ToneMap::camera_lr(curve, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks)
             } else if info.raw {
                 ToneMap::new(s.light.contrast, s.light.whites, s.light.blacks)
             } else {
@@ -241,8 +255,9 @@ impl FinishParams {
             out_luma: space.luma(),
             out_trc: space.trc(),
             proof: None,
-            hl: (s.light.highlights / 100.0) as f32,
-            sh: (s.light.shadows / 100.0) as f32,
+            hl,
+            sh,
+            hs_lut,
             clar,
             tex,
             dehaze,
@@ -326,6 +341,10 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
         let m = l.matrices();
         (l, k, m)
     });
+    // output primaries → working (for the profile table)
+    let from_out = lightcraft_color::Mat3(fp.to_out.map(|r| r.map(f64::from)))
+        .inverse()
+        .map_or([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], |m| m.to_f32());
     let FinishParams {
         tone,
         ops,
@@ -433,7 +452,10 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             let l1 = if dz != 0.0 || l_exp != 0.0 { log_lum(c) } else { l0 };
             let shift = l1 - l0;
             let base = p.base.data[i] + ev + shift;
-            let mut delta = 0.0f32;
+            let mut delta = match &fp.hs_lut {
+                Some(t) => crate::tone::lr::hs_at(t, base),
+                None => 0.0f32,
+            };
             let (hh, ss) = (hl + l_hl, sh + l_sh);
             if hh != 0.0 || ss != 0.0 {
                 let ws = 1.0 - smooth(-4.8, 0.3, base);
@@ -501,11 +523,6 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 d = d.map(|v| v + (o - v) * t);
             }
 
-            // --- the profile's colour table (a creative profile's look)
-            if let Some((l, k, m)) = &profile_lut {
-                d = l.apply_linear(d, *k, m);
-            }
-
             // --- colour
             d = ops.apply(d, l_sat, l_hue);
             if let Some((dir, amt)) = tint_col {
@@ -568,6 +585,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 if fp.refine_sat < 1.0 {
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
+            }
+            // --- the profile's colour table (a creative profile's look), on the finished colour
+            // in its own primaries and encoding (measured against Lightroom: after the curves)
+            if let Some((l, k, m)) = &profile_lut {
+                let lin = mul3(&from_out, e.map(lightcraft_color::transfer::srgb_to_linear));
+                let t = mul3(to_out, l.apply_linear(lin, *k, m));
+                e = t.map(|v| if exact { linear_to_srgb(v.clamp(0.0, 1.0)) } else { encode_srgb(srgb, v) });
             }
             if let Some((amt, cell, rough, seed)) = *grain {
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));

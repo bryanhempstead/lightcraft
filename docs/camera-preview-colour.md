@@ -88,7 +88,15 @@ picks them from a catalog (no slider, crop or curve changed, as-shot white balan
 is fitted on log-spaced bins of every unclipped pixel away from edges, down to deep shadows. A profile with a tone
 curve (`"source": "lightroom"`) takes over the camera's look for every raw format, DNG included: its colour model
 replaces the file's matrices, DNG profile tables and the per-photo camera-JPEG fit. These profiles are fitted from the
-user's own photos and previews and stay in their profiles folder; none are built in. Fujifilm RAFs now carry the
+user's own photos and previews and stay in their profiles folder; none are built in.
+
+Items may carry Lightroom's as-shot `temp` / `tint` (the tool reads them from the develop settings and the develop
+history); items without a preview only feed the white-balance model: per camera, `ln(r/g)` and `ln(b/g)` of the
+as-shot camera neutral as a quadratic in mireds and linear in tint, fitted to those photos. With it, a raw of that
+camera shows Lightroom's as-shot Temp / Tint, takes Temp / Tint in Lightroom's absolute scale (CR3 and RAF included:
+no longer relative to 6500 K), and white balance moves the camera neutral in camera space
+(`lightcraft_pipeline::CameraWb`) instead of adapting the as-shot white. Raw files with a camera tone curve also take
+Lightroom-matched Basic tone (`lightcraft_pipeline::tone::lr`). Method and measurements: `docs/lr-match.md`. Fujifilm RAFs now carry the
 camera's raw exposure bias (header record `0x9650`, e.g. −1.72 EV for DR200) as their baseline exposure, so photos
 shot at different dynamic-range settings start out at the same brightness.
 

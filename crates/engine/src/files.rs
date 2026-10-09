@@ -308,9 +308,30 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         }
         let (temp, tint) = xy_to_temp_tint(xy);
         let relative = crate::camera_preview::file_local_look(raw.format) && t.matrix_is_fallback;
+        // a Lightroom-matched profile's white-balance model: Temp / Tint as Lightroom reads them
+        let camera_wb = if from_lightroom {
+            raw.metadata.model.as_deref().and_then(crate::camera_profiles::get).and_then(|p| {
+                let fit = p.wb.as_ref()?;
+                let shot = crate::camera_profiles::shot_neutral(&raw.color, raw.wb_multipliers, xy)?;
+                let cw = fit.camera_wb(&p.matrix(), shot)?;
+                let (k, ti) = cw.temp_tint(shot)?;
+                Some((cw, k.round(), ti.round()))
+            })
+        } else {
+            None
+        };
         let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
         let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
-        return Ok((img, SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone }));
+        if let Some((cw, k, ti)) = camera_wb {
+            return Ok((
+                img,
+                SourceInfo { raw: true, as_shot_temp: k, as_shot_tint: ti, lens, relative_wb: false, camera_tone, camera_wb: Some(cw) },
+            ));
+        }
+        return Ok((
+            img,
+            SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone, camera_wb: None },
+        ));
     }
     let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).map_err(|e| e.to_string())?;
     drop(bytes);

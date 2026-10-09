@@ -67,11 +67,68 @@ pub struct SourceInfo {
     /// No measured camera illuminant: WB adjustments are relative to the camera's rendered look.
     pub relative_wb: bool,
     pub camera_tone: Option<tone::CameraTone>,
+    /// A camera white-balance model matched to Lightroom ([`CameraWb`]): Temp / Tint move the
+    /// camera's neutral as Lightroom's do, instead of a Bradford adaptation of the as-shot white.
+    pub camera_wb: Option<CameraWb>,
+}
+
+/// How a camera's neutral (raw RGB of a white surface, green = 1) follows Lightroom's Temp /
+/// Tint: `ln(r/g)` and `ln(b/g)` as `c0 + c1·m + c2·m² + c3·t + c4·m·t` of `m` = 1000 / K
+/// (mireds / 1000) and `t` = tint / 100, fitted per camera model to as-shot photos and the
+/// temperatures Lightroom gave them (`calibrate --lightroom`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CameraWb {
+    pub r: [f32; 5],
+    pub b: [f32; 5],
+    /// White-balanced camera RGB (the as-shot balance) → linear Rec.2020, and back.
+    pub to_working: [[f32; 3]; 3],
+    pub from_working: [[f32; 3]; 3],
+    /// The as-shot neutral (green = 1).
+    pub shot: [f32; 3],
+}
+
+impl CameraWb {
+    /// The camera neutral for `temp` (K) and `tint`.
+    pub fn neutral(&self, temp: f64, tint: f64) -> [f64; 3] {
+        let m = 1000.0 / temp.clamp(1500.0, 50000.0);
+        let t = tint.clamp(-150.0, 150.0) / 100.0;
+        let f = |c: &[f32; 5]| (c[0] as f64 + c[1] as f64 * m + c[2] as f64 * m * m + c[3] as f64 * t + c[4] as f64 * m * t).clamp(-6.0, 6.0).exp();
+        [f(&self.r), 1.0, f(&self.b)]
+    }
+
+    /// Temp / Tint whose neutral is `n` (Newton's method on the model; `None` if it doesn't
+    /// converge).
+    pub fn temp_tint(&self, n: [f64; 3]) -> Option<(f64, f64)> {
+        if !(n.iter().all(|v| v.is_finite() && *v > 0.0)) {
+            return None;
+        }
+        let target = [(n[0] / n[1]).ln(), (n[2] / n[1]).ln()];
+        let (mut m, mut t) = (1000.0 / 5000.0, 0.0);
+        let g = |c: &[f32; 5], m: f64, t: f64| c[0] as f64 + c[1] as f64 * m + c[2] as f64 * m * m + c[3] as f64 * t + c[4] as f64 * m * t;
+        for _ in 0..30 {
+            let (fr, fb) = (g(&self.r, m, t) - target[0], g(&self.b, m, t) - target[1]);
+            let (rm, rt) = (self.r[1] as f64 + 2.0 * self.r[2] as f64 * m + self.r[4] as f64 * t, self.r[3] as f64 + self.r[4] as f64 * m);
+            let (bm, bt) = (self.b[1] as f64 + 2.0 * self.b[2] as f64 * m + self.b[4] as f64 * t, self.b[3] as f64 + self.b[4] as f64 * m);
+            let det = rm * bt - rt * bm;
+            if !det.is_finite() || det.abs() < 1e-12 {
+                return None;
+            }
+            let dm = (fr * bt - rt * fb) / det;
+            let dt = (rm * fb - fr * bm) / det;
+            m = (m - dm).clamp(0.02, 0.67);
+            t = (t - dt).clamp(-1.5, 1.5);
+            if dm.abs() < 1e-9 && dt.abs() < 1e-9 {
+                break;
+            }
+        }
+        let k = 1000.0 / m;
+        (k.is_finite() && (1500.0..=50000.0).contains(&k)).then_some((k, t * 100.0))
+    }
 }
 
 impl Default for SourceInfo {
     fn default() -> Self {
-        Self { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, lens: None, relative_wb: false, camera_tone: None }
+        Self { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, lens: None, relative_wb: false, camera_tone: None, camera_wb: None }
     }
 }
 

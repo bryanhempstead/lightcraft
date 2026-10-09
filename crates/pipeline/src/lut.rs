@@ -5,9 +5,10 @@
 //!   `DOMAIN_MAX`, then size³ "r g b" lines with red changing fastest) apply to the
 //!   display-encoded output colour ([`LutStage::Output`]), blended by the profile amount.
 //! - Colour tables of creative profiles (camera-raw `RGBTable`s, decoded by the engine) apply as
-//!   part of the profile ([`LutStage::Profile`]): after the base rendering's tone map and before
-//!   the user's colour adjustments and tone curves, in the table's own primaries and encoding,
-//!   blended by `strength` × the amount (at most `max_strength`).
+//!   [`LutStage::Profile`]: to the finished colour (after the colour adjustments and tone curves,
+//!   before grain), in the table's own primaries and encoding, blended by the amount through
+//!   `strength`. Where they go was measured against Lightroom's renders (`docs/lr-match.md`):
+//!   after the tone curves matched clearly better than right after the base tone map.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -69,7 +70,7 @@ impl LutTransfer {
 pub enum LutStage {
     /// On the display-encoded output colour, after the tone curves (`.cube` files).
     Output,
-    /// As part of the profile: after the base tone map, before the user's colour adjustments.
+    /// A creative profile's table: on the finished colour in the table's own space and encoding.
     Profile,
 }
 

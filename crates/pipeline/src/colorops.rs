@@ -128,6 +128,10 @@ impl PointK {
     }
 }
 
+/// Saturation and the mixer's saturation per 100 slider units, as a chroma scale: matched to
+/// Lightroom's renders (`docs/lr-match.md`; 1.0 → 1.25).
+pub const SATURATION_GAIN: f32 = 1.25;
+
 /// The colour tools' parameters, resolved once per render (fields are read by the GPU kernel).
 #[derive(Clone, Debug)]
 pub struct ColorOps {
@@ -158,9 +162,9 @@ impl ColorOps {
         let g = &s.grading;
         ColorOps {
             vibrance: (s.color.vibrance / 100.0) as f32,
-            saturation: (s.color.saturation / 100.0) as f32,
+            saturation: (s.color.saturation / 100.0) as f32 * SATURATION_GAIN,
             hue: bands.map(|b| (b.hue / 100.0) as f32 * 0.5),
-            sat: bands.map(|b| (b.sat / 100.0) as f32),
+            sat: bands.map(|b| (b.sat / 100.0) as f32 * SATURATION_GAIN),
             lum: bands.map(|b| (b.lum / 100.0) as f32 * 0.18),
             mixer: !s.mixer.is_neutral(),
             points: if crate::is_bw(s) {

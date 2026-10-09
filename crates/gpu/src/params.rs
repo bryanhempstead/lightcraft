@@ -23,6 +23,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("AIR_PRE", 1),
     ("HL", 1),
     ("SH", 1),
+    ("HS_LUT", 1),
+    ("HS_OFF", 1),
     ("CLAR", 1),
     ("TEX", 1),
     ("DEHAZE", 1),
@@ -150,6 +152,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
             aux.extend_from_slice(&l.v);
         }
     }
+    let hs_off = aux.len();
+    if let Some(t) = &fp.hs_lut {
+        aux.extend_from_slice(t);
+    }
     let mask_off = aux.len();
     for m in masks {
         aux.extend_from_slice(m);
@@ -170,6 +176,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("AIR_PRE", fp.air_pre);
     p.f("HL", fp.hl);
     p.f("SH", fp.sh);
+    p.b("HS_LUT", fp.hs_lut.is_some());
+    p.u("HS_OFF", hs_off as u32);
     p.f("CLAR", fp.clar);
     p.f("TEX", fp.tex);
     p.f("DEHAZE", fp.dehaze);

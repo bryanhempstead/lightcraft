@@ -354,6 +354,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let shift = l1 - l0;
     let base = base_p[i] + ev + shift;
     var delta = 0.0;
+    if (pu(F_HS_LUT) != 0u) {
+        // Lightroom-matched Highlights / Shadows: EV by base EV, quarter stops from -10
+        let n = 57u;
+        let f = clamp((base + 10.0) * 4.0, 0.0, f32(n - 1u));
+        let k = min(u32(f), n - 2u);
+        let t = f - f32(k);
+        let o = pu(F_HS_OFF) + k;
+        delta += aux[o] + (aux[o + 1u] - aux[o]) * t;
+    }
     let hh = pf(F_HL) + lt[4];
     let ss = pf(F_SH) + lt[5];
     if (hh != 0.0 || ss != 0.0) {

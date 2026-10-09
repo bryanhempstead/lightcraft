@@ -50,11 +50,111 @@ pub struct CameraProfile {
     /// camera's own JPEGs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// How the camera's neutral follows Lightroom's Temp / Tint ([`lightcraft_pipeline::CameraWb`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wb: Option<WbFit>,
+}
+
+/// Coefficients of [`lightcraft_pipeline::CameraWb`] and the photos they were fitted on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WbFit {
+    pub r: [f64; 5],
+    pub b: [f64; 5],
+    pub samples: usize,
+    /// RMS residual of the fit (ln units).
+    pub rms: f64,
+}
+
+impl WbFit {
+    /// The pipeline's model for a photo: `to_working` maps its white-balanced camera RGB to the
+    /// working space, `shot` is its as-shot neutral.
+    pub fn camera_wb(&self, to_working: &Mat3, shot: [f64; 3]) -> Option<lightcraft_pipeline::CameraWb> {
+        let from = to_working.inverse()?;
+        Some(lightcraft_pipeline::CameraWb {
+            r: self.r.map(|v| v as f32),
+            b: self.b.map(|v| v as f32),
+            to_working: to_working.to_f32(),
+            from_working: from.to_f32(),
+            shot: shot.map(|v| v as f32),
+        })
+    }
+
+    /// Least-squares fit of `(temp K, tint, camera neutral)` samples; `None` with too few or
+    /// too uniform samples.
+    pub fn fit(samples: &[(f64, f64, [f64; 3])]) -> Option<WbFit> {
+        let rows: Vec<([f64; 5], f64, f64)> = samples
+            .iter()
+            .filter(|(k, t, n)| k.is_finite() && (1500.0..=50000.0).contains(k) && t.is_finite() && n.iter().all(|v| v.is_finite() && *v > 0.0))
+            .map(|(k, t, n)| {
+                let (m, t) = (1000.0 / k, t / 100.0);
+                ([1.0, m, m * m, t, m * t], (n[0] / n[1]).ln(), (n[2] / n[1]).ln())
+            })
+            .collect();
+        if rows.len() < 8 {
+            return None;
+        }
+        let ms: Vec<f64> = rows.iter().map(|r| r.0[1]).collect();
+        let (lo, hi) = ms.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(*v), b.max(*v)));
+        if hi - lo < 0.02 {
+            return None;
+        }
+        // normal equations with a small ridge (more on the curvature and tint terms, which a
+        // narrow spread of as-shot whites can't pin down)
+        let solve = |pick: fn(&([f64; 5], f64, f64)) -> f64| -> Option<[f64; 5]> {
+            let mut a = [[0.0f64; 5]; 5];
+            let mut b = [0.0f64; 5];
+            for r in &rows {
+                for i in 0..5 {
+                    b[i] += r.0[i] * pick(r);
+                    for j in 0..5 {
+                        a[i][j] += r.0[i] * r.0[j];
+                    }
+                }
+            }
+            let n = rows.len() as f64;
+            for (i, ridge) in [1e-6, 1e-4, 1e-2, 1e-2, 1e-2].iter().enumerate() {
+                a[i][i] += ridge * n;
+            }
+            // Gauss-Jordan
+            let mut m = [[0.0f64; 6]; 5];
+            for i in 0..5 {
+                m[i][..5].copy_from_slice(&a[i]);
+                m[i][5] = b[i];
+            }
+            for c in 0..5 {
+                let p = (c..5).max_by(|x, y| m[*x][c].abs().total_cmp(&m[*y][c].abs()))?;
+                if m[p][c].abs() < 1e-12 {
+                    return None;
+                }
+                m.swap(c, p);
+                let d = m[c][c];
+                for k in 0..6 {
+                    m[c][k] /= d;
+                }
+                for r in 0..5 {
+                    if r != c {
+                        let f = m[r][c];
+                        for k in 0..6 {
+                            m[r][k] -= f * m[c][k];
+                        }
+                    }
+                }
+            }
+            let x: [f64; 5] = std::array::from_fn(|i| m[i][5]);
+            x.iter().all(|v| v.is_finite()).then_some(x)
+        };
+        let r = solve(|r| r.1)?;
+        let b = solve(|r| r.2)?;
+        let dot = |c: &[f64; 5], f: &[f64; 5]| c.iter().zip(f).map(|(a, b)| a * b).sum::<f64>();
+        let rms =
+            (rows.iter().map(|x| (dot(&r, &x.0) - x.1).powi(2) + (dot(&b, &x.0) - x.2).powi(2)).sum::<f64>() / (2.0 * rows.len() as f64)).sqrt();
+        Some(WbFit { r, b, samples: rows.len(), rms })
+    }
 }
 
 impl CameraProfile {
     pub fn new(model: &str, files: usize, samples: usize, matrix: Mat3, hue_sat: Option<HsvTable>) -> CameraProfile {
-        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat, tone: None, source: None }
+        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat, tone: None, source: None, wb: None }
     }
 
     pub fn matrix(&self) -> Mat3 {
@@ -64,12 +164,13 @@ impl CameraProfile {
     /// Whether the data is usable (bounded matrix, table shape matching its data).
     fn valid(&self) -> bool {
         let matrix = self.matrix.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0) && Mat3(self.matrix).inverse().is_some();
+        let wb = self.wb.as_ref().is_none_or(|w| w.r.iter().chain(&w.b).all(|v| v.is_finite() && v.abs() < 1e3));
         let table = self.hue_sat.as_ref().is_none_or(|t| {
             let dims = (1..=4096).contains(&t.hue_divisions) && (2..=4096).contains(&t.sat_divisions) && (1..=4096).contains(&t.val_divisions);
             let len = t.hue_divisions.checked_mul(t.sat_divisions).and_then(|n| n.checked_mul(t.val_divisions));
             dims && len == Some(t.data.len()) && t.data.iter().flatten().all(|v| v.is_finite()) && t.data.iter().all(|e| e[1] >= 0.0 && e[2] >= 0.0)
         });
-        self.version == VERSION && !self.model.is_empty() && matrix && table
+        self.version == VERSION && !self.model.is_empty() && matrix && table && wb
     }
 }
 
@@ -206,6 +307,18 @@ type Pairs = Vec<([f64; 3], [f64; 3])>;
 pub struct Pool {
     models: HashMap<String, (usize, Pairs)>,
     lightroom: HashMap<String, (usize, Pairs, Pairs)>,
+    /// Per model: (Lightroom's as-shot temp, tint, the raw's as-shot camera neutral).
+    wb: HashMap<String, Vec<(f64, f64, [f64; 3])>>,
+}
+
+/// The as-shot camera neutral (green = 1) of a raw's header data.
+pub(crate) fn shot_neutral(color: &lightcraft_raw::ColorData, wb_multipliers: Option<[f32; 3]>, xy: lightcraft_color::Xy) -> Option<[f64; 3]> {
+    let n = match (color.as_shot_neutral, wb_multipliers) {
+        (Some(n), _) => n,
+        (None, Some(m)) if m.iter().all(|v| v.is_finite() && *v > 0.0) => m.map(|v| 1.0 / v as f64),
+        _ => lightcraft_raw::color::wb_multipliers(color, xy).map(|v| 1.0 / v),
+    };
+    (n.iter().all(|v| v.is_finite() && *v > 0.0)).then(|| [n[0] / n[1], 1.0, n[2] / n[1]])
 }
 
 /// Most colour pairs kept per photo, so a few busy photos can't dominate a profile.
@@ -231,10 +344,15 @@ impl Pool {
     /// its previews cache, Adobe RGB, in the raw's stored orientation) rendered at Lightroom's
     /// default settings. `Ok(None)` when the pair can't contribute (frames differ, too little
     /// colour).
-    pub fn add_lightroom(&mut self, raw_bytes: &[u8], preview: &[u8]) -> Result<Option<String>, String> {
+    pub fn add_lightroom(&mut self, raw_bytes: &[u8], preview: &[u8], as_shot: Option<(f64, f64)>) -> Result<Option<String>, String> {
         let mut raw = lightcraft_raw::decode(raw_bytes).map_err(|e| e.to_string())?;
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
+        if let Some((k, t)) = as_shot
+            && let Some(n) = shot_neutral(&raw.color, raw.wb_multipliers, lightcraft_raw::color::as_shot_white_xy(&raw))
+        {
+            self.wb.entry(model.to_owned()).or_default().push((k, t, n));
+        }
         let opts = lightcraft_codecs::DecodeOptions { max_size: Some((1024, 1024)), max_pixels: 64_000_000 };
         let decoded =
             lightcraft_codecs::decode_jpeg_with_fallback(preview, opts, lightcraft_codecs::NamedSpace::AdobeRgb).map_err(|e| e.to_string())?;
@@ -245,6 +363,16 @@ impl Pool {
         entry.0 += 1;
         entry.1.extend(pairs.into_iter().step_by(step));
         entry.2.extend(bright.into_iter().step_by(bstep));
+        Ok(Some(model.to_owned()))
+    }
+
+    /// Add a white-balance sample: a raw (read from its headers only) and the Temp / Tint
+    /// Lightroom gave it as shot. `Ok(None)` when the file has no model name or as-shot white.
+    pub fn add_wb(&mut self, raw_bytes: &[u8], temp: f64, tint: f64) -> Result<Option<String>, String> {
+        let info = lightcraft_raw::probe_info(raw_bytes).map_err(|e| e.to_string())?;
+        let Some(model) = info.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
+        let Some(n) = shot_neutral(&info.color, info.wb_multipliers, lightcraft_raw::color::as_shot_white_xy_of(&info)) else { return Ok(None) };
+        self.wb.entry(model.to_owned()).or_default().push((temp, tint, n));
         Ok(Some(model.to_owned()))
     }
 
@@ -262,6 +390,7 @@ impl Pool {
                 let mut p = CameraProfile::new(model, *files, pairs.len(), matrix, hue_sat);
                 p.tone = Some(tone);
                 p.source = Some("lightroom".into());
+                p.wb = self.wb.get(model).and_then(|w| WbFit::fit(w));
                 Ok(p)
             })
             .collect()
@@ -287,6 +416,9 @@ impl Pool {
             let entry = self.models.entry(model).or_default();
             entry.0 += files;
             entry.1.extend(pairs);
+        }
+        for (model, w) in other.wb {
+            self.wb.entry(model).or_default().extend(w);
         }
         for (model, (files, pairs, bright)) in other.lightroom {
             let entry = self.lightroom.entry(model).or_default();
@@ -376,10 +508,36 @@ mod tests {
     }
 
     #[test]
+    fn white_balance_fit_recovers_a_camera() {
+        let (r, b) = ([-1.1, 1.4, -0.2, 0.05, 0.0], [0.2, -1.6, 0.3, 0.4, -0.1]);
+        let f = |c: &[f64; 5], k: f64, t: f64| {
+            let (m, t) = (1000.0 / k, t / 100.0);
+            (c[0] + c[1] * m + c[2] * m * m + c[3] * t + c[4] * m * t).exp()
+        };
+        let samples: Vec<(f64, f64, [f64; 3])> = (0..40)
+            .map(|i| {
+                let k = 2800.0 + 150.0 * i as f64;
+                let t = ((i * 7) % 30) as f64 - 10.0;
+                (k, t, [f(&r, k, t), 1.0, f(&b, k, t)])
+            })
+            .collect();
+        let fit = WbFit::fit(&samples).unwrap();
+        assert!(fit.rms < 0.03, "{fit:?}");
+        let cw = fit.camera_wb(&Mat3::IDENTITY, [f(&r, 5000.0, 5.0), 1.0, f(&b, 5000.0, 5.0)]).unwrap();
+        let (k, t) = cw.temp_tint([f(&r, 5000.0, 5.0), 1.0, f(&b, 5000.0, 5.0)]).unwrap();
+        assert!((k - 5000.0).abs() < 60.0 && (t - 5.0).abs() < 2.0, "{k} {t}");
+        // too few / identical / hostile samples: no model
+        assert!(WbFit::fit(&samples[..5]).is_none());
+        assert!(WbFit::fit(&vec![(5000.0, 0.0, [0.5, 1.0, 0.8]); 50]).is_none());
+        assert!(WbFit::fit(&vec![(f64::NAN, 0.0, [0.5, 1.0, 0.8]); 50]).is_none());
+    }
+
+    #[test]
     fn pool_skips_files_that_cannot_contribute() {
         let mut pool = Pool::default();
         assert!(pool.add(b"not a raw file").is_err());
-        assert!(pool.add_lightroom(b"not a raw file", b"not a jpeg").is_err());
+        assert!(pool.add_lightroom(b"not a raw file", b"not a jpeg", Some((5000.0, 0.0))).is_err());
+        assert!(pool.add_wb(b"not a raw file", 5000.0, 0.0).is_err());
         assert!(pool.fit_lightroom(1).is_empty());
         assert!(pool.fit(1).is_empty());
         assert!(pool.files().is_empty());

@@ -96,7 +96,8 @@ USAGE:
       take their colour from the profile and only their tone from their own JPEG.
       --lightroom LIST.json [--min-files N]: instead fit Lightroom-matched profiles (colour, tone
       and chroma, any raw format) from raws and Lightroom's previews of them rendered at default
-      settings: [{\"raw\": path, \"preview\": path to the preview JPEG}, …] (tools/lr-compare
+      settings: [{\"raw\": path, \"preview\": path to the preview JPEG, \"temp\"/\"tint\": Lightroom's
+      as-shot white balance}, …]; items without a preview only feed the white-balance model (tools/lr-compare
       `calibrate` writes the list from a catalog). Raws of a profiled model then start out as
       Lightroom rendered that camera.
   lightcraft-cli migrate-lightroom --library DIR [OPTIONS]
@@ -218,10 +219,19 @@ fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
 fn calibrate_lightroom(list: &str, out: Option<std::path::PathBuf>, min_files: usize) -> Result<(), String> {
     let text = std::fs::read_to_string(list).map_err(|e| format!("{list}: {e}"))?;
     let items: Vec<Value> = serde_json::from_str(&text).map_err(|e| format!("{list}: {e}"))?;
-    let pairs: Vec<(String, String)> =
-        items.iter().filter_map(|v| Some((v.get("raw")?.as_str()?.to_string(), v.get("preview")?.as_str()?.to_string()))).collect();
+    // (raw, preview, Lightroom's as-shot temp / tint)
+    type Item = (String, Option<String>, Option<(f64, f64)>);
+    let pairs: Vec<Item> = items
+        .iter()
+        .filter_map(|v| {
+            let raw = v.get("raw")?.as_str()?.to_string();
+            let preview = v.get("preview").and_then(Value::as_str).map(str::to_string);
+            let wb = v.get("temp").and_then(Value::as_f64).map(|k| (k, v.get("tint").and_then(Value::as_f64).unwrap_or(0.0)));
+            (preview.is_some() || wb.is_some()).then_some((raw, preview, wb))
+        })
+        .collect();
     if pairs.is_empty() {
-        return Err(format!("{list}: expected [{{\"raw\": path, \"preview\": path}}, …]"));
+        return Err(format!("{list}: expected [{{\"raw\": path, \"preview\": path, \"temp\"?: K, \"tint\"?: n}}, …]"));
     }
     let dir = out.or_else(lightcraft_engine::camera_profiles::dir).ok_or("no profiles folder: pass --out DIR")?;
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 4);
@@ -231,11 +241,12 @@ fn calibrate_lightroom(list: &str, out: Option<std::path::PathBuf>, min_files: u
             .map(|_| {
                 scope.spawn(|| {
                     let mut pool = lightcraft_engine::camera_profiles::Pool::default();
-                    while let Some((raw, preview)) = pairs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
-                        let r = std::fs::read(raw)
-                            .map_err(|e| e.to_string())
-                            .and_then(|r| std::fs::read(preview).map_err(|e| e.to_string()).map(|p| (r, p)))
-                            .and_then(|(r, p)| pool.add_lightroom(&r, &p));
+                    while let Some((raw, preview, wb)) = pairs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                        let r = std::fs::read(raw).map_err(|e| e.to_string()).and_then(|r| match (preview, wb) {
+                            (Some(preview), _) => std::fs::read(preview).map_err(|e| e.to_string()).and_then(|p| pool.add_lightroom(&r, &p, *wb)),
+                            (None, Some((k, t))) => pool.add_wb(&r, *k, *t),
+                            (None, None) => Ok(None),
+                        });
                         match r {
                             Ok(Some(model)) => eprintln!("{raw} ({model})"),
                             Ok(None) => eprintln!("{raw}: skipped (frame differs from the preview, or too little colour)"),
@@ -257,7 +268,17 @@ fn calibrate_lightroom(list: &str, out: Option<std::path::PathBuf>, min_files: u
         match result {
             Ok(profile) => {
                 let path = lightcraft_engine::camera_profiles::save(&profile, &dir)?;
-                println!("{}: {} photos, {} colour pairs (Lightroom-matched) → {}", profile.model, profile.files, profile.samples, path.display());
+                let wb = profile
+                    .wb
+                    .as_ref()
+                    .map_or("no white-balance model".to_string(), |w| format!("white balance from {} photos (rms {:.3})", w.samples, w.rms));
+                println!(
+                    "{}: {} photos, {} colour pairs (Lightroom-matched), {wb} → {}",
+                    profile.model,
+                    profile.files,
+                    profile.samples,
+                    path.display()
+                );
                 written += 1;
             }
             Err(e) => eprintln!("calibrate: {e}"),

@@ -215,7 +215,8 @@ def top_level(text):
             m = re.match(r"^(\w+) = (.*?),?\s*\}?$", body)
             if m and "{" not in m.group(2):
                 d[m.group(1)] = m.group(2).strip().strip('"')
-        depth += line.count("{") - line.count("}")
+        bare = re.sub(r'"(?:[^"\\]|\\.)*"', '""', line)
+        depth += bare.count("{") - bare.count("}")
     return d
 
 
@@ -252,6 +253,7 @@ def is_default(text):
 
 def calibrate(a):
     """Lightroom-matched camera profiles from the catalog's photos at default settings."""
+    import re
     os.makedirs(a.work, exist_ok=True)
     cat = a.catalog or newest_catalog()
     prev_dir = a.previews or cat[: -len(".lrcat")] + " Previews.lrdata"
@@ -266,22 +268,51 @@ def calibrate(a):
     exclude = set()
     for f in a.exclude or []:
         exclude |= {p["id"] for p in json.load(open(f))}
-    by_model = {}
+    by_model, wb_only = {}, {}
     raw_ext = {"dng", "cr3", "cr2", "raf", "arw", "nef", "orf", "rw2", "pef"}
+
+    def as_shot(text):
+        d = top_level(text)
+        try:
+            return (float(d["Temperature"]), float(d.get("Tint", 0))) if d.get("WhiteBalance") == "As Shot" and "Temperature" in d else None
+        except ValueError:
+            return None
     for iid, path, model, ext, text, _ in db.execute(SQL):
-        if ext not in raw_ext or not model or iid in exclude or look_of(text) not in a.looks.split(","):
+        if ext not in raw_ext or not model or iid in exclude:
             continue
         if a.camera and model not in a.camera.split(","):
             continue
-        if not is_default(text):
+        wb = as_shot(text)
+        if look_of(text) in a.looks.split(",") and is_default(text):
+            by_model.setdefault(model, []).append((iid, path, wb))
+        elif wb:
+            wb_only.setdefault(model, []).append((iid, path, wb))
+    # as-shot white balance from the develop history too (Lightroom writes Temp / Tint into the
+    # steps taken while the photo was at As Shot): history texts are a u32 length + zlib
+    import zlib
+    paths = {iid: (path, model) for iid, path, model, ext, text, _ in db.execute(SQL) if ext in raw_ext and model and iid not in exclude}
+    seen = {iid for rows in wb_only.values() for iid, _, _ in rows} | {iid for rows in by_model.values() for iid, _, wb in rows if wb}
+    for img, txt in db.execute("SELECT image, text FROM Adobe_libraryImageDevelopHistoryStep"):
+        if img not in paths or img in seen or txt is None:
             continue
-        by_model.setdefault(model, []).append((iid, path))
+        b = txt if isinstance(txt, bytes) else txt.encode("latin1")
+        try:
+            t = zlib.decompress(b[4:]).decode("utf8", "replace")
+        except zlib.error:
+            t = b.decode("utf8", "replace")
+        if 'WhiteBalance = "As Shot"' not in t:
+            continue
+        k, ti = re.search(r"\nTemperature = ([\d.]+)", t), re.search(r"\nTint = (-?[\d.]+)", t)
+        if k:
+            path, model = paths[img]
+            wb_only.setdefault(model, []).append((img, path, (float(k.group(1)), float(ti.group(1)) if ti else 0.0)))
+            seen.add(img)
     random.seed(a.seed)
     items = []
     for model, rows in sorted(by_model.items()):
         random.shuffle(rows)
         got = 0
-        for iid, path in rows:
+        for iid, path, wb in rows:
             if got >= a.per_camera:
                 break
             if not os.path.isfile(path):
@@ -293,9 +324,17 @@ def calibrate(a):
             fs = [f for f in fs if int(f.rsplit("_", 1)[1]) >= 600]
             if not fs:
                 continue
-            items.append({"raw": path, "preview": min(fs, key=lambda f: int(f.rsplit("_", 1)[1])), "model": model, "id": iid})
+            item = {"raw": path, "preview": min(fs, key=lambda f: int(f.rsplit("_", 1)[1])), "model": model, "id": iid}
+            if wb:
+                item["temp"], item["tint"] = wb
+            items.append(item)
             got += 1
-        print(f"{model}: {got} of {len(rows)} default-setting photos", file=sys.stderr)
+        # more as-shot photos (any other settings) for the white-balance model: header reads only
+        extra = [r for r in wb_only.get(model, []) if os.path.isfile(r[1])]
+        random.shuffle(extra)
+        for iid, path, wb in extra[: a.wb_per_camera]:
+            items.append({"raw": path, "temp": wb[0], "tint": wb[1], "model": model, "id": iid})
+        print(f"{model}: {got} of {len(rows)} default-setting photos, {min(len(extra), a.wb_per_camera)} more as-shot for white balance", file=sys.stderr)
     for f in ("c.lrcat", "c.lrcat-wal"):
         if os.path.exists(os.path.join(cdir, f)):
             os.remove(os.path.join(cdir, f))
@@ -350,7 +389,7 @@ def render(a):
         out = os.path.join(outdir, f"{p['id']}.jpg")
         if os.path.exists(out):
             os.remove(out)
-        script.append(json.dumps({"command": "app.export", "params": {"ids": [pid], "path": out, "longEdge": max(w, h), "quality": 97, "sharpen": "none", "metadata": "none", "conflict": "overwrite"}}))
+        script.append(json.dumps({"command": "app.export", "params": {"ids": [pid], "path": out, "longEdge": min(max(w, h), a.max_size or 100000), "quality": 97, "sharpen": "none", "metadata": "none", "conflict": "overwrite"}}))
     sp = os.path.join(outdir, "script.jsonl")
     open(sp, "w").write("\n".join(script) + "\n")
     r = subprocess.run([CLI, "run", "--library", lib, "--keep-going", "--script", sp], capture_output=True, text=True)
@@ -568,6 +607,7 @@ def main():
         p.add_argument("--tag", required=True)
         p.add_argument("--lib")
         p.add_argument("--profiles", action="append", help="(migrate) profile folders/files to import first")
+        p.add_argument("--max-size", type=int, default=1200, help="(render) longest edge rendered (compare works at 512 px)")
         p.set_defaults(fn=fn)
     p = sub.add_parser("calibrate", help="fit Lightroom-matched camera profiles from default-setting photos")
     p.add_argument("--work", required=True)
@@ -578,6 +618,7 @@ def main():
     p.add_argument("--camera", help="comma-separated camera models (default: all)")
     p.add_argument("--per-camera", type=int, default=40)
     p.add_argument("--min-files", type=int, default=5)
+    p.add_argument("--wb-per-camera", type=int, default=150, help="extra as-shot photos per camera for the white-balance model")
     p.add_argument("--exclude", action="append", help="sample.json whose photos are left out (held-out test sets)")
     p.add_argument("--seed", type=int, default=11)
     p.add_argument("--dry-run", action="store_true")
