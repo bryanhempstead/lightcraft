@@ -409,6 +409,21 @@ def calibrate(a):
         print(" ".join(cmd))
         return
     subprocess.run(cmd, check=True)
+    # cameras sharing a sensor with a calibrated one (X100F = X-T2's X-Trans III): its profile
+    # under the other name (RAF has no colour matrices of its own to carry a look onto)
+    out_dir = a.out or os.path.join(os.path.expanduser("~/Library/Application Support/LightCraft"), "camera-profiles")
+    for pair in a.same_sensor or []:
+        new, _, src = pair.partition("=")
+        fn = lambda m: os.path.join(out_dir, re.sub(r"[^A-Za-z0-9_-]", "_", m.strip()) + ".json")
+        if not os.path.exists(fn(src)):
+            print(f"{new}: no {src} profile to copy", file=sys.stderr)
+            continue
+        prof = json.load(open(fn(src)))
+        prof.update({"model": new, "source": f"lightroom-same-sensor:{src}"})
+        for k in ("wb_map", "lenses"):
+            prof.pop(k, None)
+        json.dump(prof, open(fn(new), "w"), indent=1)
+        print(f"{new}: {src}'s profile (same sensor) -> {fn(new)}")
 
 
 # ---------------------------------------------------------------- migrate / render
@@ -984,6 +999,7 @@ def main():
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--transfer-from", help="camera whose Lightroom-matched look is carried over to cameras without default-setting renders (default: the one with most)")
     p.add_argument("--no-transfer", action="store_true")
+    p.add_argument("--same-sensor", action="append", help="NEW=FROM: give camera NEW the profile of FROM (same sensor, e.g. X100F=X-T2)")
     p.set_defaults(fn=calibrate)
     p = sub.add_parser("wbmap", help="fit how Lightroom's Temp / Tint read in LightCraft, per camera (after calibrate)")
     p.add_argument("--work", required=True, help="comma-separated prepared + migrated work folders")
