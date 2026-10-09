@@ -105,6 +105,27 @@ def look_of(text):
 
 QUARTER_TURNS = {"AB": 0, "BC": 1, "CD": 2, "DA": 3}
 
+# Pyramid.quality of previews Lightroom rendered from the develop settings. The others
+# ("embedded", "thumbnail", "bigThumbnail") are the camera's own JPEG preview or a tiny
+# thumbnail, in sRGB: not Lightroom's rendering, so never ground truth.
+LR_RENDERS = {"smallRender", "standard", "final", "full", "fullSize", "1to1"}
+
+
+def preview_info(pv, iid, settings_digest=None):
+    """(largest level file or None, orientation, quality, colour profile, fresh) of an image's
+    preview. `fresh`: the preview's digest is the photo's current develop-settings digest
+    (Lightroom re-renders on edit; a mismatch is a stale preview). None when unknown."""
+    e = pv.execute("SELECT uuid, digest, orientation FROM ImageCacheEntry WHERE imageId=?", (iid,)).fetchone()
+    if not e:
+        return None
+    py = pv.execute("SELECT quality, colorProfile FROM Pyramid WHERE uuid=? AND digest=?", (e[0], e[1])).fetchone() or (None, None)
+    fresh = None if settings_digest is None else settings_digest == e[1]
+    return {"uuid": e[0], "digest": e[1], "orientation": e[2], "quality": py[0], "space": "adobe" if py[1] == "AdobeRGB" else "srgb", "fresh": fresh}
+
+
+def is_lr_render(info):
+    return bool(info) and info.get("quality") in LR_RENDERS and info.get("fresh") is not False
+
 
 def store_preview(src, orientation, dst):
     """Lightroom keeps previews in the file's own orientation (previews.db `orientation`: AB, BC,
@@ -137,12 +158,15 @@ def prepare(a):
     pv = sqlite3.connect(os.path.join(cdir, "previews.db"))
     rows = db.execute(SQL).fetchall()
 
+    digests = dict(db.execute("SELECT image, digest FROM Adobe_imageDevelopSettings"))
+
     def preview(iid):
-        e = pv.execute("SELECT uuid, digest, orientation FROM ImageCacheEntry WHERE imageId=?", (iid,)).fetchone()
-        if not e:
+        info = preview_info(pv, iid, digests.get(iid))
+        if not info or (not a.any_preview and not is_lr_render(info)):
             return None
+        e = (info["uuid"], info["digest"])
         fs = [f for f in glob.glob(os.path.join(prev_dir, e[0][0], e[0][:4], f"{e[0]}-{e[1]}_*")) if f.rsplit("_", 1)[1].isdigit()]
-        return (max(fs, key=lambda f: int(f.rsplit("_", 1)[1])), e[2]) if fs else None
+        return (max(fs, key=lambda f: int(f.rsplit("_", 1)[1])), info["orientation"], info) if fs else None
 
     picked = []
     if a.ids:
@@ -174,7 +198,9 @@ def prepare(a):
             os.makedirs(os.path.join(a.work, "previews"), exist_ok=True)
             dst = os.path.join(a.work, "previews", f"{r[0]}.png")
             store_preview(pr[0], pr[1], dst)
-            picked.append({"id": r[0], "path": r[1], "model": r[2], "look": look_of(r[4]), "edits": r[5], "preview": dst})
+            info = pr[2]
+            picked.append({"id": r[0], "path": r[1], "model": r[2], "look": look_of(r[4]), "edits": r[5], "preview": dst,
+                           "previewQuality": info["quality"], "previewSpace": info["space"], "lrRender": is_lr_render(info)})
             got += 1
     json.dump(picked, open(os.path.join(a.work, "sample.json"), "w"), indent=1)
     # records for exactly these photos
@@ -277,6 +303,7 @@ def calibrate(a):
             return (float(d["Temperature"]), float(d.get("Tint", 0))) if d.get("WhiteBalance") == "As Shot" and "Temperature" in d else None
         except ValueError:
             return None
+    digests = dict(db.execute("SELECT image, digest FROM Adobe_imageDevelopSettings"))
     for iid, path, model, ext, text, _ in db.execute(SQL):
         if ext not in raw_ext or not model or iid in exclude:
             continue
@@ -317,9 +344,10 @@ def calibrate(a):
                 break
             if not os.path.isfile(path):
                 continue
-            e = pv.execute("SELECT uuid, digest FROM ImageCacheEntry WHERE imageId=?", (iid,)).fetchone()
-            if not e:
-                continue
+            info = preview_info(pv, iid, digests.get(iid))
+            if not is_lr_render(info) or info["space"] != "adobe":
+                continue  # the camera's embedded JPEG or a stale preview: not Lightroom's rendering
+            e = (info["uuid"], info["digest"])
             fs = [f for f in glob.glob(os.path.join(prev_dir, e[0][0], e[0][:4], f"{e[0]}-{e[1]}_*")) if f.rsplit("_", 1)[1].isdigit()]
             fs = [f for f in fs if int(f.rsplit("_", 1)[1]) >= 600]
             if not fs:
@@ -469,7 +497,7 @@ def align(a_img, b_img):
     return {"corr": round(float(sc), 3), "scale": round(float(scale), 3), "rot": round(float(rot), 2), "dx": float(dx) / k, "dy": float(dy) / k}
 
 
-def metrics(prev, ours, size):
+def metrics(prev, ours, size, space="adobe"):
     a = Image.open(prev).convert("RGB")
     b = Image.open(ours).convert("RGB")
     if b.size != a.size:
@@ -491,7 +519,7 @@ def metrics(prev, ours, size):
     m = max(1, round(0.01 * max(ns)))
     valid[:m, :] = valid[-m:, :] = False
     valid[:, :m] = valid[:, -m:] = False
-    la, lb = to_lab(a8, "adobe"), to_lab(b8, "srgb")
+    la, lb = to_lab(a8, space), to_lab(b8, "srgb")
     la, lb = la[valid], lb[valid]
     de = de2000(la, lb)
     d = lb - la
@@ -507,7 +535,7 @@ def metrics(prev, ours, size):
         h2, w2 = img.shape[0] // ka * ka, img.shape[1] // ka * ka
         return img[:h2, :w2].reshape(h2 // ka, ka, w2 // ka, ka, -1).mean(axis=(1, 3))
     va = coarse(valid[..., None].astype(float))[..., 0] > 0.999
-    a_lo = to_lab(coarse(a8.astype(float)).clip(0, 255), "adobe")[va]
+    a_lo = to_lab(coarse(a8.astype(float)).clip(0, 255), space)[va]
     b_lo = to_lab(coarse(b8.astype(float)).clip(0, 255), "srgb")[va]
     de_lo = de2000(a_lo, b_lo)
     return {
@@ -538,7 +566,9 @@ def compare(a):
         ours = os.path.join(a.work, "renders", a.tag, f"{p['id']}.jpg")
         if not os.path.exists(ours):
             continue
-        m = metrics(p["preview"], ours, a.size)
+        if p.get("lrRender") is False and not a.all_previews:
+            continue  # not Lightroom's rendering of the settings (camera JPEG, thumbnail, stale)
+        m = metrics(p["preview"], ours, a.size, p.get("previewSpace", "adobe"))
         m.update({"id": p["id"], "file": os.path.basename(p["path"]), "model": p["model"], "look": p["look"]})
         res.append(m)
     json.dump(res, open(os.path.join(a.work, f"results-{a.tag}.json"), "w"), indent=1)
@@ -576,6 +606,9 @@ def compare(a):
             ims = [im.resize((round(im.size[0] * h / im.size[1]), h), Image.LANCZOS) for im in ims]
             # (the Lightroom preview is Adobe RGB: convert to sRGB numerically for viewing)
             lr = np.asarray(ims[0]).astype(np.float64) / 255
+            if p.get("previewSpace", "adobe") == "srgb":
+                lr = srgb_decode(lr) @ SRGB_TO_XYZ.T @ np.linalg.inv(ADOBE_TO_XYZ).T
+                lr = np.clip(lr, 0, 1) ** (256 / 563)
             xyz = adobe_decode(lr) @ ADOBE_TO_XYZ.T
             srgb_lin = np.clip(xyz @ np.linalg.inv(SRGB_TO_XYZ).T, 0, 1)
             enc = np.where(srgb_lin <= 0.0031308, 12.92 * srgb_lin, 1.055 * srgb_lin ** (1 / 2.4) - 0.055)
@@ -600,6 +633,7 @@ def main():
     p.add_argument("--spec")
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--min-px", type=int, default=900)
+    p.add_argument("--any-preview", action="store_true", help="also take camera-embedded / thumbnail / stale previews (not ground truth)")
     p.set_defaults(fn=prepare)
     for name, fn in (("migrate", migrate), ("render", render)):
         p = sub.add_parser(name)
@@ -629,6 +663,7 @@ def main():
     p.add_argument("--base")
     p.add_argument("--size", type=int, default=512)
     p.add_argument("--strip")
+    p.add_argument("--all-previews", action="store_true", help="also score photos whose preview is not Lightroom's rendering")
     p.set_defaults(fn=compare)
     a = ap.parse_args()
     a.fn(a)
