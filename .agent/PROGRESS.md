@@ -34,6 +34,20 @@ Commit locally on `main` (no push until he OKs a fork). Pull upstream with `git 
   fallback. Rust: `lightcraft_engine::lr_migrate::resume_point(&session, folder, album, subfolders)`.
 
 ## Done
+- 2026-10-09 (shoots agent) **Library ▸ shoots. + tidier Folders** — 522f550, 8924e48, 5f77510, d96f0e0, a575f8c + docs.
+  Bryan: "keep my photo work centrally located … only the areas I import in the drives … not so many drop-downs".
+  shoots. (under Catalog): one row per shoot on any disk (camera/format folders raw, M262, X-T2 raw, GR III,
+  Canon R6, 100MSDCF… climb to the shoot; containers like Pictures / "- High Priority Edit" split) — on his real
+  folder list it gives 15 rows (Erika and Connor wedding, *C&J WEDDING, Iceland - Our Wedding…, chicago, SYNC…).
+  Engine: `library.shoots`, `shoot.show/pin/hide/rename/sort` (prefs.json → shoots), `library.source
+  {kind: libraryFolder, subfolders}`. Folders: only imported roots, camera roots named "Shoot › M262", one-way
+  chains as one row, open state kept in ui.json (foldersOpen), import. (Import window on that folder, Add mode)
+  on shoots/folders/disks; Browse Folder Without Importing… moved into the Import window. Tests:
+  crates/catalog/src/tests_shoots.rs, engine cmd/shoots.rs, crates/ui-egui/src/tests_shoots.rs
+  (LIGHTCRAFT_TEST_SHOTS=dir writes screenshots). Heads-up: the colour agent's 5adf51e swept my half-done
+  catalog lib.rs/folders.rs edits (commit with `git commit -- <paths>`); fixed by 522f550.
+  Next: on his real library check the startup-disk rows ("bryanhempstead" = 10 loose photos in ~) and whether any
+  shoot splits/merges wrong (rename./remove. cover it; no regrouping yet); drag photos between shoots not done.
 - 2026-10-09 (colour agent) **Lightroom colour fidelity** — 07da802, 17cc043, 2445b4c + this round. Creative XMP
   profiles (`crs:RGBTable` decoded: base-85 Z85 variant + zlib + n³ u16 deltas; applied after the tone curves),
   imported by `profile.import` / migration, `library.rematchProfiles`; `calibrate --lightroom` (Lightroom-matched
