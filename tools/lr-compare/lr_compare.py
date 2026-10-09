@@ -28,6 +28,9 @@ Steps (all writes go to WORK; the catalog and previews are only read, from copie
       detail at the preview's full size (render with --max-size 0): ratios to Lightroom of fine
       texture in flat areas (grain, noise), mottling, edge sharpness, edge halos and chroma
       noise, plus 1:1 crop triplets in W/crops/
+  lr_compare.py lensfit  --work W1,W2 [--out DIR] [--exclude sample.json]
+      per camera and lens, Lightroom's lens-profile vignetting from default-setting photos with
+      lens corrections on (writes `lenses` into the camera profiles; run after calibrate)
   lr_compare.py wbmap    --work W1,W2 [--out DIR] [--exclude sample.json]
       per camera, how Lightroom's Temp / Tint read in LightCraft (writes `wb_map` into the
       camera profiles; run after calibrate)
@@ -166,6 +169,7 @@ def prepare(a):
     rows = db.execute(SQL).fetchall()
 
     digests = dict(db.execute("SELECT image, digest FROM Adobe_imageDevelopSettings"))
+    lenses = dict(db.execute("SELECT e.image, l.value FROM AgHarvestedExifMetadata e LEFT JOIN AgInternedExifLens l ON l.id_local = e.lensRef"))
 
     def preview(iid):
         info = preview_info(pv, iid, digests.get(iid))
@@ -207,7 +211,7 @@ def prepare(a):
             store_preview(pr[0], pr[1], dst)
             info = pr[2]
             picked.append({"id": r[0], "path": r[1], "model": r[2], "look": look_of(r[4]), "edits": r[5], "preview": dst,
-                           "previewQuality": info["quality"], "previewSpace": info["space"], "lrRender": is_lr_render(info)})
+                           "previewQuality": info["quality"], "previewSpace": info["space"], "lrRender": is_lr_render(info), "lens": lenses.get(r[0])})
             got += 1
     json.dump(picked, open(os.path.join(a.work, "sample.json"), "w"), indent=1)
     # records for exactly these photos
@@ -759,6 +763,90 @@ def wbmap(a):
         print(msg + f" -> {fn}")
 
 
+# ---------------------------------------------------------------- lens vignetting
+def lensfit(a):
+    """Per camera and lens, Lightroom's lens-profile vignetting: for photos at default settings
+    with lens corrections on and no crop, render at their exposure and +0.3 EV, turn the
+    luminance difference to Lightroom's preview into EV with the local tone slope, and fit
+    EV(r) = a r^2 + b r^4 + c r^6 (+ a per-photo offset) per lens. Writes `lenses` into the
+    camera profiles in --out (run after calibrate)."""
+    import re
+    data = {}
+    for work in a.work.split(","):
+        lib = os.path.join(work, f"lib-{a.lib_tag}")
+        sample = json.load(open(os.path.join(work, "sample.json")))
+        recs = {r["id"]: r for r in json.load(open(os.path.join(work, "records.json")))["images"]}
+        exclude = set()
+        for f in a.exclude or []:
+            exclude |= {p["id"] for p in json.load(open(f))}
+        ids = photo_ids(lib)
+        script, jobs = [], []
+        for p in sample:
+            if p["id"] in exclude or p.get("lrRender") is False or p["id"] not in recs or not p.get("lens"):
+                continue
+            text = recs[p["id"]]["develop"]
+            d = top_level(text)
+            if d.get("LensProfileEnable") != "1" or not is_default(text):
+                continue
+            pid = ids.get(os.path.basename(p["path"]))
+            if pid is None:
+                continue
+            outs = {}
+            script.append(json.dumps({"command": "library.select", "params": {"ids": [pid]}}))
+            for k, ev in (("b", 0.0), ("e", 0.3)):
+                out = os.path.join(work, "renders", f"{a.tag}-{k}", f"{p['id']}.jpg")
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                outs[k] = out
+                script.append(json.dumps({"command": "develop.merge", "params": {"settings": {"light": {"exposure": ev}}}}))
+                script.append(json.dumps({"command": "app.export", "params": {"ids": [pid], "path": out, "longEdge": 640, "quality": 95, "sharpen": "none", "metadata": "none", "conflict": "overwrite"}}))
+            script.append(json.dumps({"command": "develop.merge", "params": {"settings": {"light": {"exposure": 0.0}}}}))
+            jobs.append((p, outs))
+        sp = os.path.join(work, f"lensfit-{a.tag}.jsonl")
+        open(sp, "w").write("\n".join(script) + "\n")
+        subprocess.run([CLI, "run", "--library", lib, "--keep-going", "--script", sp], capture_output=True, text=True)
+        for p, outs in jobs:
+            if not all(os.path.exists(f) for f in outs.values()):
+                continue
+            pv = Image.open(p["preview"]).convert("RGB")
+            b0, b1 = Image.open(outs["b"]).convert("RGB"), Image.open(outs["e"]).convert("RGB")
+            if abs(pv.size[0] / pv.size[1] - b0.size[0] / b0.size[1]) > 0.01:
+                continue
+            pv = pv.resize(b0.size, Image.BOX)
+            lum = lambda im, sp_: to_lab(np.asarray(im), sp_)[..., 0]
+            Ll, L0, L1 = lum(pv, p.get("previewSpace", "adobe")), lum(b0, "srgb"), lum(b1, "srgb")
+            slope = (L1 - L0) / 0.3  # L* per EV
+            ok = (slope > 4) & (L0 > 8) & (L0 < 92) & (Ll > 5) & (Ll < 95)
+            H, W = L0.shape
+            yy, xx = np.mgrid[0:H, 0:W]
+            r2 = ((xx + 0.5 - W / 2) ** 2 + (yy + 0.5 - H / 2) ** 2) / ((W * W + H * H) / 4)
+            e = np.clip((Ll - L0) / np.maximum(slope, 1e-3), -2, 2)
+            if ok.sum() < 2000:
+                continue
+            data.setdefault((p["model"], p["lens"]), []).append((r2[ok], e[ok], slope[ok] ** 2))
+    out_dir = a.out or os.path.join(os.path.expanduser("~/Library/Application Support/LightCraft"), "camera-profiles")
+    for (model, lens), rows in sorted(data.items()):
+        if len(rows) < a.min_photos:
+            print(f"{model} / {lens}: {len(rows)} photos, need {a.min_photos}", file=sys.stderr)
+            continue
+        coef = np.zeros(3)
+        for _ in range(10):
+            offs = [np.average(e - np.stack([r, r ** 2, r ** 3], 1) @ coef, weights=w) for r, e, w in rows]
+            F = np.concatenate([np.stack([r, r ** 2, r ** 3], 1) for r, e, w in rows])
+            y = np.concatenate([e - o for (r, e, w), o in zip(rows, offs)])
+            W_ = np.concatenate([w / w.sum() for r, e, w in rows])
+            coef = np.linalg.solve((F * W_[:, None]).T @ F + 1e-6 * np.eye(3), (F * W_[:, None]).T @ y)
+        fn = os.path.join(out_dir, re.sub(r"[^A-Za-z0-9_-]", "_", model.strip()) + ".json")
+        msg = f"{model} / {lens}: {len(rows)} photos, corner {coef.sum():+.2f} EV"
+        if not os.path.exists(fn):
+            print(msg + ": no profile to write into", file=sys.stderr)
+            continue
+        prof = json.load(open(fn))
+        prof.setdefault("lenses", {})[lens] = {"vignette_ev": [round(float(v), 4) for v in coef], "photos": len(rows)}
+        if not a.dry_run:
+            json.dump(prof, open(fn, "w"), indent=1)
+        print(msg + f" -> {fn}")
+
+
 # ---------------------------------------------------------------- detail (1:1)
 DETAIL_SIGMAS = (0.6, 1.2, 2.4, 4.8)
 
@@ -906,6 +994,15 @@ def main():
     p.add_argument("--min-photos", type=int, default=8)
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(fn=wbmap)
+    p = sub.add_parser("lensfit", help="fit Lightroom's lens-profile vignetting per camera and lens (after calibrate)")
+    p.add_argument("--work", required=True, help="comma-separated prepared + migrated work folders (default-setting photos)")
+    p.add_argument("--lib-tag", default="final")
+    p.add_argument("--tag", default="lensfit")
+    p.add_argument("--out", help="profiles folder (default: LightCraft's)")
+    p.add_argument("--exclude", action="append")
+    p.add_argument("--min-photos", type=int, default=5)
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(fn=lensfit)
     p = sub.add_parser("detail", help="1:1 detail metrics (grain, noise, sharpening, halos) and crop triplets")
     p.add_argument("--work", required=True)
     p.add_argument("--tags", required=True, help="comma-separated render tags (render them with --max-size 0)")

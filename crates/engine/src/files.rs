@@ -323,10 +323,25 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
         let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
         // the file's own long edge (its default crop, else the active area): sharpening radii
-        let native_long = {
+        let (native_w, native_h) = {
             let c = raw.crop.clipped(raw.active_area.width, raw.active_area.height);
-            let (w, h) = if c.width > 1 && c.height > 1 { (c.width, c.height) } else { (raw.active_area.width, raw.active_area.height) };
-            w.max(h) as f32
+            if c.width > 1 && c.height > 1 { (c.width, c.height) } else { (raw.active_area.width, raw.active_area.height) }
+        };
+        let native_long = native_w.max(native_h) as f32;
+        // a file without vignetting data of its own takes its lens's Lightroom-matched correction
+        // (applied, like embedded data, only with "Enable Profile Corrections" on)
+        let fitted = if from_lightroom {
+            raw.metadata.model.as_deref().and_then(crate::camera_profiles::get).and_then(|p| {
+                let lens_model = raw.metadata.lens_model.as_deref()?.trim();
+                p.lenses.as_ref()?.get(lens_model)?.vignette(native_w as f64, native_h as f64)
+            })
+        } else {
+            None
+        };
+        let lens = match (lens, fitted) {
+            (Some(l), Some(v)) if l.vignette.is_none() => Some(lightcraft_develop::EmbeddedLens { vignette: Some(v), ..l }),
+            (None, Some(v)) => Some(lightcraft_develop::EmbeddedLens { warp: None, vignette: Some(v) }),
+            (l, _) => l,
         };
         // the camera's Lightroom white-balance scale, fitted with its Lightroom-matched profile
         let wb_map = if from_lightroom {

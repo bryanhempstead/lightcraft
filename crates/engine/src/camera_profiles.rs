@@ -57,6 +57,80 @@ pub struct CameraProfile {
     /// fitted from the user's edits after the profile (`tools/lr-compare` `wbmap`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wb_map: Option<WbMapFit>,
+    /// Per lens (the files' `LensModel`): Lightroom's lens-profile vignetting correction for this
+    /// camera, fitted from the user's photos with lens corrections on (`tools/lr-compare`
+    /// `lensfit`). Used when the file carries no vignetting data of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lenses: Option<std::collections::BTreeMap<String, LensFit>>,
+}
+
+/// A lens's vignetting correction: EV added at radius r (half-diagonals from the centre) as
+/// `ev[0] r² + ev[1] r⁴ + ev[2] r⁶`, and the photos it was fitted on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LensFit {
+    pub vignette_ev: [f64; 3],
+    #[serde(default)]
+    pub photos: usize,
+}
+
+impl LensFit {
+    /// As a DNG `FixVignetteRadial` (gain `1 + k0 r² + … + k4 r¹⁰`) centred on a `w × h` image
+    /// (r in half-diagonals); `None` when out of range.
+    pub fn vignette(&self, w: f64, h: f64) -> Option<lightcraft_develop::EmbeddedVignette> {
+        let long = w.max(h);
+        if !(long >= 1.0 && w.min(h) >= 1.0) || !self.vignette_ev.iter().all(|v| v.is_finite() && v.abs() <= 4.0) {
+            return None;
+        }
+        // least squares of the gain polynomial on r² ∈ [0, 1]
+        let mut a = [[0.0f64; 5]; 5];
+        let mut b = [0.0f64; 5];
+        for i in 0..=40 {
+            let t = i as f64 / 40.0;
+            let g = (self.vignette_ev[0] * t + self.vignette_ev[1] * t * t + self.vignette_ev[2] * t * t * t).exp2() - 1.0;
+            let f: [f64; 5] = std::array::from_fn(|j| t.powi(j as i32 + 1));
+            for r in 0..5 {
+                b[r] += f[r] * g;
+                for c in 0..5 {
+                    a[r][c] += f[r] * f[c];
+                }
+            }
+        }
+        for (r, row) in a.iter_mut().enumerate() {
+            row[r] += 1e-9;
+        }
+        let k = solve5(a, b)?;
+        Some(lightcraft_develop::EmbeddedVignette { k, center: lightcraft_geom::Point::new(0.5, 0.5), radius: (w * w + h * h).sqrt() / 2.0 / long })
+    }
+}
+
+/// Gauss-Jordan with partial pivoting; `None` if singular or not finite.
+fn solve5(a: [[f64; 5]; 5], b: [f64; 5]) -> Option<[f64; 5]> {
+    let mut m = [[0.0f64; 6]; 5];
+    for i in 0..5 {
+        m[i][..5].copy_from_slice(&a[i]);
+        m[i][5] = b[i];
+    }
+    for c in 0..5 {
+        let p = (c..5).max_by(|x, y| m[*x][c].abs().total_cmp(&m[*y][c].abs()))?;
+        if m[p][c].abs() < 1e-15 {
+            return None;
+        }
+        m.swap(c, p);
+        let d = m[c][c];
+        for k in 0..6 {
+            m[c][k] /= d;
+        }
+        for r in 0..5 {
+            if r != c {
+                let f = m[r][c];
+                for k in 0..6 {
+                    m[r][k] -= f * m[c][k];
+                }
+            }
+        }
+    }
+    let x: [f64; 5] = std::array::from_fn(|i| m[i][5]);
+    x.iter().all(|v| v.is_finite()).then_some(x)
 }
 
 /// Coefficients of [`lightcraft_pipeline::WbMap`] and the photos they were fitted on.
@@ -184,6 +258,7 @@ impl CameraProfile {
             source: None,
             wb: None,
             wb_map: None,
+            lenses: None,
         }
     }
 
@@ -530,6 +605,27 @@ mod tests {
     fn profile() -> CameraProfile {
         let table = HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[5.0, 1.2, 1.0]; 8], srgb_value: false };
         CameraProfile::new("ILCE-7M4", 12, 3456, Mat3([[1.6, -0.5, -0.1], [-0.2, 1.3, -0.1], [-0.1, -0.2, 1.3]]), Some(table))
+    }
+
+    #[test]
+    fn a_lens_fit_becomes_a_centred_radial_vignette() {
+        let fit = LensFit { vignette_ev: [0.1, 1.9, -0.9], photos: 26 };
+        let v = fit.vignette(6000.0, 4000.0).unwrap();
+        assert!((v.radius - (6000f64.hypot(4000.0) / 2.0 / 6000.0)).abs() < 1e-12);
+        for t in [0.0f64, 0.3, 0.7, 1.0] {
+            let want = (0.1 * t + 1.9 * t * t - 0.9 * t * t * t).exp2();
+            let got = 1.0 + v.k.iter().enumerate().map(|(j, k)| k * t.powi(j as i32 + 1)).sum::<f64>();
+            assert!((got - want).abs() < 0.01, "r² {t}: {got} vs {want}");
+        }
+        // out of range or degenerate: no correction rather than a wild one
+        assert!(LensFit { vignette_ev: [f64::NAN, 0.0, 0.0], photos: 1 }.vignette(10.0, 10.0).is_none());
+        assert!(LensFit { vignette_ev: [9.0, 0.0, 0.0], photos: 1 }.vignette(10.0, 10.0).is_none());
+        assert!(fit.vignette(0.0, 4000.0).is_none());
+        // and it survives a profile file round trip
+        let mut p = profile();
+        p.lenses = Some([("EF24mm f/1.4L II USM".to_string(), fit.clone())].into_iter().collect());
+        let back: CameraProfile = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.lenses.unwrap()["EF24mm f/1.4L II USM"], fit);
     }
 
     #[test]
