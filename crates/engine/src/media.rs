@@ -680,6 +680,23 @@ pub fn content_key(p: &Photo) -> String {
     }
 }
 
+/// Long edge (px) the source must have so that an output of `long_edge` px shows the photo's
+/// crop at no more than 1:1: a tight crop shown large needs more than a preview-sized decode,
+/// else the view is an upscaled (soft) preview.
+pub fn source_edge_needed(p: &Photo, s: &lightcraft_develop::DevelopSettings, long_edge: usize, apply_crop: bool) -> usize {
+    let full = p.width.max(p.height) as f64;
+    if !apply_crop || full < 1.0 {
+        return long_edge;
+    }
+    let (cw, ch) = lightcraft_pipeline::native_output_size(p.width as usize, p.height as usize, s);
+    let crop = cw.max(ch);
+    if !(crop.is_finite() && crop >= 1.0) {
+        return long_edge;
+    }
+    let need = (long_edge as f64 * (full / crop).clamp(1.0, 64.0)).ceil();
+    if need.is_finite() { need as usize } else { long_edge }
+}
+
 pub fn source_info(p: &Photo) -> SourceInfo {
     // Procedural demo scenes are scene-referred HDR (like raw files): use the filmic tone map.
     if matches!(p.source, Source::Demo { .. }) {
@@ -718,9 +735,9 @@ impl crate::Session {
         thumb_bucket: Option<usize>,
     ) -> Option<RenderJob> {
         let p = self.catalog.photo(id)?.clone();
-        let level = SourceLevel::for_size(max_w.max(max_h));
-        let source = self.media.source_ref(&p, level);
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
+        let level = SourceLevel::for_size(source_edge_needed(&p, &settings, max_w.max(max_h), apply_crop));
+        let source = self.media.source_ref(&p, level);
         let request = RenderRequest { apply_crop, ..RenderRequest::fit(max_w, max_h) };
         // the photo id is part of the key: two photos with the same settings and size must not
         // share a result (a view slot showing photo A would otherwise look current for photo B)
@@ -1021,6 +1038,21 @@ mod thumbnail_hash_tests {
         s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
         s
     }
+    #[test]
+    fn a_tight_crop_shown_large_decodes_more_than_a_preview() {
+        let mut p = Photo::new(PhotoId(1), Source::File { path: "x.dng".into() }, "x.dng", "DNG", 6000, 4000, "2026-01-01");
+        let mut s = lightcraft_develop::DevelopSettings::default();
+        assert_eq!(source_edge_needed(&p, &s, 2000, true), 2000);
+        s.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 0.3, y1: 0.3 };
+        let need = source_edge_needed(&p, &s, 2000, true);
+        assert!(need >= 6000, "{need}");
+        assert_eq!(SourceLevel::for_size(need), SourceLevel::Full);
+        assert_eq!(source_edge_needed(&p, &s, 2000, false), 2000, "the crop tool shows the whole frame");
+        p.width = 0;
+        p.height = 0;
+        assert_eq!(source_edge_needed(&p, &s, 2000, true), 2000);
+    }
+
     #[test]
     fn hashes_match_uncached_keys_and_are_not_recomputed_for_sizes_metadata_or_before() {
         let mut s = session();
