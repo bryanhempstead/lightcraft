@@ -173,7 +173,18 @@ impl WbFit {
 
 impl CameraProfile {
     pub fn new(model: &str, files: usize, samples: usize, matrix: Mat3, hue_sat: Option<HsvTable>) -> CameraProfile {
-        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat, tone: None, source: None, wb: None, wb_map: None }
+        CameraProfile {
+            version: VERSION,
+            model: model.to_owned(),
+            files,
+            samples,
+            matrix: matrix.0,
+            hue_sat,
+            tone: None,
+            source: None,
+            wb: None,
+            wb_map: None,
+        }
     }
 
     pub fn matrix(&self) -> Mat3 {
@@ -528,7 +539,10 @@ mod tests {
         let mut pool = Pool::default();
         pool.colorimetric.insert("ILCE-7M4".into(), vec![ts, ts]);
         pool.colorimetric.insert("GR".into(), vec![td]);
-        pool.wb.insert("GR".into(), (0..40).map(|i| (3000.0 + 100.0 * i as f64, (i % 7) as f64, [0.4 + 0.01 * i as f64, 1.0, 0.6 - 0.005 * i as f64])).collect());
+        pool.wb.insert(
+            "GR".into(),
+            (0..40).map(|i| (3000.0 + 100.0 * i as f64, (i % 7) as f64, [0.4 + 0.01 * i as f64, 1.0, 0.6 - 0.005 * i as f64])).collect(),
+        );
         let p = pool.transfer(&src, "GR").unwrap();
         let want = src.matrix().mul(&ts.inverse().unwrap()).mul(&td);
         for (a, b) in p.matrix().0.iter().flatten().zip(want.0.iter().flatten()) {

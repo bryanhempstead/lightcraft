@@ -133,7 +133,17 @@ impl CameraWb {
 
 impl Default for SourceInfo {
     fn default() -> Self {
-        Self { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, lens: None, relative_wb: false, camera_tone: None, camera_wb: None, wb_map: None, native_long: 0.0 }
+        Self {
+            raw: false,
+            as_shot_temp: 6500.0,
+            as_shot_tint: 0.0,
+            lens: None,
+            relative_wb: false,
+            camera_tone: None,
+            camera_wb: None,
+            wb_map: None,
+            native_long: 0.0,
+        }
     }
 }
 

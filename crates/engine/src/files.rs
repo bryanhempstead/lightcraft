@@ -337,12 +337,32 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         if let Some((cw, k, ti)) = camera_wb {
             return Ok((
                 img,
-                SourceInfo { raw: true, as_shot_temp: k, as_shot_tint: ti, lens, relative_wb: false, camera_tone, camera_wb: Some(cw), wb_map, native_long },
+                SourceInfo {
+                    raw: true,
+                    as_shot_temp: k,
+                    as_shot_tint: ti,
+                    lens,
+                    relative_wb: false,
+                    camera_tone,
+                    camera_wb: Some(cw),
+                    wb_map,
+                    native_long,
+                },
             ));
         }
         return Ok((
             img,
-            SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone, camera_wb: None, wb_map, native_long },
+            SourceInfo {
+                raw: true,
+                as_shot_temp: temp,
+                as_shot_tint: tint,
+                lens,
+                relative_wb: relative,
+                camera_tone,
+                camera_wb: None,
+                wb_map,
+                native_long,
+            },
         ));
     }
     let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).map_err(|e| e.to_string())?;
