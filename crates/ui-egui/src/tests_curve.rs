@@ -9,20 +9,13 @@ use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 
-/// Detail view with the Edit panel's Curve flyout open on `channel`.
+/// Develop with only the Tone Curve panel open, on `channel`.
 fn curve_open(channel: &str) -> Headless {
     let services = Services { png: None, ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
-    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["toneCurve"]}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.app.ui.right = crate::state::RightPanel::Edit;
-    if !h.app.ui.section_open("light") {
-        h.app.ui.toggle_section("light");
-    }
-    if !h.app.ui.flyout_open("curve") {
-        h.app.ui.toggle_flyout("curve");
-    }
     h.app.ui.curve_channel = channel.into();
     h.step();
     h.step();

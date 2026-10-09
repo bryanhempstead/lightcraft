@@ -11,6 +11,9 @@ use crate::keymap::{Combo, Trigger};
 /// primary keymap assigns elsewhere, see docs/parity.md → Shortcuts). Shown in Help → Keyboard Shortcuts.
 pub const ALIASES: &[(&str, &str, &str)] = &[
     ("Cmd+D", "library.selectNone", "{}"),
+    // Lightroom Classic's panel keys (F5 top bar, F8 right panel and Tab are primary)
+    ("F6", "view.filmstrip", "{}"),
+    ("F7", "view.leftPanel", "{}"),
     ("Shift+E", "dialog.export", "{}"),
     ("Cmd+E", "app.exportPrevious", "{}"),
     ("Space", "view.zoomToggle", "{}"),
@@ -141,8 +144,15 @@ fn record(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
 }
 
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // Tab hides the panels (Classic) rather than walking the keyboard focus through buttons: a
+    // focus egui gave a widget that isn't a text field is let go, so the keys keep working
+    if let Some(f) = ctx.memory(|m| m.focused())
+        && egui::text_edit::TextEditState::load(ctx, f).is_none()
+    {
+        ctx.memory_mut(|m| m.surrender_focus(f));
+    }
     // don't steal keys from text fields
-    if ctx.egui_wants_keyboard_input() {
+    if ctx.egui_wants_keyboard_input() || crate::widgets::slider_typing(ctx) {
         return;
     }
     if record(app, ctx) {

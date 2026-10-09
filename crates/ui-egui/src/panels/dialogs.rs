@@ -62,6 +62,11 @@ pub const WHATS_NEW: &str = include_str!("../../../../docs/whats-new.md");
 
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(mut dlg) = app.ui.dialog.clone() else { return };
+    if matches!(&dlg, Dialog::Import { opts } if opts.window) {
+        crate::import_window::show(app, ctx);
+        crate::import_window::take_pending_source(app, ctx);
+        return;
+    }
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // The backdrop is an area below the dialog window (a bare `Middle` layer painter would be
@@ -92,6 +97,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::AutoStack { .. } => "Auto-Stack by Capture Time",
         Dialog::CreatePreset { .. } => "Create Preset",
         Dialog::CopySettings { .. } => "Choose Edit Settings to Copy",
+        Dialog::SyncSettings { .. } => "Synchronize Settings",
         Dialog::PasteSettings { .. } => "Paste Selected Settings",
         Dialog::Export { .. } => "Export",
         Dialog::Merge { opts } => opts.title(),
@@ -457,6 +463,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     group_checklist(ui, "presetInclude", groups);
                 }
                 Dialog::CopySettings { groups } => group_checklist(ui, "copyGroup", groups),
+                Dialog::SyncSettings { groups } => {
+                    let n = app.session.selection.ids.len().saturating_sub(1);
+                    ui.label(egui::RichText::new(crate::i18n::tr_format!("Copy to {n} other selected photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
+                    group_checklist(ui, "syncGroup", groups);
+                }
                 Dialog::PasteSettings { groups } => {
                     let n = app.session.targets(&json!({})).len();
                     ui.label(
@@ -1059,6 +1070,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }),
         ),
         Dialog::CopySettings { groups } => app.run("develop.copy", json!({"groups": groups})),
+        Dialog::SyncSettings { groups } => app.run("develop.sync", json!({"groups": groups})),
         Dialog::PasteSettings { groups } => app.run("develop.paste", json!({"groups": groups})),
         Dialog::Export { opts, full_size, resize, limit_kb, dir, .. } => {
             let mut p = export_dialog_params(opts, *full_size, resize, *limit_kb);

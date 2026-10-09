@@ -20,6 +20,55 @@ pub enum ViewMode {
     People,
 }
 
+/// Lightroom Classic's modules: Library (grid, loupe, compare, survey; organising) and Develop
+/// (one photo, the develop panels). The photo selection is shared; each module has its own side
+/// panels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Module {
+    #[default]
+    Library,
+    Develop,
+}
+
+impl Module {
+    /// The views a module shows: Develop is the loupe (or the reference view), the rest is Library.
+    pub fn of_view(view: ViewMode) -> Option<Module> {
+        match view {
+            ViewMode::PhotoGrid | ViewMode::SquareGrid | ViewMode::Compare | ViewMode::Survey | ViewMode::People => Some(Module::Library),
+            ViewMode::Detail | ViewMode::Reference => None,
+        }
+    }
+}
+
+/// Lights Out (L cycles): everything but the photo dimmed, then black.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LightsOut {
+    #[default]
+    On,
+    Dim,
+    Off,
+}
+
+impl LightsOut {
+    pub fn next(self) -> LightsOut {
+        match self {
+            LightsOut::On => LightsOut::Dim,
+            LightsOut::Dim => LightsOut::Off,
+            LightsOut::Off => LightsOut::On,
+        }
+    }
+    /// How dark the chrome is painted over (0 = not at all).
+    pub fn alpha(self) -> u8 {
+        match self {
+            LightsOut::On => 0,
+            LightsOut::Dim => 204,
+            LightsOut::Off => 255,
+        }
+    }
+}
+
 /// The right-hand tool/panel shown next to the tool strip.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -194,6 +243,8 @@ impl PanelWidth {
 
 /// The left sidebar (sources, albums, folders).
 pub const LEFT_WIDTH: PanelWidth = PanelWidth { min: 200.0, default: 268.0, max: 480.0 };
+/// The filmstrip's height limits (points; dragging its top edge resizes it).
+pub const FILM_HEIGHT: PanelWidth = PanelWidth { min: 74.0, default: 118.0, max: 260.0 };
 /// The right panel (Edit, Masking, Info, …).
 pub const RIGHT_WIDTH: PanelWidth = PanelWidth { min: 250.0, default: 270.0, max: 520.0 };
 /// The photo area the side panels always leave free (as far as their minimum widths allow).
@@ -212,7 +263,32 @@ pub struct UiState {
     #[serde(skip)]
     pub unsaved_seen: bool,
     pub view: ViewMode,
+    /// Library or Develop (the module picker, G / E / D).
+    pub module: Module,
+    /// The Library view to go back to from Develop (grid, loupe, compare…).
+    pub library_view: ViewMode,
+    /// The side panels and the toolbar can be hidden (F7 / F8 / Tab / ⇧Tab, T); the top bar (F5).
     pub left_panel: bool,
+    pub right_panel: bool,
+    pub top_panel: bool,
+    pub toolbar: bool,
+    /// Filmstrip height (points, within [`FILM_HEIGHT`]).
+    pub film_height: f32,
+    /// Lights Out (L).
+    #[serde(skip)]
+    pub lights_out: LightsOut,
+    /// Library right panel sections that are open (`histogram`, `quickDevelop`, `keywording`,
+    /// `keywordList`, `metadata`, `comments`).
+    pub library_sections: Vec<String>,
+    /// Develop left panel sections that are open (`navigator`, `presets`, `snapshots`, `history`,
+    /// `collections`).
+    pub develop_left_sections: Vec<String>,
+    /// Solo mode for the side panels (⌥-click a header): opening one closes the others.
+    pub solo_left: bool,
+    /// Develop ▸ Presets groups that are open (closed by default, as in Classic).
+    pub preset_groups_open: Vec<String>,
+    /// The Import window's last choices (source, mode, destination, options).
+    pub import_prefs: crate::import::ImportPrefs,
     pub right: RightPanel,
     /// Widths of the left sidebar and of the right panel in points (dragging their inner edge
     /// resizes them; within [`LEFT_WIDTH`] / [`RIGHT_WIDTH`]).
@@ -500,6 +576,11 @@ pub enum Dialog {
     CopySettings {
         groups: Vec<String>,
     },
+    /// Synchronize Settings (Classic's Sync…): which groups of the active photo's settings go to
+    /// the other selected photos.
+    SyncSettings {
+        groups: Vec<String>,
+    },
     /// Paste Selected Settings: which of the copied groups to paste.
     PasteSettings {
         groups: Vec<String>,
@@ -557,7 +638,19 @@ impl Default for UiState {
             unsaved_seen: false,
             luminance_map_restore: None,
             view: ViewMode::Detail,
-            left_panel: false,
+            module: Module::Library,
+            library_view: ViewMode::PhotoGrid,
+            left_panel: true,
+            right_panel: true,
+            top_panel: true,
+            toolbar: true,
+            film_height: FILM_HEIGHT.default,
+            lights_out: LightsOut::On,
+            library_sections: vec!["histogram".into(), "quickDevelop".into(), "keywording".into(), "metadata".into()],
+            develop_left_sections: vec!["navigator".into(), "presets".into(), "history".into()],
+            solo_left: false,
+            import_prefs: Default::default(),
+            preset_groups_open: Vec::new(),
             left_width: LEFT_WIDTH.default,
             right_width: RIGHT_WIDTH.default,
             right: RightPanel::Edit,
@@ -570,7 +663,7 @@ impl Default for UiState {
             zoom_anim: false,
             before_after: BeforeAfter::Off,
             thumb_size: 220.0,
-            open_sections: vec!["light".into()],
+            open_sections: vec!["basic".into()],
             open_flyouts: vec![],
             single_panel: false,
             show_clipping: false,
@@ -658,6 +751,31 @@ impl UiState {
             self.open_sections.push(id.to_string());
         }
     }
+    /// Open or close a section of a side-panel list (`list` = [`UiState::library_sections`], …);
+    /// `solo` closes the others when one opens.
+    pub fn toggle_in(list: &mut Vec<String>, id: &str, solo: bool) {
+        if list.iter().any(|s| s == id) {
+            list.retain(|s| s != id);
+        } else {
+            if solo {
+                list.clear();
+            }
+            list.push(id.to_string());
+        }
+    }
+    /// The module the current view belongs to (Library views force Library; the loupe keeps the
+    /// module it is in).
+    pub fn sync_module(&mut self) {
+        if let Some(m) = Module::of_view(self.view) {
+            self.module = m;
+        }
+        if self.module == Module::Develop && !matches!(self.view, ViewMode::Detail | ViewMode::Reference) {
+            self.view = ViewMode::Detail;
+        }
+        if self.module == Module::Library {
+            self.library_view = self.view;
+        }
+    }
     pub fn sidebar_section_collapsed(&self, id: &str) -> bool {
         self.collapsed_sidebar.iter().any(|s| s == id)
     }
@@ -682,6 +800,7 @@ impl UiState {
     pub fn sanitized(mut self) -> Self {
         self.thumb_size = self.thumb_size.clamp(90.0, 480.0);
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
+        self.film_height = FILM_HEIGHT.clamp(self.film_height);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
         self.dialog = None;
@@ -694,6 +813,16 @@ impl UiState {
             StartupView::Grid => self.view = ViewMode::PhotoGrid,
             StartupView::Detail => self.view = ViewMode::Detail,
         }
+        // Edit sections saved before the Classic panels (light, color, optics…) open their panel
+        let mut open: Vec<String> = Vec::new();
+        for id in std::mem::take(&mut self.open_sections) {
+            let c = crate::panels::edit::classic_section(&id).to_string();
+            if !open.contains(&c) {
+                open.push(c);
+            }
+        }
+        self.open_sections = open;
+        self.sync_module();
         self
     }
 }

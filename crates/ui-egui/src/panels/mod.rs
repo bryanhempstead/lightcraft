@@ -5,12 +5,15 @@ pub mod chips;
 pub mod compare;
 pub mod crop_overlay;
 pub mod detail;
+pub mod develop_left;
 pub mod dialogs;
 pub mod edit;
+pub mod filmstrip;
 pub mod filterbar;
 pub mod grid;
 pub mod left;
 pub mod library_problem;
+pub mod library_right;
 pub mod masking;
 pub mod notices;
 pub mod people;
@@ -20,7 +23,6 @@ pub mod right;
 pub mod rules_editor;
 pub mod second;
 pub mod settings;
-pub mod strip;
 pub mod topbar;
 
 use egui::{Align2, Rect, pos2, vec2};
@@ -90,4 +92,36 @@ pub fn empty_message(ui: &egui::Ui, rect: Rect, title: &str, body: &str) {
     let p = ui.painter();
     p.text(rect.center() - vec2(0.0, 12.0), Align2::CENTER_CENTER, crate::i18n::tr(title), t.semibold(18.0), t.text_label);
     p.text(rect.center() + vec2(0.0, 14.0), Align2::CENTER_CENTER, crate::i18n::tr(body), t.font(13.0), t.text_dim);
+}
+
+/// Lights Out (L): everything but the photo painted over, dimmed then black (Esc or L again ends
+/// it). Covers the window around the displayed image, above the panels and below dialogs.
+pub fn lights_out(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let a = app.ui.lights_out.alpha();
+    if a == 0 {
+        return;
+    }
+    let screen = ctx.content_rect();
+    let photo = app.image_rect.filter(|_| matches!(app.ui.view, crate::state::ViewMode::Detail | crate::state::ViewMode::Reference));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("lights-out")));
+    let c = egui::Color32::from_black_alpha(a);
+    match photo.map(|p| p.intersect(screen)).filter(|p| p.is_positive()) {
+        Some(p) => {
+            for r in [
+                Rect::from_min_max(screen.min, pos2(screen.right(), p.top())),
+                Rect::from_min_max(pos2(screen.left(), p.bottom()), screen.max),
+                Rect::from_min_max(pos2(screen.left(), p.top()), pos2(p.left(), p.bottom())),
+                Rect::from_min_max(pos2(p.right(), p.top()), pos2(screen.right(), p.bottom())),
+            ] {
+                painter.rect_filled(r, 0.0, c);
+            }
+        }
+        None => {
+            painter.rect_filled(screen, 0.0, c);
+        }
+    }
+    // a click anywhere brings the lights back (Classic)
+    if ctx.input(|i| i.pointer.any_click()) {
+        app.ui.lights_out = crate::state::LightsOut::On;
+    }
 }

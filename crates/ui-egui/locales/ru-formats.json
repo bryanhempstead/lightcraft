@@ -176,5 +176,15 @@
   "{} — show their photos": "{} — показать фото этого человека",
   "· {dups} already in the library": "· уже в библиотеке: {dups}",
   "· {n} photo{}": "· фото: {n}{:.0}",
-  "… and {more} more": "… и ещё {more}"
+  "… and {more} more": "… и ещё {more}",
+  " / {selected} selected": " / выбрано: {selected}",
+  "Collection: {title}": "Коллекция: {title}",
+  "Copy to {n} other selected photo{}": "Скопировать в другие выбранные фото: {n}{:.0}",
+  "Folder: {title}": "Папка: {title}",
+  "Importing {} of {}": "Импорт {} из {}",
+  "Metadata synced to {n} photo{}": "Метаданные синхронизированы: {n}{:.0}",
+  "Preset: {name} · {n} photo{}": "Пресет: {name} · фото: {n}{:.0}",
+  "Rated {n} star{} or more": "Рейтинг от {n}{:.0}",
+  "{path}: click the box to tag the selection, the name to show its photos": "{path}: флажок — добавить к выбранным, имя — показать фото",
+  "{total} photo{}": "Фото: {total}{:.0}"
 }

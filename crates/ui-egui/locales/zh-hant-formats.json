@@ -176,5 +176,15 @@
   "Moved; {} photo(s) relinked": "已移動；已重新連結 {} 張照片",
   "{} label (click more labels to show any of them)": "{}標籤（點擊更多標籤可顯示符合其中任一標籤的照片）",
   ", {} star{}": "，{} 顆星{:.0}",
-  ", {} label": "，{}標籤"
+  ", {} label": "，{}標籤",
+  " / {selected} selected": " / 已選 {selected} 張",
+  "Collection: {title}": "收藏集：{title}",
+  "Copy to {n} other selected photo{}": "複製到其他 {n} 張所選照片{:.0}",
+  "Folder: {title}": "資料夾：{title}",
+  "Importing {} of {}": "正在匯入 第 {0} 張，共 {1} 張",
+  "Metadata synced to {n} photo{}": "已將中繼資料同步到 {n} 張照片{:.0}",
+  "Preset: {name} · {n} photo{}": "預設：{name} · {n} 張照片{:.0}",
+  "Rated {n} star{} or more": "{n} 星及以上{:.0}",
+  "{path}: click the box to tag the selection, the name to show its photos": "{path}：點選方框為所選照片加入，點選名稱顯示照片",
+  "{total} photo{}": "{total} 張照片{:.0}"
 }

@@ -145,6 +145,28 @@ fn paint_track(ui: &Ui, rect: Rect, track: &Track, t: &Tokens, thumb_x: f32, rin
     p.rect_filled(Rect::from_center_size(pos2(thumb_x, y), vec2(ring * 2.0 + 4.0, 6.0)), 0.0, t.chrome);
 }
 
+/// Memory key: the pass in which a slider's value was last being typed.
+const SLIDER_TYPING: &str = "slider-typing-pass";
+
+/// A slider's value was being typed in the last pass (keys belong to it, not to shortcuts).
+pub fn slider_typing(ctx: &egui::Context) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|m| m.get_temp::<u64>(egui::Id::new(SLIDER_TYPING))).is_some_and(|p| p + 1 >= pass)
+}
+
+/// Height of a slider row in Lightroom Classic's one-row style.
+pub const CLASSIC_SLIDER_H: f32 = 26.0;
+
+/// Sliders drawn from now on use Lightroom Classic's one-row layout (label, track, value) — set by
+/// the Classic panels around what they draw, reset after.
+pub fn set_classic_rows(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("classic-slider-rows"), on));
+}
+
+fn classic_rows(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::new("classic-slider-rows"))).unwrap_or(false)
+}
+
 /// Result of a slider interaction this frame.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct SliderOut {
@@ -177,11 +199,27 @@ fn shown_value(spec: &ControlSpec, v: f64) -> String {
 pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>) -> SliderOut {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
-    let pad_l = 24.0;
-    let pad_r = 22.0;
-    let label_rect = Rect::from_min_size(pos2(row.left() + pad_l, row.top() + 4.0), vec2(w - pad_l - pad_r, 18.0));
-    let track_rect = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2(row.right() - pad_r, row.top() + 40.0));
+    let classic = classic_rows(ui.ctx());
+    let (row, _) = ui.allocate_exact_size(vec2(w, if classic { CLASSIC_SLIDER_H } else { t.slider_row_h }), Sense::hover());
+    let (label_rect, track_rect, value_rect) = if classic {
+        // Lightroom Classic: "Exposure ───o─── +0.35" on one row
+        // (the right padding leaves room for the panel's scroll bar)
+        // a long label ("Shadows Luminance") widens its column rather than running off the panel
+        let text = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
+        let tw = ui.painter().layout_no_wrap(text, t.font(12.0), t.text_label).size().x;
+        let (pad, pad_r, vw) = (12.0, 20.0, 46.0);
+        let lw = (tw + 2.0).max(82.0).min(row.width() * 0.5);
+        let label = Rect::from_min_size(pos2(row.left() + pad, row.top()), vec2(lw, row.height()));
+        let value = Rect::from_min_max(pos2(row.right() - pad_r - vw, row.top() + 3.0), pos2(row.right() - pad_r, row.bottom() - 3.0));
+        let track = Rect::from_min_max(pos2(label.right() + 10.0, row.center().y - 8.0), pos2(value.left() - 10.0, row.center().y + 8.0));
+        (label, track, value)
+    } else {
+        let pad_l = 24.0;
+        let pad_r = 22.0;
+        let label = Rect::from_min_size(pos2(row.left() + pad_l, row.top() + 4.0), vec2(w - pad_l - pad_r, 18.0));
+        let track = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2(row.right() - pad_r, row.top() + 40.0));
+        (label, track, Rect::from_min_max(pos2(label.right() - 64.0, label.top()), label.max))
+    };
     let id = ui.id().with(spec.id);
     let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
     // screen readers: a slider named after its control, with its value
@@ -190,7 +228,6 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let label_resp = ui.interact(label_rect, id.with("label"), Sense::click());
     register(ui.ctx(), format!("slider:{}", spec.id), track_rect);
     // the value: click it to type an exact one (over the label, so it takes the click)
-    let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
     let value_resp = ui.interact(value_rect, id.with("value"), if enabled { Sense::click() } else { Sense::hover() });
     register(ui.ctx(), format!("sliderValue:{}", spec.id), value_rect);
     let typing_id = id.with("typing");
@@ -239,6 +276,13 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         } else {
             typing = Some((text.clone(), frames));
             ui.data_mut(|m| m.insert_temp(typing_id, (text, frames)));
+        }
+        if typing.is_some() {
+            // the shortcut handler (it runs before the panels, next frame) leaves the keys alone:
+            // Esc cancels the typing, it doesn't leave Develop
+            // (the pass number is read first: the context is locked inside `data_mut`)
+            let pass = ui.ctx().cumulative_pass_nr();
+            ui.ctx().data_mut(|m| m.insert_temp(egui::Id::new(SLIDER_TYPING), pass));
         }
     } else if resp.double_clicked() || label_resp.double_clicked() {
         out.reset = true;
@@ -299,14 +343,20 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let hovered = resp.hovered() || resp.dragged();
     let text_c = if enabled { t.text_label } else { t.text_disabled };
     let p = ui.painter();
-    p.text(label_rect.left_center(), Align2::LEFT_CENTER, crate::i18n::tr(label_override.unwrap_or(spec.label)), t.font(12.5), text_c);
+    let label = crate::i18n::tr(label_override.unwrap_or(spec.label));
+    if classic {
+        p.text(label_rect.right_center(), Align2::RIGHT_CENTER, label, t.font(12.0), text_c);
+    } else {
+        p.text(label_rect.left_center(), Align2::LEFT_CENTER, label, t.font(12.5), text_c);
+    }
     if typing.is_none() {
-        p.text(label_rect.right_center(), Align2::RIGHT_CENTER, shown_value(spec, v), t.font(12.5), text_c);
+        let font = if classic { t.font(12.0) } else { t.font(12.5) };
+        p.text(value_rect.right_center(), Align2::RIGHT_CENTER, shown_value(spec, v), font, text_c);
         if enabled && value_resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         }
     }
-    let ring = 7.0;
+    let ring = if classic { 5.0 } else { 7.0 };
     let tx = to_x(v);
     paint_track(ui, track_rect, &spec.track, &t, tx, ring);
     let p = ui.painter();
@@ -368,6 +418,61 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
     }
     (resp, toggled)
 }
+
+/// A Lightroom Classic panel header: a band with the panel's name and a disclosure triangle (on
+/// the right for right-hand panels, on the left for left-hand ones), and, where Classic has one,
+/// the panel's on/off switch at the left edge. Registered as `section:{id}` (switch:
+/// `sectionEye:{id}`). Returns the header response (click = open / close; ⌥-click = solo) and a
+/// switch change.
+pub fn classic_header(ui: &mut Ui, id: &str, title: &str, open: bool, right_side: bool, switch: Option<bool>) -> (Response, Option<bool>) {
+    let title = crate::i18n::tr(title);
+    let t = Tokens::get(ui.ctx());
+    let w = ui.available_width();
+    let (r, resp) = ui.allocate_exact_size(vec2(w, CLASSIC_HEADER_H), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
+    register(ui.ctx(), format!("section:{id}"), r);
+    let p = ui.painter();
+    let band = if ui.rect_contains_pointer(r) { t.hover } else { t.header };
+    p.rect_filled(r, 0.0, band);
+    p.rect_filled(Rect::from_min_size(r.left_bottom() - vec2(0.0, 1.0), vec2(r.width(), 1.0)), 0.0, t.divider);
+    let tri = if open {
+        Icon::ChevronDown
+    } else if right_side {
+        Icon::TriangleLeft
+    } else {
+        Icon::ChevronRight
+    };
+    let text_c = if open { t.text } else { t.text_label };
+    if right_side {
+        let tr = Rect::from_center_size(pos2(r.right() - 16.0, r.center().y), vec2(11.0, 11.0));
+        paint(p, tr, tri, t.text_dim);
+        p.text(pos2(tr.left() - 8.0, r.center().y), Align2::RIGHT_CENTER, title, t.semibold(13.0), text_c);
+    } else {
+        let tr = Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(11.0, 11.0));
+        paint(p, tr, tri, t.text_dim);
+        p.text(pos2(tr.right() + 8.0, r.center().y), Align2::LEFT_CENTER, title, t.semibold(13.0), text_c);
+    }
+    let mut toggled = None;
+    if let Some(on) = switch {
+        // Classic's panel switch: a small pill at the header's left edge
+        let sw = Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(20.0, 10.0));
+        let hit = sw.expand2(vec2(6.0, 8.0));
+        let sr = ui.interact(hit, ui.id().with(("switch", id)), Sense::click());
+        register(ui.ctx(), format!("sectionEye:{id}"), hit);
+        let p = ui.painter();
+        p.rect(sw, 5.0, if on { t.text_label } else { t.inset }, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+        let knob = if on { pos2(sw.right() - 5.0, sw.center().y) } else { pos2(sw.left() + 5.0, sw.center().y) };
+        p.circle_filled(knob, 3.5, if on { t.chrome } else { t.text_dim });
+        let tip = if on { "Turn this panel's settings off" } else { "Turn this panel's settings on" };
+        if sr.on_hover_text(crate::i18n::tr(tip)).clicked() {
+            toggled = Some(!on);
+        }
+    }
+    (resp, toggled)
+}
+
+/// Height of a [`classic_header`].
+pub const CLASSIC_HEADER_H: f32 = 30.0;
 
 /// Thin divider between groups.
 pub fn divider(ui: &mut Ui) {

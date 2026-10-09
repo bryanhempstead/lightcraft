@@ -33,6 +33,8 @@ pub fn label_toast_colors(label: lightcraft_catalog::ColorLabel) -> (Color32, Co
 pub struct Tokens {
     /// Top bar, side panels, bottom bar, tool strip.
     pub chrome: Color32,
+    /// Lightroom Classic's panel header band and the top bar behind the module picker.
+    pub header: Color32,
     /// Photo canvas (detail view) and filmstrip.
     pub canvas: Color32,
     /// Grid background behind the cells.
@@ -77,7 +79,8 @@ pub struct Tokens {
 impl Default for Tokens {
     fn default() -> Self {
         Tokens {
-            chrome: Color32::from_rgb(0x2d, 0x2d, 0x2d),
+            chrome: Color32::from_rgb(0x2b, 0x2b, 0x2b),
+            header: Color32::from_rgb(0x34, 0x34, 0x34),
             canvas: Color32::from_rgb(0x1c, 0x1c, 0x1c),
             grid_bg: Color32::from_rgb(0x0f, 0x0f, 0x0f),
             cell: Color32::from_rgb(0x1c, 0x1c, 0x1c),

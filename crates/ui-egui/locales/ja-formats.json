@@ -176,5 +176,15 @@
   "Moved; {} photo(s) relinked": "移動しました。{}枚の写真の参照先を更新しました",
   "{} label (click more labels to show any of them)": "{}ラベル（ほかのラベルもクリックすると、いずれかに一致する写真を表示）",
   ", {} star{}": "、星{}つ{:.0}",
-  ", {} label": "、{}ラベル"
+  ", {} label": "、{}ラベル",
+  " / {selected} selected": " / {selected}枚選択",
+  "Collection: {title}": "コレクション：{title}",
+  "Copy to {n} other selected photo{}": "選択中の他の{n}枚にコピー{:.0}",
+  "Folder: {title}": "フォルダー：{title}",
+  "Importing {} of {}": "読み込み中：{1}枚中{0}枚",
+  "Metadata synced to {n} photo{}": "メタデータを{n}枚に同期しました{:.0}",
+  "Preset: {name} · {n} photo{}": "プリセット：{name} · {n}枚{:.0}",
+  "Rated {n} star{} or more": "{n}つ星以上{:.0}",
+  "{path}: click the box to tag the selection, the name to show its photos": "{path}：ボックスで選択中の写真にタグ付け、名前で写真を表示",
+  "{total} photo{}": "{total}枚{:.0}"
 }

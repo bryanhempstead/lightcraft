@@ -176,5 +176,15 @@
   "Moved; {} photo(s) relinked": "Verschoben; {} Fotos neu verknüpft",
   "{} label (click more labels to show any of them)": "Markierung {} (weitere Markierungen auswählen, um alle passenden Fotos zu zeigen)",
   ", {} star{}": ", Sterne: {}{:.0}",
-  ", {} label": ", Markierung: {}"
+  ", {} label": ", Markierung: {}",
+  " / {selected} selected": " / {selected} ausgewählt",
+  "Collection: {title}": "Sammlung: {title}",
+  "Copy to {n} other selected photo{}": "Auf {n} weitere ausgewählte Foto{} übertragen",
+  "Folder: {title}": "Ordner: {title}",
+  "Importing {} of {}": "Import {} von {}",
+  "Metadata synced to {n} photo{}": "Metadaten auf {n} Foto{} übertragen",
+  "Preset: {name} · {n} photo{}": "Vorgabe: {name} · {n} Foto{}",
+  "Rated {n} star{} or more": "Ab {n} Stern(en){:.0}",
+  "{path}: click the box to tag the selection, the name to show its photos": "{path}: Kästchen klicken = Auswahl verschlagworten, Name klicken = Fotos zeigen",
+  "{total} photo{}": "{total} Foto{}"
 }

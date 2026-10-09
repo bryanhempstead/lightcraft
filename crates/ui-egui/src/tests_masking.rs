@@ -15,8 +15,8 @@ const SETTLE: Duration = Duration::from_secs(120);
 fn detail(panel: &str) -> Headless {
     let services = Services { png: None, ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
-    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+    let r = h.request("ui.set", json!({"view": "detail", "leftPanel": false}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("engine.execute", json!({"command": panel}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -365,6 +365,10 @@ fn local_folder_tree_expands_and_browses() {
     std::fs::create_dir_all(base.join("Trip/Day 1")).unwrap();
     std::fs::create_dir_all(base.join(".hidden")).unwrap();
     let mut h = detail("panel.edit");
+    // Local is in the Library module's left panel (below Catalog, Folders and Collections)
+    exec(&mut h, "view.library", json!({"view": "detail"}));
+    let r = h.request("ui.resize", json!({"width": 1400.0, "height": 1700.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
     exec(&mut h, "view.leftPanel", json!({"show": true}));
     h.hide_home_above(&base);
     exec(&mut h, "local.addRoot", json!({"path": base.to_string_lossy()}));

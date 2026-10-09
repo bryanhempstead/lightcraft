@@ -176,5 +176,15 @@
   "Moved; {} photo(s) relinked": "已移动；已重新链接 {0} 张照片",
   "{} label (click more labels to show any of them)": "{0}标签（单击更多标签可显示符合其中任一标签的照片）",
   ", {} star{}": "，{0} 星{1:.0}",
-  ", {} label": "，{0}标签"
+  ", {} label": "，{0}标签",
+  " / {selected} selected": " / 已选 {selected} 张",
+  "Collection: {title}": "收藏夹：{title}",
+  "Copy to {n} other selected photo{}": "复制到其他 {n} 张所选照片{:.0}",
+  "Folder: {title}": "文件夹：{title}",
+  "Importing {} of {}": "正在导入 第 {0} 张，共 {1} 张",
+  "Metadata synced to {n} photo{}": "已将元数据同步到 {n} 张照片{:.0}",
+  "Preset: {name} · {n} photo{}": "预设：{name} · {n} 张照片{:.0}",
+  "Rated {n} star{} or more": "{n} 星及以上{:.0}",
+  "{path}: click the box to tag the selection, the name to show its photos": "{path}：点击方框为所选照片添加，点击名称显示照片",
+  "{total} photo{}": "{total} 张照片{:.0}"
 }

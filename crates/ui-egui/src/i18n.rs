@@ -680,7 +680,9 @@ mod tests {
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
         app.ui.left_panel = true;
         let text = painted_text(&ctx, &mut app, Locale::De);
-        assert!(text.contains("Meine Fotos") && text.contains("Alle Fotos"), "{text}");
+        // the Library left panel (Lightroom Classic's): Catalog ▸ All Photographs
+        let (catalog, all) = (Locale::De.tr("Catalog"), Locale::De.tr("All Photographs"));
+        assert!(text.contains(catalog) && text.contains(all), "{text}");
         app.ui.view = crate::state::ViewMode::People;
         let text = painted_text(&ctx, &mut app, Locale::De);
         assert!(text.contains("Benannte Personen"), "{text}");
@@ -716,6 +718,7 @@ mod tests {
         let services = crate::Services { pick_folder: Some(Box::new(|| None)), ..Default::default() };
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
         app.ui.language = Locale::De;
+        app.run("view.develop", serde_json::json!({})).unwrap();
         let mut bounds = Vec::new();
         for export in [false, true] {
             if export {
@@ -740,10 +743,18 @@ mod tests {
                     assert!(dialog.contains_rect(rect(id)), "{id} spills outside {dialog:?}: {:?}", rect(id));
                 }
             } else {
-                let button = rect("button:copySettings");
-                let (_, text) = bounds.iter().find(|entry| entry.0 == "Bearbeitungseinstellungen kopieren").unwrap();
-                assert!(button.contains_rect(*text), "German copy caption overflows its button: {text:?} vs {button:?}");
-                assert!(!button.intersects(rect("icon:copyGear")));
+                // Develop's Copy… / Paste and Previous / Reset (Classic's panel footers)
+                for (id, label) in [
+                    ("button:developCopy", "Copy…"),
+                    ("button:developPaste", "Paste"),
+                    ("button:developPrevious", "Previous"),
+                    ("button:developReset", "Reset"),
+                ] {
+                    let button = rect(id);
+                    let caption = Locale::De.tr(label);
+                    let (_, text) = bounds.iter().find(|entry| entry.0 == caption).unwrap_or_else(|| panic!("{caption} not painted"));
+                    assert!(button.contains_rect(*text), "German {label} caption overflows its button: {text:?} vs {button:?}");
+                }
             }
         }
         set_language(Locale::En);
@@ -807,18 +818,17 @@ mod tests {
         let english_ids = ids(&app);
         for language in Locale::ALL {
             let text = painted_text(&ctx, &mut app, *language);
-            for label in ["My Photos", "All Photos"] {
+            for label in ["Catalog", "All Photographs"] {
                 assert!(text.contains(language.tr(label)), "{language:?}: {label} -> {:?} not in\n{text}", language.tr(label));
             }
             assert_eq!(app.font_language, *language, "the fonts follow the language");
             assert_eq!(ids(&app), english_ids, "{language:?}: command ids are presentation-independent");
         }
-        let text = painted_text(&ctx, &mut app, Locale::Ja);
-        assert!(text.contains("マイフォト") && text.contains("すべての写真"), "{text}");
-        let text = painted_text(&ctx, &mut app, Locale::ZhHans);
-        assert!(text.contains("我的照片") && text.contains("所有照片"), "{text}");
-        let text = painted_text(&ctx, &mut app, Locale::PtBr);
-        assert!(text.contains("Minhas fotos") && text.contains("Todas as fotos"), "{text}");
+        // the module picker is translated too
+        for language in [Locale::Ja, Locale::ZhHans, Locale::PtBr] {
+            let text = painted_text(&ctx, &mut app, language);
+            assert!(text.contains(language.tr("Library")) && text.contains(language.tr("Develop")), "{language:?}: {text}");
+        }
         set_language(Locale::En);
     }
 
@@ -970,14 +980,16 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
-        app.ui.presets = true;
         let builtin = app.session.presets.iter().find(|p| p.name == "Warm Glow").unwrap().clone();
         app.session.presets.push(lightcraft_develop::Preset { id: "user.test".into(), builtin: false, ..builtin });
-        for (panel, title) in [(crate::state::RightPanel::Activity, "歷史紀錄"), (crate::state::RightPanel::Versions, "版本")] {
-            app.ui.right = panel;
+        // Develop's left panel: Presets (the Color group open), Snapshots, History
+        app.run("view.develop", serde_json::json!({})).unwrap();
+        app.ui.develop_left_sections = vec!["presets".into(), "snapshots".into(), "history".into()];
+        app.ui.preset_groups_open = vec!["Color".into()];
+        for title in ["歷史紀錄", "快照"] {
             let text = painted_text(&ctx, &mut app, Locale::ZhHant);
             assert!(text.contains(title), "{text}");
-            assert!(!text.contains("History") && !text.contains("Versions"), "{text}");
+            assert!(!text.contains("History") && !text.contains("Snapshots"), "{text}");
             assert!(text.contains("暖光"), "stock preset: {text}");
             assert!(text.contains("Warm Glow"), "user preset: {text}");
             assert!(text.contains("色彩"), "stock group: {text}");

@@ -176,5 +176,15 @@
   "Moved; {} photo(s) relinked": "Movida; {} foto(s) vinculada(s) novamente",
   "{} label (click more labels to show any of them)": "Rótulo {} (clique em mais rótulos para mostrar qualquer um deles)",
   ", {} star{}": ", {} estrela{}",
-  ", {} label": ", rótulo {}"
+  ", {} label": ", rótulo {}",
+  " / {selected} selected": " / {selected} selecionada(s)",
+  "Collection: {title}": "Coleção: {title}",
+  "Copy to {n} other selected photo{}": "Copiar para {n} outra{} foto(s) selecionada(s)",
+  "Folder: {title}": "Pasta: {title}",
+  "Importing {} of {}": "Importando {} de {}",
+  "Metadata synced to {n} photo{}": "Metadados sincronizados com {n} foto{}",
+  "Preset: {name} · {n} photo{}": "Predefinição: {name} · {n} foto{}",
+  "Rated {n} star{} or more": "{n} estrela{} ou mais",
+  "{path}: click the box to tag the selection, the name to show its photos": "{path}: clique na caixa para marcar a seleção, no nome para ver as fotos",
+  "{total} photo{}": "{total} foto{}"
 }

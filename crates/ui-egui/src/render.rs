@@ -183,7 +183,9 @@ impl Renderer {
     /// Would asking for this thumbnail again (at `priority`) change nothing?
     pub fn thumb_current(&self, photo: &Arc<lightcraft_catalog::Photo>, bucket: usize, priority: u32) -> bool {
         let Some(&(ref old, size, key, quick)) = self.thumb_inputs.get(&photo.id) else { return false };
-        if old.as_ptr() != Arc::as_ptr(photo) || size != bucket {
+        // a larger thumbnail serves a smaller ask: the grid, the filmstrip and the navigators show
+        // the same photo at different sizes in one frame, and must not take turns replacing it
+        if old.as_ptr() != Arc::as_ptr(photo) || size < bucket {
             return false;
         }
         let slot = Slot::Thumb(photo.id);

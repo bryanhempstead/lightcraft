@@ -281,6 +281,15 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                     u.toast = app.ui.toast.clone();
                     u.dialog = app.ui.dialog.clone();
                     u.status = app.ui.status.clone();
+                    // `right: edit` (or a develop tool) without a module means the Develop module's
+                    // panels, as it did before Library and Develop were split
+                    let tool = p.get("right").and_then(|r| serde_json::from_value::<crate::state::RightPanel>(r.clone()).ok());
+                    if p.get("module").is_none() && tool.is_some_and(|t| t.is_edit_tool()) {
+                        u.module = crate::state::Module::Develop;
+                    }
+                    if p.get("module").is_some() || p.get("view").is_some() {
+                        u.sync_module();
+                    }
                     app.ui = u;
                     crate::i18n::set_language(app.ui.language);
                     ctx.request_repaint();

@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::state::{BeforeAfter, Dialog, RightPanel, ViewMode, Zoom};
+use crate::state::{BeforeAfter, Dialog, Module, RightPanel, ViewMode, Zoom};
 
 /// (id, label, shortcut, menu path)
 pub type UiCommand = (&'static str, &'static str, Option<&'static str>, &'static str);
@@ -59,8 +59,16 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("compare.swap", "Swap Compare Photos", None, "View"),
     ("compare.makeSelect", "Make Candidate the Select", None, "View"),
     ("view.autoAdvance", "Auto Advance", None, "Photo"),
-    ("view.filmstrip", "Filmstrip", Some("/"), "View"),
-    ("view.leftPanel", "My Photos Panel", Some("Cmd+Shift+L"), "View"),
+    ("view.filmstrip", "Filmstrip", Some("/"), "Window>Panels"),
+    ("view.leftPanel", "Left Panel", Some("Cmd+Shift+L"), "Window>Panels"),
+    ("view.rightPanel", "Right Panel", Some("F8"), "Window>Panels"),
+    ("view.topPanel", "Module Picker", Some("F5"), "Window>Panels"),
+    ("view.sidePanels", "Side Panels", Some("Tab"), "Window>Panels"),
+    ("view.allPanels", "All Panels", Some("Shift+Tab"), "Window>Panels"),
+    ("view.toolbar", "Toolbar", Some("T"), "View"),
+    ("view.lightsOut", "Lights Out", None, "Window"),
+    ("view.filmHeight", "Filmstrip Height", None, ""),
+    ("view.solo", "Solo Mode", None, ""),
     ("view.beforeAfter", "Compare Before and After", Some("Y"), "View"),
     ("view.beforeAfterSplit", "Before/After Split", Some("Shift+Y"), "View"),
     ("view.beforeAfterTopBottom", "Before/After Top/Bottom", Some("Alt+Y"), "View"),
@@ -108,11 +116,20 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("panel.versions", "Versions", Some("Shift+V"), "Window"),
     ("panel.activity", "History", None, "Window"),
     ("panel.close", "Close Panel", None, ""),
-    ("section.light", "Light", Some("Cmd+1"), "Window>Edit Sections"),
-    ("section.color", "Color", Some("Cmd+2"), "Window>Edit Sections"),
-    ("section.effects", "Effects", Some("Cmd+3"), "Window>Edit Sections"),
-    ("section.detail", "Detail", Some("Cmd+4"), "Window>Edit Sections"),
-    ("section.optics", "Optics", Some("Cmd+5"), "Window>Edit Sections"),
+    // Develop's panels, as Lightroom Classic numbers them (⌘1…⌘9 open one, ⌘-click solo)
+    ("section.basic", "Basic", Some("Cmd+1"), "Window>Develop Panels"),
+    ("section.toneCurve", "Tone Curve", Some("Cmd+2"), "Window>Develop Panels"),
+    ("section.hsl", "HSL / Color", Some("Cmd+3"), "Window>Develop Panels"),
+    ("section.colorGrading", "Color Grading", Some("Cmd+4"), "Window>Develop Panels"),
+    ("section.detail", "Detail", Some("Cmd+5"), "Window>Develop Panels"),
+    ("section.lensCorrections", "Lens Corrections", Some("Cmd+6"), "Window>Develop Panels"),
+    ("section.transform", "Transform", Some("Cmd+7"), "Window>Develop Panels"),
+    ("section.effects", "Effects", Some("Cmd+8"), "Window>Develop Panels"),
+    ("section.calibration", "Calibration", Some("Cmd+9"), "Window>Develop Panels"),
+    // the earlier (Lightroom desktop) section names open the Classic panel holding their sliders
+    ("section.light", "Light", None, ""),
+    ("section.color", "Color", None, ""),
+    ("section.optics", "Optics", None, ""),
     ("tool.brush", "Brush", Some("B"), "Window>Tools"),
     ("tool.linear", "Linear Gradient", Some("L"), "Window>Tools"),
     ("tool.radial", "Radial Gradient", Some("R"), "Window>Tools"),
@@ -137,6 +154,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.autoStack", "Auto-Stack by Capture Time…", None, "Photo>Stack"),
     ("dialog.copySettings", "Choose Edit Settings to Copy…", Some("Cmd+Shift+C"), "Edit"),
     ("dialog.pasteSettings", "Paste Selected Settings…", Some("Cmd+Shift+V"), "Edit"),
+    ("dialog.syncSettings", "Sync Settings…", None, "Photo>Develop Settings"),
+    ("library.syncMetadata", "Sync Metadata", None, "Library"),
+    ("view.previousImport", "Previous Import", None, "Library"),
     ("view.focusSearch", "Find…", Some("Cmd+F"), "Edit"),
     ("dialog.export", "Export…", None, "File"),
     ("photo.editInExternal", "Edit in External Editor", Some("Cmd+Shift+E"), "Photo"),
@@ -146,7 +166,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("merge.hdrLast", "HDR with Last Settings", Some("Ctrl+Shift+H"), "Photo>Photo Merge"),
     ("merge.panoramaLast", "Panorama with Last Settings", Some("Ctrl+Shift+M"), "Photo>Photo Merge"),
     ("merge.hdrPanoramaLast", "HDR Panorama with Last Settings", None, "Photo>Photo Merge"),
-    ("file.addPhotos", "Import Photos…", Some("Cmd+Shift+I"), "File"),
+    ("file.addPhotos", "Import Photos and Video…", Some("Cmd+Shift+I"), "File"),
+    // the Import window's source column: browse to a folder / pick a device (`{path, subfolders?}`)
+    ("import.source", "Import Source", None, ""),
     ("file.addFolder", "Import from Folder…", None, "File"),
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "File"),
@@ -181,7 +203,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo"),
     ("app.exportPrevious", "Export with Previous", Some("Cmd+Alt+Shift+E"), "File"),
     // Lightroom Classic modules and "super keys" (Settings ▸ shrt.; see keymap.rs)
-    ("view.develop", "Develop", None, ""),
+    ("view.library", "Library", Some("Cmd+Alt+1"), "Window"),
+    ("view.develop", "Develop", Some("Cmd+Alt+2"), "Window"),
     ("view.colorMixer", "Color Mixer", None, ""),
     ("view.resumeLastLeftOff", "Go to Where I Left Off", None, "View"),
     ("preset.applyByName", "Apply Preset by Name", None, ""),
@@ -198,15 +221,85 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("keys.learn", "MIDI Learn", None, ""),
 ];
 
+/// Lightroom Classic's Develop module: the active photo in the loupe with the develop panels
+/// (the reference view stays). The Library view it came from is remembered for G / E.
+pub fn enter_develop(app: &mut LightcraftApp) {
+    if app.ui.module == Module::Library {
+        app.ui.library_view = app.ui.view;
+    }
+    app.ui.module = Module::Develop;
+    if app.ui.view != ViewMode::Reference {
+        app.ui.view = ViewMode::Detail;
+    }
+    if !app.ui.right.is_edit_tool() {
+        app.ui.right = RightPanel::Edit;
+    }
+    app.ui.right_panel = true;
+    // the selection carries over: with none, the first photo in view is the one developed
+    if app.session.active().is_none()
+        && let Some(first) = app.session.visible_cloned().first().copied()
+    {
+        let _ = app.session.execute("library.select", &json!({"ids": [first.0]}));
+    }
+}
+
+/// Back to the Library module, in `view` (or the Library view last used there).
+pub fn enter_library(app: &mut LightcraftApp, view: Option<ViewMode>) {
+    let v = view.unwrap_or(app.ui.library_view);
+    app.ui.module = Module::Library;
+    app.ui.view = if v == ViewMode::Reference { ViewMode::PhotoGrid } else { v };
+    app.ui.library_view = app.ui.view;
+    // Develop's on-canvas tools end with it
+    if app.ui.tool != "wbPicker" {
+        app.ui.tool.clear();
+    }
+    let _ = app.session.end_interaction();
+}
+
+/// Open a side-panel section (`list`: which side), revealing that side.
+fn open_section(app: &mut LightcraftApp, develop_left: bool, id: &str) {
+    let list = if develop_left { &mut app.ui.develop_left_sections } else { &mut app.ui.library_sections };
+    if !list.iter().any(|s| s == id) {
+        list.push(id.to_string());
+    }
+    if develop_left {
+        app.ui.left_panel = true;
+    } else {
+        app.ui.right_panel = true;
+    }
+}
+
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
-    if app.ui.right == p {
-        app.ui.right = RightPanel::None;
+    if app.ui.right == p && app.ui.module == Module::Develop && p.is_edit_tool() {
+        // a Develop tool closes back to the panels (Classic's tool strip toggles)
+        app.ui.right = RightPanel::Edit;
+        app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
+    } else if app.ui.right == p && !p.is_edit_tool() {
+        app.ui.right = if app.ui.module == Module::Develop { RightPanel::Edit } else { RightPanel::None };
         app.toast(ctx, crate::i18n::tr_format!("{name} Off", name = crate::i18n::tr(name)));
     } else {
         app.ui.right = p;
         app.toast(ctx, crate::i18n::tr_format!("{name} On", name = crate::i18n::tr(name)));
-        if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
-            app.ui.view = ViewMode::Detail;
+        match p {
+            _ if p.is_edit_tool() => {
+                let tool = app.ui.right;
+                enter_develop(app);
+                app.ui.right = tool;
+            }
+            // Library's right panel: Keywording, Metadata
+            RightPanel::Info | RightPanel::Keywords => {
+                if app.ui.module == Module::Develop {
+                    enter_library(app, Some(ViewMode::Detail));
+                }
+                open_section(app, false, if p == RightPanel::Info { "metadata" } else { "keywording" });
+            }
+            // Develop's left panel: Snapshots, History
+            RightPanel::Versions | RightPanel::Activity => {
+                enter_develop(app);
+                app.ui.right = p;
+                open_section(app, true, if p == RightPanel::Versions { "snapshots" } else { "history" });
+            }
+            _ => {}
         }
     }
     if p != RightPanel::Masking && app.ui.tool != "wbPicker" {
@@ -269,19 +362,96 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     let ctx = egui::Context::default();
     let r: Result<Value, String> = match id {
         "view.develop" => {
-            // Lightroom Classic's Develop module (D): the loupe with the Edit panel, never a toggle
-            app.ui.view = ViewMode::Detail;
-            if !matches!(app.ui.right, RightPanel::Edit | RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye) {
-                app.ui.right = RightPanel::Edit;
+            // Lightroom Classic's Develop module (D): the loupe with the develop panels, never a toggle
+            enter_develop(app);
+            Ok(json!({"module": app.ui.module}))
+        }
+        "view.library" => {
+            // {view?: photoGrid|squareGrid|detail|compare|survey|people}: the Library module
+            let view = match p.get("view") {
+                Some(v) => match serde_json::from_value::<ViewMode>(v.clone()) {
+                    Ok(v) => Some(v),
+                    Err(_) => return Some(Err(format!("view.library: unknown view {v}"))),
+                },
+                None => None,
+            };
+            enter_library(app, view);
+            Ok(json!({"module": app.ui.module, "view": app.ui.view}))
+        }
+        "view.rightPanel" => {
+            app.ui.right_panel = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.right_panel);
+            Ok(json!({"show": app.ui.right_panel}))
+        }
+        "view.topPanel" => {
+            app.ui.top_panel = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.top_panel);
+            Ok(json!({"show": app.ui.top_panel}))
+        }
+        "view.toolbar" => {
+            app.ui.toolbar = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.toolbar);
+            Ok(json!({"show": app.ui.toolbar}))
+        }
+        "view.sidePanels" => {
+            // Tab: both side panels away, or back
+            let show = p.get("show").and_then(Value::as_bool).unwrap_or(!(app.ui.left_panel || app.ui.right_panel));
+            app.ui.left_panel = show;
+            app.ui.right_panel = show;
+            Ok(json!({"show": show}))
+        }
+        "view.allPanels" => {
+            // ⇧Tab: side panels, top bar and filmstrip away, or all back
+            let any = app.ui.left_panel || app.ui.right_panel || app.ui.filmstrip || app.ui.top_panel;
+            let show = p.get("show").and_then(Value::as_bool).unwrap_or(!any);
+            app.ui.left_panel = show;
+            app.ui.right_panel = show;
+            app.ui.filmstrip = show;
+            app.ui.top_panel = show;
+            Ok(json!({"show": show}))
+        }
+        "view.lightsOut" => {
+            // {mode?: on|dim|off}; cycles when omitted
+            app.ui.lights_out = match p.get("mode") {
+                Some(m) => match serde_json::from_value(m.clone()) {
+                    Ok(v) => v,
+                    Err(_) => return Some(Err(format!("view.lightsOut: unknown mode {m} (on|dim|off)"))),
+                },
+                None => app.ui.lights_out.next(),
+            };
+            Ok(json!({"mode": app.ui.lights_out}))
+        }
+        "view.filmHeight" => {
+            let h = p.get("height").and_then(Value::as_f64).unwrap_or(crate::state::FILM_HEIGHT.default as f64) as f32;
+            app.ui.film_height = crate::state::FILM_HEIGHT.clamp(h);
+            app.ui.filmstrip = true;
+            Ok(json!({"height": app.ui.film_height}))
+        }
+        "view.solo" => {
+            // {side?: left|right, on?}: Solo Mode — opening a panel closes the others on that side
+            let left = p.get("side").and_then(Value::as_str) == Some("left");
+            let cur = if left { app.ui.solo_left } else { app.ui.single_panel };
+            let on = p.get("on").and_then(Value::as_bool).unwrap_or(!cur);
+            if left {
+                app.ui.solo_left = on;
+            } else {
+                app.ui.single_panel = on;
             }
-            Ok(Value::Null)
+            Ok(json!({"on": on}))
+        }
+        "import.source" => crate::import::choose_source(app, p),
+        "library.syncMetadata" => crate::panels::library_right::sync_metadata(app),
+        "view.previousImport" => {
+            // Library ▸ Previous Import: the photos of the last import, in the grid
+            let r = app.session.execute("library.source", &json!({"kind": "previousImport"})).map_err(|e| e.to_string());
+            if r.is_ok() {
+                enter_library(app, Some(ViewMode::PhotoGrid));
+            }
+            r
         }
         "view.colorMixer" => {
-            // {mode: hue|saturation|luminance|all|bw}: the Edit panel's Color Mixer (LrSuperKeys H/J/K/B)
-            app.ui.view = ViewMode::Detail;
+            // {mode: hue|saturation|luminance|all|bw}: Develop's HSL / Color panel (LrSuperKeys H/J/K/B)
+            enter_develop(app);
             app.ui.right = RightPanel::Edit;
-            if !app.ui.flyout_open("mixer") {
-                app.ui.toggle_flyout("mixer");
+            if !app.ui.section_open("hsl") {
+                app.ui.toggle_section("hsl");
             }
             match p.get("mode").and_then(Value::as_str) {
                 Some(m @ ("hue" | "saturation" | "luminance" | "all")) => app.ui.mixer_mode = m.to_string(),
@@ -369,7 +539,12 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "view.detail" => {
+            // the Library loupe (Lightroom Classic's E); from Develop it goes back to Library
+            if app.ui.module == Module::Develop {
+                enter_library(app, Some(ViewMode::Detail));
+            }
             app.ui.view = ViewMode::Detail;
+            app.ui.library_view = ViewMode::Detail;
             Ok(Value::Null)
         }
         "view.compare" => crate::panels::compare::enter_compare(app),
@@ -426,6 +601,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 app.ui.slideshow = None;
             } else if !app.ui.tool.is_empty() {
                 app.ui.tool.clear();
+            } else if app.ui.lights_out != crate::state::LightsOut::On {
+                app.ui.lights_out = crate::state::LightsOut::On;
+            } else if app.ui.module == Module::Develop {
+                enter_library(app, Some(ViewMode::PhotoGrid));
             } else if matches!(app.ui.view, ViewMode::Compare | ViewMode::Survey) {
                 app.ui.view = ViewMode::Detail;
             } else if app.ui.view == ViewMode::Detail {
@@ -509,12 +688,13 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
         }
         "view.filmstrip" => {
-            app.ui.filmstrip = !app.ui.filmstrip;
-            Ok(Value::Null)
+            // {show?} (toggles when omitted)
+            app.ui.filmstrip = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.filmstrip);
+            Ok(json!({"show": app.ui.filmstrip}))
         }
         "view.leftPanel" => {
-            app.ui.left_panel = !app.ui.left_panel;
-            Ok(Value::Null)
+            app.ui.left_panel = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.left_panel);
+            Ok(json!({"show": app.ui.left_panel}))
         }
         "view.beforeAfter" => {
             app.ui.before_after = if app.ui.before_after == BeforeAfter::SideBySide { BeforeAfter::Off } else { BeforeAfter::SideBySide };
@@ -755,15 +935,22 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(json!({"filterBar": app.ui.filter_bar}))
         }
         "panel.edit" => {
-            panel(app, &ctx, RightPanel::Edit, "Edit");
-            Ok(Value::Null)
+            // Lightroom desktop's E: the edit panels (Develop), or back to the Library loupe
+            if app.ui.module == Module::Develop && app.ui.right == RightPanel::Edit {
+                enter_library(app, Some(ViewMode::Detail));
+                app.toast(&ctx, crate::i18n::tr("Library"));
+            } else {
+                enter_develop(app);
+                app.ui.right = RightPanel::Edit;
+                app.toast(&ctx, crate::i18n::tr("Develop"));
+            }
+            Ok(json!({"module": app.ui.module}))
         }
         "panel.profiles" => {
-            // toggles between the profile browser and the Edit panel it belongs to
-            app.ui.right = if app.ui.right == RightPanel::Profiles { RightPanel::Edit } else { RightPanel::Profiles };
-            if !matches!(app.ui.view, ViewMode::Detail) {
-                app.ui.view = ViewMode::Detail;
-            }
+            // toggles between the profile browser and the Basic panel it belongs to
+            let open = app.ui.right != RightPanel::Profiles;
+            enter_develop(app);
+            app.ui.right = if open { RightPanel::Profiles } else { RightPanel::Edit };
             Ok(json!({"open": app.ui.right == RightPanel::Profiles}))
         }
         "panel.crop" => {
@@ -802,11 +989,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "panel.presets" => {
-            app.ui.presets = !app.ui.presets;
-            if app.ui.presets && app.ui.view != ViewMode::Detail {
-                app.ui.view = ViewMode::Detail;
+            // Develop's left panel ▸ Presets
+            let open = !(app.ui.module == Module::Develop && app.ui.left_panel && app.ui.develop_left_sections.iter().any(|s| s == "presets"));
+            enter_develop(app);
+            if open {
+                open_section(app, true, "presets");
+            } else {
+                app.ui.develop_left_sections.retain(|s| s != "presets");
             }
-            Ok(Value::Null)
+            app.ui.presets = open;
+            Ok(json!({"open": open}))
         }
         "tool.done" => {
             // Return commits a tool panel (crop, remove, red eye, masking): back to Edit
@@ -819,26 +1011,25 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "panel.close" => {
-            app.ui.right = RightPanel::None;
+            app.ui.right = if app.ui.module == Module::Develop { RightPanel::Edit } else { RightPanel::None };
             app.ui.presets = false;
             Ok(Value::Null)
         }
         s if s.starts_with("section.") => {
-            let sec = &s["section.".len()..];
-            if app.ui.right != RightPanel::Edit {
-                app.ui.right = RightPanel::Edit;
-            }
+            let sec = crate::panels::edit::classic_section(&s["section.".len()..]);
+            enter_develop(app);
+            app.ui.right = RightPanel::Edit;
             app.ui.toggle_section(sec);
-            Ok(Value::Null)
+            Ok(json!({"section": sec, "open": app.ui.section_open(sec)}))
         }
         s if s.starts_with("tool.") => {
             let tool = &s["tool.".len()..];
             match tool {
                 "none" => app.ui.tool.clear(),
                 "guidedUpright" => {
-                    // Crop & Geometry with Guided Upright on, ready to draw guides
+                    // Transform with Guided Upright on, ready to draw guides
+                    enter_develop(app);
                     app.ui.right = RightPanel::Crop;
-                    app.ui.view = ViewMode::Detail;
                     let guided = app
                         .session
                         .active()
@@ -850,19 +1041,19 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     app.ui.tool = "guidedUpright".into();
                 }
                 "brush" => {
+                    enter_develop(app);
                     app.ui.right = RightPanel::Masking;
-                    app.ui.view = ViewMode::Detail;
                     app.ui.tool = "brush".into();
                 }
                 "linear" | "radial" => {
+                    enter_develop(app);
                     app.ui.right = RightPanel::Masking;
-                    app.ui.view = ViewMode::Detail;
                     app.ui.tool = tool.into();
                     return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
                 }
                 "wbPicker" => {
+                    enter_develop(app);
                     app.ui.right = RightPanel::Edit;
-                    app.ui.view = ViewMode::Detail;
                     app.ui.tool = "wbPicker".into();
                 }
                 other => return Some(Err(format!("unknown tool `{other}`"))),
@@ -945,6 +1136,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.focusSearch" => {
             // the search field lives in the top bar of the library and detail views alike
             app.ui.focus_search = true;
+            Ok(Value::Null)
+        }
+        "dialog.syncSettings" => {
+            let groups = crate::state::default_preset_groups();
+            app.ui.dialog = Some(Dialog::SyncSettings { groups });
             Ok(Value::Null)
         }
         "dialog.copySettings" => {
@@ -1057,8 +1253,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             crate::import::browse(app, path, p.get("subfolders").and_then(Value::as_bool))
         }
         "file.addPhotos" => {
-            let paths = match p.get("paths").and_then(Value::as_array) {
+            let paths: Vec<String> = match p.get("paths").and_then(Value::as_array) {
                 Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+                // the Import window (Lightroom Classic's): source, files, options in one place
+                None if crate::import::has_window() => return Some(crate::import::open_window(app, p)),
                 None => app.services.pick_files.as_mut().map(|f| f()).unwrap_or_default(),
             };
             if paths.is_empty() {
@@ -1376,6 +1574,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
 pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
         s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
+        "dialog.syncSettings" => app.session.selection.ids.len() > 1,
         "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {
             app.session.active().is_some()
         }
@@ -1415,6 +1614,21 @@ pub struct MenuEntry {
 }
 
 /// The flattened menu model (UI commands + engine commands with menu paths).
+/// Commands that live in Lightroom Classic's Library menu, whatever menu their declaration names
+/// (the engine's own commands keep their paths for the CLI and MCP).
+pub const LIBRARY_MENU: &[&str] = &[
+    "dialog.newAlbum",
+    "dialog.newFolder",
+    "dialog.smartAlbum",
+    "dialog.newSmartAlbum",
+    "view.filterBar",
+    "library.clearFilter",
+    "view.previousImport",
+    "library.showSubfolders",
+    "file.findMissing",
+    "library.syncMetadata",
+];
+
 pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
     let mut v: Vec<MenuEntry> = ui_commands()
         .filter(|c| !c.3.is_empty())
@@ -1436,6 +1650,9 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
                 enabled: c.enabled,
             });
         }
+    }
+    for e in v.iter_mut().filter(|e| LIBRARY_MENU.contains(&e.id.as_str())) {
+        e.menu = vec!["Library".into()];
     }
     v
 }

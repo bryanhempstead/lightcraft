@@ -15,7 +15,8 @@ const SETTLE: Duration = Duration::from_secs(120);
 fn demo(view: &str) -> Headless {
     let services = Services { png: None, ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
-    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    // (tall enough that the first photo's cell fits between the toolbar and the filmstrip)
+    let mut h = Headless::new(app, [1200.0, 960.0], 1.0);
     // big thumbnails: the demo library is several screens tall
     let r = h.request("ui.set", json!({"view": view, "thumbSize": 480.0}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -134,7 +135,9 @@ fn filmstrip_shows_every_selected_photo() {
     let r = h.request("engine.execute", json!({"command": "library.selectAll"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.session.active().map(|p| p.0), Some(first));
-    assert_eq!(fill(&mut h, second), active, "a selected photo that is not the active one looks selected");
+    // Classic: the rest of the selection is lighter than unselected cells, the active one lightest
+    assert_eq!(fill(&mut h, second), crate::panels::filmstrip::SELECTED_CELL, "a selected photo that is not the active one looks selected");
+    assert_eq!(active, crate::panels::filmstrip::ACTIVE_CELL);
     // back to one photo; then what a ⌘-click on a filmstrip cell runs (toggle) adds the second
     let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [first]}}), T);
     assert_eq!(r["ok"], true, "{r}");

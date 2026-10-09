@@ -1,6 +1,8 @@
-//! The bottom bar: view modes, sort, rating/flags pill, copy/paste settings, zoom and view toggles.
+//! The toolbar under the photo (Lightroom Classic's): Library's views and sort, or Develop's loupe,
+//! Before & After and reference view; the rating/flags pill; zoom and view toggles or the
+//! thumbnail size. Copy / Paste and Sync live at the bottom of the side panels, as in Classic.
 
-use egui::{Align2, Rect, Sense, pos2, vec2};
+use egui::{Rect, Sense, pos2, vec2};
 use lightcraft_catalog::Flag;
 use serde_json::json;
 
@@ -20,10 +22,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let left_end = ui
                 .horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
+                    if app.ui.module == crate::state::Module::Develop {
+                        develop_views(app, ui);
+                        return;
+                    }
                     for (id, icon, mode, tip) in [
                         ("photoGrid", Icon::GridPhoto, ViewMode::PhotoGrid, "Photo Grid (G)"),
                         ("squareGrid", Icon::GridSquare, ViewMode::SquareGrid, "Square Grid (G toggles)"),
-                        ("detail", Icon::Single, ViewMode::Detail, "Detail (D)"),
+                        ("detail", Icon::Single, ViewMode::Detail, "Loupe (E)"),
                         ("compare", Icon::Compare, ViewMode::Compare, "Compare (Shift+C)"),
                         ("survey", Icon::Survey, ViewMode::Survey, "Survey (N)"),
                         ("people", Icon::Subject, ViewMode::People, "People"),
@@ -47,23 +53,66 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         });
 }
 
-/// Width of the centre group: the rating/flag pill, then Copy/Paste Edit Settings and its gear.
+/// Develop's toolbar views: the loupe, Before & After (Y; its layouts in a menu) and the
+/// reference view.
+fn develop_views(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    if icon_button(
+        ui,
+        "detail",
+        Icon::Single,
+        vec2(32.0, 32.0),
+        app.ui.view == ViewMode::Detail && app.ui.before_after == BeforeAfter::Off,
+        true,
+        "Loupe (D)",
+    )
+    .clicked()
+    {
+        app.ui.view = ViewMode::Detail;
+        app.ui.before_after = BeforeAfter::Off;
+    }
+    let on = !matches!(app.ui.before_after, BeforeAfter::Off | BeforeAfter::Original);
+    if icon_button(ui, "beforeAfterBar", Icon::BeforeAfter, vec2(32.0, 32.0), on, true, "Before & After (Y)").clicked() {
+        let _ = app.run("view.beforeAfter", json!({}));
+    }
+    let r = crate::widgets::dropdown(ui, "beforeAfterMode", "", t.font(12.0), t.text_label).on_hover_text(crate::i18n::tr("Before & After layouts"));
+    egui::Popup::menu(&r).show(|ui| {
+        for (label, cmd, mode) in [
+            ("Left / Right", "view.beforeAfter", BeforeAfter::SideBySide),
+            ("Left / Right Split", "view.beforeAfterSplit", BeforeAfter::Split),
+            ("Top / Bottom", "view.beforeAfterTopBottom", BeforeAfter::TopBottom),
+            ("Top / Bottom Split", "view.beforeAfterSplitTopBottom", BeforeAfter::SplitTopBottom),
+        ] {
+            if ui.selectable_label(app.ui.before_after == mode, crate::i18n::tr(label)).clicked() {
+                if app.ui.before_after != mode {
+                    let _ = app.run(cmd, json!({}));
+                }
+                ui.close();
+            }
+        }
+    });
+    ui.add_space(4.0);
+    if icon_button(ui, "reference", Icon::Compare, vec2(32.0, 32.0), app.ui.view == ViewMode::Reference, true, "Reference View (⇧R)").clicked() {
+        if app.ui.view == ViewMode::Reference {
+            app.ui.view = ViewMode::Detail;
+        } else {
+            let _ = app.run("view.reference", json!({}));
+        }
+    }
+}
+
+/// Width of the centre group: the rating/flag pill.
 const PILL_W: f32 = 196.0;
 
 /// The rating/flag pill and copy/paste settings, between `from` and `to` (the side groups): the
 /// copy buttons go first when there is no room (they are in the Edit menu too), then the pill.
 fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to: f32) {
     let t = Tokens::get(ui.ctx());
-    let has_clip = app.session.clipboard.is_some();
-    let label = crate::i18n::tr(if has_clip { "Paste Edit Settings" } else { "Copy Edit Settings" });
-    let copy_width = (ui.painter().layout_no_wrap(label.to_string(), t.font(13.0), t.text_label).size().x + 24.0).max(136.0);
-    let centre_width = PILL_W + 10.0 + copy_width + 4.0 + 30.0;
     let room = to - from;
     if room < PILL_W {
         return;
     }
-    let with_copy = room >= centre_width;
-    let w = if with_copy { centre_width } else { PILL_W };
+    let w = PILL_W;
     // where it sits with room to spare (slightly left of centre), kept between the side groups
     let left = (full.center().x - 60.0 - PILL_W / 2.0).clamp(from, to - w);
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
@@ -97,28 +146,6 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
             crate::panels::compare::target_active(app, &mut params);
             let _ = app.run("photo.flag", params);
         }
-    }
-    // copy / paste settings
-    if !with_copy {
-        return;
-    }
-    let copy_r = Rect::from_min_size(pos2(pill.right() + 10.0, pill.top()), vec2(copy_width, 30.0));
-    let cresp = ui.interact(copy_r, egui::Id::new("copy-settings"), Sense::click());
-    register(ui.ctx(), "button:copySettings", copy_r);
-    ui.painter().rect_filled(copy_r, 15.0, if cresp.hovered() { t.hover } else { t.canvas });
-    ui.painter().text(copy_r.center(), Align2::CENTER_CENTER, label, t.font(13.0), if active.is_some() { t.text_label } else { t.text_disabled });
-    if cresp.clicked() && active.is_some() {
-        let _ = if has_clip { app.run("develop.paste", json!({})) } else { app.run("develop.copy", json!({})) };
-        let msg = if has_clip { "Settings pasted" } else { "Edit settings copied" };
-        app.toast(ui.ctx(), crate::i18n::tr(msg));
-    }
-    let gear_r = Rect::from_min_size(pos2(copy_r.right() + 4.0, pill.top()), vec2(30.0, 30.0));
-    let gresp = ui.interact(gear_r, egui::Id::new("copy-gear"), Sense::click());
-    register(ui.ctx(), "icon:copyGear", gear_r);
-    ui.painter().rect_filled(gear_r, 15.0, if gresp.hovered() { t.hover } else { t.canvas });
-    paint(ui.painter(), gear_r.shrink(7.0), Icon::Gear, t.icon);
-    if gresp.clicked() {
-        let _ = app.run("dialog.copySettings", json!({}));
     }
 }
 

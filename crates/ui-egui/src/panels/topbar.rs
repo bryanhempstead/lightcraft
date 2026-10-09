@@ -1,4 +1,5 @@
-//! The top bar: sidebar toggle, back/forward, search, filter, and the right-hand icons.
+//! The top bar: sidebar toggle, back/forward, search, filter, and the module picker (Library |
+//! Develop) with the import progress on the right.
 
 use egui::{Align2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::json;
@@ -118,10 +119,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if fresp.clicked() {
                 let _ = app.run("view.filterBar", json!({}));
             }
-            // right icons
-            let mut x = full.right() - 18.0;
-            // saving is failing: the cloud icon turns into a warning until a save succeeds
-            let unsaved = app.session.unsaved().map(|(n, e)| {
+            // right: Lightroom Classic's module picker ("Library | Develop"), then the save state
+            let mut x = module_picker(app, ui, full) - 18.0;
+            // saving is failing: a warning until a save succeeds
+            if let Some(tip) = app.session.unsaved().map(|(n, e)| {
                 crate::i18n::tr_format!(
                     "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.",
                     if n == 1 { "" } else { "s" },
@@ -129,38 +130,78 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     e = e,
                     n = n
                 )
-            });
-            let cloud_tip = unsaved.as_deref().unwrap_or("Local library — no cloud account needed");
-            for (id, icon, tip, cmd) in [
-                ("discord", Icon::Chat, "Join the ArtCraft community on Discord", "app.discord"),
-                ("cloud", Icon::Cloud, cloud_tip, ""),
-                ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
-                ("share", Icon::Share, "Export", "dialog.export"),
-                ("bell", Icon::Bell, "Activity", "panel.activity"),
-            ] {
+            }) {
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
-                let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(tip);
-                register(ui.ctx(), format!("icon:{id}"), r);
-                let warn = id == "cloud" && unsaved.is_some();
-                let colour = if warn {
-                    t.caution
-                } else if resp.hovered() {
-                    t.text
-                } else {
-                    t.icon
-                };
-                paint(ui.painter(), r.shrink(5.0), icon, colour);
-                if warn {
-                    let c = r.right_top() + vec2(-5.0, 6.0);
-                    ui.painter().circle_filled(c, 6.0, t.reject);
-                    ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
-                    register(ui.ctx(), "indicator:unsaved", r);
-                }
-                if resp.clicked() && !cmd.is_empty() {
-                    let _ = app.run(cmd, json!({}));
-                }
+                ui.interact(r, egui::Id::new(("top", "cloud")), Sense::hover()).on_hover_text(tip);
+                register(ui.ctx(), "icon:cloud", r);
+                register(ui.ctx(), "indicator:unsaved", r);
+                paint(ui.painter(), r.shrink(5.0), Icon::Cloud, t.caution);
+                let c = r.right_top() + vec2(-5.0, 6.0);
+                ui.painter().circle_filled(c, 6.0, t.reject);
+                ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
                 x -= 40.0;
             }
+            // an import or export in progress: Classic shows it where its identity plate is
+            progress_strip(app, ui, Rect::from_min_max(pos2(x - 200.0, full.center().y - 9.0), pos2(x, full.center().y + 9.0)));
             let _ = Align2::CENTER_CENTER;
         });
+}
+
+/// The module picker: Classic's identity-plate text links, the active module bright, the other
+/// dim with a divider between. Returns its left edge.
+pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
+    let t = Tokens::get(ui.ctx());
+    let font = t.font(17.0);
+    let mut x = full.right() - 6.0;
+    let items =
+        [("develop", "Develop", crate::state::Module::Develop, "Develop (D)"), ("library", "Library", crate::state::Module::Library, "Library (G)")];
+    for (i, (id, label, module, tip)) in items.into_iter().enumerate() {
+        let on = app.ui.module == module;
+        let g = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), font.clone(), t.text);
+        let r = Rect::from_min_max(pos2(x - g.size().x - 8.0, full.top() + 4.0), pos2(x + 2.0, full.bottom() - 4.0));
+        let resp = ui.interact(r, egui::Id::new(("module", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
+        register(ui.ctx(), format!("module:{id}"), r);
+        let c = if on {
+            t.text
+        } else if resp.hovered() {
+            t.text_label
+        } else {
+            t.text_dim
+        };
+        ui.painter().galley(pos2(r.left() + 4.0, r.center().y - g.size().y / 2.0), g, c);
+        if resp.clicked() {
+            let cmd = if module == crate::state::Module::Develop { "view.develop" } else { "view.library" };
+            if let Err(e) = app.run(cmd, json!({})) {
+                app.toast(ui.ctx(), e);
+            }
+        }
+        x = r.left();
+        if i == 0 {
+            // the divider between the links
+            let d = Rect::from_center_size(pos2(x - 8.0, full.center().y), vec2(1.0, 16.0));
+            ui.painter().rect_filled(d, 0.0, t.text_disabled);
+            x -= 16.0;
+        }
+    }
+    x
+}
+
+/// A small progress bar with its label (import / export running), ending at `r.right()`.
+fn progress_strip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
+    let t = Tokens::get(ui.ctx());
+    let (label, frac) = if let Some(task) = app.import.as_ref().filter(|t| !t.browse && !t.auto) {
+        (crate::i18n::tr_format!("Importing {} of {}", task.done, task.total), task.done as f32 / task.total.max(1) as f32)
+    } else if let Some(task) = app.scan.as_ref() {
+        let s = task.status();
+        let (done, total) = (s["done"].as_u64().unwrap_or(0), s["total"].as_u64().unwrap_or(0));
+        (crate::i18n::tr("Reading photos…").to_string(), if total == 0 { 0.0 } else { done as f32 / total as f32 })
+    } else {
+        return;
+    };
+    let bar = Rect::from_min_max(pos2(r.right() - 90.0, r.center().y - 3.0), pos2(r.right(), r.center().y + 3.0));
+    ui.painter().rect_filled(bar, 3.0, t.inset);
+    let filled = Rect::from_min_max(bar.min, pos2(bar.left() + bar.width() * frac.clamp(0.0, 1.0), bar.bottom()));
+    ui.painter().rect_filled(filled, 3.0, t.text_label);
+    ui.painter().text(pos2(bar.left() - 8.0, r.center().y), Align2::RIGHT_CENTER, label, t.font(11.5), t.text_label);
+    register(ui.ctx(), "progress:top", r);
 }

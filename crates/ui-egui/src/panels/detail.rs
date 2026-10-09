@@ -204,13 +204,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
     let fullscreen = app.ui.fullscreen;
-    let show_film = app.ui.filmstrip && !fullscreen;
-    let film_h = if show_film { t.film_h } else { 0.0 };
-    let canvas = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - film_h));
+    // the filmstrip runs along the window's bottom (panels::filmstrip), outside the canvas
+    let canvas = full;
     app.canvas_rect = Some(canvas);
-    if show_film {
-        filmstrip(app, ui, Rect::from_min_max(pos2(full.left(), canvas.bottom()), full.max));
-    }
     let Some(id) = app.session.active() else {
         super::empty_message(ui, canvas, "No photo selected", "Choose a photo in the grid or filmstrip");
         return;
@@ -1568,164 +1564,6 @@ fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
 
 // ------------------------------------------------------------------------ filmstrip
 
-/// A filmstrip cell's file-name label: names longer than 14 characters are cut to 13 and an
-/// ellipsis. Counts characters, not bytes, so a CJK name is never cut inside a character (#266).
-fn film_label(name: &str) -> String {
-    if name.chars().nth(14).is_some() { format!("{}…", name.chars().take(13).collect::<String>()) } else { name.to_string() }
-}
-
-pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
-    let t = Tokens::get(ui.ctx());
-    ui.painter().rect_filled(r, 0.0, t.canvas);
-    ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 4.0)), 0.0, Color32::from_gray(0x20));
-    let ids = app.session.visible_cloned();
-    let active = app.session.selection.active;
-    let cell_w = 120.0;
-    let ppp = ui.ctx().pixels_per_point();
-    if ids.is_empty() {
-        let why = if app.session.filter != Default::default() { "No photos match the filters (View → Clear Filters)" } else { "No photos" };
-        ui.painter().text(r.center(), Align2::CENTER_CENTER, why, t.font(12.5), t.text_dim);
-        return;
-    }
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(0.0, 4.0))));
-    // a vertical mouse wheel scrolls the strip sideways (horizontal trackpad scrolls still work)
-    child.style_mut().always_scroll_the_only_direction = true;
-    // only a new active photo (or the strip appearing) scrolls it; see `grid::follow_active`
-    let follow = super::grid::follow_active(child.ctx(), egui::Id::new("film-follow-active"), active);
-    egui::ScrollArea::horizontal().id_salt("filmstrip").auto_shrink([false, false]).show_viewport(&mut child, |ui, vp| {
-        let (area, _) = ui.allocate_exact_size(vec2(ids.len() as f32 * cell_w, r.height() - 16.0), Sense::hover());
-        app.film_scroll = Some(vp.left());
-        for (i, id) in ids.iter().enumerate() {
-            let cr = Rect::from_min_size(pos2(area.left() + i as f32 * cell_w, area.top()), vec2(cell_w, area.height()));
-            let local = Rect::from_min_size(pos2(i as f32 * cell_w, 0.0), cr.size());
-            // centred when it is (partly) off screen; a click on a visible thumbnail leaves the strip alone
-            if follow && Some(*id) == active && !(local.left() >= vp.left() && local.right() <= vp.right()) {
-                ui.scroll_to_rect(cr, Some(egui::Align::Center));
-            }
-            if !local.intersects(vp.expand2(vec2(cell_w * 4.0, 0.0))) {
-                continue;
-            }
-            let resp = ui.interact(cr, egui::Id::new(("film", id.0)), Sense::click());
-            register(ui.ctx(), format!("film:{}", id.0), cr);
-            let state = app.session.selection.state_of(*id);
-            let sel = state == lightcraft_engine::SelectionState::Active;
-            let p = ui.painter();
-            let label = app.session.catalog.photo(*id).and_then(|ph| ph.label);
-            let selected = state != lightcraft_engine::SelectionState::NotSelected;
-            let base = if selected {
-                t.cell_selected
-            } else if resp.hovered() {
-                t.cell_selected.gamma_multiply(0.6)
-            } else {
-                t.canvas
-            };
-            p.rect_filled(cr, 0.0, crate::theme::label_background(base, label, selected));
-            let names = app.ui.settings.film_names;
-            if let Some(ph) = app.session.catalog.photo(*id).filter(|_| names) {
-                let name = ph.file_name.rsplit_once('.').map(|(n, _)| n).unwrap_or(&ph.file_name);
-                p.text(pos2(cr.left() + 8.0, cr.top() + 10.0), Align2::LEFT_CENTER, film_label(name), t.font(10.0), t.text_dim);
-                p.text(pos2(cr.right() - 8.0, cr.top() + 10.0), Align2::RIGHT_CENTER, &ph.format, t.semibold(8.5), t.text_dim);
-            }
-            let img_area = Rect::from_min_max(cr.min + vec2(10.0, 22.0), cr.max - vec2(10.0, 8.0));
-            super::grid::request_thumb(app, *id, (256.0 * ppp.min(2.0) / 2.0) as usize * 2, 8);
-            if let Some(tex) = app.renderer.thumb(*id) {
-                let [tw, th] = tex.size;
-                let s = (img_area.width() / tw as f32).min(img_area.height() / th as f32);
-                let fr = Rect::from_center_size(img_area.center(), vec2(tw as f32 * s, th as f32 * s));
-                p.image(tex.tex.id(), fr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                if sel {
-                    p.rect_stroke(fr, 0.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
-                } else if state == lightcraft_engine::SelectionState::Selected {
-                    p.rect_stroke(fr, 0.0, Stroke::new(1.5, Color32::from_gray(170)), StrokeKind::Outside);
-                }
-                if app.left_off.marker == Some(*id) {
-                    crate::leftoff::paint_marker(p, &t, fr, true);
-                }
-                if app.ui.settings.film_badges
-                    && let Some(ph) = app.session.catalog.photo(*id)
-                {
-                    film_badges(p, &t, fr, ph);
-                }
-                if let Some(st) = app.session.catalog.stack_of(*id) {
-                    let text =
-                        if st.collapsed { st.photos.len().to_string() } else { format!("{}/{}", st.position(*id).unwrap_or(0) + 1, st.photos.len()) };
-                    let g = p.layout_no_wrap(text, t.semibold(9.5), Color32::WHITE);
-                    let br = Rect::from_min_size(fr.min + vec2(3.0, 3.0), vec2(g.size().x + 22.0, 15.0));
-                    p.rect_filled(br, 7.5, Color32::from_black_alpha(170));
-                    crate::icons::paint(p, Rect::from_min_size(br.min + vec2(4.0, 2.0), vec2(11.0, 11.0)), crate::icons::Icon::Stack, Color32::WHITE);
-                    p.galley(pos2(br.min.x + 17.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
-                }
-            }
-            if resp.clicked() {
-                let m = ui.input(|i| i.modifiers);
-                let mode = if m.command {
-                    "toggle"
-                } else if m.shift {
-                    "range"
-                } else {
-                    "replace"
-                };
-                let _ = app.run("library.select", json!({"ids": [id.0], "mode": mode}));
-            }
-            // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted)
-            resp.context_menu(|ui| super::grid::context_menu(app, ui, *id));
-        }
-    });
-}
-
-/// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Interface).
-fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo) {
-    use crate::icons::{Icon, paint};
-    use lightcraft_catalog::Flag;
-    let edited = ph.is_edited();
-    if ph.rating == 0 && ph.flag == Flag::None && !edited {
-        return;
-    }
-    let bar = Rect::from_min_max(pos2(fr.left(), fr.bottom() - 15.0), fr.right_bottom());
-    p.rect_filled(bar, 0.0, Color32::from_black_alpha(130));
-    let y = bar.center().y;
-    let mut x = bar.left() + 3.0;
-    for i in 0..ph.rating {
-        paint(p, Rect::from_min_size(pos2(x + i as f32 * 9.0, y - 4.0), vec2(8.0, 8.0)), Icon::StarFilled, t.star);
-    }
-    x += ph.rating as f32 * 9.0 + 2.0;
-    match ph.flag {
-        Flag::Pick => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagPick, t.pick),
-        Flag::Reject => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagReject, t.reject),
-        Flag::None => {}
-    }
-    if edited {
-        paint(p, Rect::from_min_size(pos2(bar.right() - 13.0, y - 5.0), vec2(10.0, 10.0)), Icon::Sliders, t.text_label);
-    }
-}
-
-#[cfg(test)]
-mod preview_geometry_tests {
-    use super::{fit_rect, fit_texture_rect};
-    use crate::state::Zoom;
-    use egui::{Rect, pos2, vec2};
-
-    #[test]
-    fn portrait_preview_keeps_its_ratio_inside_a_landscape_frame() {
-        let frame = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0));
-        let image = fit_texture_rect(frame, [100, 200]);
-
-        assert!((image.width() / image.height() - 0.5).abs() < 1e-6);
-        assert_eq!(image.center(), frame.center());
-        assert!(frame.contains_rect(image));
-    }
-
-    #[test]
-    fn portrait_preview_aspect_fits_detail_area_without_stretching() {
-        let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0));
-        let image = fit_rect(area, 0.5, Zoom::Fit, [4000, 6000], 1.0, (0.5, 0.5));
-
-        assert!((image.width() / image.height() - 0.5).abs() < 1e-6);
-        assert_eq!(image.size(), vec2(100.0, 200.0));
-        assert_eq!(image.center(), area.center());
-    }
-}
-
 /// Straighten tool: drag along a horizon (or a vertical) to set the crop angle; double-click = Auto.
 /// The image is shown unrotated in the crop view, so the line's on-screen angle is its image angle.
 /// `held`: drawn with ⌘ held in the crop tool, which stays active afterwards.
@@ -1768,18 +1606,28 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
 }
 
 #[cfg(test)]
-mod tests {
-    use super::film_label;
+mod preview_geometry_tests {
+    use super::{fit_rect, fit_texture_rect};
+    use crate::state::Zoom;
+    use egui::{Rect, pos2, vec2};
 
     #[test]
-    fn film_labels_cut_on_characters_not_bytes() {
-        // the name from #266: byte 13 falls inside '限'
-        assert_eq!(film_label("202407層三限定訂閱圖(4)"), "202407層三限定訂閱圖…");
-        assert_eq!(film_label("写真"), "写真");
-        // exactly 14 characters (42 bytes) is shown whole
-        assert_eq!(film_label("一二三四五六七八九十一二三四"), "一二三四五六七八九十一二三四");
-        assert_eq!(film_label("IMG_20240712_153012"), "IMG_20240712_…");
-        assert_eq!(film_label("DSC_0001"), "DSC_0001");
-        assert_eq!(film_label(""), "");
+    fn portrait_preview_keeps_its_ratio_inside_a_landscape_frame() {
+        let frame = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0));
+        let image = fit_texture_rect(frame, [100, 200]);
+
+        assert!((image.width() / image.height() - 0.5).abs() < 1e-6);
+        assert_eq!(image.center(), frame.center());
+        assert!(frame.contains_rect(image));
+    }
+
+    #[test]
+    fn portrait_preview_aspect_fits_detail_area_without_stretching() {
+        let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0));
+        let image = fit_rect(area, 0.5, Zoom::Fit, [4000, 6000], 1.0, (0.5, 0.5));
+
+        assert!((image.width() / image.height() - 0.5).abs() < 1e-6);
+        assert_eq!(image.size(), vec2(100.0, 200.0));
+        assert_eq!(image.center(), area.center());
     }
 }

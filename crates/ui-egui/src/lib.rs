@@ -13,6 +13,7 @@ pub mod headless;
 pub mod i18n;
 pub mod icons;
 pub mod import;
+pub mod import_window;
 pub mod keymap;
 pub mod leftoff;
 pub mod links;
@@ -29,6 +30,8 @@ pub mod tasks;
 pub mod theme;
 pub mod widgets;
 
+#[cfg(test)]
+mod tests_classic;
 #[cfg(test)]
 mod tests_curve;
 #[cfg(test)]
@@ -846,21 +849,33 @@ impl LightcraftApp {
             self.end_frame(t0);
             return;
         }
-        // Order matters: earlier panels take the full edge (top bar spans the window; the tool strip,
-        // right panels and left panel run to the bottom; the bottom bar sits between them).
-        panels::topbar::show(self, ui);
-        panels::library_problem::banner(self, ui);
-        panels::strip::show(self, ui);
-        if self.ui.right != state::RightPanel::None {
-            panels::right::show(self, ui);
+        // Lightroom Classic's layout. Order matters: earlier panels take the full edge — the top bar
+        // (module picker) and the filmstrip span the window; the side panels run between them; the
+        // toolbar sits under the photo, between the side panels.
+        self.ui.sync_module();
+        if self.ui.top_panel {
+            panels::topbar::show(self, ui);
         }
-        if self.ui.presets {
-            panels::presets::show(self, ui);
+        panels::library_problem::banner(self, ui);
+        panels::filmstrip::show(self, ui);
+        let develop = self.ui.module == state::Module::Develop;
+        if self.ui.right_panel {
+            if develop {
+                panels::right::show(self, ui);
+            } else {
+                panels::library_right::show(self, ui);
+            }
         }
         if self.ui.left_panel {
-            panels::left::show(self, ui);
+            if develop {
+                panels::develop_left::show(self, ui);
+            } else {
+                panels::left::show(self, ui);
+            }
         }
-        panels::bottombar::show(self, ui);
+        if self.ui.toolbar {
+            panels::bottombar::show(self, ui);
+        }
         let t = theme::Tokens::get(&ctx);
         let bg = if matches!(self.ui.view, state::ViewMode::Detail | state::ViewMode::Compare | state::ViewMode::Survey | state::ViewMode::Reference)
         {
@@ -884,6 +899,7 @@ impl LightcraftApp {
         import::scan_progress(self, &ctx);
         export_task::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);
+        panels::lights_out(self, &ctx);
         panels::toast(self, &ctx);
         self.widgets = widgets::take_registry(&ctx);
         self.end_frame(t0);

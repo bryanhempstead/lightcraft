@@ -1,5 +1,5 @@
-//! The right-hand panel next to the tool strip: Edit, Crop, Remove, Masking, Red Eye, Info,
-//! Keywords, Versions, Activity.
+//! The Develop module's right panel (histogram, tool strip and drawer, the develop panels) and
+//! the tool, Metadata, Keywording, Snapshots and History bodies the Classic panels embed.
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -11,55 +11,186 @@ use crate::state::RightPanel;
 use crate::theme::Tokens;
 use crate::widgets::{divider, register, slider, text_button};
 
+/// Height of the Previous / Reset row at the bottom of the Develop right panel.
+const FOOTER_H: f32 = 40.0;
+
+/// The Develop module's right panel (Lightroom Classic): Histogram, the tool strip (Crop &
+/// Straighten, Spot Removal, Red Eye, Masking) with the active tool's options under it, then the
+/// develop panels (Basic … Calibration), and "Previous" / "Reset" at the bottom.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
-    // the presets column and the left sidebar are laid out after this panel: leave them their room
-    let reserve = if app.ui.presets { t.panel_w } else { 0.0 } + if app.ui.left_panel { crate::state::LEFT_WIDTH.min } else { 0.0 };
+    // the left panel is laid out after this one: leave it its room
+    let reserve = if app.ui.left_panel { crate::state::LEFT_WIDTH.min } else { 0.0 };
     let width = app.ui.right_width;
     let resized = super::resizable_side(ui, false, "right_panel", frame, width, crate::state::RIGHT_WIDTH, reserve, |ui| {
         let Some(id) = app.session.active() else {
             let r = ui.max_rect();
-            super::empty_message(ui, r, "No photo selected", "Select a photo to edit");
+            super::empty_message(ui, r, "No photo selected", "Select a photo to develop");
             return;
         };
-        egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]).show(ui, |ui| {
+        let full = ui.max_rect();
+        let body = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - FOOTER_H));
+        let mut top = ui.new_child(egui::UiBuilder::new().max_rect(body).layout(egui::Layout::top_down(egui::Align::Min)));
+        crate::widgets::set_classic_rows(top.ctx(), true);
+        egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]).show(&mut top, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
+            histogram_panel(app, ui, id);
+            tool_strip(app, ui);
             match app.ui.right {
-                RightPanel::Edit => super::edit::show(app, ui, id),
                 RightPanel::Profiles => super::profiles::show(app, ui, id),
-                RightPanel::Crop => crop(app, ui, id),
-                RightPanel::Remove => remove(app, ui, id),
-                RightPanel::Masking => super::masking::show(app, ui, id),
-                RightPanel::RedEye => red_eye(app, ui, id),
-                RightPanel::Info => info(app, ui, id),
-                RightPanel::Keywords => keywords(app, ui, id),
-                RightPanel::Versions => versions(app, ui, id),
-                RightPanel::Activity => activity(app, ui, id),
-                RightPanel::None => {}
+                tool @ (RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye) => {
+                    // the tool's options, then the panels (Classic's tool drawer)
+                    let drawer = ui.max_rect().width();
+                    egui::Frame::NONE.fill(t.inset).show(ui, |ui| {
+                        ui.set_width(drawer);
+                        match tool {
+                            RightPanel::Crop => crop(app, ui, id),
+                            RightPanel::Remove => remove(app, ui, id),
+                            RightPanel::Masking => super::masking::show(app, ui, id),
+                            _ => red_eye(app, ui, id),
+                        }
+                        ui.add_space(8.0);
+                    });
+                    divider(ui);
+                    if tool != RightPanel::Masking {
+                        super::edit::show(app, ui, id);
+                    }
+                }
+                _ => super::edit::show(app, ui, id),
             }
         });
+        crate::widgets::set_classic_rows(ui.ctx(), false);
+        footer(app, ui, Rect::from_min_max(pos2(full.left(), body.bottom()), full.max));
+        // the panel keeps its width (its contents are drawn in child areas)
+        ui.expand_to_include_rect(full);
     });
     if let Some(w) = resized {
         app.ui.right_width = w;
     }
 }
 
+/// Histogram panel (Classic): the histogram with its clipping triangles and the camera line (ISO,
+/// focal length, aperture, shutter), and the Original Photo toggle. Its header hides it.
+pub(crate) fn histogram_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    let (resp, _) = crate::widgets::classic_header(ui, "histogram", "Histogram", app.ui.histogram, true, None);
+    if resp.clicked() {
+        app.ui.histogram = !app.ui.histogram;
+    }
+    if !app.ui.histogram {
+        return;
+    }
+    super::edit::histogram(app, ui, id);
+    if app.ui.soft_proof {
+        super::edit::soft_proofing(app, ui, id);
+    }
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 20, top: 4, bottom: 6 }).show(ui, |ui| {
+        let mut original = app.ui.before_after == crate::state::BeforeAfter::Original;
+        let r = ui.checkbox(&mut original, crate::i18n::tr("Original Photo"));
+        register(ui.ctx(), "check:originalPhoto", r.rect);
+        if r.on_hover_text(crate::i18n::tr("Show the photo without its edits (\\)")).changed() {
+            let _ = app.run("view.showOriginal", json!({}));
+        }
+    });
+}
+
+/// Classic's tool strip under the histogram: Crop & Straighten (R), Spot Removal (Q), Red Eye,
+/// Masking (⇧W).
+fn tool_strip(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
+    ui.painter().rect_filled(r, 0.0, t.header);
+    let tools = [
+        ("crop", Icon::Crop, RightPanel::Crop, "Crop & Straighten (R)"),
+        ("remove", Icon::Eraser, RightPanel::Remove, "Spot Removal / Healing (Q)"),
+        ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye Correction"),
+        ("masking", Icon::Mask, RightPanel::Masking, "Masking (⇧W)"),
+    ];
+    let w = 40.0;
+    let x0 = r.center().x - w * tools.len() as f32 / 2.0;
+    let mut row = ui.new_child(
+        egui::UiBuilder::new().max_rect(Rect::from_min_max(pos2(x0, r.top()), r.max)).layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    row.spacing_mut().item_spacing.x = 0.0;
+    for (id, icon, panel, tip) in tools {
+        if crate::widgets::icon_button(&mut row, id, icon, vec2(w, 34.0), app.ui.right == panel, true, tip).clicked() {
+            let _ = app.run(&format!("panel.{id}"), json!({}));
+        }
+    }
+    ui.painter().rect_filled(Rect::from_min_size(r.left_bottom() - vec2(0.0, 1.0), vec2(r.width(), 1.0)), 0.0, t.divider);
+}
+
+/// "Previous" (paste the settings of the photo selected before; "Sync…" with several photos
+/// selected) and "Reset" at the bottom of the Develop right panel.
+fn footer(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
+    let t = Tokens::get(ui.ctx());
+    ui.painter().rect_filled(r, 0.0, t.header);
+    let n = app.session.selection.ids.len();
+    let half = (r.width() - 12.0 * 2.0 - 8.0) / 2.0;
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(12.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    row.spacing_mut().item_spacing.x = 8.0;
+    let (label, cmd, tip) = if n > 1 {
+        ("Sync…", "dialog.syncSettings", "Copy the active photo's settings to the other selected photos (⌘⇧S)")
+    } else {
+        ("Previous", "develop.pastePrevious", "Paste the settings of the photo selected before this one")
+    };
+    if wide_button(&mut row, "developPrevious", label, half).on_hover_text(crate::i18n::tr(tip)).clicked()
+        && let Err(e) = app.run(cmd, json!({}))
+    {
+        app.toast(ui.ctx(), e);
+    }
+    if wide_button(&mut row, "developReset", "Reset", half).on_hover_text(crate::i18n::tr("Reset all develop settings (⌘⇧R)")).clicked() {
+        // the photo being developed (Classic; Auto Sync carries it to the others)
+        let ids: Vec<u64> = app.session.active().map(|a| a.0).into_iter().collect();
+        let _ = app.run("develop.reset", json!({"ids": ids}));
+    }
+}
+
+/// A Classic footer button of width `w`.
+pub(crate) fn wide_button(ui: &mut egui::Ui, id: &str, label: &str, w: f32) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(w.max(40.0), 26.0), Sense::click());
+    register(ui.ctx(), format!("button:{id}"), r);
+    let fill = if resp.hovered() { t.hover } else { t.button };
+    ui.painter().rect(r, 3.0, fill, egui::Stroke::new(1.0, t.button_border), egui::StrokeKind::Inside);
+    ui.painter().text(r.center(), Align2::CENTER_CENTER, crate::i18n::tr(label), t.font(12.5), t.text);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp
+}
+
 pub fn header(ui: &mut egui::Ui, title: &str) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(15.0), t.text);
+    if ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new(NO_HEADERS))).unwrap_or(false) {
+        return;
+    }
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+    ui.painter().text(pos2(r.left() + 12.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(13.0), t.text);
+}
+
+/// Memory key: the right panels' own titles are left out (they are drawn inside a Classic panel
+/// whose header already names them).
+const NO_HEADERS: &str = "right-no-headers";
+
+/// Draw `add` without the tool panels' own titles.
+pub(crate) fn without_headers(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(NO_HEADERS), true));
+    add(ui);
+    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(NO_HEADERS), false));
 }
 
 pub fn label_row(ui: &mut egui::Ui, label: &str, value: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr(label), t.font(12.5), t.text_dim);
-    ui.painter().text(pos2(r.left() + 110.0, r.center().y), Align2::LEFT_CENTER, value, t.font(12.5), t.text_label);
+    ui.painter().text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr(label), t.font(12.0), t.text_dim);
+    ui.painter().text(pos2(r.left() + 98.0, r.center().y), Align2::LEFT_CENTER, value, t.font(12.0), t.text_label);
 }
 
 fn padded(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 6 }).show(ui, add);
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 20, top: 6, bottom: 6 }).show(ui, |ui| {
+        // wrapped button rows and stacked controls keep Classic's breathing room
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+        add(ui)
+    });
 }
 
 /// The aspect presets of the Crop panel: (menu label, `crop.aspect` value).
@@ -130,7 +261,7 @@ fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
-    header(ui, "Crop");
+    header(ui, "Crop & Straighten");
     padded(ui, |ui| {
         let original = app.session.catalog.photo(id).map(|p| {
             let (w, h) = (p.width.max(1) as f64, p.height.max(1) as f64);
@@ -225,8 +356,11 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
     });
-    divider(ui);
-    header(ui, "Geometry");
+}
+
+/// Classic's Transform panel: Upright (Off / Auto / Guided / Level / Vertical / Full, Update,
+/// guides), Constrain Crop and the transform sliders.
+pub(crate) fn transform(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &lightcraft_develop::DevelopSettings) {
     padded(ui, |ui| {
         ui.label(crate::i18n::tr("Upright"));
         {
@@ -283,7 +417,7 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
     });
     for spec in lightcraft_develop::controls::in_section(lightcraft_develop::Section::Geometry).filter(|c| c.id != "crop.angle") {
-        let v = lightcraft_develop::controls::get(&d, spec.id).unwrap_or(spec.default);
+        let v = lightcraft_develop::controls::get(d, spec.id).unwrap_or(spec.default);
         let out = slider(ui, spec, v, true, None);
         super::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": spec.id, "value": v})));
     }
@@ -474,7 +608,7 @@ fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
 }
 
-fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "Info");
     let t = Tokens::get(ui.ctx());
@@ -748,7 +882,7 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
     ui.add_space(6.0);
 }
 
-fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+pub(crate) fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "Keywords");
     let t = Tokens::get(ui.ctx());
@@ -901,7 +1035,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui, have: &[String]) {
     });
 }
 
-fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+pub(crate) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "Versions");
     let t = Tokens::get(ui.ctx());
@@ -1009,7 +1143,7 @@ fn short_time(iso: &str) -> String {
     }
 }
 
-fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+pub(crate) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "History");
     let t = Tokens::get(ui.ctx());

@@ -53,7 +53,7 @@ pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a s
 }
 
 /// Top-level menus in order (the macOS app menu is added by the host).
-pub const MENUS: &[&str] = &["File", "Edit", "View", "Photo", "Window", "Help"];
+pub const MENUS: &[&str] = &["File", "Edit", "Library", "View", "Photo", "Window", "Help"];
 
 /// Order and grouping per menu: command ids, `---` separators and `@Submenu` placeholders.
 /// Entries with a menu path that aren't listed are appended at the end of their menu, before any
@@ -69,11 +69,6 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "app.openLibrary",
             "file.backupLibrary",
             "file.restoreLibrary",
-            "---",
-            "dialog.newAlbum",
-            "dialog.newFolder",
-            "dialog.smartAlbum",
-            "dialog.newSmartAlbum",
             "---",
             "file.importPresets",
             "file.exportPresets",
@@ -108,6 +103,25 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.focusSearch",
             "---",
             "app.settings",
+        ],
+    ),
+    (
+        "Library",
+        &[
+            "dialog.newAlbum",
+            "dialog.smartAlbum",
+            "dialog.newFolder",
+            "dialog.newSmartAlbum",
+            "---",
+            "view.filterBar",
+            "library.clearFilter",
+            "---",
+            "view.previousImport",
+            "library.showSubfolders",
+            "---",
+            "file.findMissing",
+            "---",
+            "library.syncMetadata",
         ],
     ),
     (
@@ -153,8 +167,6 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "@Sort",
             "@Stacks",
-            "view.filterBar",
-            "library.clearFilter",
             "---",
             "compare.swap",
             "compare.makeSelect",
@@ -202,6 +214,12 @@ const LAYOUT: &[(&str, &[&str])] = &[
     (
         "Window",
         &[
+            "view.library",
+            "view.develop",
+            "---",
+            "@Panels",
+            "view.lightsOut",
+            "---",
             "panel.edit",
             "panel.crop",
             "panel.remove",
@@ -214,7 +232,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "panel.info",
             "panel.keywords",
             "---",
-            "@Edit Sections",
+            "@Develop Panels",
             "@Tools",
         ],
     ),
@@ -290,6 +308,11 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         // Every language's command is checked when it is the active one.
         _ if crate::menus::language_from_command(id).is_some() => Some(crate::menus::language_from_command(id) == Some(u.language)),
         "develop.autoSync" => Some(app.session.auto_sync),
+        "view.library" => Some(u.module == crate::state::Module::Library),
+        "view.develop" => Some(u.module == crate::state::Module::Develop),
+        "view.rightPanel" => Some(u.right_panel),
+        "view.topPanel" => Some(u.top_panel),
+        "view.toolbar" => Some(u.toolbar),
         "view.photoCounts" => Some(u.show_counts),
         "view.secondWindow" => Some(u.second_window),
         "view.photoGrid" => Some(u.view == ViewMode::PhotoGrid),
@@ -875,7 +898,7 @@ mod tests {
                 MenuNode::Separator => "---".into(),
             })
             .collect();
-        assert_eq!(labels[0], "Import Photos… [Cmd+Shift+I]");
+        assert_eq!(labels[0], "Import Photos and Video… [Cmd+Shift+I]");
         assert_eq!(labels[1..], ["Import from Folder…".to_string(), "Import from Device ▸".to_string()]);
         let all: Vec<MenuNode> = bar.iter().flat_map(|(_, v)| v.clone()).collect();
         let text = serde_json::to_string(&all).unwrap();

@@ -414,7 +414,8 @@ mod tests {
         assert_eq!((after.develop.clone(), after.history.len()), (before.develop.clone(), before.history.len()), "hover leaves the photo alone");
         assert_eq!(h.app.session.undo.len(), 0);
         // moving away ends the preview
-        h.request("ui.move", json!({"x": 5, "y": 500}), t);
+        // (over the photo)
+        h.request("ui.move", json!({"x": 700, "y": 400}), t);
         h.step();
         assert!(h.app.hover_preview.is_none());
         // click applies (one history step); the star toggles the favourite
@@ -435,6 +436,12 @@ mod tests {
         let t = Duration::from_secs(10);
         h.request("ui.set", json!({"view": "detail"}), t);
         h.request("engine.execute", json!({"command": "panel.presets"}), t);
+        h.settle(SETTLE);
+        // Develop ▸ Presets: groups start closed (Classic); a click opens one
+        assert!(h.app.ui.preset_groups_open.is_empty());
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "presetGroup:B&W"}), t)["ok"], true);
+        assert_eq!(h.app.ui.preset_groups_open, ["B&W"]);
+        h.app.ui.preset_groups_open.push("Color".into());
         h.settle(SETTLE);
         let id = h.app.session.active().unwrap();
         let photo = |h: &Headless| h.app.session.catalog.photo(id).unwrap().clone();
@@ -459,7 +466,7 @@ mod tests {
         assert_eq!(h.app.hover_preview.as_ref().map(|p| p.label.as_str()), Some("Preset: Warm Glow"));
         // thumbnails: variant textures for the visible presets
         h.app.ui.preset_thumbs = true;
-        h.request("ui.move", json!({"x": 5, "y": 500}), t);
+        h.request("ui.move", json!({"x": 700, "y": 400}), t);
         h.settle(SETTLE);
         h.step();
         assert!(h.app.hover_preview.is_none());
@@ -559,18 +566,18 @@ mod tests {
         let ex = |h: &mut Headless, c: &str, p: Value| h.request("engine.execute", json!({"command": c, "params": p}), Duration::from_secs(10));
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[0], vis[1]], "addKeywords": ["travel|italy"]}));
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[2]], "addKeywords": ["travel|france"]}));
-        h.request("ui.set", json!({"leftPanel": true}), t);
+        // Library ▸ Keyword List (Classic): a click on a keyword's name shows its photos
+        h.request("ui.set", json!({"view": "photoGrid", "librarySections": ["keywordList"]}), t);
         // clicks land on last frame's layout: let the keyword list settle first (on a loaded machine a
         // row could still move, and the click then hit its neighbour, e.g. "sunrise")
         h.settle(SETTLE);
-        let r = h.request("ui.clickWidget", json!({"id": "source:keyword:travel"}), t);
+        let r = h.request("ui.clickWidget", json!({"id": "keywordList:travel"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.filter.keyword.as_deref(), Some("travel"));
         assert_eq!(h.app.session.visible_cloned().len(), 3);
-        // open the level, filter by the child
-        h.request("ui.clickWidget", json!({"id": "keywordToggle:travel"}), t);
+        // the child (nested rows are listed open)
         h.settle(SETTLE);
-        let r = h.request("ui.clickWidget", json!({"id": "source:keyword:travel|italy"}), t);
+        let r = h.request("ui.clickWidget", json!({"id": "keywordList:travel|italy"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.visible_cloned().len(), 2);
         h.app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: "travel".into(), to: "trips".into() });
@@ -583,7 +590,8 @@ mod tests {
         h.request("engine.execute", json!({"command": "library.clearFilter"}), t);
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [vis[1]]}}), t);
         ex(&mut h, "photo.setMeta", json!({"ids": [vis[0]], "addKeywords": ["gelato"]}));
-        h.request("ui.set", json!({"right": "keywords"}), t);
+        // Library ▸ Keywording
+        h.request("ui.set", json!({"librarySections": ["keywording"]}), t);
         assert!(h.settle(SETTLE), "keyword suggestions did not settle");
         let r = h.request("ui.clickWidget", json!({"id": "kwSuggest:gelato"}), t);
         assert_eq!(r["ok"], true, "{r}");
@@ -606,6 +614,8 @@ mod tests {
             true
         }
         let mut h = demo([800.0, 600.0]);
+        // (the side panels' own disk checks would mix with the one under test)
+        h.app.ui.left_panel = false;
         h.settle(SETTLE);
         let check = |h: &mut Headless| {
             let raw = HeadlessView::raw_input(h.size, 1.0, 0.0, vec![]);
@@ -720,7 +730,7 @@ mod tests {
     fn drag_photos_onto_an_album() {
         let mut h = demo([1300.0, 900.0]);
         let t = Duration::from_secs(10);
-        h.request("engine.execute", json!({"command": "view.leftPanel"}), t);
+        h.request("engine.execute", json!({"command": "view.leftPanel", "params": {"show": true}}), t);
         let r = h.request("engine.execute", json!({"command": "album.create", "params": {"name": "Dropped"}}), t);
         let album = r["result"]["id"].as_u64().unwrap_or_else(|| panic!("{r}"));
         h.settle(SETTLE);
@@ -776,13 +786,12 @@ mod tests {
         assert_eq!(badges, vec![format!("badge:previewOnly:{}", po.0)], "only the preview-only photo has the badge");
         // the loupe and the Edit panel
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [po.0]}}), t);
-        h.request("ui.set", json!({"view": "detail"}), t);
-        h.app.ui.right = crate::state::RightPanel::Edit;
+        h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
         h.settle(SETTLE);
         let n = ids(&mut h, "notice:previewOnly:");
         assert!(n.contains(&"notice:previewOnly:loupe".to_string()) && n.contains(&"notice:previewOnly:edit".to_string()), "{n:?}");
-        // Info
-        h.app.ui.right = crate::state::RightPanel::Info;
+        // Library ▸ Metadata
+        h.request("ui.set", json!({"module": "library", "librarySections": ["metadata"]}), t);
         h.settle(SETTLE);
         assert!(ids(&mut h, "notice:previewOnly:").contains(&"notice:previewOnly:info".to_string()));
         // a regular photo: no notice
@@ -819,9 +828,10 @@ mod tests {
     /// accessibility and place fields reach the photo.
     #[test]
     fn info_fields_keep_typing_and_save() {
-        let mut h = demo([1300.0, 1000.0]);
+        // tall enough for the whole Metadata panel
+        let mut h = demo([1300.0, 1900.0]);
         let t = Duration::from_secs(10);
-        h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
+        h.request("ui.set", json!({"view": "detail", "module": "library", "librarySections": ["metadata"]}), t);
         h.settle(SETTLE);
         for (key, text) in [("altText", "A lake at dawn"), ("usageTerms", "Editorial use only"), ("city", "Zermatt")] {
             let r = h.request("ui.clickWidget", json!({"id": format!("field:{key}")}), t);
@@ -892,7 +902,8 @@ mod tests {
     /// open down to the hidden folder and push the restore row out of view.
     #[test]
     fn local_location_can_be_hidden_and_restored() {
-        let size = [1300.0, 900.0];
+        // (tall enough that the Local rows sit above the filmstrip)
+        let size = [1300.0, 1400.0];
         let mut h = demo(size);
         let t = Duration::from_secs(10);
         let dir = std::env::temp_dir().join(format!("lc-ui-hide-{}", std::process::id()));
@@ -1018,7 +1029,10 @@ mod tests {
         let mut h = demo([1300.0, 900.0]);
         let t = Duration::from_secs(10);
         let exec = |h: &mut Headless, c: &str, p: Value| h.request("engine.execute", json!({"command": c, "params": p}), t);
-        h.request("ui.set", json!({"view": "detail", "right": "versions"}), t);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        // Develop ▸ Snapshots (alone, so it is on screen)
+        exec(&mut h, "panel.versions", json!({}));
+        h.request("ui.set", json!({"developLeftSections": ["snapshots"]}), t);
         exec(&mut h, "develop.set", json!({"values": {"light.exposure": 1.0}}));
         exec(&mut h, "version.create", json!({"name": "Bright"}));
         exec(&mut h, "develop.set", json!({"values": {"light.exposure": -1.0}}));
@@ -1088,18 +1102,21 @@ mod tests {
     /// (issue #316).
     #[test]
     fn section_eye_switches_a_section_off() {
-        let mut h = demo([1300.0, 900.0]);
+        // tall enough that every Develop panel header is on screen
+        let mut h = demo([1300.0, 1400.0]);
         let t = Duration::from_secs(10);
         h.request("ui.set", json!({"view": "detail", "right": "edit"}), t);
         h.settle(SETTLE);
-        let light_on = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().section_enabled("light");
+        // Classic's Tone Curve panel switch (Basic has none)
+        let curve_on = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().section_enabled("curve");
+        let open = h.app.ui.section_open("toneCurve");
         for expected in [false, true] {
-            // the eye shows while the pointer is on the header
-            assert_eq!(h.request("ui.hoverWidget", json!({"id": "section:light"}), t)["ok"], true);
-            assert_eq!(h.request("ui.clickWidget", json!({"id": "sectionEye:light"}), t)["ok"], true);
-            assert_eq!(light_on(&h), expected);
+            assert_eq!(h.request("ui.hoverWidget", json!({"id": "section:toneCurve"}), t)["ok"], true);
+            assert_eq!(h.request("ui.clickWidget", json!({"id": "sectionEye:toneCurve"}), t)["ok"], true);
+            assert_eq!(curve_on(&h), expected);
         }
-        assert!(h.app.ui.section_open("light"), "the click didn't fold the section");
+        assert_eq!(h.app.ui.section_open("toneCurve"), open, "the switch doesn't open or fold the panel");
+        assert!(!h.app.widgets.iter().any(|(w, _)| w == "sectionEye:basic"), "Basic has no switch");
     }
 
     /// Return commits a tool panel back to Edit; elsewhere it does nothing.
@@ -1319,11 +1336,11 @@ mod tests {
     /// Info panel → Edit Capture Time…: a time-zone shift moves the selected photos.
     #[test]
     fn capture_time_dialog_shifts_time_zone() {
-        let mut h = demo([1200.0, 900.0]);
+        let mut h = demo([1200.0, 1700.0]);
         let t = Duration::from_secs(10);
         let id = h.app.session.visible_cloned()[0];
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0]}}), t);
-        h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
+        h.request("ui.set", json!({"view": "detail", "module": "library", "librarySections": ["metadata"]}), t);
         let before = h.app.session.catalog.photo(id).unwrap().captured.clone().unwrap();
         let r = h.request("ui.clickWidget", json!({"id": "icon:editCaptureTime"}), t);
         assert_eq!(r["ok"], true, "{r}");
@@ -1350,7 +1367,7 @@ mod tests {
         let t = Duration::from_secs(10);
         let id = h.app.session.visible_cloned()[0];
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0]}}), t);
-        h.request("ui.set", json!({"view": "detail", "right": "info"}), t);
+        h.request("ui.set", json!({"view": "detail", "module": "library", "librarySections": ["metadata"]}), t);
         let r = h.request("ui.clickWidget", json!({"id": "label:green"}), t);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(h.app.session.catalog.photo(id).unwrap().label, Some(lightcraft_catalog::ColorLabel::Green));

@@ -74,10 +74,23 @@ impl DevelopSettings {
     /// Calibration the pipeline switches off where it applies them. Borrowed when every section is on.
     pub fn effective(&self) -> std::borrow::Cow<'_, DevelopSettings> {
         let off = |section: &str| !self.section_enabled(section);
-        if !(off("light") || off("color") || off("detail")) {
+        if !(off("light") || off("color") || off("detail") || off("curve") || off("hsl") || off("grading")) {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut d = self.clone();
+        // Lightroom Classic's panel switches: Tone Curve, HSL / Color (with Point Color), Color Grading
+        if off("curve") {
+            d.reset_section(Section::Curve);
+        }
+        if off("hsl") {
+            for section in [Section::Mixer, Section::BwMix, Section::PointColor] {
+                d.reset_section(section);
+            }
+            d.point_colors.clear();
+        }
+        if off("grading") {
+            d.reset_section(Section::Grading);
+        }
         if off("light") {
             d.reset_section(Section::Light);
             d.reset_section(Section::Curve);
@@ -180,6 +193,19 @@ mod tests {
         assert!(!s.is_unedited());
         s.reset_section(Section::Light);
         assert!(s.is_unedited());
+    }
+
+    #[test]
+    fn classic_panel_switches_reset_only_their_panel() {
+        let mut s = DevelopSettings::default();
+        s.light.exposure = 1.0;
+        s.grading.blending = 20.0;
+        s.set_section_enabled("grading", false);
+        let e = s.effective();
+        assert_eq!(e.light.exposure, 1.0, "Basic stays");
+        assert_eq!(e.grading.blending, DevelopSettings::default().grading.blending, "Color Grading off");
+        s.set_section_enabled("grading", true);
+        assert!(matches!(s.effective(), std::borrow::Cow::Borrowed(_)));
     }
 
     #[test]

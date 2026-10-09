@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 
 use crate::LightcraftApp;
+pub use crate::import_window::{choose_source, has_window, open_window};
 use crate::render::Slot;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -85,6 +86,142 @@ pub struct ImportDialog {
     /// The candidate clicked last: where a Shift-click range starts ([`ImportDialog::click`]).
     #[serde(skip)]
     pub last_clicked: Option<usize>,
+    /// Lightroom Classic's Import window (source browser, files, options) rather than the review
+    /// of files already chosen.
+    pub window: bool,
+    /// The window's choices (remembered for the next import).
+    pub prefs: ImportPrefs,
+    /// The grid shows `all` photos, `new` ones (not in the library) or `folders` (by destination
+    /// folder).
+    pub show: String,
+    /// Grid order: `time` (capture time), `checked`, `name` or `type`.
+    pub sort: String,
+    /// Thumbnail size in the grid (points).
+    pub thumb: f32,
+    /// The source is being read.
+    #[serde(skip)]
+    pub scanning: bool,
+}
+
+/// The Import window's choices, remembered between imports (Lightroom Classic keeps the last
+/// source, transfer mode, destination and options).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ImportPrefs {
+    /// The folder or device last imported from.
+    pub source: String,
+    /// Include Subfolders.
+    pub subfolders: bool,
+    /// `dng` (Copy as DNG), `copy`, `move` or `add`.
+    pub mode: String,
+    /// Copy / move into this folder ("" = the library's Originals/).
+    pub destination: String,
+    /// Into Subfolder: on, and its name.
+    pub into_subfolder: bool,
+    pub subfolder: String,
+    /// Organize: `date` (by date, in [`DATE_FORMATS`]`[date_format]`) or `flat` (into one folder).
+    pub organize: String,
+    pub date_format: usize,
+    /// Build Previews: `minimal`, `embedded`, `standard` or `full` (1:1).
+    pub previews: String,
+    pub smart_previews: bool,
+    /// Make a Second Copy To this folder ("" = off).
+    pub second_copy: String,
+    /// File Renaming template ("" = keep the names).
+    pub rename: String,
+    /// Apply During Import: develop preset id, metadata preset name, keywords.
+    pub preset: String,
+    pub metadata_preset: String,
+    pub keywords: String,
+}
+
+impl Default for ImportPrefs {
+    fn default() -> Self {
+        ImportPrefs {
+            source: String::new(),
+            subfolders: true,
+            mode: "add".into(),
+            destination: String::new(),
+            into_subfolder: false,
+            subfolder: String::new(),
+            organize: "date".into(),
+            date_format: 0,
+            previews: "minimal".into(),
+            smart_previews: false,
+            second_copy: String::new(),
+            rename: String::new(),
+            preset: String::new(),
+            metadata_preset: String::new(),
+            keywords: String::new(),
+        }
+    }
+}
+
+/// A typed folder name made safe as one folder level of a template: no separators, no template
+/// braces, no leading / trailing dots or spaces.
+pub fn folder_name(name: &str) -> String {
+    let cleaned: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '{' | '}') || c.is_control() { '-' } else { c }).collect();
+    cleaned.trim().trim_matches('.').trim().to_string()
+}
+
+/// Classic's Destination ▸ Date Format choices: (example, folder template).
+pub const DATE_FORMATS: [(&str, &str); 7] = [
+    ("2026/2026-10-08", "{date:%Y}/{date:%Y-%m-%d}"),
+    ("2026/10/08", "{date:%Y}/{date:%m}/{date:%d}"),
+    ("2026/10-08", "{date:%Y}/{date:%m-%d}"),
+    ("2026-10-08", "{date:%Y-%m-%d}"),
+    ("2026/20261008", "{date:%Y}/{date:%Y%m%d}"),
+    ("20261008", "{date:%Y%m%d}"),
+    ("2026/2026-10", "{date:%Y}/{date:%Y-%m}"),
+];
+
+/// The Import window's modes: (key, label, what it does).
+pub const MODES: [(&str, &str, &str); 4] = [
+    ("dng", "Copy as DNG", "Copy photos to a new location, raw files converted to DNG, and add them to the catalog"),
+    ("copy", "Copy", "Copy photos to a new location and add them to the catalog"),
+    ("move", "Move", "Move photos to a new location and add them to the catalog (the originals are removed once each copy is verified)"),
+    ("add", "Add", "Add photos to the catalog without moving them"),
+];
+
+impl ImportPrefs {
+    /// The `organize` param of `library.import` for Into Subfolder / Organize / Date Format: a
+    /// folder template (`Wedding/{date:%Y}/{date:%Y-%m-%d}`), or `flat` into one folder.
+    pub fn organize_param(&self) -> String {
+        let sub = if self.into_subfolder { folder_name(&self.subfolder) } else { String::new() };
+        let dated = (self.organize != "flat").then(|| DATE_FORMATS.get(self.date_format).unwrap_or(&DATE_FORMATS[0]).1);
+        match (sub.is_empty(), dated) {
+            (true, None) => "flat".into(),
+            (true, Some(t)) => t.into(),
+            (false, None) => format!("{sub}/"),
+            (false, Some(t)) => format!("{sub}/{t}"),
+        }
+    }
+
+    /// The destination folder a photo captured at `captured` (`YYYY-MM-DDTHH:MM:SS`) goes to,
+    /// relative to the destination ("" = the destination itself).
+    /// `fallback` is the date of a photo without a capture time (the import's, as the engine files it).
+    pub fn folder_for(&self, captured: Option<&str>, fallback: &str) -> String {
+        let date = captured.unwrap_or(fallback);
+        let part = |a: usize, b: usize| date.get(a..b).filter(|s| s.chars().all(|c| c.is_ascii_digit())).unwrap_or("unknown");
+        let (y, m, d) = (part(0, 4), part(5, 7), part(8, 10));
+        let mut levels: Vec<String> = Vec::new();
+        if self.into_subfolder && !self.subfolder.trim().is_empty() {
+            levels.push(folder_name(&self.subfolder));
+        }
+        if self.organize != "flat" {
+            let t = DATE_FORMATS.get(self.date_format).unwrap_or(&DATE_FORMATS[0]).1;
+            for level in t.split('/') {
+                // `{date:%Y-%m}` → `2026-10`
+                let f = level.trim_start_matches("{date:").trim_end_matches('}');
+                levels.push(f.replace("%Y", y).replace("%m", m).replace("%d", d));
+            }
+        }
+        levels.join("/")
+    }
+
+    pub fn copies(&self) -> bool {
+        self.mode != "add"
+    }
 }
 
 impl ImportDialog {
@@ -186,17 +323,22 @@ pub struct ImportTask {
     first: Option<u64>,
     /// Reading a folder for the Local view: the photos stay out of the library, and nothing is
     /// selected or announced as added.
-    browse: bool,
+    pub browse: bool,
     /// Cancel was pressed: no further files are started; batches already readied are added.
     pub cancelled: bool,
     /// Auto Import (the watched folder): the selection stays as it is, a short toast when done.
-    auto: bool,
+    pub auto: bool,
     /// Auto Import: the selection to keep.
     keep_selection: Option<lightcraft_engine::Selection>,
     run: Option<ImportRun>,
     /// A command to run when the import has finished (e.g. the Lightroom migration's apply step),
     /// and the toast its result makes: what the finished import announces.
     then: Option<Then>,
+    /// Started from the Import window: afterwards Library shows Previous Import, previews are
+    /// built and the second copy is made as chosen there.
+    pub window: Option<ImportPrefs>,
+    /// The files the Import window imported (for its second copy).
+    pub window_files: Vec<String>,
 }
 
 impl ImportTask {
@@ -353,6 +495,8 @@ pub struct ScanTask {
     browse: bool,
     /// What is being scanned (the review's source).
     sources: Vec<String>,
+    /// The Import window is waiting for these files (its grid is refilled, its choices kept).
+    into_window: bool,
 }
 
 /// Scan `paths` in the background, then open the review dialog (see [`poll_scan`]).
@@ -372,7 +516,7 @@ pub fn open(app: &mut LightcraftApp, paths: Vec<String>) -> Result<Value, String
     std::thread::spawn(job);
     #[cfg(target_arch = "wasm32")]
     job();
-    app.scan = Some(ScanTask { progress, rx, copy: false, browse: false, sources });
+    app.scan = Some(ScanTask { progress, rx, copy: false, browse: false, sources, into_window: false });
     Ok(json!({"scanning": true}))
 }
 
@@ -433,7 +577,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
     std::thread::spawn(job);
     #[cfg(target_arch = "wasm32")]
     job();
-    app.scan = Some(ScanTask { progress, rx, copy: false, browse: true, sources: Vec::new() });
+    app.scan = Some(ScanTask { progress, rx, copy: false, browse: true, sources: Vec::new(), into_window: false });
     app.renderer.forget_imports();
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))
 }
@@ -465,6 +609,29 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             let total = queue.len();
             let _ = total;
             app.import = Some(ImportTask::new(queue, json!({"mode": "add", "local": true}), undo0, true));
+        }
+        return;
+    }
+    if task.into_window {
+        app.renderer.forget_imports();
+        let trashed: Vec<bool> = out
+            .candidates
+            .iter()
+            .map(|c| {
+                c.duplicate.is_some()
+                    && c.existing.is_some_and(|id| app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).is_some_and(|p| p.deleted))
+            })
+            .collect();
+        if let Some(crate::state::Dialog::Import { opts }) = app.ui.dialog.as_mut()
+            && opts.window
+        {
+            let fresh = ImportDialog::new(out.candidates);
+            opts.candidates = fresh.candidates;
+            opts.checked = fresh.checked;
+            opts.trashed = trashed;
+            opts.sources = task.sources;
+            opts.scanning = false;
+            opts.last_clicked = None;
         }
         return;
     }
@@ -519,14 +686,60 @@ pub fn scan_progress(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 impl ScanTask {
+    /// A scan whose files refill the open Import window.
+    pub(crate) fn for_window(progress: std::sync::Arc<ScanProgress>, rx: std::sync::mpsc::Receiver<ScanOutput>, sources: Vec<String>) -> Self {
+        ScanTask { progress, rx, copy: false, browse: false, sources, into_window: true }
+    }
+
+    /// Stop the worker at its next file (it isn't waited for).
+    pub fn cancel(&self) {
+        self.progress.cancel.store(true, Ordering::Relaxed);
+    }
+
     /// `{done, total}` for `ui.inspect` (total is 0 while the folders are still being listed).
     pub fn status(&self) -> Value {
         json!({"done": self.progress.done.load(Ordering::Relaxed), "total": self.progress.total.load(Ordering::Relaxed)})
     }
 }
 
+/// The review fields an Import window's choices stand for (transfer, destination, folders,
+/// renaming, what is applied).
+pub fn from_prefs(d: &ImportDialog) -> ImportDialog {
+    let mut d = d.clone();
+    let p = &d.prefs;
+    d.copy = p.copies();
+    d.move_files = p.mode == "move";
+    d.dng = p.mode == "dng";
+    d.destination = p.destination.clone();
+    d.organize = "custom".into();
+    d.folder_template = p.organize_param();
+    if d.folder_template == "flat" {
+        d.organize = "flat".into();
+    }
+    d.rename = p.rename.clone();
+    d.preset = p.preset.clone();
+    d.metadata_preset = p.metadata_preset.clone();
+    d.keywords = p.keywords.clone();
+    d
+}
+
 /// Start importing the dialog's checked files (the dialog's OK / `ui.dialog.confirm`).
 pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String> {
+    if d.window {
+        // remember the choices for the next import (Classic)
+        app.ui.import_prefs = d.prefs.clone();
+        let w = from_prefs(d);
+        let r = start_review(app, &w)?;
+        if let Some(task) = app.import.as_mut() {
+            task.window = Some(d.prefs.clone());
+            task.window_files = w.selected_paths();
+        }
+        return Ok(r);
+    }
+    start_review(app, d)
+}
+
+fn start_review(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String> {
     let queue = d.selected_paths();
     if queue.is_empty() {
         return Err("no photos selected".into());
@@ -712,6 +925,10 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, mut task: ImportTask) {
             app.toast(ctx, crate::i18n::tr_format!("{} photo{} not readable", task.failed, if task.failed == 1 { "" } else { "s" }));
         }
         return;
+    }
+    if let Some(prefs) = task.window.take() {
+        let files = std::mem::take(&mut task.window_files);
+        crate::import_window::after_window_import(app, &prefs, task.imported + task.restored, &files);
     }
     if let Some(f) = task.first {
         let _ = app.run("library.select", json!({"ids": [f]}));
