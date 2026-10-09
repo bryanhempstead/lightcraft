@@ -6,6 +6,7 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (colour agent round 4, 2026-10-09) Camera Raw oracle (tools/lr-compare/oracle, 98a79d3): global Basic tone now measured exactly; held-out B 4.22 (round 2 4.46) but the grid photos' colour (Summer Fields calibration greens/teals) still loses to round 2 → **not for Bryan's library yet**. Blocked: Photoshop is stuck on a modal "disk is full" alert from the oracle batch (the Mac hit 0 bytes during it) — dismiss it / quit Photoshop, then run the colour-chart oracle (Calibration, HSL, Saturation, Summer Fields table placement).
 - [ ] (colour agent round 3, 2026-10-09) **Bryan runs** — Adobe's own profiles (replaces the round-1/2 "Bryan runs" calibrate / wbmap / lensfit steps for cameras with an Adobe Standard DCP; those fitted profiles stay only as the fallback, e.g. iPhone ProRAW). LightCraft closed:
   1. `cd ~/crafts/lightcraft && sh tools/fetch-dng-sdk.sh` (already done on this Mac: vendor/ is there; re-run after a fresh clone)
   2. `cargo build --release -p lightcraft-cli -p lightcraft` (then let the brain app rebuild/launch LightCraft.app as usual)

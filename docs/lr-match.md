@@ -276,3 +276,30 @@ operator on heavily edited photos.
 Next: a controlled oracle for Lightroom's sliders (Camera Raw in Photoshop rendering synthetic
 DNGs with known settings, if Bryan agrees to it being scripted) would replace the regression on
 previews with exact measurements of PV2012.
+
+## Round 4 (2026-10-09, in progress): Camera Raw as an oracle
+
+Bryan approved scripting Camera Raw in Photoshop 2026 (AppleScript `do javascript`, no GUI input;
+`tools/lr-compare/oracle/`). Synthetic LinearRaw DNGs with real camera colour (Adobe Standard DCP
+matrices) and known settings in their XMP, rendered by Camera Raw and by LightCraft
+(`oracle_render`), compared pixel by pixel; also Bryan's real raws (training photos only) with
+one-slider sidecars.
+
+What the oracle showed:
+- **Exposure, Whites, Blacks are global per-pixel curves** (a thin probe ramp renders the same on
+  any background), non-linear in the slider value and applied in sequence (Exposure first).
+  Measured as EV-shift tables at 8–12 slider values (`crates/pipeline/src/tone_adobe.rs`): on the
+  ramps LightCraft now matches Camera Raw to ΔE ~0.1 per slider, 0.1–0.9 for pairs/triples.
+- **Contrast is global but image-adaptive**: its pivot moves ~0.21 EV per EV of the image's key.
+- **Lightroom's default tone** differs from the DNG reference: no "Shadows 5" black ramp (deep
+  shadows were up to 2 L* too dark) — now the measured `BASE` table.
+- **Highlights / Shadows are local and image-adaptive**: no effect at all on a uniform image; a thin
+  bright line on a dark background is pulled almost to the background at Highlights −100. Fits on
+  real raws with one slider each did not transfer to his combined presets (B 4.22 → 4.33), so
+  H/S stay fitted on previews on top of the exact global tone.
+
+Held-out split B: round 2 4.46 / 10.7 / 21 → round 3 4.46 / 10.7 / 23 → **round 4 4.22 / 10.4 / 24**
+(edited 5.84 → 5.43, Summer Fields 5.84 → 5.36, Leica 3.35 → 3.10, GR III 5.30 → 4.88). Grid photos
+still behind round 2 on colour (L1007499 4.00 vs 2.72, _DSF4237 4.46 vs 3.13: greens/teals drift
+brown) — next: the colour chart through Camera Raw for Calibration / HSL / Saturation and the
+creative tables.
