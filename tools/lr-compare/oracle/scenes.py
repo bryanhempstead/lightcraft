@@ -41,3 +41,21 @@ def chart(h=640):
         row, col = divmod(i, 24)
         img[4 + row * chh + 3: 4 + (row + 1) * chh - 3, col * cw + 3:(col + 1) * cw - 3] = c
     return img, cells, (cw, chh)
+GRID_H = np.arange(36) / 36.0
+GRID_S = np.array([0.0, 0.08, 0.16, 0.25, 0.35, 0.5, 0.65, 0.8, 0.9, 0.97])
+GRID_EV = np.linspace(-9.0, 0.0, 13)
+def grid(px=8, cols=72):
+    """dense HSV grid (linear ProPhoto): 36 hues x 10 saturations x 13 levels, px-square patches; returns (img, colours, rects)"""
+    cols_ = []
+    for ev in GRID_EV:
+        for s in GRID_S:
+            for hh in GRID_H:
+                cols_.append(2.0 ** ev * np.array(colorsys.hsv_to_rgb(hh, s, 1.0)))
+    n = len(cols_); rows = -(-n // cols)
+    img = np.full((rows * px, cols * px, 3), 0.18 * 0.5)
+    rects = []
+    for i, c in enumerate(cols_):
+        r, k = divmod(i, cols)
+        img[r * px:(r + 1) * px, k * px:(k + 1) * px] = c
+        rects.append((r * px + 2, k * px + 2, r * px + px - 2, k * px + px - 2))
+    return img, np.array(cols_), rects

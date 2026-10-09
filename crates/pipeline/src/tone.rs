@@ -693,8 +693,14 @@ mod tests {
     /// is exact at the measured values (zero sliders: the base table alone), and survives NaN.
     #[test]
     fn adobe_tone_tables_are_monotone_and_safe() {
-        let base = crate::adobe::Base { look: None, curve: (0..=crate::adobe::CURVE_N).map(|i| (i as f32 / crate::adobe::CURVE_N as f32).sqrt()).collect(), black: 0.0 };
-        for (e, c, w, b) in [(0.0, 0.0, 0.0, 0.0), (1.3, -63.0, -36.0, 30.0), (-2.7, -100.0, 15.0, 68.0), (4.0, 100.0, 100.0, -100.0), (-5.0, -100.0, -100.0, 100.0)] {
+        let base = crate::adobe::Base {
+            look: None,
+            curve: (0..=crate::adobe::CURVE_N).map(|i| (i as f32 / crate::adobe::CURVE_N as f32).sqrt()).collect(),
+            black: 0.0,
+        };
+        for (e, c, w, b) in
+            [(0.0, 0.0, 0.0, 0.0), (1.3, -63.0, -36.0, 30.0), (-2.7, -100.0, 15.0, 68.0), (4.0, 100.0, 100.0, -100.0), (-5.0, -100.0, -100.0, 100.0)]
+        {
             for key in [None, Some(-6.0), Some(2.0), Some(f32::NAN)] {
                 let t = ToneMap::adobe_lr(&base, e, c, w, b, key);
                 assert!(t.lut().iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{e} {c} {w} {b} {key:?}");

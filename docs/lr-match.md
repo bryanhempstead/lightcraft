@@ -277,7 +277,7 @@ Next: a controlled oracle for Lightroom's sliders (Camera Raw in Photoshop rende
 DNGs with known settings, if Bryan agrees to it being scripted) would replace the regression on
 previews with exact measurements of PV2012.
 
-## Round 4 (2026-10-09, in progress): Camera Raw as an oracle
+## Round 4 (2026-10-09): Camera Raw as an oracle
 
 Bryan approved scripting Camera Raw in Photoshop 2026 (AppleScript `do javascript`, no GUI input;
 `tools/lr-compare/oracle/`). Synthetic LinearRaw DNGs with real camera colour (Adobe Standard DCP
@@ -298,8 +298,38 @@ What the oracle showed:
   real raws with one slider each did not transfer to his combined presets (B 4.22 → 4.33), so
   H/S stay fitted on previews on top of the exact global tone.
 
-Held-out split B: round 2 4.46 / 10.7 / 21 → round 3 4.46 / 10.7 / 23 → **round 4 4.22 / 10.4 / 24**
-(edited 5.84 → 5.43, Summer Fields 5.84 → 5.36, Leica 3.35 → 3.10, GR III 5.30 → 4.88). Grid photos
-still behind round 2 on colour (L1007499 4.00 vs 2.72, _DSF4237 4.46 vs 3.13: greens/teals drift
-brown) — next: the colour chart through Camera Raw for Calibration / HSL / Saturation and the
-creative tables.
+Tone alone (4a): held-out B 4.22 / 10.4 / 24, but the grid photos' colour still lost to round 2.
+Then the colour (4b), on a dense ProPhoto HSV grid (36 hues × 10 saturations × 13 levels,
+`make_grid.py`) and a chart, every Calibration / HSL / Saturation / Vibrance slider at ±50 / ±100:
+- **Calibration is a primaries matrix in linear ProPhoto** (fitted through Camera Raw's own base
+  inverted on the grid, `inv.py` / `calfit2.py`): each slider moves its primary's column to
+  `e_i + a·e_next + b·e_prev`, columns rescaled to keep white; hue ≈ ±0.16 per 50, saturation
+  ≈ ∓0.18 per 50, offsets add (`colorops::CALIB_TABLE`). Summer Fields' calibration on the grid:
+  ΔE 2.64 → 1.55.
+- **HSL, Saturation, Vibrance** act on the finished colour as smooth functions of its OkLCh hue,
+  lightness and chroma; measured as tables (36 × 5 × 4, Δhue / ln chroma ratio / ΔL, per slider
+  stop; `hslfit.py`, `gen_colortab.py` → `crates/pipeline/src/colortab.bin`, 126 KB) and summed per
+  render (Camera Raw's own combinations match the sum: his HSL preset 1.89 → 0.38 in the model,
+  0.77 in LightCraft; Saturation −30 1.39 → 0.82). Used for Adobe camera bases only.
+- **Custom white balance moves twice as far** as the DNG colour spec says, for every camera tried
+  except the Leica M (Typ 262) (real CR3 / RAF / GR III DNG and synthetic DNGs; `make_rwb.py`,
+  `make_wb.py`): the neutral is `shot · (sdk / shot)^k`, k = 2 (Leica 1), chosen per camera on split A
+  (`engine::adobe::WB_STRENGTH`). Mechanism unknown; extreme Temp (34 600 K) is still short on X-T2.
+- X-T2 exposure bias: split A dL +0.2 — no change needed.
+
+| | round 2 (jc6) | round 4a (o3) | **round 4 (o5)** |
+|---|---|---|---|
+| held-out B | 4.46 / 10.7 / 21 | 4.22 / 10.4 / 24 | **3.95 / 10.1 / 24** |
+| all 166 | 5.13 / 11.7 / 24 | 4.69 / 11.2 / 28 | **4.31 / 10.8 / 28** |
+| B · edited | 5.84 / 14.0 / 3 | 5.43 / 13.0 / 4 | 5.00 / 12.6 / 4 |
+| B · Summer Fields | 5.84 / 13.9 / 0 | 5.36 / 12.7 / 1 | 4.88 / 12.3 / 1 |
+| B · R6 / Leica / GR III | 3.79 / 3.35 / 5.30 | 3.82 / 3.10 / 4.88 | 3.46 / 2.94 / 4.69 |
+| B · X-T2 / X100F | 7.04 / 6.39 | 7.30 / 4.85 | 7.27 / 4.06 |
+| L1007499 | 2.72 / 5.3 | 4.00 / 7.2 | **2.68 / 6.2** |
+| R0001321 | 6.07 / 34.5 | 6.14 / 33.5 | 5.66 / 33.1 |
+| _DSF4237 | 3.13 / 5.6 | 4.46 / 8.8 | **2.45 / 4.6** |
+| IMG_4270 | 15.86 / 22.0 | 15.86 / 22.0 | 16.07 / 21.5 |
+| L1004995 | 11.18 / 33.6 | 10.16 / 30.6 | 10.97 / 32.2 |
+
+Not done: Highlights / Shadows and Clarity / Texture / Dehaze against spatial targets (they stay
+fitted on previews); the WB mechanism; Nautica (3 photos, ~10).

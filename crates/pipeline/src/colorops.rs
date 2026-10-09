@@ -5,7 +5,7 @@ use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
 
 use lightcraft_color::perceptual::{hsv_to_rgb, lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
-use lightcraft_color::{Mat3, REC2020, SRGB};
+use lightcraft_color::{Mat3, PROPHOTO, REC2020, SRGB};
 use lightcraft_develop::{Calibration, DevelopSettings, MIXER_HUES, PointColor};
 
 /// OkLCh hue angle (radians) of a pure sRGB colour with HSV hue `deg`.
@@ -148,6 +148,9 @@ pub struct ColorOps {
     pub grading: Option<([WheelK; 4], f32, f32)>,
     /// OkLCh hue of skin tones (protected by vibrance).
     pub skin: f32,
+    /// Lightroom's measured HSL / Saturation / Vibrance ([`crate::colortab`]) in place of the
+    /// mixer, vibrance and saturation above (set for Adobe camera bases).
+    pub table: Option<Vec<f32>>,
 }
 
 fn wheel(w: &lightcraft_develop::Wheel) -> WheelK {
@@ -181,11 +184,32 @@ impl ColorOps {
                 )
             }),
             skin: oklch_hue_of_srgb_hue(25.0),
+            table: None,
         }
     }
 
+    /// Use Lightroom's measured colour tables for `s` (when it has HSL / Saturation / Vibrance
+    /// and the data is available) instead of the built-in mixer, vibrance and saturation.
+    pub fn with_measured(mut self, s: &DevelopSettings) -> ColorOps {
+        if self.bw.is_none()
+            && let Some(t) = crate::colortab::for_settings(s)
+        {
+            self.table = Some(t);
+            self.mixer = false;
+            self.vibrance = 0.0;
+            self.saturation = 0.0;
+        }
+        self
+    }
+
     pub fn is_identity(&self) -> bool {
-        self.vibrance == 0.0 && self.saturation == 0.0 && !self.mixer && self.points.is_empty() && self.bw.is_none() && self.grading.is_none()
+        self.vibrance == 0.0
+            && self.saturation == 0.0
+            && !self.mixer
+            && self.table.is_none()
+            && self.points.is_empty()
+            && self.bw.is_none()
+            && self.grading.is_none()
     }
 
     /// `local_sat` (−1..1) and `local_hue` (radians) come from masks.
@@ -197,7 +221,7 @@ impl ColorOps {
         let lab = oklab_from_2020(rgb);
         // only chroma changes (vibrance / saturation, maybe grading): scale a, b directly — the same
         // result as the OkLCh round trip without its sin / cos (and atan2 unless vibrance needs the hue)
-        if !self.mixer && self.points.is_empty() && self.bw.is_none() && local_hue == 0.0 {
+        if !self.mixer && self.table.is_none() && self.points.is_empty() && self.bw.is_none() && local_hue == 0.0 {
             let mut lab = lab;
             let c0 = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
             let mut c = c0;
@@ -224,6 +248,12 @@ impl ColorOps {
             let mix: f32 = (0..8).map(|i| w[i] * bw[i]).sum();
             let l = (l + mix * (c / 0.2).min(1.0) * BW_GAIN).max(0.0);
             return self.grade(lch_to_lab([l, 0.0, h]));
+        }
+        if let Some(t) = &self.table {
+            let d = crate::colortab::lookup(t, l, c, h);
+            h += d[0];
+            c *= d[1].exp();
+            l += d[2];
         }
         if self.mixer {
             let w = band_weights(h);
@@ -272,14 +302,34 @@ impl ColorOps {
     }
 }
 
-/// Hue rotation (OkLCh radians) of a calibration primary at ±100.
-pub const CALIB_HUE: f32 = 0.5;
-/// Chroma scale of a calibration primary at ±100 (`1 ± CALIB_SAT`).
-pub const CALIB_SAT: f32 = 0.6;
+/// Calibration slider stops for [`CALIB_TABLE`].
+const CALIB_STOPS: [f64; 5] = [-100.0, -50.0, 0.0, 50.0, 100.0];
+
+/// Measured with Camera Raw itself (synthetic DNGs, `tools/lr-compare/oracle`): each calibration
+/// slider moves its primary's column of a linear-ProPhoto matrix to `e_i + a·e_next + b·e_prev`
+/// (next = the following primary R→G→B→R). Per primary (R, G, B) and slider (Hue, Saturation), the
+/// (a, b) offsets at −100, −50, 0, +50, +100 (fitted in CIELAB); hue and saturation offsets add.
+#[rustfmt::skip]
+#[allow(clippy::approx_constant)]
+const CALIB_TABLE: [[[(f64, f64); 5]; 2]; 3] = [
+    [[(-0.3336, 0.3212), (-0.1715, 0.1514), (0.0000, 0.0000), (0.1480, -0.1759), (0.3107, -0.3427)],
+     [(0.3687, 0.3927), (0.1775, 0.1875), (0.0000, 0.0000), (-0.2027, -0.2055), (-0.3839, -0.3941)]],
+    [[(-0.3371, 0.3135), (-0.1672, 0.1494), (0.0000, 0.0000), (0.1635, -0.1625), (0.3199, -0.3277)],
+     [(0.3885, 0.3620), (0.1682, 0.1884), (0.0000, 0.0000), (-0.1915, -0.2018), (-0.3808, -0.3856)]],
+    [[(-0.3295, 0.3135), (-0.1677, 0.1518), (0.0000, 0.0000), (0.1512, -0.1722), (0.3163, -0.3359)],
+     [(0.3574, 0.3673), (0.1606, 0.1763), (0.0000, 0.0000), (-0.1862, -0.1932), (-0.3650, -0.3664)]],
+];
+
+fn calib_offset(t: &[(f64, f64); 5], v: f64) -> (f64, f64) {
+    let v = v.clamp(-100.0, 100.0);
+    let i = (((v + 100.0) / 50.0).floor() as usize).min(3);
+    let f = (v - CALIB_STOPS[i]) / 50.0;
+    (t[i].0 + (t[i + 1].0 - t[i].0) * f, t[i].1 + (t[i + 1].1 - t[i].1) * f)
+}
 
 /// The calibration panel's primaries as a white-preserving 3×3 matrix on linear Rec.2020 (row-major):
-/// each primary is rotated in OkLCh hue and scaled in chroma at constant OkLab lightness, then the
-/// columns are rescaled so that neutral (1, 1, 1) maps to itself. `None` when neutral.
+/// Lightroom's primaries matrix in linear ProPhoto ([`CALIB_TABLE`]), columns rescaled so that
+/// neutral maps to itself, conjugated into Rec.2020. `None` when neutral.
 pub fn calibration_matrix(c: &Calibration) -> Option<[[f32; 3]; 3]> {
     let prim = c.primaries();
     if prim.iter().all(|(h, s)| *h == 0.0 && *s == 0.0) {
@@ -287,19 +337,18 @@ pub fn calibration_matrix(c: &Calibration) -> Option<[[f32; 3]; 3]> {
     }
     let mut p = [[0.0f64; 3]; 3];
     for (i, (hue, sat)) in prim.iter().enumerate() {
-        let mut e = [0.0f32; 3];
-        e[i] = 1.0;
-        let [l, ch, h] = lab_to_lch(oklab_from_2020(e));
-        let h2 = h + (hue.clamp(-100.0, 100.0) / 100.0) as f32 * CALIB_HUE;
-        let c2 = ch * (1.0 + (sat.clamp(-100.0, 100.0) / 100.0) as f32 * CALIB_SAT);
-        let q = oklab_to_2020(lch_to_lab([l, c2, h2]));
-        for (r, row) in p.iter_mut().enumerate() {
-            row[i] = q[r] as f64;
-        }
+        let (ha, hb) = calib_offset(&CALIB_TABLE[i][0], *hue);
+        let (sa, sb) = calib_offset(&CALIB_TABLE[i][1], *sat);
+        p[i][i] = 1.0;
+        p[(i + 1) % 3][i] = ha + sa;
+        p[(i + 2) % 3][i] = hb + sb;
     }
     let m = Mat3(p);
     let k = m.inverse()?.apply([1.0, 1.0, 1.0]);
-    Some(std::array::from_fn(|r| std::array::from_fn(|col| (p[r][col] * k[col]) as f32)))
+    let pp = Mat3(std::array::from_fn(|r| std::array::from_fn(|col| p[r][col] * k[col])));
+    let to = REC2020.to_space(&PROPHOTO);
+    let m = PROPHOTO.to_space(&REC2020).mul(&pp).mul(&to);
+    Some(std::array::from_fn(|r| std::array::from_fn(|col| m.0[r][col] as f32)))
 }
 
 /// Shadows-tint strength at ±100: the green channel's relative change in deep shadows.

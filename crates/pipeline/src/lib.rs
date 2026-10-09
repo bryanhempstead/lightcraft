@@ -26,6 +26,7 @@
 pub mod adobe;
 pub mod auto;
 pub mod colorops;
+pub mod colortab;
 pub mod cull;
 pub mod dump;
 pub mod dust;

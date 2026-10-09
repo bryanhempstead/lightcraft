@@ -722,4 +722,12 @@ fn adobe_base_and_look() {
     s.light.whites = -20.0;
     s.light.blacks = 15.0;
     check("adobe look edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    // Lightroom's measured HSL / Saturation / Vibrance tables (`colortab`)
+    s.color.saturation = -30.0;
+    s.color.vibrance = 20.0;
+    s.mixer.green.hue = 44.0;
+    s.mixer.green.sat = -45.0;
+    s.mixer.blue.lum = 7.0;
+    s.mixer.yellow.hue = 63.0;
+    check("adobe measured colour", &src, &info, &s, &RenderRequest::fit(320, 240));
 }

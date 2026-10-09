@@ -299,6 +299,44 @@ fn point_color(k: u32, lch: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(l, c, h);
 }
 
+// `colortab::axis`: lower index and fraction of x on a clamped axis.
+fn ctab_axis(a_in: array<f32, 5>, n: u32, x: f32) -> vec2<f32> {
+    var a = a_in;
+    let xc = clamp(x, a[0], a[n - 1u]);
+    var i = 0u;
+    while (i + 2u < n && xc > a[i + 1u]) {
+        i++;
+    }
+    return vec2<f32>(f32(i), (xc - a[i]) / (a[i + 1u] - a[i]));
+}
+
+// `colortab::lookup`: (Δhue, ln chroma ratio, Δlightness) from the summed table in aux.
+fn ctab_lookup(l: f32, c: f32, h: f32) -> vec3<f32> {
+    let la = array<f32, 5>(0.2, 0.4, 0.6, 0.8, 1.0);
+    let ca = array<f32, 5>(0.0, 0.06, 0.14, 0.26, 0.26);
+    let u = rem_euclid(h / TAU, 1.0) * 36.0;
+    let h0 = u32(floor(u)) % 36u;
+    let fh = u - floor(u);
+    let lx = ctab_axis(la, 5u, l);
+    let cx = ctab_axis(ca, 4u, c);
+    let l0 = u32(lx.x);
+    let c0 = u32(cx.x);
+    let base = pu(F_CTAB_OFF);
+    var out = vec3<f32>(0.0);
+    for (var dh = 0u; dh < 2u; dh++) {
+        let wh = select(1.0 - fh, fh, dh == 1u);
+        for (var dl = 0u; dl < 2u; dl++) {
+            let wl = select(1.0 - lx.y, lx.y, dl == 1u);
+            for (var dc = 0u; dc < 2u; dc++) {
+                let wc = select(1.0 - cx.y, cx.y, dc == 1u);
+                let k = base + ((((h0 + dh) % 36u) * 5u + l0 + dl) * 4u + c0 + dc) * 3u;
+                out += wh * wl * wc * vec3<f32>(aux[k], aux[k + 1u], aux[k + 2u]);
+            }
+        }
+    }
+    return out;
+}
+
 // `ColorOps::apply`.
 fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
     if (pu(F_OPS_IDENTITY) != 0u && local_sat == 0.0 && local_hue == 0.0) {
@@ -317,6 +355,12 @@ fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
         }
         l = max(l + mix * min(c / 0.2, 1.0) * BW_GAIN, 0.0);
         return grade_lab(vec3<f32>(l, 0.0, 0.0));
+    }
+    if (pu(F_CTAB) != 0u) {
+        let d = ctab_lookup(l, c, h);
+        h += d.x;
+        c *= exp(d.y);
+        l += d.z;
     }
     if (pu(F_MIXER) != 0u) {
         let w = band_weights(h);

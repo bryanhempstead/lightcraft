@@ -25,7 +25,7 @@ use lightcraft_dng_sdk_sys as sdk;
 use lightcraft_raw::profile::HsvTable;
 
 /// Bumped when what [`decode_color`] produces changes (part of the source cache key).
-pub const VERSION: u64 = 6;
+pub const VERSION: u64 = 7;
 
 /// Largest look-profile XMP read (Adobe's are ≤ ~1 MB).
 const MAX_XMP: u64 = 8 << 20;
@@ -257,17 +257,36 @@ pub fn neutral_for(cam: &Camera, analog: Option<[f64; 3]>, temp: f64, tint: f64)
     (n[1] > 0.0 && n.iter().all(|v| v.is_finite() && *v > 0.0)).then(|| n.map(|v| v / n[1]))
 }
 
+/// How far Lightroom's Temp / Tint move the white, as a power of the SDK's camera-neutral change
+/// from the as-shot white (measured with Camera Raw on real raws and synthetic DNGs: most cameras
+/// move twice as far as the DNG colour spec says; the Leica M (Typ 262)'s own DNGs move as specified).
+/// Fitted per camera on split A of Bryan's edits (`docs/lr-match.md`, round 4).
+pub const WB_STRENGTH: &[(&str, f64)] = &[("LEICA M (Typ 262)", 1.0)];
+pub const WB_STRENGTH_DEFAULT: f64 = 2.0;
+
+pub fn wb_strength(model: &str) -> f64 {
+    WB_STRENGTH.iter().find(|(m, _)| *m == model).map_or(WB_STRENGTH_DEFAULT, |e| e.1)
+}
+
+/// The neutral Lightroom renders for the SDK's neutral `n` (green = 1), as-shot `sh` (green = 1).
+fn strengthen(n: [f64; 3], sh: [f64; 3], k: f64) -> [f64; 3] {
+    let e: [f64; 3] = std::array::from_fn(|i| sh[i] * (n[i] / sh[i]).powf(k));
+    if e.iter().all(|v| v.is_finite() && *v > 0.0) { e.map(|v| v / e[1]) } else { n }
+}
+
 /// [`lightcraft_pipeline::CameraWb`] from the SDK: exact neutrals through a registered function
 /// (the colour spec for each Temp / Tint), plus the polynomial (least squares in log space) as a
 /// fallback; `shot` = the as-shot neutral exactly.
 fn wb_model(cam: &Arc<Camera>, analog: Option<[f64; 3]>, shot: [f64; 3], matrix: &Mat3) -> Option<lightcraft_pipeline::CameraWb> {
+    let k = wb_strength(&cam.info.unique_model);
+    let sh = shot.map(|v| v / shot[1]);
     let mut a = [[0.0f64; 5]; 5];
     let (mut br, mut bb) = ([0.0f64; 5], [0.0f64; 5]);
     for mi in 0..=24 {
         let temp = 1e6 / (33.0 + (500.0 - 33.0) * mi as f64 / 24.0);
         for ti in -5..=5 {
             let tint = ti as f64 * 20.0;
-            let Some(n) = neutral_for(cam, analog, temp, tint) else { continue };
+            let Some(n) = neutral_for(cam, analog, temp, tint).map(|n| strengthen(n, sh, k)) else { continue };
             let (yr, yb) = (n[0].ln(), n[2].ln());
             let (m, t) = (1000.0 / temp, tint / 100.0);
             let f = [1.0, m, m * m, t, m * t];
@@ -300,10 +319,10 @@ fn wb_model(cam: &Arc<Camera>, analog: Option<[f64; 3]>, shot: [f64; 3], matrix:
     lightcraft_pipeline::adobe::register_wb(
         key,
         lightcraft_pipeline::adobe::WbFns {
-            neutral: Box::new(move |t, ti| neutral_for(&c1, analog, t, ti)),
+            neutral: Box::new(move |t, ti| neutral_for(&c1, analog, t, ti).map(|n| strengthen(n, sh, k))),
             matrix: Box::new(move |t, ti| {
-                let xy = sdk::temp_tint_to_xy(t, ti).ok()?;
-                let spec = c2.profile.color_spec(sdk::White::Xy(xy[0], xy[1]), analog).ok()?;
+                let n = strengthen(neutral_for(&c2, analog, t, ti)?, sh, k);
+                let spec = c2.profile.color_spec(sdk::White::Neutral(n), analog).ok()?;
                 Some(pcs_to_working().mul(&Mat3(spec.camera_to_pcs)).mul(&shot_inverse).0)
             }),
         },
@@ -556,11 +575,13 @@ mod tests {
         assert!(base.valid());
         // the ACR3 default curve: grey 0.18 → ~0.39
         assert!((base.curve_at(0.18) - 0.388).abs() < 0.01, "{}", base.curve_at(0.18));
-        // the fitted white-balance model stays within 1.5 % of the SDK's neutrals
+        // the fitted white-balance model stays within 1.5 % of the SDK's neutrals (moved by the
+        // camera's measured Lightroom strength)
         let shot = neutral_for(&cam, None, 5200.0, 5.0).unwrap();
         let m = wb_model(&cam, None, shot, &Mat3::IDENTITY).unwrap();
+        assert_eq!(m.neutral(5200.0, 5.0).map(|v| (v * 1e6).round()), shot.map(|v| (v * 1e6).round()));
         for (t, ti) in [(2600.0, 0.0), (3200.0, 10.0), (4500.0, -15.0), (5500.0, 5.0), (6500.0, 20.0), (9000.0, -30.0), (15000.0, 0.0)] {
-            let sdk_n = neutral_for(&cam, None, t, ti).unwrap();
+            let sdk_n = strengthen(neutral_for(&cam, None, t, ti).unwrap(), shot, wb_strength("Canon EOS R6"));
             let ours = m.neutral(t, ti);
             for c in [0, 2] {
                 let e = (ours[c] / sdk_n[c]).ln().abs();

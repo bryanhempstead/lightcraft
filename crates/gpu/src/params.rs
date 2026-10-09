@@ -41,6 +41,9 @@ const FIELDS: &[(&str, usize)] = &[
     ("VIBRANCE", 1),
     ("SATURATION", 1),
     ("MIXER", 1),
+    // Lightroom's measured HSL / Saturation / Vibrance table (`lightcraft_pipeline::colortab`)
+    ("CTAB", 1),
+    ("CTAB_OFF", 1),
     ("MIX_HUE", 8),
     ("MIX_SAT", 8),
     ("MIX_LUM", 8),
@@ -186,6 +189,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
             aux.extend(t.data.iter().flatten());
         }
     }
+    let ctab_off = aux.len();
+    if let Some(t) = &fp.ops.table {
+        aux.extend_from_slice(t);
+    }
     let mask_off = aux.len();
     for m in masks {
         aux.extend_from_slice(m);
@@ -226,6 +233,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("VIBRANCE", ops.vibrance);
     p.f("SATURATION", ops.saturation);
     p.b("MIXER", ops.mixer);
+    p.b("CTAB", ops.table.is_some());
+    p.u("CTAB_OFF", ctab_off as u32);
     p.fs("MIX_HUE", &ops.hue);
     p.fs("MIX_SAT", &ops.sat);
     p.fs("MIX_LUM", &ops.lum);

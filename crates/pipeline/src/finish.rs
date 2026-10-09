@@ -379,7 +379,7 @@ impl FinishParams {
                 let k = l.blend((s.profile.amount / 100.0) as f32);
                 (l, k)
             }),
-            ops: ColorOps::new(s),
+            ops: if adobe.is_some() { ColorOps::new(s).with_measured(s) } else { ColorOps::new(s) },
             // an Adobe look's own curves go under the user's (with an Adobe base only: the looks
             // are raw-only in Lightroom too)
             curves: match adobe.as_ref().and(crate::adobe::look_for(&s.profile.id)) {
