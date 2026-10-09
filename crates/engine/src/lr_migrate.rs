@@ -287,40 +287,49 @@ pub fn rematch_profiles(s: &mut Session, rec: Option<&Records>, opts: &MigrateOp
     // Bryan's fork: Adobe's base profile and Adobe Raw looks (Adobe Color, Adobe Monochrome…) by
     // their own ids, for photos still on the profile an earlier migration gave them
     let mut adobe_ids: BTreeMap<String, usize> = BTreeMap::new();
+    let mut lens_on = 0usize;
+    // photos the creative-look pass below may change too: their settings continue there
+    let mut pending: HashMap<PhotoId, lightcraft_develop::DevelopSettings> = HashMap::new();
     if let Some(rec) = rec {
         let by_path = photos_by_path(s);
         for im in rec.images.iter().filter(|i| i.master.is_none()) {
             let Some(&id) = by_path.get(&im.path) else { continue };
-            if looks.contains_key(&id) {
-                continue;
-            }
-            let Some(want) = prepare_image(im, None).develop.and_then(|d| d["profile"]["id"].as_str().map(str::to_string)) else { continue };
-            if !lightcraft_pipeline::adobe::is_adobe_look(&want) {
-                continue;
-            }
+            let Some(partial) = prepare_image(im, None).develop else { continue };
             let Some(p) = s.catalog.photo(id) else { continue };
-            let current = p.develop.profile.id.as_str();
-            if current == want {
-                continue;
+            let mut d = (*p.develop).clone();
+            let mut changed = false;
+            // Lightroom's lens corrections (its default for these raws): now rendered from the
+            // lens's Adobe profile, so carried over where an earlier migration left them off
+            if partial["optics"]["lens_profile"].as_bool() == Some(true) && !d.optics.lens_profile {
+                d.optics.lens_profile = true;
+                lens_on += 1;
+                changed = true;
             }
-            // what the migration gave these before (our nearest look)
-            let earlier = match want.as_str() {
-                "adobe:Adobe Monochrome" => "lc.mono",
-                "adobe:Adobe Neutral" => "lc.neutral",
-                "adobe:Adobe Vivid" => "lc.vivid",
-                "adobe:Adobe Landscape" => "lc.landscape",
-                "adobe:Adobe Portrait" => "lc.portrait",
-                _ => "lc.color",
-            };
-            if !force && !(current.is_empty() || current == earlier) {
-                kept += 1;
-                continue;
+            let want = partial["profile"]["id"].as_str().map(str::to_string).filter(|w| lightcraft_pipeline::adobe::is_adobe_look(w));
+            if let Some(want) = want.filter(|w| !looks.contains_key(&id) && d.profile.id != *w) {
+                // what the migration gave these before (our nearest look)
+                let earlier = match want.as_str() {
+                    "adobe:Adobe Monochrome" => "lc.mono",
+                    "adobe:Adobe Neutral" => "lc.neutral",
+                    "adobe:Adobe Vivid" => "lc.vivid",
+                    "adobe:Adobe Landscape" => "lc.landscape",
+                    "adobe:Adobe Portrait" => "lc.portrait",
+                    _ => "lc.color",
+                };
+                if force || d.profile.id.is_empty() || d.profile.id == earlier {
+                    *adobe_ids.entry(want.clone()).or_default() += 1;
+                    d.profile = lightcraft_develop::Profile { id: want, amount: 100.0 };
+                    changed = true;
+                } else {
+                    kept += 1;
+                }
             }
-            *adobe_ids.entry(want.clone()).or_default() += 1;
-            if !opts.dry_run {
-                let mut d = (*p.develop).clone();
-                d.profile = lightcraft_develop::Profile { id: want, amount: 100.0 };
-                ops.push(Op::SetDevelop { id, settings: Arc::new(d), label: "Match Profiles".into(), edited: p.edited.clone() });
+            if changed && !opts.dry_run {
+                if looks.contains_key(&id) {
+                    pending.insert(id, d);
+                } else {
+                    ops.push(Op::SetDevelop { id, settings: Arc::new(d), label: "Match Profiles".into(), edited: p.edited.clone() });
+                }
             }
         }
     }
@@ -350,16 +359,23 @@ pub fn rematch_profiles(s: &mut Session, rec: Option<&Records>, opts: &MigrateOp
         matched += 1;
         *by_look.entry(name.clone()).or_default() += 1;
         if !opts.dry_run {
-            let mut d = (*p.develop).clone();
+            let mut d = pending.remove(&id).unwrap_or_else(|| (*p.develop).clone());
             d.profile = lightcraft_develop::Profile { id: pid, amount: (amount * 100.0).clamp(0.0, 200.0) };
             ops.push(Op::SetDevelop { id, settings: Arc::new(d), label: "Match Profiles".into(), edited: p.edited.clone() });
         }
+    }
+    // (lens corrections for photos whose look stayed as it was)
+    let mut rest: Vec<(PhotoId, lightcraft_develop::DevelopSettings)> = pending.into_iter().collect();
+    rest.sort_by_key(|(id, _)| *id);
+    for (id, d) in rest {
+        let Some(p) = s.catalog.photo(id) else { continue };
+        ops.push(Op::SetDevelop { id, settings: Arc::new(d), label: "Match Profiles".into(), edited: p.edited.clone() });
     }
     if !ops.is_empty() {
         s.commit("Match Lightroom Profiles", Op::Batch { ops })?;
     }
     Ok(
-        json!({"dryRun": opts.dry_run, "profiles": profiles, "matched": matched, "byLook": by_look, "adobe": adobe_ids, "keptOwnProfile": kept, "unmatched": unmatched}),
+        json!({"dryRun": opts.dry_run, "profiles": profiles, "matched": matched, "byLook": by_look, "adobe": adobe_ids, "lensCorrectionsOn": lens_on, "keptOwnProfile": kept, "unmatched": unmatched}),
     )
 }
 

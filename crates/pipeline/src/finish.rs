@@ -188,6 +188,14 @@ pub fn halo_weight(d: f32) -> f32 {
 
 /// Grain amplitude per unit of Amount/100, on encoded values (fitted against Lightroom's renders).
 pub const GRAIN_GAIN: f32 = 0.36;
+/// Grain cell size in source pixels: `GRAIN_CELL0 + GRAIN_CELL_PER_SIZE · Size`.
+pub const GRAIN_CELL0: f32 = 0.5;
+pub const GRAIN_CELL_PER_SIZE: f32 = 0.03;
+/// Roughness mixes in a coarser octave (`GRAIN_COARSE`× the cell) at `GRAIN_COARSE_WEIGHT` and
+/// takes `GRAIN_FINE_DROP` of the fine one, each times the roughness.
+pub const GRAIN_COARSE: f32 = 1.6;
+pub const GRAIN_COARSE_WEIGHT: f32 = 0.35;
+pub const GRAIN_FINE_DROP: f32 = 0.25;
 
 /// Grain as Lightroom renders it: film grain whose cells are a size in the source's own pixels
 /// (Size 0 → 0.6 px, 100 → 4.6 px), so a smaller render averages several cells into each pixel and
@@ -196,7 +204,7 @@ pub const GRAIN_GAIN: f32 = 0.36;
 pub fn grain_params(amount: f64, size: f64, roughness: f64, seed: u32, px_per_long: f64, native_long: f32) -> (f32, f32, f32, u32) {
     let native = if native_long.is_finite() && native_long > 16.0 { native_long } else { 6000.0 };
     let fin = |v: f64, d: f32| if v.is_finite() { v as f32 } else { d };
-    let cell_native = 0.6 + 0.04 * fin(size, 25.0).clamp(0.0, 100.0);
+    let cell_native = GRAIN_CELL0 + GRAIN_CELL_PER_SIZE * fin(size, 25.0).clamp(0.0, 100.0);
     let cell_out = cell_native * (fin(px_per_long, native) / native);
     let amp = (fin(amount, 0.0) / 100.0).clamp(0.0, 1.0) * GRAIN_GAIN * if cell_out.is_finite() { cell_out.clamp(0.05, 1.0) } else { 1.0 };
     (amp, native / cell_native, (fin(roughness, 50.0) / 100.0).clamp(0.0, 1.0), seed)
@@ -761,7 +769,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
                 let sc = cell;
                 let mut g = grain_noise(gx * sc, gy * sc, seed);
-                g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc / 2.3, gy * sc / 2.3, seed ^ 0x55) * rough * 0.7;
+                g = g * (1.0 - rough * GRAIN_FINE_DROP)
+                    + grain_noise(gx * sc / GRAIN_COARSE, gy * sc / GRAIN_COARSE, seed ^ 0x55) * rough * GRAIN_COARSE_WEIGHT;
                 let lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
                 let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
                 e = e.map(|v| v + k);

@@ -758,7 +758,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let rough = pf(F_GRAIN_ROUGH);
         let seed = pu(F_GRAIN_SEED);
         var g = grain_noise(gx * sc, gy * sc, seed);
-        g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc / 2.3, gy * sc / 2.3, seed ^ 0x55u) * rough * 0.7;
+        g = g * (1.0 - rough * GRAIN_FINE_DROP) + grain_noise(gx * sc / GRAIN_COARSE, gy * sc / GRAIN_COARSE, seed ^ 0x55u) * rough * GRAIN_COARSE_WEIGHT;
         let lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
         let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
         e = e + k;

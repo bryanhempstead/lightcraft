@@ -2,9 +2,11 @@
 
 For someone moving a Lightroom Classic catalog over, "right" means "looks like it did in Lightroom".
 This page is how LightCraft measures that, what was changed because of the measurements, and what
-still differs. Everything here is black-box: Lightroom's *output* (the previews it keeps of the
-user's own photos) is compared with ours; no Adobe code, profile, curve or table is read or copied,
-and everything fitted from a user's catalog stays on that user's machine.
+still differs. Rounds 1–2 were black-box (Lightroom's *output* — the previews it keeps of the
+user's own photos — compared with ours). Since round 3 (Bryan's fork, AGENTS.md → *Fork rules*)
+LightCraft renders raws on Adobe's own camera, look and lens profiles installed with Lightroom, read
+at run time with Adobe's DNG SDK; nothing of Adobe's is copied into the repository, and everything
+fitted from a user's catalog stays on that user's machine.
 
 ## Measuring: `tools/lr-compare`
 
@@ -168,3 +170,109 @@ twice Lightroom's chroma noise. Regression test: `highlights_and_shadows_leave_n
   correction that `lensfit` now also applies (default R6 photos read ~1 L* bright).
 - Leica Q2 (219 photos) and Canon 5D Mark II (172) are not in the sample: `calibrate` gives the
   Q2 the transferred look automatically; the 5D is unmeasured.
+
+## Round 3 (2026-10-09): Adobe's own profiles through the DNG SDK
+
+Bryan's fork dropped the clean-room rule, so the base rendering is now Adobe's, not a fit of it.
+
+### What is Adobe's now
+
+- **Adobe DNG SDK 1.7.1** (`crates/dng-sdk-sys`, C++ built by `cc` from `vendor/dng_sdk_1_7_1`,
+  fetched from `download.adobe.com` by `tools/fetch-dng-sdk.sh`, sha256-pinned; the zip carries no
+  licence of its own, so it is never committed). A C ABI shim catches every exception; without the
+  SDK (other OS, wasm, not fetched) every call reports "unavailable" and the old path runs.
+- **Camera colour** (`crates/engine/src/adobe.rs`): the camera's `Adobe Standard` DCP from
+  `/Library/Application Support/Adobe/CameraRaw/CameraProfiles/Adobe Standard/` (1,470 installed;
+  R6, M Typ 262, GR III, X-T2, X100F, Q2, 5D Mark II all present). `dng_color_spec` gives the
+  camera → XYZ D50 matrix for the as-shot white (dual-illuminant interpolation, forward matrices,
+  `AnalogBalance`), `HueSatMapForWhite` the interpolated 90×30 hue/sat map (applied at decode in
+  linear ProPhoto before exposure, our `HsvTable` verified against `RefBaselineHueSatMap` to
+  2e-4), `dng_temperature` the as-shot Temp / Tint. Lightroom's per-camera fitted profiles in
+  `~/Library/Application Support/LightCraft/camera-profiles/` are no longer used for cameras with
+  an Adobe DCP (they stay as the fallback, e.g. iPhone ProRAW).
+- **Tone** (`crates/pipeline/src/adobe.rs`, CPU and GPU): the DCP's own `LookTable` (36×8×16,
+  every Adobe Standard has one), the exposure ramp's `DefaultBlackRender` black (Shadows 5 =
+  0.005), then the `ProfileToneCurve` or the ACR3 default curve applied as `RefBaselineRGBTone`
+  (largest and smallest channel through the curve, the middle interpolated) in ProPhoto — the
+  order of `dng_render`. Measured against the SDK's own reference render of Leica defaults first:
+  `dng_render` with Adobe Standard alone already gave 13/19 passing Lightroom's previews.
+- **Looks**: Adobe Color, Monochrome, Neutral, Portrait, Landscape, Vivid are read from
+  `…/CameraRaw/Settings/Adobe/Profiles/Adobe Raw/*.xmp` (their `LookTable` decoded by the SDK's
+  big-table code, `ToneCurvePV2012` composed under the user's curves, hidden settings added) and
+  used as profile ids `adobe:<name>`; `lc.color` on a raw with an Adobe base renders as Adobe Color
+  (Lightroom's default). Migration maps `CameraProfile` / `Look` to them; creative looks (Summer
+  Fields, Nautica) keep their RGB tables on the Adobe Standard base, now with the table's own
+  gamut handling (clip vs extend) as the SDK applies it (our decode matches
+  `dng_rgb_to_rgb_table_data` to 1e-3 in gamut).
+- **White balance**: Temp / Tint → xy (`dng_temperature`) → the profile's camera → PCS matrix for
+  that white, as one working-space matrix (exact, apart from the hue/sat map staying at the
+  as-shot white).
+- **Lens profiles** (`crates/engine/src/lcp.rs`): files without lens opcodes take the lens's Adobe
+  `.lcp` (system / user / Lightroom's bundled `LensProfiles/1.0`), interpolated in focal length,
+  aperture (APEX) and focus distance, as `WarpRectilinear` + `FixVignetteRadial` (what the DNG
+  Converter does); the migration now carries Lightroom's lens-correction default for unedited
+  photos. R6 defaults: corner ΔL* −4…−10 → within ±1.5.
+
+### Fitted on top of the exact base
+
+Basic tone (`tone::lr::ADOBE_*`) refitted with a per-pixel dump of the pipeline
+(`LIGHTCRAFT_LR_DUMP`, `crates/pipeline/src/dump.rs`) and Lightroom's previews: Lightroom's default
+tone over the ACR3 curve (`ADOBE_BASE`) on default-setting photos only, then the six sliders on
+edited ones (split A + training photos, B held out); two iterations. Per-camera exposure offsets
+(Camera Raw's per-camera baseline and white levels live in its binaries): R6 +0.13 EV at ISO 100,
++0.22 above (its ISO 100 white level differs), GR III +0.03, X-T2 −0.53 (−1.06 from ISO 500,
+DR400), X100F −0.37; `adobe-exposure.json` in the config folder can override them.
+
+### Results (held-out split B; mean ΔE2000 / p95 / photos passing ΔE ≤ 2 & p95 ≤ 5)
+
+| group | n | round 2 | round 3 |
+|---|---|---|---|
+| split A (fit) | 63 | 6.23 / 13.3 / 3 | 5.71 / 12.6 / 3 |
+| **split B (held out)** | 103 | 4.46 / 10.7 / 21 | **4.46 / 10.7 / 23** |
+| all | 166 | 5.13 / 11.7 / 24 | 4.94 / 11.4 / 26 |
+| B · Canon EOS R6 | 33 | 3.79 / 9.7 / 4 | 3.82 / 10.4 / 5 |
+| B · Leica M Typ 262 | 34 | 3.35 / 8.6 / 16 | 3.51 / 8.5 / 17 |
+| B · Ricoh GR III | 18 | 5.30 / 14.7 / 0 | 5.42 / 14.3 / 0 |
+| B · Fujifilm X-T2 | 6 | 7.04 / 12.3 / 0 | 7.45 / 12.3 / 0 |
+| B · Fujifilm X100F | 7 | 6.39 / 12.8 / 0 | 4.94 / 10.3 / 0 |
+| B · Adobe Color | 50 | 2.84 / 6.8 / 20 | 2.76 / 7.2 / 22 |
+| B · Summer Fields | 46 | 5.84 / 13.9 / 0 | 5.91 / 13.4 / 0 |
+| B · Nautica | 3 | 10.15 / 24.9 / 0 | 11.13 / 25.8 / 0 |
+| B · default settings | 39 | 2.19 / 5.5 / 18 | 2.20 / 6.0 / 20 |
+| B · edited | 64 | 5.84 / 14.0 / 3 | 5.84 / 13.5 / 3 |
+| B&W set `t2` | 45 | 4.57 | 4.32 (6 pass) |
+
+The base is now right by construction (and no longer needs a Lightroom catalog to calibrate a
+camera: any camera with an Adobe Standard DCP works), but the totals barely move: round 2's
+per-camera fits had absorbed much of the base error, and what remains is Lightroom's Basic-tone
+operator on heavily edited photos.
+
+### What still misses, and why
+
+- **Edited photos (~5.8 ΔE)**. With the base exact, the per-pixel tone error on edited photos is
+  ~3.7 L* (held out); even a perfect per-photo exposure offset would only take it to ~3.0, and that
+  offset is not predictable from the sliders or image statistics (R² < 0 held out). Lightroom's
+  PV2012 Highlights / Shadows / Whites / Blacks are local and image-adaptive in ways a per-slider
+  table can't express, and Bryan's presets use extreme values (Contrast −100, Shadows +100,
+  Exposure −2.7). Tried and rejected on held-out data: white/black-point-relative Whites / Blacks,
+  percentile-relative Highlights / Shadows, the profile table right after the base curve (B 5.00
+  vs 4.47), calibration on the camera's own primaries in xy (B 4.54–4.95 vs 4.47).
+- **Calibration** (Summer Fields uses Green Hue +44, Blue Sat +38): ours moves Rec.2020 primaries
+  in OkLCh; greens / teals still drift (the X100F hot-spring water renders brown, not teal).
+- **Grain and local contrast at 1:1** (`lr-compare detail` on the 28-photo full-size set, ratio
+  to Lightroom): grain made finer (cells `0.5 + 0.03·Size` source px, roughness's coarse octave at
+  1.6× instead of 2.3×, weight 0.35 instead of 0.7): mottle 1.39 → 1.23 (training photos), 1.87
+  → 1.75 (w1), fine 0.95–1.0; the L1007499 face crop is visibly closer. Still: edges ~0.8
+  (flatter at 1:1), mottle > 1 even without grain (part of it may be Lightroom's preview JPEG
+  quantisation), chroma noise 0.76–1.33.
+- **X-T2**: its Fujifilm raw exposure bias isn't what Camera Raw compensates (per-photo residuals
+  +0.3 EV at DR100, −0.45 EV at DR400 before the ISO split); colour still ~4 b* blue on the six
+  held-out photos.
+- iPhone ProRAW (no Adobe Standard DCP matched: `Apple Embedded Color Profile`) and JPEGs keep
+  the round-2 path.
+- The SDK's opcode lists (`WarpRectilinear`, `GainMap`) are not used for pixels yet: LightCraft's
+  own opcode code applies DNG lens corrections; ProRAW `ProfileGainTableMap` is still missing.
+
+Next: a controlled oracle for Lightroom's sliders (Camera Raw in Photoshop rendering synthetic
+DNGs with known settings, if Bryan agrees to it being scripted) would replace the regression on
+previews with exact measurements of PV2012.
