@@ -173,6 +173,7 @@ mod ffi {
             out_camera_white: *mut f64,
             out_camera_to_pcs: *mut f64,
         ) -> i32;
+        pub fn lc_profile_matrices(p: *const LcProfile, out: *mut f64) -> i32;
         pub fn lc_profile_hue_sat_map(p: *const LcProfile, x: f64, y: f64, dims: *mut u32, buf: *mut f32, cap: usize) -> i32;
         pub fn lc_profile_look_table(p: *const LcProfile, dims: *mut u32, buf: *mut f32, cap: usize) -> i32;
         pub fn lc_profile_tone_curve(p: *const LcProfile, xs: *const f64, ys: *mut f64, n: usize) -> i32;
@@ -360,6 +361,19 @@ impl Profile {
             let _ = (mode, input);
             Err(Error::Unavailable)
         }
+    }
+
+    /// `ColorMatrix1`, `ColorMatrix2`, `ForwardMatrix1`, `ForwardMatrix2` (rows; zeros where absent).
+    pub fn matrices(&self) -> Result<[[[f64; 3]; 3]; 4]> {
+        #[cfg(lc_dng_sdk)]
+        {
+            let mut m = [0f64; 36];
+            // SAFETY: `m` is a live array of the 36 doubles the shim writes.
+            status(unsafe { ffi::lc_profile_matrices(self.ptr.as_ptr(), m.as_mut_ptr()) })?;
+            Ok(std::array::from_fn(|k| std::array::from_fn(|i| std::array::from_fn(|j| m[k * 9 + i * 3 + j]))))
+        }
+        #[cfg(not(lc_dng_sdk))]
+        Err(Error::Unavailable)
     }
 
     /// The hue/sat map interpolated for white `xy` (`None`: the profile has none).

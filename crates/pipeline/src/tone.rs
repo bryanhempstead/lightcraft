@@ -198,8 +198,8 @@ pub mod lr {
     pub const ADOBE_CONTRAST: [f32; N] =
         [-0.278, -0.652, -1.018, -1.343, -1.563, -1.569, -1.180, -0.717, -0.461, -0.046, 0.346, 0.664, 0.992, 1.199, 1.361];
     pub const ADOBE_HIGHLIGHTS: [f32; N] =
-        [-1.575, -1.580, -1.532, -1.326, -0.840, -0.137, 0.134, 0.261, 0.262, 0.615, 1.063, 1.482, 2.394, 3.259, 4.349];
-    pub const ADOBE_SHADOWS: [f32; N] = [1.252, 1.431, 1.569, 1.574, 1.385, 1.336, 1.407, 0.920, 0.435, 0.549, 0.789, 0.644, 0.946, 1.288, 1.434];
+        [-1.212, -1.291, -1.329, -1.243, -0.867, -0.264, 0.267, 0.302, 0.294, 0.694, 0.995, 1.749, 2.824, 3.405, 4.125];
+    pub const ADOBE_SHADOWS: [f32; N] = [1.204, 1.438, 1.631, 1.694, 1.397, 1.064, 1.443, 0.924, 0.382, 0.485, 0.531, 0.655, 1.298, 1.493, 1.220];
     pub const ADOBE_WHITES: [f32; N] = [0.346, 0.418, 0.479, 0.503, 0.449, 0.257, -0.147, -0.161, 0.342, 0.597, 0.644, 1.205, 1.833, 2.213, 2.509];
     pub const ADOBE_BLACKS: [f32; N] =
         [-0.702, -0.720, -0.713, -0.636, -0.417, 0.038, 0.757, 0.783, 0.406, 0.637, 0.293, -0.152, -0.526, -0.804, -1.047];
@@ -311,18 +311,34 @@ impl ToneMap {
         ToneMap { lut, chroma: curve.chroma }
     }
 
-    /// [`ToneMap::camera_lr`] over an Adobe base's tone curve ([`crate::adobe::Base`]): the
-    /// table is then applied channel-wise in ProPhoto (`RefBaselineRGBTone`), not on luminance.
-    pub fn adobe_lr(base: &crate::adobe::Base, exposure: f64, contrast: f64, whites: f64, blacks: f64) -> ToneMap {
-        let (e, c, w, b) = (exposure as f32, (contrast / 100.0) as f32, (whites / 100.0) as f32, (blacks / 100.0) as f32);
+    /// Lightroom's Basic tone over an Adobe base's tone curve ([`crate::adobe::Base`]), as Camera
+    /// Raw renders it (measured, [`crate::tone_adobe`]): Lightroom's default tone, then Exposure,
+    /// Contrast (pivot following the photo's `key`, [`lr::image_key`] before exposure), Whites and
+    /// Blacks in turn as EV moves; Highlights / Shadows are local (`hs_lut`). The table is applied
+    /// channel-wise in ProPhoto (`RefBaselineRGBTone`), not on luminance.
+    pub fn adobe_lr(base: &crate::adobe::Base, exposure: f64, contrast: f64, whites: f64, blacks: f64, key: Option<f32>) -> ToneMap {
+        use crate::tone_adobe as t;
+        let pivot = key.filter(|k| k.is_finite()).map_or(0.0, |k| (k - t::KEY_RAMP).clamp(-10.0, 10.0) * t::CONTRAST_PIVOT);
+        let (e, c, w, b) = (exposure as f32, contrast as f32, whites as f32, blacks as f32);
         let lut = (0..LUT_N)
             .map(|i| {
-                let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
-                let d = lr::at(&lr::ADOBE_BASE, ev)
-                    + e * lr::at(&lr::ADOBE_EXPOSURE, ev)
-                    + c * lr::at(&lr::ADOBE_CONTRAST, ev)
-                    + w * lr::at(&lr::ADOBE_WHITES, ev)
-                    + b * lr::at(&lr::ADOBE_BLACKS, ev);
+                // the table is indexed after Exposure's gain (the per-pixel stage applies it first):
+                // Camera Raw's Exposure is the measured shift from the photo's own EV
+                let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32 - e;
+                let mut x = ev;
+                if e != 0.0 {
+                    x += adobe_shift(&t::E_VALUES, &t::E_TABLE, e, x);
+                }
+                if c != 0.0 {
+                    x += adobe_shift(&t::C_VALUES, &t::C_TABLE, c, x - pivot);
+                }
+                if w != 0.0 {
+                    x += adobe_shift(&t::W_VALUES, &t::W_TABLE, w, x);
+                }
+                if b != 0.0 {
+                    x += adobe_shift(&t::K_VALUES, &t::K_TABLE, b, x);
+                }
+                let d = table_at(&t::BASE, ev) + (x - ev);
                 base.curve_at(GREY * 2f32.powf(ev + d))
             })
             .collect();
@@ -432,6 +448,54 @@ impl ToneMap {
         let v = self.lut[i] + (self.lut[i + 1] - self.lut[i]) * t;
         if ev < LUT_MIN_EV { v * (y / (GREY * 2f32.powf(LUT_MIN_EV))) } else { v }
     }
+}
+
+/// A [`crate::tone_adobe`] grid table at `ev` (linear between nodes, held at the ends).
+fn table_at(t: &[f32], ev: f32) -> f32 {
+    use crate::tone_adobe::{EV0, STEP};
+    if t.len() < 2 || !ev.is_finite() {
+        return 0.0;
+    }
+    let f = ((ev - EV0) / STEP).clamp(0.0, (t.len() - 1) as f32);
+    let i = (f as usize).min(t.len() - 2);
+    let k = f - i as f32;
+    t[i] + (t[i + 1] - t[i]) * k
+}
+
+/// The EV shift of a slider at value `v` at input `ev`: the tables at the measured (sorted)
+/// `values`, a zero table at 0, linear in between, held beyond the ends.
+fn adobe_shift<const V: usize>(values: &[f32; V], tables: &[[f32; crate::tone_adobe::N]; V], v: f32, ev: f32) -> f32 {
+    if !v.is_finite() || v == 0.0 || V == 0 {
+        return 0.0;
+    }
+    // (value, shift at ev) with 0 → 0 inserted, in order
+    let mut pts = [(0.0f32, 0.0f32); 16];
+    let mut n = 0;
+    let mut zero_done = false;
+    for (x, t) in values.iter().zip(tables) {
+        if !zero_done && *x > 0.0 && n < pts.len() {
+            pts[n] = (0.0, 0.0);
+            n += 1;
+            zero_done = true;
+        }
+        if n < pts.len() {
+            pts[n] = (*x, table_at(t, ev));
+            n += 1;
+        }
+    }
+    if !zero_done && n < pts.len() {
+        pts[n] = (0.0, 0.0);
+        n += 1;
+    }
+    let pts = &pts[..n];
+    let v = v.clamp(pts[0].0, pts[n - 1].0);
+    for w in pts.windows(2) {
+        let ((x0, y0), (x1, y1)) = (w[0], w[1]);
+        if v >= x0 && v <= x1 {
+            return if x1 > x0 { y0 + (y1 - y0) * (v - x0) / (x1 - x0) } else { y0 };
+        }
+    }
+    0.0
 }
 
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
@@ -623,5 +687,27 @@ mod tests {
         assert!(ToneMap::new(0.0, 60.0, 0.0).apply(0.8) > base.apply(0.8));
         assert!(ToneMap::new(0.0, 0.0, -60.0).apply(0.01) < base.apply(0.01));
         assert!(ToneMap::new(0.0, 0.0, 60.0).apply(0.01) > base.apply(0.01));
+    }
+
+    /// Bryan's fork: the measured Camera Raw tone stays finite and non-decreasing for any sliders,
+    /// is exact at the measured values (zero sliders: the base table alone), and survives NaN.
+    #[test]
+    fn adobe_tone_tables_are_monotone_and_safe() {
+        let base = crate::adobe::Base { look: None, curve: (0..=crate::adobe::CURVE_N).map(|i| (i as f32 / crate::adobe::CURVE_N as f32).sqrt()).collect(), black: 0.0 };
+        for (e, c, w, b) in [(0.0, 0.0, 0.0, 0.0), (1.3, -63.0, -36.0, 30.0), (-2.7, -100.0, 15.0, 68.0), (4.0, 100.0, 100.0, -100.0), (-5.0, -100.0, -100.0, 100.0)] {
+            for key in [None, Some(-6.0), Some(2.0), Some(f32::NAN)] {
+                let t = ToneMap::adobe_lr(&base, e, c, w, b, key);
+                assert!(t.lut().iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{e} {c} {w} {b} {key:?}");
+                assert!(t.lut().windows(2).all(|p| p[1] >= p[0] - 1e-4), "not monotone: {e} {c} {w} {b} {key:?}");
+            }
+        }
+        let t = ToneMap::adobe_lr(&base, f64::NAN, f64::NAN, f64::INFINITY, -f64::INFINITY, None);
+        assert!(t.lut().iter().all(|v| v.is_finite()));
+        // between measured slider values the shift is linear in the slider
+        let a = adobe_shift(&crate::tone_adobe::W_VALUES, &crate::tone_adobe::W_TABLE, 25.0, 1.0);
+        let b2 = adobe_shift(&crate::tone_adobe::W_VALUES, &crate::tone_adobe::W_TABLE, 50.0, 1.0);
+        let m = adobe_shift(&crate::tone_adobe::W_VALUES, &crate::tone_adobe::W_TABLE, 37.5, 1.0);
+        assert!((m - (a + b2) / 2.0).abs() < 1e-5);
+        assert_eq!(adobe_shift(&crate::tone_adobe::W_VALUES, &crate::tone_adobe::W_TABLE, 0.0, 1.0), 0.0);
     }
 }

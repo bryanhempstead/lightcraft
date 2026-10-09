@@ -210,6 +210,18 @@ int lc_color_spec(const lc_profile *p, const double *analog_balance, int mode, c
     });
 }
 
+int lc_profile_matrices(const lc_profile *p, double out[36]) {
+    if (!p || !out) return LC_ERR_BAD_ARG;
+    return guarded([&] {
+        const dng_matrix *ms[4] = {&p->profile.ColorMatrix1(), &p->profile.ColorMatrix2(), &p->profile.ForwardMatrix1(), &p->profile.ForwardMatrix2()};
+        for (int k = 0; k < 4; k++)
+            for (uint32 i = 0; i < 3; i++)
+                for (uint32 j = 0; j < 3; j++)
+                    out[k * 9 + i * 3 + j] = (ms[k]->Rows() == 3 && ms[k]->Cols() == 3) ? (*ms[k])[i][j] : 0.0;
+        return LC_OK;
+    });
+}
+
 int lc_profile_hue_sat_map(const lc_profile *p, double x, double y, uint32_t dims[3], float *buf, size_t cap) {
     if (!p || !dims) return LC_ERR_BAD_ARG;
     return guarded([&] {

@@ -367,7 +367,7 @@ impl FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: if let Some(a) = adobe.as_ref() {
-                ToneMap::adobe_lr(&a.base, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks)
+                ToneMap::adobe_lr(&a.base, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks, tone_key)
             } else if let Some(curve) = info.camera_tone.as_ref() {
                 ToneMap::camera_lr(curve, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks)
             } else if info.raw {

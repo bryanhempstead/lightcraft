@@ -49,6 +49,10 @@ int lc_profile_info_get(const lc_profile *p, lc_profile_info *out);
 int lc_color_spec(const lc_profile *p, const double *analog_balance, int mode, const double in[3],
                   double out_white_xy[2], double out_camera_white[3], double out_camera_to_pcs[9]);
 
+// The profile's ColorMatrix1, ColorMatrix2, ForwardMatrix1, ForwardMatrix2 (3x3 row-major each;
+// zeros where absent).
+int lc_profile_matrices(const lc_profile *p, double out[36]);
+
 // The profile's hue/sat map interpolated for white xy (DNG dual/triple illuminant), deltas as
 // (hue shift deg, sat scale, val scale) triples in val-major, hue, sat-minor order.
 // LC_ERR_NONE when the profile has none; LC_ERR_SMALL when cap (floats) is too small (dims set).

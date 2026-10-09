@@ -25,7 +25,7 @@ use lightcraft_dng_sdk_sys as sdk;
 use lightcraft_raw::profile::HsvTable;
 
 /// Bumped when what [`decode_color`] produces changes (part of the source cache key).
-pub const VERSION: u64 = 5;
+pub const VERSION: u64 = 6;
 
 /// Largest look-profile XMP read (Adobe's are ≤ ~1 MB).
 const MAX_XMP: u64 = 8 << 20;
@@ -176,10 +176,11 @@ fn load_camera(path: &Path) -> Result<Camera, String> {
     Ok(Camera { key, path: path.to_path_buf(), info, profile })
 }
 
-/// The exposure ramp's black for `DefaultBlackRender` auto: Camera Raw's default Shadows 5
-/// (× 0.001); `LIGHTCRAFT_ADOBE_BLACK` overrides (measurement).
+/// The exposure ramp's black for `DefaultBlackRender` auto: 0 — Lightroom's PV2012 default tone,
+/// measured with Camera Raw, is in `tone_adobe::BASE` instead of the DNG reference's Shadows 5;
+/// `LIGHTCRAFT_ADOBE_BLACK` overrides (measurement).
 fn black_level() -> f32 {
-    std::env::var("LIGHTCRAFT_ADOBE_BLACK").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| (0.0..0.05).contains(v)).unwrap_or(0.005)
+    std::env::var("LIGHTCRAFT_ADOBE_BLACK").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| (0.0..0.05).contains(v)).unwrap_or(0.0)
 }
 
 /// What the raw decode applies for a camera with an Adobe base.
@@ -242,7 +243,9 @@ pub fn decode_color(cam: &Arc<Camera>, raw: &lightcraft_raw::RawImage) -> Option
     let hue_sat = cam.profile.hue_sat_map(spec.white_xy).ok().flatten().as_ref().and_then(hsv_table);
     let [temp, tint] = sdk::xy_to_temp_tint(spec.white_xy[0], spec.white_xy[1]).ok()?;
     // the file's baseline exposure (DNG tag; Fujifilm's raw exposure bias), the profile's offset
-    let gain_ev = raw.color.baseline_exposure + cam.info.baseline_exposure_offset + exposure_offset(&cam.info.unique_model, raw.metadata.iso);
+    // (a DNG carries its own baseline exposure: the measured offsets are for the camera's own format)
+    let measured = if raw.format == lightcraft_raw::RawFormat::Dng { 0.0 } else { exposure_offset(&cam.info.unique_model, raw.metadata.iso) };
+    let gain_ev = raw.color.baseline_exposure + cam.info.baseline_exposure_offset + measured;
     let camera_wb = wb_model(cam, analog, n, &matrix)?;
     Some(DecodeColor { matrix, wb, hue_sat, gain_ev, as_shot_temp: temp, as_shot_tint: tint, camera_wb })
 }
@@ -355,7 +358,6 @@ pub(crate) fn solve5(a: [[f64; 5]; 5], b: [f64; 5]) -> Option<[f64; 5]> {
 pub const MEASURED_EXPOSURE: &[(&str, u32, f64)] = &[
     ("Canon EOS R6", 0, 0.127),
     ("Canon EOS R6", 125, 0.216),
-    ("RICOH GR III", 0, 0.034),
     ("Fujifilm X-T2", 0, -0.533),
     ("Fujifilm X-T2", 500, -1.062),
     ("Fujifilm X100F", 0, -0.37),
