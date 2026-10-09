@@ -322,15 +322,21 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         };
         let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
         let (temp, tint) = if relative { (6500.0, 0.0) } else { (temp.round(), tint.round()) };
+        // the camera's Lightroom white-balance scale, fitted with its Lightroom-matched profile
+        let wb_map = if from_lightroom {
+            raw.metadata.model.as_deref().and_then(crate::camera_profiles::get).and_then(|p| p.wb_map.as_ref().map(|m| m.map()))
+        } else {
+            None
+        };
         if let Some((cw, k, ti)) = camera_wb {
             return Ok((
                 img,
-                SourceInfo { raw: true, as_shot_temp: k, as_shot_tint: ti, lens, relative_wb: false, camera_tone, camera_wb: Some(cw) },
+                SourceInfo { raw: true, as_shot_temp: k, as_shot_tint: ti, lens, relative_wb: false, camera_tone, camera_wb: Some(cw), wb_map },
             ));
         }
         return Ok((
             img,
-            SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone, camera_wb: None },
+            SourceInfo { raw: true, as_shot_temp: temp, as_shot_tint: tint, lens, relative_wb: relative, camera_tone, camera_wb: None, wb_map },
         ));
     }
     let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).map_err(|e| e.to_string())?;

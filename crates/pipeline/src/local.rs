@@ -82,10 +82,14 @@ fn wb_gain(img: &mut Rgb32f, info: &SourceInfo, s: &DevelopSettings, gain: f32) 
 /// The white balance actually in effect (presets resolve to their Kelvin values for raw files).
 pub fn effective_wb(info: &SourceInfo, s: &DevelopSettings) -> (f64, f64) {
     use lightcraft_develop::WbMode;
-    match s.wb.mode {
-        WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
+    let set = match s.wb.mode {
+        WbMode::AsShot => return (info.as_shot_temp, info.as_shot_tint),
         m if info.raw && !info.relative_wb => m.preset().unwrap_or((s.wb.temp, s.wb.tint)),
         _ => (s.wb.temp, s.wb.tint),
+    };
+    match &info.wb_map {
+        Some(map) if info.raw => map.apply(set.0, set.1),
+        _ => set,
     }
 }
 
@@ -392,6 +396,28 @@ mod tests {
         let cw = crate::CameraWb { r: [-1.2, 1.5, 0.0, 0.0, 0.0], b: [0.1, -1.4, 0.0, 0.3, 0.0], to_working: m, from_working: inv, shot: [1.0; 3] };
         let shot = cw.neutral(5000.0, 0.0).map(|v| v as f32);
         crate::CameraWb { shot, ..cw }
+    }
+
+    #[test]
+    fn lightroom_white_balance_map_moves_set_white_balances_only() {
+        let map = crate::WbMap { mired: [10.0, 0.0, 0.0], tint: [5.0, 0.0, 0.0] };
+        let info = SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 3.0, wb_map: Some(map), ..Default::default() };
+        let mut s = DevelopSettings::default();
+        assert_eq!(effective_wb(&info, &s), (5200.0, 3.0), "As Shot is the camera's own");
+        s.wb.mode = lightcraft_develop::WbMode::Custom;
+        s.wb.temp = 5000.0;
+        s.wb.tint = 10.0;
+        let (k, t) = effective_wb(&info, &s);
+        assert!((1e6 / k - 210.0).abs() < 1e-6 && (t - 15.0).abs() < 1e-9, "{k} {t}");
+        // hostile coefficients and values: bounded, finite, never a panic
+        let wild = crate::WbMap { mired: [f32::NAN, 1e30, -1e30], tint: [f32::INFINITY, 0.0, 0.0] };
+        for (temp, tint) in [(5000.0, 0.0), (f64::NAN, 0.0), (0.0, 0.0), (1e12, 1e12)] {
+            let (k, t) = wild.apply(temp, tint);
+            assert!(k.is_nan() == temp.is_nan() && (temp.is_nan() || (k.is_finite() && t.is_finite())), "{temp} {tint} -> {k} {t}");
+        }
+        let big = crate::WbMap { mired: [1e4, 0.0, 0.0], tint: [-1e4, 0.0, 0.0] };
+        let (k, t) = big.apply(5000.0, 0.0);
+        assert!((1500.0..=50000.0).contains(&k) && (-150.0..=150.0).contains(&t));
     }
 
     #[test]

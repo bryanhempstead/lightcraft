@@ -70,6 +70,8 @@ pub struct SourceInfo {
     /// A camera white-balance model matched to Lightroom ([`CameraWb`]): Temp / Tint move the
     /// camera's neutral as Lightroom's do, instead of a Bradford adaptation of the as-shot white.
     pub camera_wb: Option<CameraWb>,
+    /// The camera's Lightroom white-balance scale (set white balances only, see [`WbMap`]).
+    pub wb_map: Option<WbMap>,
 }
 
 /// How a camera's neutral (raw RGB of a white surface, green = 1) follows Lightroom's Temp /
@@ -128,7 +130,36 @@ impl CameraWb {
 
 impl Default for SourceInfo {
     fn default() -> Self {
-        Self { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, lens: None, relative_wb: false, camera_tone: None, camera_wb: None }
+        Self { raw: false, as_shot_temp: 6500.0, as_shot_tint: 0.0, lens: None, relative_wb: false, camera_tone: None, camera_wb: None, wb_map: None }
+    }
+}
+
+/// How one camera's Temp / Tint in Lightroom read in LightCraft's white-balance model: a set
+/// white balance (any mode but As Shot) of `m` mired (10⁶ / K) and tint `t` renders as
+/// `m + mired · [1, m/100, t/100]`, `t + tint · [1, m/100, t/100]`. Fitted per camera from the
+/// user's own edits (`tools/lr-compare` `wbmap`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WbMap {
+    pub mired: [f32; 3],
+    pub tint: [f32; 3],
+}
+
+impl WbMap {
+    /// The white balance to render for Lightroom's `temp` (K) and `tint`.
+    pub fn apply(&self, temp: f64, tint: f64) -> (f64, f64) {
+        if !(temp.is_finite() && temp > 0.0 && tint.is_finite()) {
+            return (temp, tint);
+        }
+        let m = 1e6 / temp.clamp(1500.0, 50000.0);
+        let x = [1.0, m / 100.0, tint / 100.0];
+        let dot = |c: &[f32; 3]| c.iter().zip(x).map(|(a, b)| f64::from(*a) * b).sum::<f64>();
+        let (dm, dt) = (dot(&self.mired), dot(&self.tint));
+        if !(dm.is_finite() && dt.is_finite()) {
+            return (temp, tint);
+        }
+        // a bounded correction: never a negative or absurd temperature
+        let m2 = (m + dm.clamp(-150.0, 150.0)).clamp(20.0, 667.0);
+        ((1e6 / m2).clamp(1500.0, 50000.0), (tint + dt.clamp(-80.0, 80.0)).clamp(-150.0, 150.0))
     }
 }
 

@@ -645,6 +645,113 @@ def compare(a):
             out.save(os.path.join(a.work, "strips", f"{sid}-{a.tag}.jpg"), quality=90)
 
 
+# ---------------------------------------------------------------- white-balance map
+def neutral_cast(prev, prev_space, ours, size=256):
+    """Median (da*, db*) of Lightroom minus ours on near-neutral pixels, or None."""
+    a = Image.open(prev).convert("RGB")
+    b = Image.open(ours).convert("RGB").resize(a.size, Image.BOX)
+    k = size / max(a.size)
+    ns = (max(8, round(a.size[0] * k)), max(8, round(a.size[1] * k)))
+    la, lb = to_lab(np.asarray(a.resize(ns, Image.BOX)), prev_space), to_lab(np.asarray(b.resize(ns, Image.BOX)), "srgb")
+    m = (np.hypot(lb[..., 1], lb[..., 2]) < 12) & (la[..., 0] > 15) & (la[..., 0] < 95)
+    if m.sum() < 50:
+        return None
+    return np.array([np.median(la[..., 1][m] - lb[..., 1][m]), np.median(la[..., 2][m] - lb[..., 2][m])])
+
+
+WB_STEP = (15.0, 10.0)  # mired, tint
+
+
+def wbmap(a):
+    """Per camera, how Lightroom's Temp / Tint read in LightCraft: for every photo with a set
+    white balance, render it at its Temp / Tint and one step warmer / more magenta, solve for
+    the change that removes its colour cast against Lightroom's preview, and fit that change as
+    a function of the white balance (const or linear, chosen by cross-validation). Writes
+    `wb_map` into the camera profiles in --out (run after `calibrate`)."""
+    import re
+    rows = []
+    for work in a.work.split(","):
+        lib = os.path.join(work, f"lib-{a.lib_tag}")
+        sample = json.load(open(os.path.join(work, "sample.json")))
+        recs = {r["id"]: r for r in json.load(open(os.path.join(work, "records.json")))["images"]}
+        exclude = set()
+        for f in a.exclude or []:
+            exclude |= {p["id"] for p in json.load(open(f))}
+        ids = photo_ids(lib)
+        script, jobs = [], []
+        for p in sample:
+            if p["id"] in exclude or p.get("lrRender") is False or p["id"] not in recs:
+                continue
+            d = top_level(recs[p["id"]]["develop"])
+            try:
+                temp, tint = float(d.get("Temperature", "")), float(d.get("Tint", "0"))
+            except ValueError:
+                continue
+            pid = ids.get(os.path.basename(p["path"]))
+            if d.get("WhiteBalance") != "Custom" or pid is None:
+                continue
+            variants = {"b": (temp, tint), "m": (1e6 / (1e6 / temp + WB_STEP[0]), tint), "t": (temp, tint + WB_STEP[1])}
+            script.append(json.dumps({"command": "library.select", "params": {"ids": [pid]}}))
+            outs = {}
+            for k, (tt, ti) in variants.items():
+                out = os.path.join(work, "renders", f"{a.tag}-{k}", f"{p['id']}.jpg")
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                outs[k] = out
+                script.append(json.dumps({"command": "develop.merge", "params": {"settings": {"wb": {"mode": "custom", "temp": tt, "tint": ti}}}}))
+                script.append(json.dumps({"command": "app.export", "params": {"ids": [pid], "path": out, "longEdge": 400, "quality": 95, "sharpen": "none", "metadata": "none", "conflict": "overwrite"}}))
+            script.append(json.dumps({"command": "develop.merge", "params": {"settings": {"wb": {"mode": "custom", "temp": temp, "tint": tint}}}}))
+            jobs.append((p, temp, tint, outs))
+        sp = os.path.join(work, f"wbmap-{a.tag}.jsonl")
+        open(sp, "w").write("\n".join(script) + "\n")
+        subprocess.run([CLI, "run", "--library", lib, "--keep-going", "--script", sp], capture_output=True, text=True)
+        for p, temp, tint, outs in jobs:
+            c = {k: neutral_cast(p["preview"], p.get("previewSpace", "adobe"), f) if os.path.exists(f) else None for k, f in outs.items()}
+            if any(v is None for v in c.values()):
+                continue
+            J = np.stack([(c["m"] - c["b"]) / WB_STEP[0], (c["t"] - c["b"]) / WB_STEP[1]], 1)
+            if abs(np.linalg.det(J)) < 1e-4:
+                continue
+            d = np.clip(-np.linalg.solve(J, c["b"]), [-150, -80], [150, 80])
+            rows.append({"model": p["model"], "mired": 1e6 / temp, "tint": tint, "cast": c["b"], "J": J, "d": d})
+    def feats(r, kind):
+        return np.array([1.0, r["mired"] / 100, r["tint"] / 100]) if kind == "lin" else np.array([1.0, 0.0, 0.0])
+    def solve(rs, kind):
+        F = np.array([feats(r, kind) for r in rs])
+        D = np.array([r["d"] for r in rs])
+        lam = np.diag([1e-3, 0.1, 0.1]) * len(rs)
+        return np.linalg.solve(F.T @ F + lam, F.T @ D)  # (3, 2)
+    def residual(rs, th, kind):
+        return float(np.mean([np.hypot(*(r["cast"] + r["J"] @ (feats(r, kind) @ th))) for r in rs]))
+    out_dir = a.out or os.path.join(os.path.expanduser("~/Library/Application Support/LightCraft"), "camera-profiles")
+    for model in sorted({r["model"] for r in rows}):
+        rs = [r for r in rows if r["model"] == model]
+        if len(rs) < a.min_photos:
+            print(f"{model}: {len(rs)} photos with a set white balance, need {a.min_photos}", file=sys.stderr)
+            continue
+        # 5-fold cross-validation: keep the map only if it removes cast on photos it wasn't fitted on
+        folds = [rs[i::5] for i in range(5)]
+        cv = {}
+        for kind in ("const", "lin"):
+            errs = []
+            for i in range(5):
+                tr = [r for j, f in enumerate(folds) if j != i for r in f]
+                errs.append(residual(folds[i], solve(tr, kind), kind) if folds[i] and tr else 0.0)
+            cv[kind] = float(np.mean(errs))
+        base = float(np.mean([np.hypot(*r["cast"]) for r in rs]))
+        kind = min(cv, key=cv.get)
+        msg = f"{model}: {len(rs)} photos, neutral cast {base:.2f} -> {cv[kind]:.2f} ({kind}, cross-validated)"
+        fn = os.path.join(out_dir, re.sub(r"[^A-Za-z0-9_-]", "_", model.strip()) + ".json")
+        if cv[kind] >= base or not os.path.exists(fn):
+            print(msg + (": no profile to write into" if not os.path.exists(fn) else ": no gain, left out"), file=sys.stderr)
+            continue
+        th = solve(rs, kind)
+        prof = json.load(open(fn))
+        prof["wb_map"] = {"mired": [round(float(v), 4) for v in th[:, 0]], "tint": [round(float(v), 4) for v in th[:, 1]], "photos": len(rs)}
+        if not a.dry_run:
+            json.dump(prof, open(fn, "w"), indent=1)
+        print(msg + f" -> {fn}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -682,6 +789,15 @@ def main():
     p.add_argument("--transfer-from", help="camera whose Lightroom-matched look is carried over to cameras without default-setting renders (default: the one with most)")
     p.add_argument("--no-transfer", action="store_true")
     p.set_defaults(fn=calibrate)
+    p = sub.add_parser("wbmap", help="fit how Lightroom's Temp / Tint read in LightCraft, per camera (after calibrate)")
+    p.add_argument("--work", required=True, help="comma-separated prepared + migrated work folders")
+    p.add_argument("--lib-tag", default="final", help="library folder lib-TAG in each work folder")
+    p.add_argument("--tag", default="wbmap")
+    p.add_argument("--out", help="profiles folder (default: LightCraft's)")
+    p.add_argument("--exclude", action="append", help="sample.json whose photos are left out (held-out test sets)")
+    p.add_argument("--min-photos", type=int, default=8)
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(fn=wbmap)
     p = sub.add_parser("compare")
     p.add_argument("--work", required=True)
     p.add_argument("--tag", required=True)

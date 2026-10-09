@@ -53,6 +53,25 @@ pub struct CameraProfile {
     /// How the camera's neutral follows Lightroom's Temp / Tint ([`lightcraft_pipeline::CameraWb`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wb: Option<WbFit>,
+    /// How Lightroom's Temp / Tint read in LightCraft for this camera ([`lightcraft_pipeline::WbMap`]),
+    /// fitted from the user's edits after the profile (`tools/lr-compare` `wbmap`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wb_map: Option<WbMapFit>,
+}
+
+/// Coefficients of [`lightcraft_pipeline::WbMap`] and the photos they were fitted on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WbMapFit {
+    pub mired: [f64; 3],
+    pub tint: [f64; 3],
+    #[serde(default)]
+    pub photos: usize,
+}
+
+impl WbMapFit {
+    pub fn map(&self) -> lightcraft_pipeline::WbMap {
+        lightcraft_pipeline::WbMap { mired: self.mired.map(|v| v as f32), tint: self.tint.map(|v| v as f32) }
+    }
 }
 
 /// Coefficients of [`lightcraft_pipeline::CameraWb`] and the photos they were fitted on.
@@ -154,7 +173,7 @@ impl WbFit {
 
 impl CameraProfile {
     pub fn new(model: &str, files: usize, samples: usize, matrix: Mat3, hue_sat: Option<HsvTable>) -> CameraProfile {
-        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat, tone: None, source: None, wb: None }
+        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat, tone: None, source: None, wb: None, wb_map: None }
     }
 
     pub fn matrix(&self) -> Mat3 {
@@ -164,7 +183,8 @@ impl CameraProfile {
     /// Whether the data is usable (bounded matrix, table shape matching its data).
     fn valid(&self) -> bool {
         let matrix = self.matrix.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0) && Mat3(self.matrix).inverse().is_some();
-        let wb = self.wb.as_ref().is_none_or(|w| w.r.iter().chain(&w.b).all(|v| v.is_finite() && v.abs() < 1e3));
+        let wb = self.wb.as_ref().is_none_or(|w| w.r.iter().chain(&w.b).all(|v| v.is_finite() && v.abs() < 1e3))
+            && self.wb_map.as_ref().is_none_or(|m| m.mired.iter().chain(&m.tint).all(|v| v.is_finite() && v.abs() < 1e3));
         let table = self.hue_sat.as_ref().is_none_or(|t| {
             let dims = (1..=4096).contains(&t.hue_divisions) && (2..=4096).contains(&t.sat_divisions) && (1..=4096).contains(&t.val_divisions);
             let len = t.hue_divisions.checked_mul(t.sat_divisions).and_then(|n| n.checked_mul(t.val_divisions));
