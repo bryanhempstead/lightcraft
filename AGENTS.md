@@ -66,8 +66,14 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
 - Every Adobe-backed path has a fallback: no SDK, no installed profile, an odd DCP or an SDK error → the previous
   LightCraft path with a notice, never a panic or a blank render.
 - Lightroom's data stays read-only (it syncs his personal library: never import/edit/rate/delete there; work on
-  copies). GPL code (darktable, RawTherapee, LibRaw, …) is still not copied: the fork stays MIT OR Apache-2.0 for its
-  own code.
+  copies).
+- **GPL / LGPL code is allowed (Bryan, 2026-11-21: "I'm not selling this, I'm just using it personally … implement
+  those things"; patents are no concern either).** Reuse before building: upstream storytold/lightcraft first (same
+  licence), then permissive projects, then LibRaw / darktable / RawTherapee / other copyleft work. Keep the repo honest
+  (it's public, and LightCraft's own code stays MIT OR Apache-2.0): big C/C++ libraries (LibRaw, …) are fetched at build
+  time and checksum-pinned like the DNG SDK (`vendor/`, a `-sys` crate with a safe API and a fallback), never
+  committed; ported GPL/LGPL source lives in its own crate whose files carry the original licence header and
+  copyright, listed in NOTICE, and a binary built with it is distributed under that licence. Never strip a copyright.
 
 ## Non-negotiables
 - **Layering** (`plan/architecture.md` §3, enforced by `cargo xtask layers`): nothing below L5 depends on egui/eframe/winit/rfd.
