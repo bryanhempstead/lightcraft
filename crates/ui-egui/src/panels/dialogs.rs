@@ -477,6 +477,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         .checkbox(auto_align, crate::i18n::tr("Auto align (horizon)"))
                         .on_hover_text(crate::i18n::tr("Level each photo's horizon (or plumb lines) with its crop angle"));
                     crate::widgets::register(ui.ctx(), "syncGroup:autoAlign", r.rect);
+                    // remembered as checked, even when the dialog is cancelled
+                    let now = crate::state::SyncPrefs { groups: Some(groups.clone()), match_exposure: *match_exposure, auto_align: *auto_align };
+                    if app.ui.sync_prefs != now {
+                        app.ui.sync_prefs = now;
+                    }
                 }
                 Dialog::PasteSettings { groups } => {
                     let n = app.session.targets(&json!({})).len();

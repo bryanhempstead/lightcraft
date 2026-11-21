@@ -250,6 +250,16 @@ pub const RIGHT_WIDTH: PanelWidth = PanelWidth { min: 250.0, default: 270.0, max
 /// The photo area the side panels always leave free (as far as their minimum widths allow).
 pub const MIN_PHOTO_WIDTH: f32 = 360.0;
 
+/// The Sync Settings dialog's checkboxes as last left. Match exposure and auto align start off.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SyncPrefs {
+    /// The settings groups checked (`None`: never opened — Classic's defaults).
+    pub groups: Option<Vec<String>>,
+    pub match_exposure: bool,
+    pub auto_align: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
@@ -289,6 +299,8 @@ pub struct UiState {
     pub preset_groups_open: Vec<String>,
     /// The Import window's last choices (source, mode, destination, options).
     pub import_prefs: crate::import::ImportPrefs,
+    /// Sync Settings: what was checked last time (kept between runs and restarts).
+    pub sync_prefs: SyncPrefs,
     pub right: RightPanel,
     /// Widths of the left sidebar and of the right panel in points (dragging their inner edge
     /// resizes them; within [`LEFT_WIDTH`] / [`RIGHT_WIDTH`]).
@@ -657,6 +669,7 @@ impl Default for UiState {
             develop_left_sections: vec!["navigator".into(), "presets".into(), "history".into()],
             solo_left: false,
             import_prefs: Default::default(),
+            sync_prefs: Default::default(),
             preset_groups_open: Vec::new(),
             left_width: LEFT_WIDTH.default,
             right_width: RIGHT_WIDTH.default,
