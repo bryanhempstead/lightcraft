@@ -404,3 +404,39 @@ TIFF exports still carry no Exif IFD (Make / Model only through XMP).
 with an Adobe Standard DCP renders as Adobe Standard + the Adobe Color look: pixel-identical to
 setting `adobe:Adobe Color` (R6 CR3 checked). The profile browser names it "Color", not "Adobe
 Color"; lens corrections start off unless the file has embedded ones.
+
+## Recipes, curves and the process version (R01–R23, 2026-11-21)
+
+### The acceptance set and its gate (R01)
+
+`lr_compare.py gate --work W --tag T [--base T0] [--split B]` reports every *recipe* — look ×
+camera × Lightroom process version — plus edited / default and PV5 / PV6, with mean / p95 ΔE,
+`dE128`, mean ΔL* and photos passing (ΔE ≤ 2 and p95 ≤ 5); with `--base` it exits 1 when a cell of
+≥ 3 photos gets worse by more than 0.15 ΔE, the overall mean by more than 0.03, or fewer photos
+pass. Every sampled photo now carries its process version, a fixed fit / held-out split (`A` / `B`,
+a hash of its catalog id), its top-level settings and point curves (`prepare` and the new
+`assemble`). `tools/lr-compare/acceptance.json` is the recipe spec for `prepare` (Summer Fields /
+Nautica / Adobe Color × M262 / R6 PV5 + PV6 / GR III / iPhone JPEG + ProRAW, plus Monochrome, Q2,
+X-T2, X100F). `lr_compare.py hues` breaks a run's colour error down by CIELAB hue (ΔL*, ΔC*, Δh°).
+
+On 2026-11-21 the catalog's `Previews.lrdata` was no longer next to the catalog, and most
+originals of the earlier sets live on the `HEMPSTEAD` drive (not mounted; its backup on `LOT48`
+holds most of them). `assemble` builds a work folder from earlier prepared sets (their stored
+Lightroom previews) and relocates originals (`--relocate OLD=NEW`): the acceptance set used below
+is w9 + r6d + fe + vg, the 183 photos whose original is readable (137 edited; Summer Fields 106,
+Adobe Color 72, Nautica 4; split A 91 / B 92). Only 7 of them are PV5, so PV5 vs PV6 is measured
+with the oracle instead (below).
+
+Baseline (main at ce413b5, CPU):
+
+| recipe | n | ΔE | p95 | pass |
+|---|---|---|---|---|
+| all | 183 | 4.01 | 10.9 | 23 |
+| edited / default | 137 / 46 | 4.59 / 2.29 | 12.4 / 6.3 | 5 / 18 |
+| Summer Fields · M262 | 64 | 4.45 | 12.9 | 0 |
+| Summer Fields · R6 | 20 | 5.82 | 13.7 | 0 |
+| Summer Fields · GR III | 6 | 3.95 | 9.7 | 0 |
+| Summer Fields · iPhone JPEG | 4 | 6.99 | 19.3 | 0 |
+| Adobe Color · R6 | 64 | 2.96 | 8.0 | 16 |
+| Adobe Color · M262 | 7 | 1.27 | 3.1 | 7 |
+| Nautica · R6 | 4 | 5.46 | 17.2 | 0 |
