@@ -147,32 +147,32 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         });
 }
 
-/// The module tabs: library. | develop. — the one you're in is a filled accent pill with bright
-/// text, the other quiet (a hover shows it can be clicked). Returns their left edge.
+/// The module picker, as Lightroom Classic draws it: plain text links with a thin divider; the
+/// module you're in bright, the other one dim (brighter on hover). Returns its left edge.
 pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
     let t = Tokens::get(ui.ctx());
-    let font = t.semibold(15.0);
-    let mut x = full.right() - 10.0;
+    let mut x = full.right() - 12.0;
     let items =
         [("develop", "Develop", crate::state::Module::Develop, "Develop (D)"), ("library", "Library", crate::state::Module::Library, "Library (G)")];
     for (i, (id, label, module, tip)) in items.into_iter().enumerate() {
         let on = app.ui.module == module;
         // Bryan's label style: lowercase with a period ("library.", "develop."), in every language
         let text = format!("{}.", crate::i18n::tr(label).to_lowercase());
-        let g = ui.painter().layout_no_wrap(text, font.clone(), t.text);
-        let h = (full.height() - 12.0).clamp(22.0, 30.0);
-        let r = Rect::from_min_max(pos2(x - g.size().x - 28.0, full.center().y - h / 2.0), pos2(x, full.center().y + h / 2.0));
+        let font = if on { t.semibold(18.0) } else { t.font(18.0) };
+        // PLACEHOLDER: the colour passed to `galley` below is the one used (bright / dim / hover)
+        let g = ui.painter().layout_no_wrap(text, font, egui::Color32::PLACEHOLDER);
+        let r = Rect::from_min_max(pos2(x - g.size().x - 8.0, full.top() + 4.0), pos2(x, full.bottom() - 4.0));
         let resp = ui.interact(r, egui::Id::new(("module", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
         register(ui.ctx(), format!("module:{id}"), r);
-        let (fill, c) = if on {
-            (t.accent, egui::Color32::WHITE)
+        let c = if on {
+            egui::Color32::from_gray(238)
         } else if resp.hovered() {
-            (t.hover, t.text)
+            egui::Color32::from_gray(175)
         } else {
-            (egui::Color32::TRANSPARENT, t.text_dim)
+            // Classic's unselected modules: a dim grey, clearly behind the bright one
+            egui::Color32::from_gray(112)
         };
-        ui.painter().rect_filled(r, h / 2.0, fill);
-        ui.painter().galley(pos2(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, c);
+        ui.painter().galley(pos2(r.left() + 4.0, r.center().y - g.size().y / 2.0), g, c);
         if resp.clicked() {
             let cmd = if module == crate::state::Module::Develop { "view.develop" } else { "view.library" };
             if let Err(e) = app.run(cmd, json!({})) {
@@ -181,7 +181,10 @@ pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> 
         }
         x = r.left();
         if i == 0 {
-            x -= 8.0; // the gap between the tabs
+            // the divider between the links
+            let d = Rect::from_center_size(pos2(x - 10.0, full.center().y), vec2(1.0, 18.0));
+            ui.painter().rect_filled(d, 0.0, egui::Color32::from_gray(90));
+            x -= 20.0;
         }
     }
     x

@@ -574,7 +574,8 @@ fn grid_column(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, d: &mut Impo
     let items = [("all", "All Photos"), ("new", "New Photos"), ("folders", "Destination Folders")];
     let mut x = tabs.center().x - 190.0;
     for (key, label) in items {
-        let g = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), t.font(12.5), t.text);
+        // PLACEHOLDER: the bright / dim / hover colour given to `galley` is the one drawn
+        let g = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), t.font(12.5), egui::Color32::PLACEHOLDER);
         let tr = Rect::from_min_size(pos2(x, tabs.top() + 4.0), vec2(g.size().x + 20.0, 24.0));
         let resp = ui.interact(tr, egui::Id::new(("import-show", key)), Sense::click());
         register(ui.ctx(), format!("button:importShow-{key}"), tr);
