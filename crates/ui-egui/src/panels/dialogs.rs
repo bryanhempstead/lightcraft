@@ -463,10 +463,20 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     group_checklist(ui, "presetInclude", groups);
                 }
                 Dialog::CopySettings { groups } => group_checklist(ui, "copyGroup", groups),
-                Dialog::SyncSettings { groups } => {
+                Dialog::SyncSettings { groups, match_exposure, auto_align } => {
                     let n = app.session.selection.ids.len().saturating_sub(1);
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Copy to {n} other selected photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
                     group_checklist(ui, "syncGroup", groups);
+                    ui.add_space(12.0);
+                    ui.label(egui::RichText::new(crate::i18n::tr("Then, on each photo")).color(t.text_dim));
+                    let r = ui.checkbox(match_exposure, crate::i18n::tr("Match exposure")).on_hover_text(crate::i18n::tr(
+                        "Set each photo's Exposure so it comes out as bright as this one — measured on the finished look, so photos shot 4 stops under or 3 over all land on it",
+                    ));
+                    crate::widgets::register(ui.ctx(), "syncGroup:matchExposure", r.rect);
+                    let r = ui
+                        .checkbox(auto_align, crate::i18n::tr("Auto align (horizon)"))
+                        .on_hover_text(crate::i18n::tr("Level each photo's horizon (or plumb lines) with its crop angle"));
+                    crate::widgets::register(ui.ctx(), "syncGroup:autoAlign", r.rect);
                 }
                 Dialog::PasteSettings { groups } => {
                     let n = app.session.targets(&json!({})).len();
@@ -1070,7 +1080,9 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }),
         ),
         Dialog::CopySettings { groups } => app.run("develop.copy", json!({"groups": groups})),
-        Dialog::SyncSettings { groups } => app.run("develop.sync", json!({"groups": groups})),
+        Dialog::SyncSettings { groups, match_exposure, auto_align } => {
+            app.run("develop.sync", json!({"groups": groups, "matchExposure": match_exposure, "autoAlign": auto_align}))
+        }
         Dialog::PasteSettings { groups } => app.run("develop.paste", json!({"groups": groups})),
         Dialog::Export { opts, full_size, resize, limit_kb, dir, .. } => {
             let mut p = export_dialog_params(opts, *full_size, resize, *limit_kb);

@@ -583,6 +583,10 @@ pub enum Dialog {
     /// the other selected photos.
     SyncSettings {
         groups: Vec<String>,
+        /// Then set each photo's Exposure so it renders as bright as the active one.
+        match_exposure: bool,
+        /// Then level each photo's horizon.
+        auto_align: bool,
     },
     /// Paste Selected Settings: which of the copied groups to paste.
     PasteSettings {

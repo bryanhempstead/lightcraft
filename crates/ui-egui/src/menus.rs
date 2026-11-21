@@ -1143,7 +1143,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "dialog.syncSettings" => {
             let groups = crate::state::default_preset_groups();
-            app.ui.dialog = Some(Dialog::SyncSettings { groups });
+            app.ui.dialog = Some(Dialog::SyncSettings { groups, match_exposure: false, auto_align: false });
             Ok(Value::Null)
         }
         "dialog.copySettings" => {

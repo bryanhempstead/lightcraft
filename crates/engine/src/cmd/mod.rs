@@ -10,7 +10,7 @@ mod color;
 pub(crate) mod convert;
 mod cull;
 pub mod curves;
-mod develop;
+pub(crate) mod develop;
 mod edit;
 mod export;
 pub mod filters;

@@ -30,6 +30,70 @@ fn groups_param(p: &Value) -> Option<Vec<SettingsGroup>> {
     p.get("groups").and_then(|g| serde_json::from_value(g.clone()).ok())
 }
 
+/// Turn the crop to `angle`, keeping its size if it still fits, else shrinking it to fit.
+fn straighten(d: &mut DevelopSettings, w: f64, h: f64, angle: f64) {
+    let r = d.crop.geometry.rect_px(w, h);
+    let fit = crop_fit_angle(w, h, angle, Some(r.width() / r.height()));
+    let cand = CropGeometry { rect: d.crop.geometry.rect, angle };
+    d.crop.geometry = if cand.is_within_image(w, h) { cand } else { fit };
+}
+
+/// The level angle for photo `id` with settings `d` (its horizon or plumb lines), if it has one.
+fn level_angle(s: &mut Session, id: PhotoId, d: &DevelopSettings) -> Option<f64> {
+    let src = s.source_now(id, SourceLevel::Preview).ok()?;
+    let info = s.source_info(id);
+    let level = lightcraft_pipeline::upright::level_degrees(&src, &info, d)?;
+    Some((level.clamp(-45.0, 45.0) * 100.0).round() / 100.0)
+}
+
+/// How bright photo `id` comes out with settings `d`: the log-average linear luminance of a small
+/// render (the finished look, after tone curve and every other setting), or `None` if it can't render.
+pub(crate) fn rendered_brightness(s: &mut Session, id: PhotoId, d: &DevelopSettings) -> Option<f64> {
+    let mut job = s.render_job(id, 256, 256, false, true)?;
+    job.key ^= d.hash64();
+    job.settings = std::sync::Arc::new(d.clone());
+    (job.cache, job.stages, job.view_cache) = (None, None, None);
+    let r = job.run();
+    s.accept(&r);
+    let img = r.rendered.ok()?.image;
+    let lin = |v: u8| {
+        let c = f64::from(v) / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let n = img.data.len();
+    let sum: f64 = img.data.iter().map(|px| (0.2126 * lin(px[0]) + 0.7152 * lin(px[1]) + 0.0722 * lin(px[2]) + 1e-4).ln()).sum();
+    (n > 0).then(|| (sum / n as f64).exp()).filter(|b| b.is_finite() && *b > 0.0)
+}
+
+/// Move `d`'s Exposure until photo `id` renders as bright as `target` (render, correct, repeat:
+/// the tone curve bends the response, so one step is not enough). `false`: it couldn't render.
+fn match_brightness(s: &mut Session, id: PhotoId, d: &mut DevelopSettings, target: f64) -> bool {
+    for _ in 0..6 {
+        let Some(b) = rendered_brightness(s, id, d) else { return false };
+        let step = (target / b).log2();
+        if !step.is_finite() || step.abs() < 0.02 {
+            break;
+        }
+        let next = (d.light.exposure + step).clamp(-5.0, 5.0);
+        if (next - d.light.exposure).abs() < 1e-3 {
+            break; // at the slider's end
+        }
+        d.light.exposure = (next * 100.0).round() / 100.0;
+    }
+    true
+}
+
+/// log2 of the light photo `id` gathered (shutter s × ISO ÷ f-number²), from its metadata.
+fn gathered_ev(s: &Session, id: PhotoId) -> Option<f64> {
+    let m = &s.catalog.photo(id)?.meta;
+    let t = match m.shutter.split_once('/') {
+        Some((a, b)) => a.trim().parse::<f64>().ok()? / b.trim().parse::<f64>().ok()?,
+        None => m.shutter.trim().trim_end_matches('s').trim().parse::<f64>().ok()?,
+    };
+    let (n, iso) = (m.aperture? as f64, m.iso? as f64);
+    (t > 0.0 && n > 0.0 && iso > 0.0).then(|| (t * iso / (n * n)).log2())
+}
+
 fn crop_dims(s: &Session, id: PhotoId) -> (f64, f64) {
     let p = s.catalog.photo(id);
     let (w, h) = p.map(|p| (p.width.max(1) as f64, p.height.max(1) as f64)).unwrap_or((3.0, 2.0));
@@ -473,11 +537,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let (w, h) = crop_dims(s, id);
                 let angle = f64_req(p, "angle", "crop.straighten")?.clamp(-45.0, 45.0);
                 edit(s, "crop.straighten", "Straighten", |d| {
-                    let r = d.crop.geometry.rect_px(w, h);
-                    let fit = crop_fit_angle(w, h, angle, Some(r.width() / r.height()));
-                    // keep the current crop size if it still fits, else shrink
-                    let cand = CropGeometry { rect: d.crop.geometry.rect, angle };
-                    d.crop.geometry = if cand.is_within_image(w, h) { cand } else { fit };
+                    straighten(d, w, h, angle);
                     Ok(())
                 })
             }
@@ -705,25 +765,37 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sync Settings",
             [],
             None,
-            "{groups?} — copy the active photo's settings to all selected photos",
+            "{groups?, matchExposure?: bool, autoAlign?: bool} — copy the active photo's settings to all selected photos; matchExposure then sets each one's Exposure so it renders as bright as the active photo (however far over / under it was shot); autoAlign levels each one's horizon → {changed, matched, aligned}",
             has_selection,
             |s, p| {
                 let id = active(s, "develop.sync")?;
                 let groups = groups_param(p).unwrap_or_else(SettingsGroup::default_copy);
+                let (match_exp, align) = (bool_or(p, "matchExposure", false), bool_or(p, "autoAlign", false));
                 let d = s.develop_of(id).unwrap_or_default();
                 let partial = lightcraft_develop::extract_groups(&d, &groups);
-                let ops = s
-                    .selection
-                    .ids
-                    .clone()
-                    .into_iter()
-                    .filter(|x| *x != id)
-                    .filter_map(|x| s.develop_of(x).map(|d| (x, d)))
-                    .filter_map(|(x, dd)| s.develop_op(x, lightcraft_develop::apply_partial(&dd, &partial, 1.0), "Sync Settings"))
-                    .collect::<Vec<_>>();
+                let target = if match_exp { rendered_brightness(s, id, &d) } else { None };
+                let (r_ev, r_slider) = (gathered_ev(s, id), d.light.exposure);
+                let (mut ops, mut matched, mut aligned) = (Vec::new(), 0, 0);
+                for x in s.selection.ids.clone().into_iter().filter(|x| *x != id) {
+                    let Some(dd) = s.develop_of(x) else { continue };
+                    let mut nd = lightcraft_develop::apply_partial(&dd, &partial, 1.0);
+                    if let Some(t) = target {
+                        // start from the camera-settings difference, then match the rendered result
+                        if let (Some(r), Some(ev)) = (r_ev, gathered_ev(s, x)) {
+                            nd.light.exposure = (r_slider + r - ev).clamp(-5.0, 5.0);
+                        }
+                        matched += usize::from(match_brightness(s, x, &mut nd, t));
+                    }
+                    if align && let Some(angle) = level_angle(s, x, &nd) {
+                        let (w, h) = crop_dims(s, x);
+                        straighten(&mut nd, w, h, angle);
+                        aligned += 1;
+                    }
+                    ops.extend(s.develop_op(x, nd, "Sync Settings"));
+                }
                 let n = ops.len();
                 s.commit("Sync Settings", Op::Batch { ops })?;
-                Ok(json!({"changed": n}))
+                Ok(json!({"changed": n, "matched": matched, "aligned": aligned}))
             }
         ),
         cmd!(
@@ -775,22 +847,12 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "develop.matchExposure";
                 let reference = active(s, c)?;
-                // log2 of the light the photo gathered (shutter s × ISO / f-number²)
-                let gathered = |s: &Session, id: PhotoId| -> Option<f64> {
-                    let m = &s.catalog.photo(id)?.meta;
-                    let t = match m.shutter.split_once('/') {
-                        Some((a, b)) => a.trim().parse::<f64>().ok()? / b.trim().parse::<f64>().ok()?,
-                        None => m.shutter.trim().trim_end_matches('s').trim().parse::<f64>().ok()?,
-                    };
-                    let (n, iso) = (m.aperture? as f64, m.iso? as f64);
-                    (t > 0.0 && n > 0.0 && iso > 0.0).then(|| (t * iso / (n * n)).log2())
-                };
-                let r_ev = gathered(s, reference).ok_or_else(|| bad(c, "the active photo has no shutter / aperture / ISO"))?;
+                let r_ev = gathered_ev(s, reference).ok_or_else(|| bad(c, "the active photo has no shutter / aperture / ISO"))?;
                 let r_slider = s.develop_of(reference).map(|d| d.light.exposure).unwrap_or(0.0);
                 let ids: Vec<PhotoId> = s.targets(p).into_iter().filter(|x| *x != reference).collect();
                 let (mut ops, mut skipped) = (Vec::new(), Vec::new());
                 for id in ids {
-                    let (Some(ev), Some(d)) = (gathered(s, id), s.develop_of(id)) else {
+                    let (Some(ev), Some(d)) = (gathered_ev(s, id), s.develop_of(id)) else {
                         skipped.push(id.0);
                         continue;
                     };
@@ -801,6 +863,66 @@ pub fn specs() -> Vec<CommandSpec> {
                 let n = ops.len();
                 if n > 0 {
                     s.commit("Match Total Exposures", Op::Batch { ops })?;
+                }
+                Ok(json!({"changed": n, "skipped": skipped}))
+            }
+        ),
+        cmd!(
+            "develop.matchBrightness",
+            "Match Brightness",
+            ["Photo"],
+            Some("Cmd+Alt+Shift+M"),
+            "{ids?} — set each selected photo's Exposure so it renders as bright as the active photo (measured on the finished look, so a photo shot 4 stops under and one 3 over both land on it) → {changed, skipped}",
+            has_selection,
+            |s, p| {
+                let c = "develop.matchBrightness";
+                let reference = active(s, c)?;
+                let d = s.develop_of(reference).unwrap_or_default();
+                let target = rendered_brightness(s, reference, &d).ok_or_else(|| bad(c, "the active photo couldn't be rendered"))?;
+                let (r_ev, r_slider) = (gathered_ev(s, reference), d.light.exposure);
+                let (mut ops, mut skipped) = (Vec::new(), Vec::new());
+                for id in s.targets(p).into_iter().filter(|x| *x != reference) {
+                    let Some(dd) = s.develop_of(id) else { continue };
+                    let mut nd = (*dd).clone();
+                    if let (Some(r), Some(ev)) = (r_ev, gathered_ev(s, id)) {
+                        nd.light.exposure = (r_slider + r - ev).clamp(-5.0, 5.0);
+                    }
+                    if match_brightness(s, id, &mut nd, target) {
+                        ops.extend(s.develop_op(id, nd, "Match Brightness"));
+                    } else {
+                        skipped.push(id.0);
+                    }
+                }
+                let n = ops.len();
+                if n > 0 {
+                    s.commit("Match Brightness", Op::Batch { ops })?;
+                }
+                Ok(json!({"changed": n, "skipped": skipped}))
+            }
+        ),
+        cmd!(
+            "develop.autoAlign",
+            "Auto Align (Horizon)",
+            ["Photo"],
+            Some("Cmd+Alt+Shift+U"),
+            "{ids?} — level the horizon (or plumb lines) of every selected photo with its crop angle, in one undo step → {changed, skipped}",
+            has_selection,
+            |s, p| {
+                let (mut ops, mut skipped) = (Vec::new(), Vec::new());
+                for id in s.targets(p) {
+                    let Some(dd) = s.develop_of(id) else { continue };
+                    let mut nd = (*dd).clone();
+                    let Some(angle) = level_angle(s, id, &nd) else {
+                        skipped.push(id.0);
+                        continue;
+                    };
+                    let (w, h) = crop_dims(s, id);
+                    straighten(&mut nd, w, h, angle);
+                    ops.extend(s.develop_op(id, nd, "Auto Align"));
+                }
+                let n = ops.len();
+                if n > 0 {
+                    s.commit("Auto Align", Op::Batch { ops })?;
                 }
                 Ok(json!({"changed": n, "skipped": skipped}))
             }

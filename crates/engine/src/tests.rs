@@ -692,6 +692,54 @@ fn match_total_exposures() {
 }
 
 #[test]
+fn match_brightness_lands_every_photo_on_the_reference() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    // shot "4 stops under" and "3 stops over" (simulated with the slider)
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": -4.0, "ids": [ids[1]]})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 3.0, "ids": [ids[2]]})).unwrap();
+    s.execute("library.select", &json!({"ids": ids})).unwrap();
+    s.selection.active = Some(PhotoId(ids[0]));
+    let r = s.execute("develop.matchBrightness", &json!({})).unwrap();
+    assert_eq!(r["changed"].as_u64(), Some(2), "{r}");
+    let bright = |s: &mut crate::Session, id: u64| {
+        let d = (*s.develop_of(PhotoId(id)).unwrap()).clone();
+        crate::cmd::develop::rendered_brightness(s, PhotoId(id), &d).unwrap()
+    };
+    let target = bright(&mut s, ids[0]);
+    for &id in &ids[1..] {
+        let b = bright(&mut s, id);
+        assert!((b / target).log2().abs() < 0.1, "photo {id}: {b} vs {target}");
+    }
+    // one undo step puts both back
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(PhotoId(ids[1])).unwrap().light.exposure, -4.0);
+}
+
+#[test]
+fn sync_can_match_exposure_and_align() {
+    use lightcraft_catalog::PhotoId;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    s.execute("develop.set", &json!({"control": "light.contrast", "value": 30.0, "ids": [ids[0]]})).unwrap();
+    s.execute("library.select", &json!({"ids": ids})).unwrap();
+    s.selection.active = Some(PhotoId(ids[0]));
+    let r = s.execute("develop.sync", &json!({"matchExposure": true, "autoAlign": true})).unwrap();
+    assert_eq!((r["changed"].as_u64(), r["matched"].as_u64()), (Some(2), Some(2)), "{r}");
+    assert!(r["aligned"].as_u64().is_some());
+    for &id in &ids[1..] {
+        assert_eq!(s.develop_of(PhotoId(id)).unwrap().light.contrast, 30.0, "the other settings still sync");
+    }
+    // plain sync still copies Exposure as it is
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.25, "ids": [ids[0]]})).unwrap();
+    s.execute("develop.sync", &json!({})).unwrap();
+    assert_eq!(s.develop_of(PhotoId(ids[2])).unwrap().light.exposure, 1.25);
+    let r = s.execute("develop.autoAlign", &json!({})).unwrap();
+    assert!(r["changed"].as_u64().is_some(), "{r}");
+}
+
+#[test]
 fn find_similar_filters_to_look_alikes() {
     let mut s = demo();
     let id = s.catalog.photos().next().unwrap().id;
