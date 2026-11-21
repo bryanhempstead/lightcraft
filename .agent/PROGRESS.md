@@ -6,6 +6,16 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [x] (Claude, 2026-11-21 later) **Monogram console = a LightCraft integration** (d11982a, 8f724a2): LightCraft listens on
+  127.0.0.1:50111 (`apps/lightcraft/src/monogram_server.rs`) for Monogram's app protocols (`keys.lrinput`: Lightroom lines
+  and the JSON "adobe" lines); registered with Monogram from `~/.hammerspoon/devices/dev.py monoIntegrate` (ADD_APP, unsigned
+  list); profile "LightCraftMonogram1" = Lightroom 1 + far-right slider `lc_cycle_cropAspect`. Cycle lists in keymap.json
+  `cycles` (`keys.cycle`, `keys.cycles`). LrSuperKeys hold H/J/K/B + drag = targeted HSL; K = Luminance restored.
+- [ ] **Window managers (Magnet ⌘← ⌘→ ⌘↑) need LightCraft launched through LaunchServices**: started as the brain's child
+  process, macOS reports AXWindows = [] for it (AXFocusedWindow still works) and Magnet does nothing. Fixed in
+  `~/second-brain/src/crafts.js` (signs builds with his Apple Development cert → stable identity, drive access kept across
+  rebuilds → launches with `open -a`); uncommitted there, takes effect after a brain restart (needs.you #131). The
+  `target/release/LightCraft.app` on disk is signed now; a plain `cargo build` + copy needs re-signing (crafts.js does it).
 - [ ] (Claude, 2026-11-21 audit) **Rundown — Bryan's asks and where they stand** (from his messages 10-08…11-21):
   - ✅ Lightroom catalog moved over and in sync: LightCraft 13,865 photos; LR-Cat2 has nothing captured after 10-09 (checked a copy of the .lrcat). Folders, collections, 187 presets, looks, keymap, LrSuperKeys, MIDI.
   - ✅ Pipeline wiring (brain app LC. buttons, `library.folderStatus` / `importRated` / `app.export`, photo app. lr/lc/both): commands answer live.
@@ -22,6 +32,7 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   6. Upstream storytold merges (60+ commits incl. wider preview fallback) — optional now.
 - [x] (Claude, 2026-11-21) Fixed: Temp slider was linear 2,000–50,000 K (daylight at 7 % of the track, ~340 K per pixel) → Lightroom-like non-linear track (`widgets::track_frac`); Leica's "not selected" lens tag hidden in the info overlay; unrated grid cells show five quiet dots instead of an empty footer; native menu leaves Tab / ⇧Tab to the app (the `shortcuts_map_to_accelerators` failure); Monogram ↓/↑ pass-through.
 - [x] (Hermes, 2026-10-11) Round-4 apply steps DONE: rebuilt (cargo 1.99, 40s), `library.rematchProfiles readCatalog=true` real run — 6,983 adobe:Adobe Color / 117 Standard / 56 Monochrome, lensCorrectionsOn 116, verified live in catalog.snap (seq 3014). App restarted via brain-app launcher so sources re-decode on the Adobe base (cache key changed).
+- [ ] (Claude colour agent, 2026-11-21, uncommitted on main) **Colour round 5** — docs/lr-match.md → Round 5. Fresh held-out `w9` (103): 4.99 → 4.97 ΔE, 8 pass. Fixed: curves / creative table / grain now act in one space (ProPhoto + sRGB curve) for every export space, CPU + GPU (`finish::STYLE_SPACE`); new `tools/lr-compare/export_check.py`. Next, in order: (1) use Lightroom's *named* lens profile (`LensProfileFilename`; 469 Leica M + Voigtlander, Exif "not selected") and de-fish the Sigma 15 mm fisheye profile (213 photos, R6 defaults 11 ΔE vs 2.7); (2) colour-manage the window: the Metal layer is untagged (sRGB shown as display/P3 values) — P3-tagged surface + Develop view rendered in Display P3; (3) ICC v2 profiles + Exif ColorSpace like Lightroom's files.
 - [ ] Open colour items: Highlights / Shadows and Clarity / Texture / Dehaze vs spatial targets; why Lightroom's custom WB moves 2× (Leica 1×); X-T2 at 34 600 K; Nautica.
 - [x] (HEIC, 2026-10-11) `migrate-lightroom --only-new` is a no-op now (imported 0, 4,047 duplicates) — 50 HEIC incl. all 35 stragglers already in catalog (verified in catalog.snap). `library.importFailures` empty. Only remaining bit: app restart so the running app decodes HEIC too.
 - [ ] (colour agent round 3, 2026-10-09) **Bryan runs** — Adobe's own profiles (replaces the round-1/2 "Bryan runs" calibrate / wbmap / lensfit steps for cameras with an Adobe Standard DCP; those fitted profiles stay only as the fallback, e.g. iPhone ProRAW). LightCraft closed:
