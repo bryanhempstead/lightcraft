@@ -398,7 +398,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             if let Some(info) = info {
                 let txt = if opts.command == "merge.take" {
                     let n = opts.people.iter().filter(|p| p.from != opts.base).count();
-                    format!("{} · {n} {}", crate::i18n::tr_format!("{} photos", app.merge.ids.len()), crate::i18n::tr("faces swapped"))
+                    format!(
+                        "{} · {n} {}",
+                        crate::i18n::tr_format!("{} photos", app.merge.ids.len()),
+                        crate::i18n::tr(if n == 1 { "face swapped" } else { "faces swapped" })
+                    )
                 } else if opts.command == "merge.focus" {
                     format!("{} · {}", crate::i18n::tr_format!("{} photos", app.merge.ids.len()), crate::i18n::tr("focus stack"))
                 } else if opts.is_pano() {
