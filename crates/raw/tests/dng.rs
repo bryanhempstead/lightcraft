@@ -548,3 +548,52 @@ fn malformed_profile_look_tags_are_ignored() {
     let plain = decode(&profile_dng(ByteOrder::Little, |_| {})).unwrap();
     assert!(plain.color.profile.is_empty());
 }
+
+/// iPhone ProRAW keeps a `ProfileGainTableMap` in its raw IFD (in the file's byte order); a
+/// malformed one is ignored, never trusted or fatal.
+#[test]
+fn profile_gain_table_map_is_read_from_the_raw_ifd() {
+    use lightcraft_raw::gainmap::{GainTableMap, PROFILE_GAIN_TABLE_MAP, write_tag};
+    let map = GainTableMap {
+        points_v: 2,
+        points_h: 3,
+        points_n: 2,
+        spacing_v: 1.0,
+        spacing_h: 0.5,
+        origin_v: 0.0,
+        origin_h: 0.0,
+        weights: [0.25, 0.5, 0.25, 0.0, 0.0],
+        gamma: 1.0,
+        gains: (0..12).map(|i| 0.5 + i as f32 * 0.25).collect(),
+    };
+    let with_tag = |order: ByteOrder, bytes: Vec<u8>| {
+        let (w, h) = (8, 6);
+        let px = pattern(w, h, 3, 16);
+        let mut raw = base_ifd(w, h, 16, 3, false);
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![u16_bytes(&px, order)] });
+        raw.set(PROFILE_GAIN_TABLE_MAP, Value::Undefined(bytes));
+        dng_with(raw, order, |_| {})
+    };
+    for order in [ByteOrder::Big, ByteOrder::Little] {
+        let file = with_tag(order, write_tag(&map, order).1);
+        let img = decode(&file).unwrap();
+        assert_eq!(img.color.profile.gain_table_map.as_deref(), Some(&map));
+        assert!(!img.color.profile.is_empty());
+        assert_eq!(lightcraft_raw::probe_info(&file).unwrap().color.profile, img.color.profile);
+        let again = decode(&write_dng(&img, &DngWriteOptions::default()).unwrap()).unwrap();
+        assert_eq!(again.color.profile.gain_table_map.as_deref(), Some(&map));
+        // truncated, a NaN spacing, absurd sizes: decoded without the map
+        let good = write_tag(&map, order).1;
+        let mut nan = good.clone();
+        let mut nan_bytes = Vec::new();
+        order.put_u64(&mut nan_bytes, f64::NAN.to_bits());
+        nan[8..16].copy_from_slice(&nan_bytes);
+        let mut huge = good.clone();
+        huge[0..4].copy_from_slice(&[0xff; 4]);
+        for bad in [good[..good.len() - 1].to_vec(), good[..10].to_vec(), Vec::new(), nan, huge] {
+            let img = decode(&with_tag(order, bad)).unwrap();
+            assert!(img.color.profile.gain_table_map.is_none());
+        }
+    }
+}

@@ -214,6 +214,10 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     if let Some(curve) = &p.tone_curve {
         ifd.set(t::PROFILE_TONE_CURVE, Value::Float(curve.points.iter().flatten().copied().collect()));
     }
+    if let Some(map) = &p.gain_table_map {
+        let (tag, bytes) = crate::gainmap::write_tag(map, opts.order);
+        ifd.set(tag, Value::Undefined(bytes));
+    }
     for (list, tag) in [(&raw.opcodes.list1, t::OPCODE_LIST_1), (&raw.opcodes.list2, t::OPCODE_LIST_2), (&raw.opcodes.list3, t::OPCODE_LIST_3)] {
         if !list.is_empty() {
             ifd.set(tag, Value::Undefined(opcodes::write_list(list)));

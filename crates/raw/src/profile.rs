@@ -207,11 +207,15 @@ pub struct ProfileLook {
     pub look_table: Option<HsvTable>,
     /// `ProfileToneCurve`.
     pub tone_curve: Option<ToneCurve>,
+    /// `ProfileGainTableMap` / `ProfileGainTableMap2` ([`crate::gainmap`]; iPhone ProRAW). Shared,
+    /// not serialised (megabytes; re-read from the file).
+    #[serde(skip)]
+    pub gain_table_map: Option<std::sync::Arc<crate::gainmap::GainTableMap>>,
 }
 
 impl ProfileLook {
     pub fn is_empty(&self) -> bool {
-        self.hue_sat_map.iter().all(Option::is_none) && self.look_table.is_none() && self.tone_curve.is_none()
+        self.hue_sat_map.iter().all(Option::is_none) && self.look_table.is_none() && self.tone_curve.is_none() && self.gain_table_map.is_none()
     }
 
     /// The hue/saturation map for calibration-1 weight `g` (one table: used for any white).
@@ -249,12 +253,19 @@ impl ProfileTables {
     /// linear Rec.2020 D65 in, linear Rec.2020 D65 out.
     #[inline]
     pub fn apply(&self, rgb: [f32; 3], gain: f32) -> [f32; 3] {
+        self.apply_with(rgb, gain, |p| p)
+    }
+
+    /// [`Self::apply`] with `after_exposure` run on the linear ProPhoto colour right after the
+    /// exposure compensation, before the look table (where a `ProfileGainTableMap` applies).
+    #[inline]
+    pub fn apply_with(&self, rgb: [f32; 3], gain: f32, after_exposure: impl FnOnce([f32; 3]) -> [f32; 3]) -> [f32; 3] {
         let m = &self.to_prophoto;
         let mut p: [f32; 3] = std::array::from_fn(|i| m[i][0] * rgb[0] + m[i][1] * rgb[1] + m[i][2] * rgb[2]);
         if let Some(t) = &self.hue_sat {
             p = t.apply(p);
         }
-        p = p.map(|v| v * gain);
+        p = after_exposure(p.map(|v| v * gain));
         if let Some(t) = &self.look {
             p = t.apply(p);
         }
@@ -360,7 +371,7 @@ mod tests {
         let m = HsvTable::blend(&a, &b, 0.25).unwrap();
         assert_eq!(m.data[1], [7.5, 1.75, 1.0]);
         assert!(HsvTable::blend(&a, &identity(3, 2, 1), 0.5).is_none());
-        let look = ProfileLook { hue_sat_map: [Some(a.clone()), None], look_table: Some(a), tone_curve: None };
+        let look = ProfileLook { hue_sat_map: [Some(a.clone()), None], look_table: Some(a), ..Default::default() };
         let t = ProfileTables::new(&look, 0.5).unwrap();
         let c = [0.3, 0.2, 0.1];
         assert!(close(t.apply(c, 2.0), [0.6, 0.4, 0.2], 1e-4), "{:?}", t.apply(c, 2.0));

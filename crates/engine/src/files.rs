@@ -349,19 +349,29 @@ fn load_raw(
         } else {
             lightcraft_raw::profile::ProfileTables::new(&raw.color.profile, lightcraft_raw::color::illuminant_weight(&raw.color, xy))
         };
-        img.map_in_place(|p| {
-            let c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
-            let rgb = [
-                m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
-                m[1][0] * c[0] + m[1][1] * c[1] + m[1][2] * c[2],
-                m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
-            ];
-            let rgb = match &tables {
-                Some(tables) => tables.apply(rgb, gain),
-                None => rgb.map(|v| v * gain),
-            };
-            // after the baseline exposure, as when it was fitted
-            hue_sat.as_ref().map_or(rgb, |h| h.apply(rgb)).map(|v| v.max(0.0))
+        // The file's ProfileGainTableMap (iPhone ProRAW): part of its own profile, so it applies
+        // with the file's own rendering (after the baseline exposure, before the look table). A
+        // Lightroom-matched profile stands for Lightroom's Adobe profiles, under which Lightroom
+        // renders these files without it (docs/lr-match.md → ProRAW gain table map).
+        let gain_map = if from_lightroom { None } else { lightcraft_raw::gainmap::GainMapper::for_raw(&raw, img.width, img.height) };
+        let width = img.width;
+        lightcraft_raster::par_rows(&mut img.data, width, |y, row| {
+            for (x, p) in row.iter_mut().enumerate() {
+                let c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
+                let rgb = [
+                    m[0][0] * c[0] + m[0][1] * c[1] + m[0][2] * c[2],
+                    m[1][0] * c[0] + m[1][1] * c[1] + m[1][2] * c[2],
+                    m[2][0] * c[0] + m[2][1] * c[1] + m[2][2] * c[2],
+                ];
+                let rgb = match (&tables, &gain_map) {
+                    (Some(tables), Some(g)) => tables.apply_with(rgb, gain, |q| q.map(|v| v * g.gain_prophoto(x, y, q))),
+                    (Some(tables), None) => tables.apply(rgb, gain),
+                    (None, Some(g)) => g.apply_rec2020(x, y, rgb.map(|v| v * gain)),
+                    (None, None) => rgb.map(|v| v * gain),
+                };
+                // after the baseline exposure, as when it was fitted
+                *p = hue_sat.as_ref().map_or(rgb, |h| h.apply(rgb)).map(|v| v.max(0.0));
+            }
         });
         stages.push(("colour", t0.elapsed()));
         let img = if chart.is_some() { img } else { fit(&img, max_edge, max_edge, Filter::Box).into_oriented(raw.orientation) };
@@ -517,6 +527,7 @@ fn load_adobe(
         let look = lightcraft_raw::profile::ProfileLook { hue_sat_map: [Some(h), None], ..Default::default() };
         lightcraft_raw::profile::ProfileTables::new(&look, 1.0)
     });
+    // (no ProfileGainTableMap: it belongs to the file's own profile, not to Adobe's)
     img.map_in_place(|p| {
         let c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
         let rgb = [
@@ -887,7 +898,7 @@ mod tests {
         // a map that removes all saturation, and a tone curve
         let grey = HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[0.0, 0.0, 1.0]; 8], srgb_value: false };
         raw.color.profile =
-            ProfileLook { hue_sat_map: [Some(grey), None], look_table: None, tone_curve: ToneCurve::from_tag(&[0.0, 0.0, 0.18, 0.3, 1.0, 1.0]) };
+            ProfileLook { hue_sat_map: [Some(grey), None], tone_curve: ToneCurve::from_tag(&[0.0, 0.0, 0.18, 0.3, 1.0, 1.0]), ..Default::default() };
         let with = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
         let (after, info) = load_bytes(&with, 64).unwrap();
         assert!(sat(&after) < 1e-3, "saturation {} → {}", sat(&before), sat(&after));
@@ -903,6 +914,45 @@ mod tests {
         };
         let (dim, _) = load_bytes(&lightcraft_raw::write_dng(&raw, &Default::default()).unwrap(), 64).unwrap();
         assert!((mean(&dim) / mean(&before) - 0.5).abs() < 0.02, "{} vs {}", mean(&dim), mean(&before));
+    }
+
+    /// iPhone ProRAW: the file's `ProfileGainTableMap` scales each pixel by the gain at its place
+    /// in the image (here 1 at the left edge to 3 at the right), through our DNG writer and back.
+    #[test]
+    fn dng_gain_table_map_is_applied_by_position() {
+        use lightcraft_raw::gainmap::GainTableMap;
+        let plain = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+        let mut raw = lightcraft_raw::decode(&plain).unwrap();
+        let (before, _) = load_bytes(&plain, 64).unwrap();
+        let map = GainTableMap {
+            points_v: 1,
+            points_h: 2,
+            points_n: 1,
+            spacing_v: 1.0,
+            spacing_h: 1.0,
+            origin_v: 0.0,
+            origin_h: 0.0,
+            weights: [0.0, 1.0, 0.0, 0.0, 0.0],
+            gamma: 1.0,
+            gains: vec![1.0, 3.0],
+        };
+        raw.color.profile.gain_table_map = Some(std::sync::Arc::new(map));
+        let bytes = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+        assert!(lightcraft_raw::decode(&bytes).unwrap().color.profile.gain_table_map.is_some(), "the writer keeps the map");
+        let (after, _) = load_bytes(&bytes, 64).unwrap();
+        assert_eq!((after.width, after.height), (before.width, before.height));
+        let w = after.width as f32;
+        for y in [0, after.height / 2, after.height - 1] {
+            for x in [0, after.width / 3, after.width - 1] {
+                let want = 1.0 + 2.0 * (x as f32 + 0.5) / w;
+                let (b, a) = (before.get(x, y), after.get(x, y));
+                for c in 0..3 {
+                    if b[c] > 1e-3 {
+                        assert!((a[c] / b[c] - want).abs() < 1e-3 * want, "({x}, {y}) channel {c}: ×{} want ×{want}", a[c] / b[c]);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
