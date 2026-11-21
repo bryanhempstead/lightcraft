@@ -1285,7 +1285,15 @@ pub fn import_monogram(profile: &Value, app_id: &str) -> (Import, Value) {
         }
         for (slot, kind) in [("leftTurn", "left turn"), ("rightTurn", "right turn")] {
             if let Some(p) = st.get(slot) {
-                out.skipped.push(format!("{name} {kind}: {p} (Lightroom's adjust-the-hovered-slider; no LightCraft equivalent)"));
+                // Lightroom's "adjust any slider" (↓ / ↑): LightCraft nudges the slider under the
+                // pointer with the same keys, so the keystroke goes through unchanged
+                let key = p.get("key").and_then(Value::as_str).unwrap_or("");
+                if matches!(key, "up" | "down") && p.get("input").is_none() {
+                    ns.insert(slot.into(), p.clone());
+                    out.mapped.push(format!("{name} {kind} → key {key} → nudge the slider under the pointer"));
+                } else {
+                    out.skipped.push(format!("{name} {kind}: {p}: no LightCraft equivalent"));
+                }
             }
         }
         let mut note =
@@ -1348,6 +1356,99 @@ pub fn import_monogram(profile: &Value, app_id: &str) -> (Import, Value) {
         "link": "",
     });
     (out, monogram)
+}
+
+/// The console as Monogram Creator last saw it: `(local id, module uuid, type)` from the newest
+/// "Layout Updated" line in its own logs (read only), sorted by local id. Empty when unknown.
+pub fn monogram_layout() -> Vec<(u64, String, String)> {
+    let Some(home) = std::env::var_os("HOME") else { return Vec::new() };
+    let dir = std::path::Path::new(&home).join("Library/Application Support/Monogram/Creator/log");
+    let mut logs: Vec<(std::time::SystemTime, std::path::PathBuf)> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "log"))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    logs.sort_by_key(|l| std::cmp::Reverse(l.0));
+    for (_, path) in logs.into_iter().take(5) {
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let Some(line) = text.lines().rev().find(|l| l.contains("Layout Updated")) else { continue };
+        let Some(at) = line.find('{') else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line.get(at..).unwrap_or("")) else { continue };
+        let mut out = Vec::new();
+        fn walk(n: &Value, out: &mut Vec<(u64, String, String)>, depth: usize) {
+            if depth > 64 || !n.is_object() {
+                return;
+            }
+            let kind = match n.get("t").and_then(Value::as_u64).map(|t| t & 31) {
+                Some(0) => "core",
+                Some(1) => "button",
+                Some(2) => "dial",
+                Some(3) => "slider",
+                _ => "",
+            };
+            out.push((
+                n.get("i").and_then(Value::as_u64).unwrap_or(0),
+                n.get("u").and_then(Value::as_str).unwrap_or("").to_string(),
+                kind.to_string(),
+            ));
+            for c in n.get("c").and_then(Value::as_array).into_iter().flatten() {
+                walk(c, out, depth + 1);
+            }
+        }
+        walk(v.get("layout").unwrap_or(&Value::Null), &mut out, 0);
+        out.sort();
+        return out;
+    }
+    Vec::new()
+}
+
+/// A generated profile (assignments keyed by module uuid, as in Monogram's state.json) → the
+/// `.monogram` file Monogram Creator imports: assignments are LISTS per module type, filled onto
+/// the attached modules in local-id order (its loader ignores uuid keys, so a uuid-keyed file
+/// imported empty). Modules not in `layout` follow, sorted by uuid.
+pub fn monogram_file(mono: &Value, layout: &[(u64, String, String)]) -> Value {
+    let empty = serde_json::Map::new();
+    let a = mono.get("assignments").and_then(Value::as_object).unwrap_or(&empty);
+    let kind = |uuid: &str, v: &Value| -> &'static str {
+        let st = v.get("settings");
+        let has = |k: &str| st.and_then(|s| s.get(k)).is_some();
+        if uuid.trim() == "00005" || v.get("fixedPosition").is_some() {
+            "core"
+        } else if has("pose") {
+            "slider"
+        } else if has("turn") || has("pressAndTurn") || has("leftTurn") || has("rightTurn") {
+            "dial"
+        } else {
+            "button"
+        }
+    };
+    let mut lists: std::collections::BTreeMap<&str, Vec<Value>> = ["core", "button", "dial", "slider"].into_iter().map(|k| (k, Vec::new())).collect();
+    let mut placed = std::collections::HashSet::new();
+    for (_, uuid, typ) in layout {
+        if let Some(l) = lists.get_mut(typ.as_str()) {
+            l.push(a.get(uuid).cloned().unwrap_or_else(|| json!("")));
+            placed.insert(uuid.clone());
+        }
+    }
+    let mut rest: Vec<(&String, &Value)> = a.iter().filter(|(k, _)| !placed.contains(*k)).collect();
+    rest.sort_by(|x, y| x.0.cmp(y.0));
+    for (uuid, v) in rest {
+        if let Some(l) = lists.get_mut(kind(uuid, v)) {
+            l.push(v.clone());
+        }
+    }
+    for l in lists.values_mut() {
+        while l.last().is_some_and(|v| v == &json!("")) {
+            l.pop();
+        }
+    }
+    let mut out = mono.clone();
+    if let Some(o) = out.as_object_mut() {
+        o.insert("assignments".into(), json!(lists));
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------------- app side
@@ -1485,7 +1586,7 @@ pub fn import(app: &mut crate::LightcraftApp, p: &Value) -> Result<Value, String
                 if out.contains("/Monogram/") {
                     return Err("won't write inside Monogram's own folders: save the profile elsewhere and import it in Monogram Creator".into());
                 }
-                let bytes = serde_json::to_vec_pretty(&mono).map_err(|e| e.to_string())?;
+                let bytes = serde_json::to_vec_pretty(&monogram_file(&mono, &monogram_layout())).map_err(|e| e.to_string())?;
                 if let Some(d) = std::path::Path::new(out).parent() {
                     std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
                 }
@@ -1930,6 +2031,22 @@ mod tests {
         assert_eq!(by("BH6 press").command, "view.beforeAfter");
         assert_eq!(by("BH6 hold").command, "view.fullScreenPreview");
         assert!(i.skipped.iter().any(|s| s.contains("C{>") && s.contains("Mystery")));
+        // the file Monogram imports is keyed by module type, in the console's local-id order
+        let layout = vec![
+            (1, "00005".to_string(), "core".to_string()),
+            (2, "  H|r".to_string(), "dial".to_string()),
+            (3, "  Ak2".to_string(), "slider".to_string()),
+            (4, "  C7J".to_string(), "dial".to_string()),
+        ];
+        let file = monogram_file(&mono, &layout);
+        let dials = file["assignments"]["dial"].as_array().unwrap();
+        assert_eq!(dials[0], mono["assignments"]["  H|r"], "first dial in the layout first");
+        assert_eq!(dials[1], mono["assignments"]["  C7J"]);
+        assert_eq!(file["assignments"]["slider"][0], mono["assignments"]["  Ak2"]);
+        assert!(file["assignments"]["button"].as_array().unwrap().len() >= 2, "keys not attached still come along");
+        // "adjust any slider" turns pass ↓ / ↑ through: LightCraft nudges the hovered slider
+        assert_eq!(mono["assignments"]["  C{>"]["settings"]["leftTurn"]["key"], "down");
+        assert!(!i.skipped.iter().any(|s| s.contains("left turn")), "{:?}", i.skipped);
         // MIDI numbers are unique per kind
         let mut seen = std::collections::HashSet::new();
         assert!(i.midi.iter().all(|m| seen.insert((m.midi.clone(), m.number))));

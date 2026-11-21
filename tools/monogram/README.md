@@ -13,7 +13,7 @@ maps that MIDI to the same sliders and actions (Settings ▸ ctrl.).
 | dial C7J | turn Exposure · press+turn Tint · press ⇧M | CC 31 · CC 51 · note 68 | Exposure · Tint · radial gradient |
 | dial C7\` | turn Blacks · press+turn Whites · press Y | CC 32 · CC 52 · note 69 | Blacks · Whites · before/after |
 | dial CEZ | turn crop scale · press+turn crop Y · press ⌘X | CC 33 · CC 53 · note 70 | zoom crop · move crop up/down · ⌘X (nothing bound in LightCraft) |
-| dial C{> | press preset · press+turn Saturation · left/right turn ↓/↑ | note 71 · CC 54 | preset "BH - NMD - 7 - TD" · Saturation · (↓/↑ not mapped: no hovered-slider adjust) |
+| dial C{> | press preset · press+turn Saturation · left/right turn ↓/↑ | note 71 · CC 54 · keys ↓/↑ | preset "BH - NMD - 7 - TD" · Saturation · ↓/↑ nudge the slider under the pointer (Lightroom's "adjust any slider") |
 | dial H\|r | turn Temp · press+turn Lights · press W · double-tap reset Blacks | CC 34 · CC 55 · notes 72, 73 | Temp · Tone Curve Lights · WB selector · reset Blacks |
 | key BFo | press preset · hold [preset HardBlack, U] | notes 62, 63 | "BH - NMD - 7 - TD" · macro: "BH - B&W - HardBlack" then unflag |
 | key BH6 | press before/after · hold F | notes 64, 65 | before/after · full-screen preview |
@@ -24,6 +24,10 @@ moves the slider by its LrSuperKeys step (Exposure 0.05, Temp 25, most others 1)
 
 The exact numbers are in the file and in LightCraft's `keymap.json` (`midi` list) — they were
 generated together by `keys.import {"source": "monogram"}`, so they always match.
+
+The file is in Monogram's own import format: assignments are lists per module type (`dial`, `slider`,
+`button`, `core`) that Monogram Creator fills onto the attached modules in the console's order (read
+from its log). If you move modules around, regenerate (ctrl. ▸ monogram.) before importing.
 
 ## Import it
 

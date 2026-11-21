@@ -174,7 +174,9 @@ fn midi_moves_sliders_and_runs_commands() {
     let r = exec(&mut h, "keys.import", json!({"source": "monogram", "path": state, "write": out}));
     assert_eq!(r["midi"], 4, "{r}");
     let mono: Value = serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
-    assert_eq!(mono["assignments"]["  Ak2"]["settings"]["pose"]["midi"], "cc");
+    // Monogram's import format: lists per module type (the slider sends a CC)
+    let sliders = mono["assignments"]["slider"].as_array().unwrap();
+    assert!(sliders.iter().any(|s| s["settings"]["pose"]["midi"] == "cc"), "{mono}");
     h.request("ui.set", json!({"view": "detail"}), T);
     let dev = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap_or_default();
     // the Shadows slider at the top
