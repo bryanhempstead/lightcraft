@@ -6,6 +6,19 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (Claude, 2026-11-21 night) **"No gaps" program — Lightroom Classic 15.4.1 reverse-engineered (Library + Develop only).**
+  Research (local only, Adobe text never in the repo): /private/tmp/claude-501/lr-re/{library,develop}/inventory.md,
+  usage table from his catalog, ranked list gaps.md (103 rows: Tier 1 = 23, Tier 2 = 22, Tier 3 = 58). Running on branches
+  (merge one at a time into main, full gate after each): upstream storytold/lightcraft merge (4,818 commits: CR3, Denoise,
+  Lens Blur, People …), LibRaw fallback decoder (crates/libraw-sys), Sync ▸ Match camera & lens color (chart match per
+  camera after each camera renders like Lightroom; per-lens / per-phone cast tables learned from his catalog; ProRAW gain
+  table map). Tier 1 build order after the merge: per-look acceptance gate (Summer Fields, Nautica × camera) → point
+  curve → calibration → PV5 vs PV6 split → ProRAW gain map → Basic tone on edited photos (local Highlights/Shadows) →
+  Look RGBTable on GPU (7,457 photos render on CPU) → Copy/Sync per-slider groups (+ "Modified", saved subsets) →
+  custom WB → grain → parametric curve → sharpening 126/94 at 1:1 → re-sync edits from the Lightroom catalog (mobile) →
+  desktop catalog backups → lens CA model → HSL on JPEG/HEIC → Nautica → radial-mask local tone → content-aware spots →
+  mobile snapshots as versions → stored Upright transforms → Point Color → Develop view color management (Studio
+  Display). Then Tier 2 (weekly use), Tier 3 (everything else: AI masks, generative remove, HDR, culling …).
 - [x] (Claude, 2026-11-21 evening) **Committed**: 7096c20 LR-COLOR round 6 (Lightroom's named lens profiles incl. Sigma 15 mm
   fisheye + Voigtländer, ICC v2 sRGB / Adobe RGB, Exif ColorSpace, Make/Model; held-out fisheye 6.23 → 2.28 ΔE, R6 defaults
   4.01 → 2.52, M262 + Voigtländer 6.73 → 4.37 — docs/lr-match.md Round 6), 07d0f3c LC-SYNC (Sync ▸ Match exposure on the
