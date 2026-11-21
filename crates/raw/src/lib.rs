@@ -19,6 +19,10 @@
 //! compressed ORF, CR3 unverified marker families / C-RAW configurations) return [`RawError::Unsupported`]; each vendor module documents its sources
 //! (public specifications, tag-name documentation, black-box analysis of CC0 samples) and gaps. Non-DNG files carry no
 //! colour matrix: [`color`] falls back to a documented neutral model. The decoders never panic on malformed input.
+//!
+//! Bryan's fork: when the native decoder fails (or the container has none), [`decode`] falls back
+//! to LibRaw (`crates/libraw-sys`, when built in; [`libraw_available`]), whose unpacked sensor
+//! data is developed by the same pipeline; see the `libraw` module.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -28,6 +32,7 @@ pub mod demosaic;
 mod dng;
 pub mod dngwrite;
 pub mod highlight;
+mod libraw;
 pub mod ljpeg;
 pub mod opcodes;
 mod preview;
@@ -38,6 +43,7 @@ mod vendor;
 
 pub use demosaic::{Method, demosaic};
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng};
+pub use libraw::{Decoder, available as libraw_available};
 pub use lightcraft_color::Mat3;
 pub use lightcraft_geom::Orientation;
 pub use lightcraft_meta::Metadata;
@@ -85,6 +91,9 @@ pub enum RawFormat {
     Srw,
     /// Another TIFF-based raw (3FR, IIQ, ERF, KDC, DCR, MOS, …).
     OtherTiff,
+    /// A non-TIFF raw only LibRaw reads (Canon CRW, Minolta MRW, Phase One IIQ); recognised only
+    /// when LibRaw is built in.
+    Other,
 }
 
 impl RawFormat {
@@ -118,6 +127,9 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     }
     if bytes.starts_with(b"IIU\0") {
         return Some(RawFormat::Rw2);
+    }
+    if libraw::available() && libraw::probe_other(bytes) {
+        return Some(RawFormat::Other);
     }
     if bytes.len() >= 10 && bytes.starts_with(b"II*\0") && &bytes[8..10] == b"CR" {
         return Some(RawFormat::Cr2);
@@ -157,6 +169,11 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
 
 /// Decode a raw file.
 pub fn decode(bytes: &[u8]) -> Result<RawImage> {
+    decode_with(bytes, Mode::Full).map(|(img, _)| img)
+}
+
+/// [`decode`], also saying which decoder read the file (LightCraft's own or LibRaw).
+pub fn decode_reporting(bytes: &[u8]) -> Result<(RawImage, Decoder)> {
     decode_with(bytes, Mode::Full)
 }
 
@@ -171,7 +188,7 @@ pub fn decode(bytes: &[u8]) -> Result<RawImage> {
 /// phase of files without an Exif `CFAPattern`; Pentax PEF without crop tags: dark borders); for
 /// those the samples are read (unpacked, nothing to decompress) and dropped.
 pub fn probe_info(bytes: &[u8]) -> Result<RawInfo> {
-    decode_with(bytes, Mode::Header).map(RawImage::into_info)
+    decode_with(bytes, Mode::Header).map(|(img, _)| img.into_info())
 }
 
 /// How much of a file a decoder reads.
@@ -184,8 +201,30 @@ pub(crate) enum Mode {
     Header,
 }
 
-fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
-    match probe(bytes).ok_or(RawError::NotRaw)? {
+/// The native decoder first, then LibRaw (see the `libraw` module for the order knob). When both
+/// fail, the native decoder's error is returned (callers show the embedded preview on it).
+fn decode_with(bytes: &[u8], mode: Mode) -> Result<(RawImage, Decoder)> {
+    let format = probe(bytes).ok_or(RawError::NotRaw)?;
+    let order = libraw::order();
+    if order == libraw::Order::None {
+        return Err(RawError::Unsupported(format!("{format:?}: raw decoding turned off (LIGHTCRAFT_RAW_DECODER=none)")));
+    }
+    if order == libraw::Order::LibRawThenNative
+        && let Ok(img) = libraw::decode(bytes, format, mode)
+    {
+        return Ok((img, Decoder::LibRaw));
+    }
+    match decode_native(bytes, format, mode) {
+        Ok(img) => Ok((img, Decoder::Native)),
+        Err(e) if order == libraw::Order::NativeThenLibRaw && libraw::worth_trying(&e) => {
+            libraw::decode(bytes, format, mode).map(|img| (img, Decoder::LibRaw)).map_err(|_| e)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn decode_native(bytes: &[u8], format: RawFormat, mode: Mode) -> Result<RawImage> {
+    match format {
         RawFormat::Dng => dng::decode(bytes, mode),
         RawFormat::Cr2 => vendor::cr2::decode(bytes, mode),
         RawFormat::Cr3 => vendor::cr3::decode(bytes, mode),

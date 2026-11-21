@@ -22,6 +22,15 @@ The port was modified by the LightCraft contributors (2026): translated from Pyt
 Rust on candle and restructured; each ported file says so. Because of this, crates/segment is
 licensed under the Apache License 2.0 only (LICENSE-APACHE), not under the MIT option.
 
+LibRaw (https://www.libraw.org, Copyright 2008-2025 LibRaw LLC; based on dcraw by Dave Coffin) is
+LightCraft's fallback raw decoder in this fork (crates/libraw-sys). It is not in this repository:
+tools/fetch-libraw.sh downloads the pinned, checksum-verified LibRaw 0.22.3 release into the
+gitignored vendor/ folder, and the build links it statically when it is there. LibRaw is
+dual-licensed under the GNU Lesser General Public License 2.1 and the Common Development and
+Distribution License 1.0 (vendor/LibRaw-0.22.3/LICENSE.LGPL, LICENSE.CDDL, COPYRIGHT); a binary
+built with it is distributed under those terms for the LibRaw part. Builds without vendor/ (and
+the web build) contain no LibRaw code.
+
 The SAM 3 weights are not part of LightCraft and are never distributed with it. A user downloads
 the facebook/sam3 checkpoint only when they choose to (in the app, or by hand), under Meta's SAM
 License (https://github.com/facebookresearch/sam3/blob/main/LICENSE), a separate, non-OSI

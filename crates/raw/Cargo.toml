@@ -14,6 +14,7 @@ lightcraft-meta = { workspace = true }
 lightcraft-raster = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-geom = { workspace = true }
+lightcraft-libraw-sys = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
