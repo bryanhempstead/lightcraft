@@ -502,7 +502,9 @@ fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &li
             if let Some(f) = m.focal_mm {
                 exp.push(format!("{f:.0} mm"));
             }
-            let camera = [m.camera.as_str(), m.lens.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
+            // Leica bodies write "not selected" for an uncoded lens: that's no lens name
+            let lens = if m.lens.trim().eq_ignore_ascii_case("not selected") { "" } else { m.lens.as_str() };
+            let camera = [m.camera.as_str(), lens].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
             let mut v = vec![photo.file_name.clone()];
             v.push(if exp.is_empty() { "No exposure information".into() } else { exp.join("  ") });
             if !camera.is_empty() {

@@ -239,9 +239,8 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         typing = Some((shown_value(spec, value).trim_start_matches('+').to_string(), 0));
     }
     let mut out = SliderOut::default();
-    let span = (spec.max - spec.min).max(1e-9);
-    let to_x = |v: f64| track_rect.left() + ((v - spec.min) / span).clamp(0.0, 1.0) as f32 * track_rect.width();
-    let from_x = |x: f32| spec.min + ((x - track_rect.left()) / track_rect.width()).clamp(0.0, 1.0) as f64 * span;
+    let to_x = |v: f64| track_rect.left() + track_frac(spec, v) as f32 * track_rect.width();
+    let from_x = |x: f32| track_value(spec, ((x - track_rect.left()) / track_rect.width()).clamp(0.0, 1.0) as f64);
     let mut v = value;
     if let Some((mut text, frames)) = typing.take() {
         let field = egui::TextEdit::singleline(&mut text)
@@ -298,7 +297,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
             let fine = ui.input(|i| i.modifiers.shift);
             let nv = if fine {
                 let dx = ui.input(|i| i.pointer.delta().x);
-                value + dx as f64 * span / track_rect.width() as f64 * 0.1
+                track_value(spec, track_frac(spec, value) + dx as f64 / track_rect.width().max(1.0) as f64 * 0.1)
             } else {
                 from_x(p.x)
             };
@@ -373,6 +372,34 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
     out
+}
+
+/// Where `v` sits on the slider's track, 0..1. Linear, except Temp: like Lightroom's, it is
+/// non-linear so daylight sits near the middle (half log, half mired between 2,000 and 50,000 K);
+/// linear put everything from 2,000 to 10,000 K in the left sixth of the track.
+pub fn track_frac(spec: &ControlSpec, v: f64) -> f64 {
+    let span = (spec.max - spec.min).max(1e-9);
+    if spec.id == "wb.temp" && spec.min > 0.0 && spec.max > spec.min {
+        let k = v.clamp(spec.min, spec.max);
+        let log = (k / spec.min).ln() / (spec.max / spec.min).ln();
+        let mired = (1.0 / spec.min - 1.0 / k) / (1.0 / spec.min - 1.0 / spec.max);
+        return ((log + mired) / 2.0).clamp(0.0, 1.0);
+    }
+    ((v - spec.min) / span).clamp(0.0, 1.0)
+}
+
+/// The value at track position `f` (0..1), the inverse of [`track_frac`].
+pub fn track_value(spec: &ControlSpec, f: f64) -> f64 {
+    let f = if f.is_finite() { f.clamp(0.0, 1.0) } else { 0.0 };
+    if spec.id == "wb.temp" && spec.min > 0.0 && spec.max > spec.min {
+        let (mut lo, mut hi) = (spec.min, spec.max);
+        for _ in 0..60 {
+            let mid = (lo + hi) / 2.0;
+            if track_frac(spec, mid) < f { lo = mid } else { hi = mid }
+        }
+        return (lo + hi) / 2.0;
+    }
+    spec.min + f * (spec.max - spec.min)
 }
 
 /// `value` moved by `steps` keyboard nudges: one nudge is about 1/200 of the range, a whole
@@ -653,6 +680,14 @@ mod tests {
         assert!((nudged(&spec("light.exposure", -5.0, 5.0, 0.01), 0.0, 1.0) - 0.05).abs() < 1e-9);
         assert_eq!(nudged(&spec("light.contrast", -100.0, 100.0, 1.0), 10.0, -5.0), 5.0);
         assert_eq!(nudged(&spec("wb.temp", 2000.0, 50000.0, 1.0), 6500.0, 1.0), 6550.0);
+        // Temp's track is non-linear: daylight near the middle, both ends reachable, round trip exact
+        let t = spec("wb.temp", 2000.0, 50000.0, 1.0);
+        assert!((0.4..0.55).contains(&track_frac(&t, 5500.0)), "{}", track_frac(&t, 5500.0));
+        assert_eq!(track_frac(&t, 2000.0), 0.0);
+        assert_eq!(track_frac(&t, 50000.0), 1.0);
+        for k in [2000.0, 3200.0, 5179.0, 10000.0, 50000.0] {
+            assert!((track_value(&t, track_frac(&t, k)) - k).abs() < 0.5, "{k}");
+        }
         assert_eq!(nudged(&spec("light.contrast", -100.0, 100.0, 1.0), 99.0, 5.0), 100.0, "clamped");
     }
 

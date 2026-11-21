@@ -581,6 +581,13 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         for i in 0..photo.rating {
             paint(p, Rect::from_min_size(pos2(x + i as f32 * 13.0, bar.center().y - 6.0), vec2(12.0, 12.0)), Icon::StarFilled, t.star);
         }
+        if photo.rating == 0 && (resp.hovered() || selected) {
+            // unrated: Lightroom's five quiet dots, so the footer never reads as an empty box
+            for i in 0..5 {
+                p.circle_filled(pos2(x + 6.0 + i as f32 * 13.0, bar.center().y), 1.6, t.text_dim);
+            }
+            x += 5.0 * 13.0;
+        }
         x += photo.rating as f32 * 13.0 + 4.0;
         match photo.flag {
             Flag::Pick => paint(p, Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::FlagPick, t.pick),
