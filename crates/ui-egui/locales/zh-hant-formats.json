@@ -186,5 +186,6 @@
   "Preset: {name} · {n} photo{}": "預設：{name} · {n} 張照片{:.0}",
   "Rated {n} star{} or more": "{n} 星及以上{:.0}",
   "{path}: click the box to tag the selection, the name to show its photos": "{path}：點選方框為所選照片加入，點選名稱顯示照片",
-  "{total} photo{}": "{total} 張照片{:.0}"
+  "{total} photo{}": "{total} 張照片{:.0}",
+  "{n} raws can now be developed from their raw data": "{n} 個 RAW 現在可以從 RAW 資料沖印"
 }

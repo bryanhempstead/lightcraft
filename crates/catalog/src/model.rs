@@ -277,10 +277,26 @@ pub struct Photo {
     /// picture style baked in — so it is treated as a rendered (non-raw) source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_only: Option<String>,
+    /// Which raw decoders decided [`Photo::preview_only`] ([`PREVIEW_STAMP`] when this build did;
+    /// empty when it isn't set, or for flags set before stamps existed). A flag another build set
+    /// is stale: the library rechecks its file when it opens (`library.recheckPreviewOnly`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub preview_checked: String,
     /// A Local record: the fingerprint of its state when the browse catalogued it, to tell
     /// whether the user changed anything since (see [`crate::local`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_baseline: Option<u64>,
+}
+
+/// The stamp of this build's raw decoders, compared with [`Photo::preview_checked`]. The fork's
+/// version rarely changes, so the stamp carries a decoder generation too: **bump it whenever a
+/// raw decoder starts reading files it refused before**, so photos imported as preview-only are
+/// rechecked on the next library open.
+pub const PREVIEW_STAMP: &str = concat!(env!("CARGO_PKG_VERSION"), "+raw.1");
+
+/// The [`Photo::preview_checked`] stamp for a `preview_only` this build decided.
+pub fn preview_stamp(preview_only: &Option<String>) -> String {
+    if preview_only.is_some() { PREVIEW_STAMP.to_string() } else { String::new() }
 }
 
 /// What assisted culling measured on a photo.
@@ -328,8 +344,19 @@ impl Photo {
             import_look: None,
             analysis: None,
             preview_only: None,
+            preview_checked: String::new(),
             local_baseline: None,
         }
+    }
+    /// Sets [`Photo::preview_only`] as this build decided it, with its stamp.
+    pub fn set_preview_only(&mut self, preview_only: Option<String>) {
+        self.preview_checked = preview_stamp(&preview_only);
+        self.preview_only = preview_only;
+    }
+    /// A preview-only photo whose flag other raw decoders set (an older build, or before stamps
+    /// existed): this build should probe its file again, it may decode now.
+    pub fn preview_only_stale(&self) -> bool {
+        self.preview_only.is_some() && self.preview_checked != PREVIEW_STAMP
     }
     /// A raw file developed from its sensor data: not a rendered image, and not a raw shown from
     /// its embedded preview ([`Photo::preview_only`]).

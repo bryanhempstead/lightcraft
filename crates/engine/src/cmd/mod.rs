@@ -29,6 +29,7 @@ mod prefs;
 mod preset_files;
 pub mod previews;
 mod query;
+pub mod recheck;
 pub mod shoot;
 pub mod shoots;
 mod xmp;
@@ -143,6 +144,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(browse::specs());
         v.extend(folders::specs());
         v.extend(missing::specs());
+        v.extend(recheck::specs());
         v.extend(metadata::specs());
         v.extend(filters::specs());
         v.extend(lightroom::specs());

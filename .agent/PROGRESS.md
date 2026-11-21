@@ -6,6 +6,11 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (Claude CR3 agent, 2026-11-21, branch `worktree-agent-ab68a8dba69d04286`, not merged) **CR3 "not decoded yet"**: the CRX
+  decoder has worked since 10-08 (R6 RAW: 92 files decode, ~90 ms / 20 MP, sensor identical to upstream's decoder); the notice
+  was a stale catalog flag on 4,312 photos imported before it. Fix: stamped preview-only flags + background recheck on library
+  open (`library.recheckPreviewOnly`, ported from upstream #662). R6 vs Lightroom previews: raw 4.61 ΔE vs embedded JPEG 7.23.
+  Upstream merge assessed, not done (238 conflict hunks / 34.8k lines in 109 files; raw/tiff/meta moved to craft-libs).
 - [x] (Claude, 2026-11-21 evening) **Committed**: 7096c20 LR-COLOR round 6 (Lightroom's named lens profiles incl. Sigma 15 mm
   fisheye + Voigtländer, ICC v2 sRGB / Adobe RGB, Exif ColorSpace, Make/Model; held-out fisheye 6.23 → 2.28 ΔE, R6 defaults
   4.01 → 2.52, M262 + Voigtländer 6.73 → 4.37 — docs/lr-match.md Round 6), 07d0f3c LC-SYNC (Sync ▸ Match exposure on the

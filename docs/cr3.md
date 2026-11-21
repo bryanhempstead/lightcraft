@@ -59,6 +59,33 @@ tile count, marker headers and temporary allocations. The full sensor buffer is
 allocated only after the first plane decodes, and plane buffers grow row by row,
 so a small crafted file fails before reserving memory for the image it claims.
 
+## Canon EOS R6 (private files, 2026-11-21)
+
+EOS R6 RAW (CRX `0x100`, lossless, one tile, 14-bit) decodes: 92 files sampled across Bryan's
+library by size, full-frame 5568×3708 and 1.6× crop-mode 3584×2386, all decode; on 30 of them the
+sensor samples hash identically to upstream LightCraft's independent CR3 decoder
+(storytold/lightcraft `1a81a5a26`, `craft-raw`). Decode takes ~90 ms per 20 MP file (crop mode
+~37 ms) on an M3 Pro, release build. Rendered geometry, orientation and brightness match
+macOS's own decoder (`sips`): same size and rotation, mean level within 2 %. No C-RAW R6 file was
+found in the library. Against Lightroom's own previews (`tools/lr-compare`, 30 R6 photos: 20
+Summer Fields, 10 Adobe Color), developing from the raw gives mean ΔE 4.61 (Adobe Color 2.94,
+Summer Fields 5.45) versus 7.23 (3.64 / 9.03) for the embedded-JPEG path (the same photos with their raw data cut off).
+
+Upstream also extends the CR3 white level to the sensor's real saturation (#3805: e.g. 14008 →
+16157 on some R6 files) and folds the difference into baseline exposure; that is not taken here,
+because it shifts exposure against the Lightroom-matched calibration.
+
+**Libraries imported before the decoder.** A CR3 imported before the CRX decoder existed was
+stored as preview-only ("Cr3 files are not decoded yet") and kept that notice even though it
+decodes now (4,312 photos in Bryan's library). Their pixels already came from the raw (the loader
+decodes whatever it can: exports of flagged and unflagged copies are byte-identical), but the
+notice stayed, and White Balance worked as on a rendered JPEG. Preview-only flags are now stamped with the raw
+decoders that set them (`Photo::preview_checked`, `lightcraft_catalog::PREVIEW_STAMP`, bumped when a
+decoder learns new files); when a library opens, the app probes its stale preview-only photos in
+the background and gives each what Reload from Disk would (`library.recheckPreviewOnly`, ported
+from upstream #662). On a copy of Bryan's catalog: 2,353 originals probed in 222 s from USB
+drives, all 4,312 CR3 photos (with virtual copies) cleared.
+
 ## Colour limits
 
 CR3 carries as-shot white balance but no measured camera matrix is imported

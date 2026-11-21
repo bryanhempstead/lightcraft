@@ -22,6 +22,7 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 pub mod panels;
+pub mod recheck;
 pub mod render;
 pub mod shortcuts;
 pub mod softpaint;
@@ -52,6 +53,8 @@ mod tests_offline;
 mod tests_panels;
 #[cfg(test)]
 mod tests_quit_unsaved;
+#[cfg(test)]
+mod tests_recheck;
 #[cfg(test)]
 mod tests_scroll;
 #[cfg(test)]
@@ -675,6 +678,7 @@ impl LightcraftApp {
         merge::poll(self, ctx);
         import::poll_scan(self, ctx);
         import::tick(self, ctx);
+        recheck::tick(self);
         tasks::poll(self, ctx);
         self.preview_build_status(ctx);
         self.save_status(ctx);

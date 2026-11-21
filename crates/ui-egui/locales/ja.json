@@ -1654,5 +1654,7 @@
   "Media Type": "メディアタイプ",
   "Minimal": "最小",
   "Embedded & Sidecar": "埋め込みとサイドカー",
-  "Import Photos and Video…": "写真とビデオを読み込み…"
+  "Import Photos and Video…": "写真とビデオを読み込み…",
+  "Checking raw files": "RAWファイルを確認中",
+  "1 raw can now be developed from its raw data": "1枚のRAWをRAWデータから現像できるようになりました"
 }

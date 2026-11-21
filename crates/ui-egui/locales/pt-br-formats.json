@@ -186,5 +186,6 @@
   "Preset: {name} · {n} photo{}": "Predefinição: {name} · {n} foto{}",
   "Rated {n} star{} or more": "{n} estrela{} ou mais",
   "{path}: click the box to tag the selection, the name to show its photos": "{path}: clique na caixa para marcar a seleção, no nome para ver as fotos",
-  "{total} photo{}": "{total} foto{}"
+  "{total} photo{}": "{total} foto{}",
+  "{n} raws can now be developed from their raw data": "{n} RAW agora podem ser revelados a partir dos dados RAW"
 }

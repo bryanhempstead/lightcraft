@@ -186,5 +186,6 @@
   "Preset: {name} · {n} photo{}": "プリセット：{name} · {n}枚{:.0}",
   "Rated {n} star{} or more": "{n}つ星以上{:.0}",
   "{path}: click the box to tag the selection, the name to show its photos": "{path}：ボックスで選択中の写真にタグ付け、名前で写真を表示",
-  "{total} photo{}": "{total}枚{:.0}"
+  "{total} photo{}": "{total}枚{:.0}",
+  "{n} raws can now be developed from their raw data": "{n}枚のRAWをRAWデータから現像できるようになりました"
 }
