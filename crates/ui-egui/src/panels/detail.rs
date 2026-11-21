@@ -876,6 +876,39 @@ fn general_interaction(
         targeted_drag(app, resp, map, &target);
         return;
     }
+    // LrSuperKeys' HSL keys (Bryan's SpeedKeys.xml: H, J, K, B): hold one and drag up/down on the
+    // photo = targeted hue / saturation / luminance / B&W mix of the colour under the press point.
+    // The target is kept for the whole drag, so letting go of the key mid-drag still ends it.
+    if app.ui.tool.is_empty() {
+        let sk_id = egui::Id::new("superkey-target");
+        let held: Option<&'static str> = if ui.ctx().egui_wants_keyboard_input() || crate::widgets::slider_typing(ui.ctx()) {
+            None
+        } else {
+            ui.input(|i| {
+                [(egui::Key::H, "hue"), (egui::Key::J, "sat"), (egui::Key::K, "lum"), (egui::Key::B, "lum")]
+                    .into_iter()
+                    .find(|(k, _)| i.key_down(*k) && !i.modifiers.command && !i.modifiers.alt && !i.modifiers.ctrl)
+                    .map(|(_, t)| t)
+            })
+        };
+        let dragging: Option<String> = ui.data(|m| m.get_temp(sk_id));
+        let target = dragging.or_else(|| held.map(str::to_string));
+        if let Some(target) = target {
+            if resp.drag_started() {
+                ui.data_mut(|m| m.insert_temp(sk_id, target.clone()));
+            }
+            if held.is_some() || resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            }
+            targeted_drag(app, resp, map, &target);
+            if resp.drag_stopped() || !(resp.dragged() || resp.drag_started()) && held.is_none() {
+                ui.data_mut(|m| m.remove::<String>(sk_id));
+            }
+            if resp.dragged() || resp.drag_started() || resp.drag_stopped() {
+                return;
+            }
+        }
+    }
     if app.ui.tool == "colorRange" {
         // click: sample the colour for the selected mask's colour range; ⇧-click adds (up to 5)
         if resp.clicked()
