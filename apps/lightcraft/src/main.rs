@@ -26,6 +26,7 @@ mod alloc_release;
 mod control_server;
 mod logging;
 mod midi_in;
+mod monogram_server;
 #[cfg(target_os = "macos")]
 mod native_menu;
 
@@ -599,10 +600,16 @@ fn main() -> eframe::Result {
                 app.ui.settings.gpu = false;
                 app.notices.push(notice);
             }
+            // the control channel and Monogram's Lightroom protocol share one queue to the UI thread
+            let (ctl_tx, ctl_rx) = std::sync::mpsc::channel();
             if let Some(port) = control_port {
-                let rx = control_server::start(port, cc.egui_ctx.clone());
-                app = app.with_control(rx);
+                control_server::start_on(port, ctl_tx.clone(), cc.egui_ctx.clone());
             }
+            let mono_port = std::env::var("LIGHTCRAFT_MONOGRAM_PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(50111);
+            if mono_port != 0 {
+                monogram_server::start(mono_port, ctl_tx, cc.egui_ctx.clone());
+            }
+            app = app.with_control(ctl_rx);
             if let Some(mut p) = problem {
                 // imported once the user has chosen where (into the library, or the temporary session)
                 p.pending_import = files;

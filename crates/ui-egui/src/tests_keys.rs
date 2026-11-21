@@ -254,3 +254,57 @@ fn lands_where_i_left_off() {
     // the top bar button is there
     assert!(h.app.widgets.iter().any(|(id, _)| id == "button:leftOff"));
 }
+
+/// Monogram's Lightroom protocol (what its service sends the Lightroom plugin) drives LightCraft:
+/// dial detents with Monogram's step, a slider by position, reset, one-shot inputs, and cycle lists
+/// (crop ratios) by slider position or dial detent.
+#[test]
+fn monogram_lightroom_lines_drive_lightcraft() {
+    let mut h = demo();
+    h.request("ui.set", json!({"view": "detail"}), T);
+    let dev = |h: &Headless| h.app.session.develop_of(h.app.session.active().unwrap()).unwrap_or_default();
+    let line = |h: &mut Headless, l: &str| exec(h, "keys.lrinput", json!({"line": l}));
+    let e0 = dev(&h).light.exposure;
+    line(&mut h, "Exposure = ^0.05,-10,10");
+    line(&mut h, "Exposure = ^0.05,-10,10");
+    assert!((dev(&h).light.exposure - e0 - 0.10).abs() < 1e-6, "two detents up: {}", dev(&h).light.exposure);
+    line(&mut h, "Exposure = v0.05,-10,10");
+    assert!((dev(&h).light.exposure - e0 - 0.05).abs() < 1e-6);
+    line(&mut h, "Exposure = reset");
+    assert_eq!(dev(&h).light.exposure, 0.0);
+    // slider: hardware 0–255 across the input's range
+    line(&mut h, "Shadows = 255,-100,100");
+    assert_eq!(dev(&h).light.shadows, 100.0);
+    line(&mut h, "Shadows = 0,-100,100");
+    assert_eq!(dev(&h).light.shadows, -100.0);
+    // one-shot: flag = pick → P
+    line(&mut h, "flag = pick");
+    h.step();
+    assert_eq!(h.app.session.catalog.photo(h.app.session.active().unwrap()).unwrap().flag, lightcraft_catalog::Flag::Pick);
+    // cycle by slider: the top of the throw = the last crop ratio (21 × 9); same zone again does nothing
+    let r = line(&mut h, "lc_cycle_cropAspect = 255,0,1");
+    assert_eq!(r["label"], "21 × 9", "{r}");
+    assert_eq!(line(&mut h, "lc_cycle_cropAspect = 250,0,1")["unchanged"], true);
+    assert!(dev(&h).crop.aspect.is_some());
+    // cycle by dial: next wraps to the first (As Shot), previous back to 21 × 9
+    assert_eq!(line(&mut h, "lc_cycle_cropAspect = ^1,0,1")["label"], "As Shot");
+    assert_eq!(line(&mut h, "lc_cycle_cropAspect = v1,0,1")["label"], "21 × 9");
+    // a user list replaces the built-in one
+    exec(&mut h, "keys.set", json!({"cycles": {"cropAspect": [{"label": "5 × 7", "command": "crop.aspect", "params": {"aspect": "5x7"}}]}}));
+    assert_eq!(line(&mut h, "lc_cycle_cropAspect = 10,0,1")["label"], "5 × 7");
+    // the "adobe" (JSON) form Monogram sends LightCraft's own integration
+    let j = |h: &mut Headless, v: Value| exec(h, "keys.lrinput", json!({"line": v.to_string()}));
+    j(&mut h, json!({"input": "Exposure = ", "argv": [0, 0, 0.05, -1, -1, -99999, -5, 5, 1]}));
+    assert!((dev(&h).light.exposure - 0.05).abs() < 1e-6, "dial up: {}", dev(&h).light.exposure);
+    j(&mut h, json!({"input": "Contrast = ", "argv": [200, -1, -1, -1, -1, 40, -100, 100, -1]}));
+    assert_eq!(dev(&h).light.contrast, 40.0, "slider value");
+    j(&mut h, json!({"input": "Contrast = ", "argv": [1, -1, -1, -1, -1, -1, -1, -1, -1]}));
+    assert_eq!(dev(&h).light.contrast, 0.0, "pressed = reset");
+    exec(&mut h, "keys.set", json!({"cycles": {}}));
+    let r = j(&mut h, json!({"input": "lc_cycle_cropAspect = ", "argv": [250, -1, -1, -1, -1, 0.99, 0, 1, -1]}));
+    assert_eq!(r["label"], "21 × 9", "top of the slider: {r}");
+    // junk doesn't panic
+    let _ = h.request("engine.execute", json!({"command": "keys.lrinput", "params": {"line": "{\"input\": 3}"}}), T);
+    let _ = h.request("engine.execute", json!({"command": "keys.lrinput", "params": {"line": "nonsense"}}), T);
+    let _ = h.request("engine.execute", json!({"command": "keys.lrinput", "params": {"line": "Exposure = ^,,"}}), T);
+}

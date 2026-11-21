@@ -1,3 +1,19 @@
+# Monogram console → LightCraft
+
+**Current setup (2026-11-21): LightCraft is a Monogram app.** LightCraft listens on 127.0.0.1:50111 for the
+line protocol Monogram's service speaks to its app integrations (reverse-engineered from the service, notes in
+`~/.hammerspoon/devices/re/MONOGRAM.md`), and `~/.hammerspoon/devices/dev.py monoIntegrate` registers it with
+Monogram (`ADD_APP`, the unsigned integrations list) with Monogram's own Lightroom input list (243 inputs, its
+steps; LightCraft's real slider ranges) + Bryan's presets + LightCraft's cycle lists. So a Monogram profile for
+LightCraft works exactly like one for Lightroom: Monogram does the dial increments, slider ranges, presses,
+holds, double-taps and macros, whatever app is in front. `keys.lrinput` handles both Monogram protocols
+(Lightroom lines `Exposure = ^0.05,-10,10` and the JSON "adobe" lines); `keys.cycle` steps a cycle list
+(`lc_cycle_cropAspect`: a slider picks a crop ratio by position, a dial / key steps); `keys.cycles` lists them,
+`keys.set {cycles}` edits them (also from scrn.brd ▸ dev. ▸ mono. ▸ cycle. ▸ edit list.).
+
+The MIDI profile below is the older route (sliders as CC, dial turns as Ctrl+Alt+Shift keys because the Core V1
+firmware can't send relative MIDI); it still works but isn't needed any more.
+
 # LightCraft profile for the Monogram Creative Console
 
 `LightCraft.monogram` is Bryan's Monogram profile "Lightroom 1" re-assigned for LightCraft: every

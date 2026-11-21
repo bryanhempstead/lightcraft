@@ -251,6 +251,53 @@ pub struct KeymapFile {
     /// Nudge steps per develop control, `[small, large]` (`keys.nudge`, relative MIDI dials);
     /// missing controls use the slider's step ×1 / ×5.
     pub steps: BTreeMap<String, [f64; 2]>,
+    /// Lists a slider or dial steps through (`keys.cycle`, Monogram input `lc_cycle = <name>`):
+    /// e.g. `cropAspect` → 4×3, 16×9, 21×9. Empty = the built-in lists (`default_cycles`).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub cycles: BTreeMap<String, Vec<CycleItem>>,
+}
+
+/// One entry of a cycle list: what it's called and the command it runs.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CycleItem {
+    pub label: String,
+    pub command: String,
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub params: Value,
+}
+
+/// The built-in cycle lists (a user list of the same name replaces one).
+pub fn default_cycles() -> BTreeMap<String, Vec<CycleItem>> {
+    let crop = |label: &str, aspect: &str| CycleItem { label: label.into(), command: "crop.aspect".into(), params: json!({"aspect": aspect}) };
+    let mut m = BTreeMap::new();
+    m.insert(
+        "cropAspect".to_string(),
+        vec![
+            crop("As Shot", "original"),
+            crop("1 × 1", "1x1"),
+            crop("4 × 5", "4x5"),
+            crop("4 × 3", "4x3"),
+            crop("3 × 2", "3x2"),
+            crop("16 × 9", "16x9"),
+            crop("21 × 9", "21x9"),
+        ],
+    );
+    let wb = |label: &str, mode: &str| CycleItem { label: label.into(), command: "develop.wb".into(), params: json!({"mode": mode}) };
+    m.insert(
+        "whiteBalance".to_string(),
+        vec![
+            wb("As Shot", "asShot"),
+            wb("Auto", "auto"),
+            wb("Daylight", "daylight"),
+            wb("Cloudy", "cloudy"),
+            wb("Shade", "shade"),
+            wb("Tungsten", "tungsten"),
+            wb("Fluorescent", "fluorescent"),
+            wb("Flash", "flash"),
+        ],
+    );
+    m
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -640,6 +687,8 @@ pub struct Keymap {
     pub recording: Option<Option<usize>>,
     /// shrt. page: the action the next recorded keys are bound to.
     pub draft: Binding,
+    /// Where each cycle list stands (`keys.cycle`), so a slider only fires when it enters a new zone.
+    pub cycle_pos: BTreeMap<String, usize>,
 }
 
 impl Keymap {
@@ -1660,6 +1709,224 @@ pub fn import(app: &mut crate::LightcraftApp, p: &Value) -> Result<Value, String
     }))
 }
 
+// ---------------------------------------------------------------- Monogram's Lightroom protocol
+
+/// Monogram's Lightroom one-shot inputs → the Lightroom Classic key that does the same (resolved
+/// through LightCraft's Classic keymap, so they act exactly like those keys).
+const LR_TRIGGER_KEYS: &[(&str, &str)] = &[
+    ("flag = pick", "P"),
+    ("flag = reject", "X"),
+    ("flag = unflag", "U"),
+    ("flag = toggle", "`"),
+    ("flag = pick_next", "Shift+P"),
+    ("flag = reject_next", "Shift+X"),
+    ("flag = unflag_next", "Shift+U"),
+    ("togglerating = 0", "0"),
+    ("togglerating = 1", "1"),
+    ("togglerating = 2", "2"),
+    ("togglerating = 3", "3"),
+    ("togglerating = 4", "4"),
+    ("togglerating = 5", "5"),
+    ("togglerating = 1_next", "Shift+1"),
+    ("togglerating = 2_next", "Shift+2"),
+    ("togglerating = 3_next", "Shift+3"),
+    ("togglerating = 4_next", "Shift+4"),
+    ("togglerating = 5_next", "Shift+5"),
+    ("togglerating = remove_next", "Shift+0"),
+    ("togglerating = increase", "]"),
+    ("togglerating = decrease", "["),
+    ("labels = red", "6"),
+    ("labels = yellow", "7"),
+    ("labels = green", "8"),
+    ("labels = blue", "9"),
+    ("labels = red_next", "Shift+6"),
+    ("labels = yellow_next", "Shift+7"),
+    ("labels = green_next", "Shift+8"),
+    ("labels = blue_next", "Shift+9"),
+    ("select = all", "Cmd+A"),
+    ("select = none", "Cmd+D"),
+    ("select = previousphoto", "Left"),
+    ("select = nextphoto", "Right"),
+    ("undo = 0", "Cmd+Z"),
+    ("redo = 0", "Cmd+Shift+Z"),
+    ("reset = alldevelop", "Cmd+Shift+R"),
+    ("togglezoom = 0", "Z"),
+    ("switchview = loupe", "E"),
+    ("switchview = grid", "G"),
+    ("switchview = compare", "C"),
+    ("switchview = survey", "N"),
+    ("switchview = develop_loupe", "D"),
+    ("develop_before_after_horiz = 0", "Y"),
+    ("switchview = develop_before_after_horiz", "Y"),
+    ("switchview = develop_before_after_vert", "Alt+Y"),
+    ("switchview = develop_before", "\\"),
+    ("selecttool = crop", "R"),
+    ("selecttool = dust", "Q"),
+    ("selecttool = gradient", "M"),
+    ("selecttool = circularGradient", "Shift+M"),
+    ("selecttool = localized", "K"),
+    ("selecttool = loupe", "D"),
+];
+
+/// One line of Monogram's Lightroom protocol, as Monogram's service sends it to the Lightroom plugin
+/// (reverse-engineered from its encoder): `Exposure = 128,-10,10` (slider: hardware 0–255 + the
+/// input's range), `Exposure = ^0.05,-10,10` / `v0.05` (dial: Monogram's own step × detents),
+/// `Exposure = reset`, `set_preset = Name`, one-shot inputs (`flag = pick`…), and LightCraft's
+/// `lc_cycle = <list>` (slider: pick by position; dial: next / previous). Does what Lightroom's
+/// Monogram plugin does, on the active photo.
+pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, String> {
+    let line = line.trim();
+    if line.starts_with('{') {
+        return lr_input_json(app, line);
+    }
+    let (name, rest) = line.split_once('=').ok_or_else(|| format!("not a Monogram line: {line}"))?;
+    let (name, rest) = (name.trim(), rest.trim());
+    let ctx = egui::Context::default();
+    if name == "set_preset" {
+        crate::shortcuts::dispatch(app, &ctx, "preset.applyByName", json!({"name": rest}));
+        return Ok(json!({"preset": rest}));
+    }
+    if let Some(&(_, keys)) = LR_TRIGGER_KEYS.iter().find(|(l, _)| l.eq_ignore_ascii_case(line)) {
+        let (cmd, params) = keystroke_command(keys);
+        crate::shortcuts::dispatch(app, &ctx, &cmd, params.clone());
+        return Ok(json!({"run": cmd, "params": params}));
+    }
+    if name == "WhiteBalance" {
+        let mode = match rest.to_ascii_lowercase().as_str() {
+            "as shot" => "asShot",
+            "auto" => "auto",
+            "daylight" => "daylight",
+            "cloudy" => "cloudy",
+            "shade" => "shade",
+            "tungsten" => "tungsten",
+            "fluorescent" => "fluorescent",
+            "flash" => "flash",
+            _ => "custom",
+        };
+        return app.run("develop.wb", json!({"mode": mode}));
+    }
+    if name == "PerspectiveUpright" {
+        let mode = ["off", "auto", "level", "vertical", "full", "guided"].get(rest.parse::<usize>().unwrap_or(0)).copied().unwrap_or("off");
+        return app.run("geometry.upright", json!({"mode": mode}));
+    }
+    // the numbers after the name: dial `^d,min,max` / `vd,…`, slider `v,min,max`
+    let dial = rest.strip_prefix('^').map(|r| (1.0, r)).or_else(|| rest.strip_prefix('v').map(|r| (-1.0, r)));
+    let nums: Vec<f64> = dial.map(|(_, r)| r).unwrap_or(rest).split(',').filter_map(|x| x.trim().parse::<f64>().ok()).collect();
+    if name == "lc_cycle" || name.starts_with("lc_cycle_") {
+        let list = if name == "lc_cycle" { rest.split(',').next().unwrap_or("").trim() } else { name.trim_start_matches("lc_cycle_") };
+        return cycle(app, list, dial.map(|(sign, _)| sign), if dial.is_none() { nums.first().copied() } else { None });
+    }
+    if rest == "reset" {
+        let control = lr_param(name).ok_or_else(|| format!("{name}: no LightCraft slider"))?;
+        return app.run("develop.resetControl", json!({"control": control}));
+    }
+    let control = lr_param(name).ok_or_else(|| format!("{name}: no LightCraft slider for this Monogram input"))?;
+    match (dial, nums.as_slice()) {
+        (Some((sign, _)), [d, ..]) => {
+            // Monogram's own increment per detent; the crop pseudo controls move in LightCraft's units
+            let delta = if control.starts_with("crop.") && control != "crop.angle" { app.keymap.steps(control)[0] } else { *d };
+            nudge(app, control, sign * delta.abs())
+        }
+        (None, [v, min, max]) => {
+            let t = (v / 255.0).clamp(0.0, 1.0);
+            let spec = lightcraft_develop::controls::find(control);
+            let value = if control == "wb.temp" { spec.map(|s| crate::widgets::track_value(s, t)).unwrap_or(5500.0) } else { min + t * (max - min) };
+            let value = spec.map(|s| value.clamp(s.min.min(s.max), s.max.max(s.min))).unwrap_or(value);
+            let r = app.run("develop.set", json!({"control": control, "value": value}));
+            if r.is_ok() {
+                hud(app, control);
+            }
+            r
+        }
+        _ => Err(format!("{line}: no value")),
+    }
+}
+
+/// Monogram's "adobe" protocol line (what it sends Photoshop / Premiere integrations, and LightCraft's
+/// own integration): `{"input": "Exposure = ", "argv": [9 values]}` — reverse-engineered from its
+/// encoder: `=` (slider) puts the value in argv[5] and the input's range in argv[6..7]; `+` (dial)
+/// puts down / up amounts in argv[1] / argv[2] with argv[8] = 1; a one-shot sets argv[0] = 1 (the
+/// rest -1); a text parameter goes in argv[8]. Unlike the Lightroom protocol it carries values for
+/// any input, so LightCraft's own inputs (cycle lists) work from sliders too.
+pub fn lr_input_json(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, String> {
+    let v: Value = serde_json::from_str(line).map_err(|e| format!("Monogram line: {e}"))?;
+    let input = v.get("input").and_then(Value::as_str).ok_or("Monogram line: no `input`")?.trim().to_string();
+    let argv = v.get("argv").and_then(Value::as_array).cloned().unwrap_or_default();
+    let a = |i: usize| argv.get(i).and_then(Value::as_f64).unwrap_or(-1.0);
+    let (name, rest) = input.split_once('=').map(|(n, r)| (n.trim().to_string(), r.trim().to_string())).unwrap_or((input.clone(), String::new()));
+    if let Some(text) = argv.get(8).and_then(Value::as_str) {
+        return lr_input(app, &format!("{name} = {text}"));
+    }
+    let is_cycle = name.starts_with("lc_cycle_");
+    if a(8) == 1.0 && (a(1) > 0.0 || a(2) > 0.0) {
+        let d = a(2) - a(1);
+        return lr_input(app, &format!("{name} = {}{},{},{}", if d < 0.0 { 'v' } else { '^' }, d.abs(), a(6), a(7)));
+    }
+    if a(6) != -1.0 || a(7) != -1.0 {
+        let (lo, hi, val) = (a(6), a(7), a(5));
+        if is_cycle {
+            let t = if (hi - lo).abs() > 1e-12 { (val - lo) / (hi - lo) } else { 0.0 };
+            return cycle(app, name.trim_start_matches("lc_cycle_"), None, Some(t * 255.0));
+        }
+        let control = lr_param(&name).ok_or_else(|| format!("{name}: no LightCraft slider for this Monogram input"))?;
+        let spec = lightcraft_develop::controls::find(control);
+        let value = spec.map(|s| val.clamp(s.min.min(s.max), s.max.max(s.min))).unwrap_or(val);
+        let r = app.run("develop.set", json!({"control": control, "value": value}));
+        if r.is_ok() {
+            hud(app, control);
+        }
+        return r;
+    }
+    // a one-shot: `flag = pick`, `Exposure = reset`, a preset… or a slider input pressed = reset it
+    if !rest.is_empty() {
+        return lr_input(app, &input);
+    }
+    if is_cycle {
+        return cycle(app, name.trim_start_matches("lc_cycle_"), Some(1.0), None);
+    }
+    match lr_param(&name) {
+        Some(control) => app.run("develop.resetControl", json!({"control": control})),
+        None => Err(format!("{input}: nothing to do in LightCraft")),
+    }
+}
+
+/// Step a cycle list: `dir` ±1 (a dial detent) or `hw` 0–255 (a slider picks the item by position;
+/// it only fires when the slider enters another item's zone).
+pub fn cycle(app: &mut crate::LightcraftApp, list: &str, dir: Option<f64>, hw: Option<f64>) -> Result<Value, String> {
+    let items =
+        app.keymap.file.cycles.get(list).cloned().or_else(|| default_cycles().remove(list)).ok_or_else(|| format!("no cycle list `{list}`"))?;
+    if items.is_empty() {
+        return Err(format!("cycle list `{list}` is empty"));
+    }
+    let n = items.len();
+    let cur = app.keymap.cycle_pos.get(list).copied();
+    let next = match (dir, hw) {
+        (Some(d), _) => match cur {
+            Some(c) => (c as i64 + if d < 0.0 { -1 } else { 1 }).rem_euclid(n as i64) as usize,
+            None => 0,
+        },
+        (None, Some(v)) => (((v / 255.0).clamp(0.0, 1.0) * n as f64) as usize).min(n - 1),
+        _ => cur.map(|c| (c + 1) % n).unwrap_or(0),
+    };
+    if hw.is_some() && cur == Some(next) {
+        return Ok(json!({"list": list, "index": next, "unchanged": true}));
+    }
+    app.keymap.cycle_pos.insert(list.to_string(), next);
+    let Some(item) = items.get(next) else { return Err("cycle: out of range".into()) };
+    let ctx = egui::Context::default();
+    crate::shortcuts::dispatch(app, &ctx, &item.command, if item.params.is_null() { json!({}) } else { item.params.clone() });
+    say(app, format!("{} {}", list_label(list), item.label));
+    Ok(json!({"list": list, "index": next, "label": item.label, "command": item.command}))
+}
+
+fn list_label(list: &str) -> &str {
+    match list {
+        "cropAspect" => "Crop",
+        "whiteBalance" => "WB",
+        _ => list,
+    }
+}
+
 /// Commands of the keymap and its super keys; `None` = not one of them.
 pub fn run_command(app: &mut crate::LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     let s = |k: &str| p.get(k).and_then(Value::as_str);
@@ -1676,6 +1943,12 @@ pub fn run_command(app: &mut crate::LightcraftApp, id: &str, p: &Value) -> Optio
             };
             nudge(app, &control, delta)
         })(),
+        "keys.lrinput" => s("line").ok_or_else(|| "keys.lrinput: missing `line`".to_string()).and_then(|l| lr_input(app, l)),
+        "keys.cycle" => (|| {
+            let list = s("list").ok_or("keys.cycle: missing `list`")?;
+            cycle(app, list, p.get("dir").and_then(Value::as_f64), p.get("value").and_then(Value::as_f64))
+        })(),
+        "keys.cycles" => Ok(json!({"cycles": app.keymap.file.cycles, "defaults": default_cycles()})),
         "keys.macro" => (|| {
             let steps = p.get("steps").and_then(Value::as_array).ok_or("keys.macro: missing `steps`")?.clone();
             let ctx = egui::Context::default();

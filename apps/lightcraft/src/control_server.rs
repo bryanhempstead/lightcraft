@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use lightcraft_ui_egui::ControlRequest;
@@ -23,18 +23,17 @@ pub const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Connections served at once; further ones get an error line and are closed.
 pub const MAX_CONNECTIONS: usize = 16;
 
-pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
-    let (tx, rx) = channel::<ControlRequest>();
+/// Serve the control channel on `port`, feeding `tx` (shared with the Monogram listener).
+pub fn start_on(port: u16, tx: Sender<ControlRequest>, ctx: egui::Context) {
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
         Err(e) => {
             log::error!("control server failed to bind 127.0.0.1:{port}: {e}");
-            return rx;
+            return;
         }
     };
     log::info!("control server listening on 127.0.0.1:{port}");
     std::thread::spawn(move || accept_loop(listener, tx, ctx));
-    rx
 }
 
 fn accept_loop(listener: TcpListener, tx: Sender<ControlRequest>, ctx: egui::Context) {
