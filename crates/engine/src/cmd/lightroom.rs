@@ -131,11 +131,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Repair Lightroom Migration",
             [],
             None,
-            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom) | records?: path, crops?: bool (default true: straighten angles an earlier version mirrored), unedited?: bool (default true: photos Lightroom shows unedited that got settings from an XMP sidecar at import get Lightroom's), dryRun?: bool} — repair a library migrated by an earlier version; photos changed here since the migration are left alone; one undo step → {cropsFixed, uneditedReset, keptChangedHere}",
+            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom) | records?: path, crops?: bool (default true: straighten angles an earlier version mirrored), unedited?: bool (default true: photos Lightroom shows unedited that got settings from an XMP sidecar at import get Lightroom's), upright?: bool (default true: Lightroom's Upright mode — earlier versions read Level as Vertical — with the transform Lightroom stored instead of our own detection, and Constrain Crop), dryRun?: bool} — repair a library migrated by an earlier version; photos changed here since the migration are left alone; one undo step → {cropsFixed, uneditedReset, uprightFixed, keptChangedHere}",
             always,
             |s, p| {
                 let rec = load_records(p).map_err(|e| bad("library.repairLightroomMigration", e))?;
-                repair_migration(s, &rec, bool_or(p, "crops", true), bool_or(p, "unedited", true), bool_or(p, "dryRun", false))
+                repair_migration(
+                    s,
+                    &rec,
+                    bool_or(p, "crops", true),
+                    bool_or(p, "unedited", true),
+                    bool_or(p, "upright", true),
+                    bool_or(p, "dryRun", false),
+                )
             }
         ),
         cmd!(

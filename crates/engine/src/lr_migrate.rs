@@ -187,14 +187,26 @@ fn recorded_looks(s: &Session) -> HashMap<PhotoId, (String, f64)> {
         .unwrap_or_default()
 }
 
+/// Was photo `p`'s look changed in LightCraft after the migration (at `migrated`)? Edits made
+/// here leave a History step (the migration writes none) or a later edit time.
+pub fn edited_here(p: &lightcraft_catalog::Photo, migrated: Option<&str>) -> bool {
+    !p.history.is_empty()
+        || match (&p.edited, migrated) {
+            (Some(e), Some(m)) => e.as_str() > m,
+            _ => false,
+        }
+}
+
 /// Repair a library migrated by an earlier version, from the catalog's records:
 /// - `crops`: crops whose straighten angle is still exactly the mirror of Lightroom's (an earlier
 ///   version read `crs:CropAngle` the wrong way round) get the right one;
 /// - `unedited`: photos Lightroom shows unedited but that carry other settings (taken from an XMP
-///   sidecar next to the file at import) get Lightroom's settings.
+///   sidecar next to the file at import) get Lightroom's settings;
+/// - `upright`: Lightroom's Upright mode (an earlier version read Level as Vertical) with the
+///   transform Lightroom stored, and its Constrain Crop.
 ///
 /// Photos (and virtual copies) changed here since the migration are left alone. One undo step.
-pub fn repair_migration(s: &mut Session, rec: &Records, crops: bool, unedited: bool, dry_run: bool) -> crate::Result<Value> {
+pub fn repair_migration(s: &mut Session, rec: &Records, crops: bool, unedited: bool, upright: bool, dry_run: bool) -> crate::Result<Value> {
     let by_path = photos_by_path(s);
     let lr_by_id: HashMap<i64, &LrImage> = rec.images.iter().map(|i| (i.id, i)).collect();
     let migrated_at = s
@@ -205,6 +217,7 @@ pub fn repair_migration(s: &mut Session, rec: &Records, crops: bool, unedited: b
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|d| d["migrated"].as_str().map(str::to_string));
     let (mut fixed, mut kept, mut reset, mut ops) = (0usize, 0usize, 0usize, Vec::new());
+    let mut uprights = 0usize;
     for im in &rec.images {
         let target = match im.master {
             None => by_path.get(&im.path).copied(),
@@ -220,43 +233,71 @@ pub fn repair_migration(s: &mut Session, rec: &Records, crops: bool, unedited: b
         let aspect = (p.width > 0 && p.height > 0).then(|| p.width as f64 / p.height as f64);
         let prep = prepare_image(im, aspect);
         let Some(partial) = prep.develop else { continue };
-        let changed_here = match (&p.edited, &migrated_at) {
-            (Some(e), Some(m)) => e.as_str() > m.as_str(),
-            _ => false,
-        };
+        let changed_here = edited_here(p, migrated_at.as_deref());
         // Lightroom shows it unedited: its settings are Lightroom's defaults
         if unedited && im.edits == 0 && !prep.custom && im.master.is_none() && p.is_edited() {
+            let d = lightcraft_develop::apply_partial(&p.camera_defaults(), &partial, 1.0);
+            // (already Lightroom's: nothing to do)
+            if d == *p.develop {
+                continue;
+            }
             if changed_here {
                 kept += 1;
                 continue;
             }
             reset += 1;
             if !dry_run {
-                let d = lightcraft_develop::apply_partial(&p.camera_defaults(), &partial, 1.0);
                 ops.push(Op::SetDevelop { id: p.id, settings: Arc::new(d), label: "Lightroom Settings".into(), edited: None });
             }
             continue;
         }
-        let Some(want) = partial["crop"]["geometry"]["angle"].as_f64().filter(|_| crops) else { continue };
-        let have = p.develop.crop.geometry.angle;
-        if want == 0.0 || (have - want).abs() < 1e-9 {
-            continue;
+        // Upright: Lightroom's mode (an earlier version read Level as Vertical), its stored
+        // transform instead of our own detection, and Constrain Crop
+        let mut d = (*p.develop).clone();
+        let mut label = None;
+        if upright && partial["geometry"]["upright"].is_string() {
+            let g = &partial["geometry"];
+            let mut want = d.geometry.clone();
+            if let Ok(u) = serde_json::from_value(g["upright"].clone()) {
+                want.upright = u;
+            }
+            want.upright_transform = serde_json::from_value(g["upright_transform"].clone()).ok();
+            if let Some(c) = g["constrain_crop"].as_bool() {
+                want.constrain_crop = c;
+            }
+            if want != d.geometry {
+                if changed_here {
+                    kept += 1;
+                    continue;
+                }
+                uprights += 1;
+                d.geometry = want;
+                label = Some("Lightroom Upright");
+            }
         }
-        if (have + want).abs() > 1e-6 {
-            kept += 1;
-            continue;
+        // the crop angle an earlier version mirrored
+        if let Some(want) = partial["crop"]["geometry"]["angle"].as_f64().filter(|_| crops) {
+            let have = d.crop.geometry.angle;
+            if want != 0.0 && (have - want).abs() >= 1e-9 {
+                if (have + want).abs() > 1e-6 {
+                    kept += 1;
+                } else {
+                    fixed += 1;
+                    d.crop.geometry.angle = want;
+                    label = Some(label.map_or("Fix Lightroom Crop", |_| "Lightroom Upright"));
+                }
+            }
         }
-        fixed += 1;
-        if !dry_run {
-            let mut d = (*p.develop).clone();
-            d.crop.geometry.angle = want;
-            ops.push(Op::SetDevelop { id: p.id, settings: Arc::new(d), label: "Fix Lightroom Crop".into(), edited: p.edited.clone() });
+        if let Some(label) = label
+            && !dry_run
+        {
+            ops.push(Op::SetDevelop { id: p.id, settings: Arc::new(d), label: label.into(), edited: p.edited.clone() });
         }
     }
     if !ops.is_empty() {
         s.commit("Repair Lightroom Migration", Op::Batch { ops })?;
     }
-    Ok(json!({"dryRun": dry_run, "cropsFixed": fixed, "uneditedReset": reset, "keptChangedHere": kept}))
+    Ok(json!({"dryRun": dry_run, "cropsFixed": fixed, "uneditedReset": reset, "uprightFixed": uprights, "keptChangedHere": kept}))
 }
 
 /// Give photos the imported creative profile their Lightroom look names (Summer Fields,
@@ -633,7 +674,8 @@ fn sqlite3() -> PathBuf {
     if sys.is_file() { sys.to_path_buf() } else { PathBuf::from("sqlite3") }
 }
 
-fn query(db: &Path, sql: &str) -> Result<Vec<Value>, String> {
+/// Run one query on an SQLite file (a catalog *copy*) with the system `sqlite3 -json`.
+pub(crate) fn query(db: &Path, sql: &str) -> Result<Vec<Value>, String> {
     let out = std::process::Command::new(sqlite3())
         .arg("-json")
         .arg(db)
@@ -653,6 +695,24 @@ fn query(db: &Path, sql: &str) -> Result<Vec<Value>, String> {
 /// Read a Lightroom Classic catalog. It is copied (with its `-wal` log, which holds the latest
 /// changes) into a fresh folder under `scratch` and read from there; the copy is removed again.
 pub fn dump_catalog(lrcat: &Path, scratch: &Path) -> Result<Records, String> {
+    with_catalog_copy(lrcat, scratch, |db| records_from_db(db, &lrcat.display().to_string()))
+}
+
+/// [`Records`] from a catalog copy `db` (named `catalog` in them).
+pub fn records_from_db(db: &Path, catalog: &str) -> Result<Records, String> {
+    let images = query(db, SQL_IMAGES)?;
+    let keywords = query(db, SQL_KEYWORDS)?;
+    let image_keywords = query(db, SQL_IMAGE_KEYWORDS)?;
+    let collections = query(db, SQL_COLLECTIONS)?;
+    let collection_images = query(db, SQL_COLLECTION_IMAGES)?;
+    let smart = query(db, SQL_SMART)?;
+    Ok(records_from_rows(catalog, &images, &keywords, &image_keywords, &collections, &collection_images, &smart))
+}
+
+/// Run `f` on a copy of the catalog `lrcat` (with its `-wal` log, which holds the latest
+/// changes) made in a fresh folder under `scratch`; the copy is removed again afterwards. The
+/// catalog itself is never opened.
+pub fn with_catalog_copy<T>(lrcat: &Path, scratch: &Path, f: impl FnOnce(&Path) -> Result<T, String>) -> Result<T, String> {
     if !lrcat.is_file() {
         return Err(format!("{}: no such catalog", lrcat.display()));
     }
@@ -666,13 +726,7 @@ pub fn dump_catalog(lrcat: &Path, scratch: &Path) -> Result<Records, String> {
         if wal.is_file() {
             std::fs::copy(&wal, dir.join("catalog.lrcat-wal")).map_err(|e| format!("copying {}: {e}", wal.display()))?;
         }
-        let images = query(&db, SQL_IMAGES)?;
-        let keywords = query(&db, SQL_KEYWORDS)?;
-        let image_keywords = query(&db, SQL_IMAGE_KEYWORDS)?;
-        let collections = query(&db, SQL_COLLECTIONS)?;
-        let collection_images = query(&db, SQL_COLLECTION_IMAGES)?;
-        let smart = query(&db, SQL_SMART)?;
-        Ok(records_from_rows(&lrcat.display().to_string(), &images, &keywords, &image_keywords, &collections, &collection_images, &smart))
+        f(&db)
     })();
     // only what we made: the copy, its log and index, and the folder
     for f in ["catalog.lrcat", "catalog.lrcat-wal", "catalog.lrcat-shm", "catalog.lrcat-journal"] {
@@ -719,7 +773,7 @@ pub fn default_preset_dirs(catalog: Option<&Path>) -> Vec<String> {
 // --------------------------------------------------------------------------------- develop
 
 /// Quarter turns clockwise of Lightroom's orientation code.
-fn lr_quarter_turns(code: &str) -> Option<u8> {
+pub(crate) fn lr_quarter_turns(code: &str) -> Option<u8> {
     match code.trim() {
         "AB" => Some(0),
         "BC" => Some(1),
@@ -819,6 +873,19 @@ pub fn reorient_partial(partial: &mut Value, o: lightcraft_geom::Orientation) {
             *v = json!({"x": nx, "y": ny});
         }
     };
+    // Lightroom's stored Upright transform (centred coordinates of the stored frame): conjugate by
+    // the turn, which in centred coordinates is a signed axis swap (`map` with a zero-size frame)
+    if let Some(t) = partial.pointer_mut("/geometry/upright_transform")
+        && let Some(m) = t.as_array().and_then(|a| a.iter().map(Value::as_f64).collect::<Option<Vec<f64>>>())
+        && let Ok(m) = <[f64; 9]>::try_from(m)
+    {
+        let (ax, ay) = o.map(1.0, 0.0, 0.0, 0.0);
+        let (bx, by) = o.map(0.0, 1.0, 0.0, 0.0);
+        let r = lightcraft_geom::Homography([ax, bx, 0.0, ay, by, 0.0, 0.0, 0.0, 1.0]);
+        if let Some(ri) = r.inverse() {
+            *t = json!(r.mul(&lightcraft_geom::Homography(m)).mul(&ri).0);
+        }
+    }
     if let Some(r) = partial.pointer_mut("/crop/geometry/rect")
         && let (Some(x0), Some(y0), Some(x1), Some(y1)) = (r["x0"].as_f64(), r["y0"].as_f64(), r["x1"].as_f64(), r["y1"].as_f64())
     {
@@ -1108,6 +1175,29 @@ fn file_orientation(path: &str) -> lightcraft_geom::Orientation {
         let _ = f.take(512 << 10).read_to_end(&mut buf);
     }
     lightcraft_meta::extract(&buf).orientation.unwrap_or_default()
+}
+
+/// The library's photo for each of the catalog's images: masters by file path, virtual copies
+/// by their master and copy name.
+pub fn library_ids(s: &Session, rec: &Records) -> HashMap<i64, PhotoId> {
+    let by_path = photos_by_path(s);
+    let mut copies: HashMap<(PhotoId, &str), PhotoId> = HashMap::new();
+    for p in s.catalog.photos() {
+        if let (Some(m), Some(n)) = (p.copy_of, p.copy_name.as_deref()) {
+            copies.entry((m, n)).or_insert(p.id);
+        }
+    }
+    let masters: HashMap<i64, PhotoId> =
+        rec.images.iter().filter(|i| i.master.is_none()).filter_map(|i| Some((i.id, *by_path.get(&i.path)?))).collect();
+    let mut out = masters.clone();
+    for im in rec.images.iter().filter(|i| i.master.is_some()) {
+        let Some(mid) = im.master.and_then(|m| masters.get(&m).copied()) else { continue };
+        let name = im.copy_name.as_deref().unwrap_or("Copy 1");
+        if let Some(id) = copies.get(&(mid, name)) {
+            out.insert(im.id, *id);
+        }
+    }
+    out
 }
 
 /// The catalog's photo for each file path.
@@ -1863,3 +1953,6 @@ pub fn resume_point(s: &Session, folder: Option<&str>, album: Option<AlbumId>, s
 #[cfg(test)]
 #[path = "tests_lr_migrate.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "tests_lr_upright.rs"]
+mod tests_upright;

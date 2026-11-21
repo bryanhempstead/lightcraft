@@ -133,7 +133,9 @@ names are read (e.g. `Exposure2012`, not the older `Exposure`).
 | `DefringePurple/GreenAmount/HueLo/HueHi` | `optics.defringe_*` | |
 | `ShadowTint`, `RedHue/Saturation`, `GreenHue/Saturation`, `BlueHue/Saturation` | `calibration.shadows_tint`, `calibration.red_hue/red_sat`, … | Calibration panel, 1:1 |
 | `PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y` | `geometry.vertical/horizontal/rotate/scale/aspect/offset_x/offset_y` | |
-| `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided |
+| `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 full, 3 level, 4 vertical, 5 guided |
+| `UprightTransform_<mode>` | `geometry.upright_transform` | the matrix Lightroom stored for that mode (output → lens-corrected, 0..1 per axis of the stored frame, incl. its shrink-to-fit), inverted into ours; not re-detected |
+| `CropConstrainToWarp` | `geometry.constrain_crop` | |
 | `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
 | `LensProfileDistortionScale`, `LensProfileVignettingScale` | `optics.profile_distortion`, `optics.profile_vignetting` | |
 | `ChromaticAberrationR`, `ChromaticAberrationB` | `optics.ca_red`, `optics.ca_blue` | |
@@ -149,7 +151,7 @@ balance, `ToggleStyle*`, `Preset`, HDR fields while `HDREditMode` is 0, preset d
 
 **Not mapped:** creative profiles whose colour table isn't imported (see *Profiles* below: an imported one matches by
 name), red eye, lens
-blur, guided Upright lines (`UprightTransform_*`), process-version 2010 field names, and AI features.
+blur, guided Upright lines (`UprightFourSegments_*`), process-version 2010 field names, and AI features.
 
 ## Lightroom Classic catalogs
 

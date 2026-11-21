@@ -372,15 +372,11 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     n(o, "PerspectiveX", "geometry.offset_x");
     n(o, "PerspectiveY", "geometry.offset_y");
     if let Some(u) = num(props, "crs:PerspectiveUpright") {
-        let mode = match u as i64 {
-            1 => "auto",
-            2 => "level",
-            3 => "vertical",
-            4 => "full",
-            5 => "guided",
-            _ => "off",
-        };
-        put(o, "geometry.upright", json!(mode));
+        put(o, "geometry.upright", json!(upright_mode(u)));
+    }
+    // Lightroom's "Constrain Crop" (the crop stays inside the warped photo)
+    if let Some(c) = num(props, "crs:CropConstrainToWarp") {
+        put(o, "geometry.constrain_crop", json!(c != 0.0));
     }
 
     n(o, "LensProfileDistortionScale", "optics.profile_distortion");
@@ -433,15 +429,68 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     out
 }
 
+/// `crs:PerspectiveUpright` → our Upright mode. Lightroom's values: 0 Off, 1 Auto, 2 Full, 3 Level,
+/// 4 Vertical, 5 Guided (read off the stored transforms: slot 3 is always a pure rotation, slot 4
+/// only corrects converging verticals, slot 2 both).
+fn upright_mode(v: f64) -> &'static str {
+    match v as i64 {
+        1 => "auto",
+        2 => "full",
+        3 => "level",
+        4 => "vertical",
+        5 => "guided",
+        _ => "off",
+    }
+}
+
+/// The Upright correction Lightroom stored for the photo's mode, so it isn't re-detected.
+///
+/// Lightroom keeps one 3×3 matrix per mode (`UprightTransform_<mode>`, row-major text). It maps a
+/// point of the transformed (output) image to the lens-corrected one, both normalized 0..1 per axis
+/// in the file's stored (unrotated) frame, and includes Lightroom's shrink-to-fit (a level rotation
+/// by θ of a 3:2 frame comes with a scale of `cos θ + 1.5 sin θ`). Ours maps lens-corrected →
+/// transformed in centred coordinates `(p − centre) / (long edge / 2)`; `aspect` is the stored
+/// frame's width / height. `None` when the mode has no (sane) stored matrix.
+pub fn upright_transform(props: &Props, aspect: f64) -> Option<lightcraft_geom::Homography> {
+    use lightcraft_geom::Homography;
+    let mode = num(props, "crs:PerspectiveUpright")?;
+    if !(1.0..=4.0).contains(&mode) {
+        return None;
+    }
+    let text = first(props, &format!("crs:UprightTransform_{}", mode as i64))?;
+    let m: Vec<f64> = text.split(',').filter_map(|x| x.trim().parse::<f64>().ok()).filter(|x| x.is_finite()).collect();
+    let m: [f64; 9] = m.try_into().ok()?;
+    // corrupt input: a transform that flings the photo away or folds it
+    if m.iter().any(|x| x.abs() > 100.0) || m[8].abs() < 1e-6 {
+        return None;
+    }
+    let inv = Homography(m).inverse()?;
+    let aspect = if aspect.is_finite() && aspect > 0.0 { aspect.clamp(0.01, 100.0) } else { 1.5 };
+    // normalized (0..1 per axis) → centred (long edge = 2)
+    let (wx, hy) = if aspect >= 1.0 { (1.0, 1.0 / aspect) } else { (aspect, 1.0) };
+    let c = Homography([2.0 * wx, 0.0, -wx, 0.0, 2.0 * hy, -hy, 0.0, 0.0, 1.0]);
+    let h = c.mul(&inv).mul(&c.inverse()?);
+    let k = h.0[8];
+    if !k.is_finite() || k.abs() < 1e-9 {
+        return None;
+    }
+    let h = Homography(h.0.map(|x| x / k));
+    h.0.iter().all(|x| x.is_finite() && x.abs() < 1e6).then_some(h)
+}
+
 /// [`to_partial`], plus the adjustments in the packet it could not carry over (field names
 /// without the `crs:` prefix, grouped: `CameraProfile`, `Look`, `MaskGroupBasedCorrections`…).
 ///
 /// With `values` (the packet's structured properties), local corrections become masks too
 /// ([`crate::crs_masks`]; radial masks fitted to `aspect` = width / height); components that
-/// can't be carried over are reported as `Mask: <kind>`.
+/// can't be carried over are reported as `Mask: <kind>`. Upright takes Lightroom's stored
+/// transform ([`upright_transform`], in the stored frame of that `aspect`).
 pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values>, raw: Option<bool>, aspect: f64) -> (Value, Vec<String>) {
     READ.with(|r| *r.borrow_mut() = Some(Default::default()));
     let mut out = to_partial(props, raw);
+    if let Some(h) = upright_transform(props, aspect) {
+        put(&mut out, "geometry.upright_transform", json!(h.0));
+    }
     let mut read = READ.with(|r| r.borrow_mut().take()).unwrap_or_default();
     let mut mask_skips = Vec::new();
     if let Some(values) = values {
@@ -481,7 +530,7 @@ pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values
             || k == "AutoGrayscaleMix"
             || k.ends_with("Digest")
             || k.starts_with("AutoToneDigest")
-            || (k.starts_with("Upright") && !k.starts_with("UprightTransform_"))
+            || k.starts_with("Upright")
             || k.starts_with("LensProfile")
             || k.starts_with("ToggleStyle")
             || k.starts_with("Custom")
@@ -607,7 +656,7 @@ mod tests {
         assert_eq!(s.vignette.amount, -21.0);
         assert_eq!(s.vignette.style, VignetteStyle::ColorPriority);
         assert_eq!((s.grain.amount, s.grain.size, s.grain.roughness), (15.0, 30.0, 60.0));
-        assert_eq!(s.geometry.upright, Upright::Level);
+        assert_eq!(s.geometry.upright, Upright::Full, "2 = Full (3 Level, 4 Vertical)");
         assert_eq!(s.geometry.vertical, -10.0);
         assert!(s.optics.remove_ca);
         assert_eq!(s.treatment, lightcraft_develop::Treatment::Color);
