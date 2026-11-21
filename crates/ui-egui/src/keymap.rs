@@ -1167,14 +1167,17 @@ pub fn import_superkeys(shortcuts: &str, speedkeys: Option<&str>) -> Import {
 
 // --------------------------------------------------------------------------------- Monogram
 
-/// MIDI numbers handed out to a Monogram profile's modules (channel 1): sliders CC 20+, dial
-/// turns CC 30+, dial press-and-turns CC 50+, notes 60+.
+/// MIDI numbers handed out to a Monogram profile's modules (channel 1): sliders CC 20+, notes 60+;
+/// dial turns get keys (see `DIAL_KEYS`).
 struct Alloc {
     slider_cc: u8,
-    turn_cc: u8,
-    press_turn_cc: u8,
     note: u8,
+    /// next key for dial turns (Ctrl+Alt+Shift + A…Z, 0…9)
+    key: usize,
 }
+
+/// Keys handed to dial turns: Ctrl+Alt+Shift + one of these, one per turn direction.
+const DIAL_KEYS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 /// A Monogram `press` / `pressAndHold` / macro step → command.
 fn monogram_step(v: &Value) -> Option<(String, Value)> {
@@ -1219,7 +1222,7 @@ fn monogram_control(v: &Value) -> Option<(&'static str, bool, f64)> {
 pub fn import_monogram(profile: &Value, app_id: &str) -> (Import, Value) {
     let mut out = Import::default();
     let mut assignments = serde_json::Map::new();
-    let mut alloc = Alloc { slider_cc: 20, turn_cc: 30, press_turn_cc: 50, note: 60 };
+    let mut alloc = Alloc { slider_cc: 20, note: 60, key: 0 };
     let title = profile.get("title").and_then(Value::as_str).unwrap_or("Lightroom");
     let mut keys: Vec<(&String, &Value)> = profile.get("assignments").and_then(Value::as_object).map(|o| o.iter().collect()).unwrap_or_default();
     keys.sort_by(|a, b| a.0.cmp(b.0));
@@ -1270,17 +1273,39 @@ pub fn import_monogram(profile: &Value, app_id: &str) -> (Import, Value) {
                 None => out.skipped.push(format!("{name} slider: {p}: no LightCraft slider")),
             }
         }
-        for (slot, kind, counter) in [("turn", "turn", 0), ("pressAndTurn", "press+turn", 1)] {
+        // Dial turns go as keystrokes, not MIDI: the Core V1 firmware can't send relative CC
+        // (its encoder for it is empty), so a CC turn did nothing. Monogram fires the key itself
+        // on each detent (left / right, and press-and-turn left / right); LightCraft binds each
+        // key to a nudge of the same slider.
+        for (slot, kind, left, right) in
+            [("turn", "turn", "leftTurn", "rightTurn"), ("pressAndTurn", "press+turn", "pressAndLeftTurn", "pressAndRightTurn")]
+        {
             let Some(p) = st.get(slot) else { continue };
-            match monogram_control(p) {
-                Some((c, inv, step)) => {
-                    // Monogram's step counts in its own units; LightCraft uses the slider's nudge step
-                    let _ = step;
-                    let n = if counter == 0 { &mut alloc.turn_cc } else { &mut alloc.press_turn_cc };
-                    cc(kind, c, "rel", inv, 0.0, *n, slot, &mut ns, &mut out);
-                    *n = n.saturating_add(1);
-                }
-                None => out.skipped.push(format!("{name} {kind}: {p}: no LightCraft slider")),
+            let Some((c, inv, _)) = monogram_control(p) else {
+                out.skipped.push(format!("{name} {kind}: {p}: no LightCraft slider"));
+                continue;
+            };
+            let (Some(&kl), Some(&kr)) = (DIAL_KEYS.get(alloc.key), DIAL_KEYS.get(alloc.key + 1)) else {
+                out.skipped.push(format!("{name} {kind}: out of keys for dial turns"));
+                continue;
+            };
+            alloc.key += 2;
+            for (side, letter, dir) in [(left, kl, -1.0), (right, kr, 1.0)] {
+                let l = (letter as char).to_ascii_lowercase().to_string();
+                ns.insert(side.into(), json!({"key": l, "localCharacter": l, "modifiers": ["control", "alt", "shift"], "virtual": true}));
+                let keys = format!("Ctrl+Alt+Shift+{}", letter as char);
+                let dir = if inv { -dir } else { dir };
+                out.bindings.push(Binding::new(
+                    &keys,
+                    "keys.nudge",
+                    json!({"control": c, "dir": dir}),
+                    &format!("Monogram {name} {kind} {}", if dir < 0.0 { "−" } else { "+" }),
+                ));
+                out.mapped.push(format!(
+                    "{name} {kind} {} → key {keys} → nudge {c} {}",
+                    if side.contains("Left") || side == "leftTurn" { "left" } else { "right" },
+                    if dir < 0.0 { "−" } else { "+" }
+                ));
             }
         }
         for (slot, kind) in [("leftTurn", "left turn"), ("rightTurn", "right turn")] {
@@ -1288,7 +1313,9 @@ pub fn import_monogram(profile: &Value, app_id: &str) -> (Import, Value) {
                 // Lightroom's "adjust any slider" (↓ / ↑): LightCraft nudges the slider under the
                 // pointer with the same keys, so the keystroke goes through unchanged
                 let key = p.get("key").and_then(Value::as_str).unwrap_or("");
-                if matches!(key, "up" | "down") && p.get("input").is_none() {
+                if ns.contains_key(slot) {
+                    // a turn assignment already uses this direction
+                } else if matches!(key, "up" | "down") && p.get("input").is_none() {
                     ns.insert(slot.into(), p.clone());
                     out.mapped.push(format!("{name} {kind} → key {key} → nudge the slider under the pointer"));
                 } else {
@@ -1598,6 +1625,10 @@ pub fn import(app: &mut crate::LightcraftApp, p: &Value) -> Result<Value, String
         other => return Err(format!("keys.import: unknown source `{other}` (lrkeys|superkeys|monogram)")),
     };
     let mut f = app.keymap.file.clone();
+    if source == "monogram" {
+        // an earlier import's dial-turn CCs (relative MIDI the Core V1 never sends): replaced by keys now
+        f.midi.retain(|m| !(m.mode == "rel" && (m.label.ends_with(" turn") || m.label.ends_with(" press+turn"))));
+    }
     imp.merge_into(&mut f);
     if source == "monogram" {
         f.midi_enabled = true;
@@ -2011,18 +2042,30 @@ mod tests {
         let by = |label: &str| i.midi.iter().find(|m| m.label == label).cloned().unwrap_or_else(|| panic!("{label}: {:?}", i.midi));
         assert_eq!(by("Ak2 slider").control, "light.shadows");
         assert_eq!(by("Ak2 slider").mode, "abs");
-        assert_eq!(by("C7J turn").control, "light.exposure");
-        assert_eq!(by("C7J press+turn").control, "wb.tint");
+        // dial turns are keys (the Core V1 can't send relative MIDI): one per direction
+        let turn = |label: &str| -> Vec<(String, Value)> {
+            i.bindings.iter().filter(|b| b.label.starts_with(&format!("Monogram {label} "))).map(|b| (b.keys.clone(), b.params.clone())).collect()
+        };
+        let c7j = turn("C7J turn");
+        assert_eq!(c7j.len(), 2, "{c7j:?}");
+        assert!(c7j.iter().all(|(k, p)| k.starts_with("Ctrl+Alt+Shift+") && p["control"] == "light.exposure"));
+        assert_eq!((c7j[0].1["dir"].as_f64(), c7j[1].1["dir"].as_f64()), (Some(-1.0), Some(1.0)), "left = down, right = up");
+        assert_ne!(c7j[0].0, c7j[1].0);
+        assert!(turn("C7J press+turn").iter().all(|(_, p)| p["control"] == "wb.tint"));
         assert_eq!(by("C7J press").command, "tool.radial", "Shift+M = radial filter in Classic");
-        assert_eq!(by("H|r turn").control, "wb.temp");
-        assert_eq!(by("H|r press+turn").control, "curve.lights");
+        assert!(turn("H|r turn").iter().all(|(_, p)| p["control"] == "wb.temp"));
+        assert!(turn("H|r press+turn").iter().all(|(_, p)| p["control"] == "curve.lights"));
         assert_eq!(by("H|r press").command, "tool.wbPicker");
         assert_eq!(
             (by("H|r double-tap").command, by("H|r double-tap").params),
             ("develop.resetControl".to_string(), json!({"control": "light.blacks"}))
         );
-        assert!(by("AP> press+turn").invert && by("AP> press+turn").control == "crop.x");
-        assert_eq!(by("AP> turn").control, "crop.angle");
+        let ap = turn("AP> press+turn");
+        assert!(ap.iter().all(|(_, p)| p["control"] == "crop.x"));
+        assert_eq!(ap.get(1).and_then(|(_, p)| p["dir"].as_f64()), Some(-1.0), "invert: right turn moves left");
+        assert!(turn("AP> turn").iter().all(|(_, p)| p["control"] == "crop.angle"));
+        let all: Vec<&String> = i.bindings.iter().map(|b| &b.keys).collect();
+        assert_eq!(all.len(), all.iter().collect::<std::collections::HashSet<_>>().len(), "every dial key is its own");
         assert_eq!((by("BFo press").command, by("BFo press").params), ("preset.applyByName".to_string(), json!({"name": "BH - NMD - 7 - TD"})));
         let hold = by("BFo hold");
         assert_eq!(hold.command, "keys.macro");
@@ -2053,7 +2096,8 @@ mod tests {
         // the Monogram side sends exactly those messages
         let a = &mono["assignments"];
         assert_eq!(a["  Ak2"]["settings"]["pose"], json!({"midi": "cc", "cc": by("Ak2 slider").number, "channel": 1}));
-        assert_eq!(a["  C7J"]["settings"]["turn"]["midi"], "cc");
+        assert!(a["  C7J"]["settings"].get("turn").is_none(), "no MIDI turn left behind");
+        assert_eq!(a["  C7J"]["settings"]["rightTurn"]["modifiers"], json!(["control", "alt", "shift"]));
         assert_eq!(a["  C7J"]["settings"]["press"], json!({"midi": "note", "note": by("C7J press").number, "channel": 1}));
         assert_eq!(a["00005"]["fixedPosition"], true);
         assert_eq!(mono["app"], "ai.storyteller.lightcraft");

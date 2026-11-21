@@ -5,7 +5,7 @@
       {
         "settings": {
           "color": "#000000",
-          "info": "LightCraft: BH6 press → note 64 → view.beforeAfter {}; BH6 hold → note 65 → view.fullScreenPreview {}",
+          "info": "LightCraft: Ajn slider → cc 20 → light.highlights; Ak2 slider → cc 21 → light.shadows; BFo press → note 62 → preset.applyByName {\"name\":\"BH - NMD - 7 - TD\"}; BFo hold → note 63 → keys.macro {\"steps\":[{\"command\":\"preset.applyByName\",\"params\":{\"name\":\"BH - B&W - HardBlack\"}},{\"command\":\"photo.unflag\",\"params\":{}}]}; BH6 press → note 64 → view.beforeAfter {}; BH6 hold → note 65 → view.fullScreenPreview {}",
           "label": "Compare Before and After",
           "name": "Compare Before and After",
           "press": {
@@ -23,7 +23,7 @@
       {
         "settings": {
           "color": "#000000",
-          "info": "LightCraft: BFo press → note 62 → preset.applyByName {\"name\":\"BH - NMD - 7 - TD\"}; BFo hold → note 63 → keys.macro {\"steps\":[{\"command\":\"preset.applyByName\",\"params\":{\"name\":\"BH - B&W - HardBlack\"}},{\"command\":\"photo.unflag\",\"params\":{}}]}",
+          "info": "LightCraft: AP> press → note 60 → view.maskOverlay {}; AP> double-tap → note 61 → develop.resetControl {\"control\":\"crop.angle\"}; Ajn slider → cc 20 → light.highlights; Ak2 slider → cc 21 → light.shadows; BFo press → note 62 → preset.applyByName {\"name\":\"BH - NMD - 7 - TD\"}; BFo hold → note 63 → keys.macro {\"steps\":[{\"command\":\"preset.applyByName\",\"params\":{\"name\":\"BH - B&W - HardBlack\"}},{\"command\":\"photo.unflag\",\"params\":{}}]}",
           "label": "BH - NMD - 7 - TD",
           "name": "BH - NMD - 7 - TD",
           "press": {
@@ -41,7 +41,7 @@
       {
         "settings": {
           "color": "#000000",
-          "info": "LightCraft: BI` press → note 66 → view.fullScreenPreview {}; BI` hold → note 67 → preset.applyByName {\"name\":\"BH - Iceland - Greens\"}",
+          "info": "LightCraft: BFo press → note 62 → preset.applyByName {\"name\":\"BH - NMD - 7 - TD\"}; BFo hold → note 63 → keys.macro {\"steps\":[{\"command\":\"preset.applyByName\",\"params\":{\"name\":\"BH - B&W - HardBlack\"}},{\"command\":\"photo.unflag\",\"params\":{}}]}; BH6 press → note 64 → view.beforeAfter {}; BH6 hold → note 65 → view.fullScreenPreview {}; BI` press → note 66 → view.fullScreenPreview {}; BI` hold → note 67 → preset.applyByName {\"name\":\"BH - Iceland - Greens\"}",
           "label": "Full Screen Preview",
           "name": "Full Screen Preview",
           "press": {
@@ -68,23 +68,53 @@
       {
         "settings": {
           "color": "#000000",
-          "info": "LightCraft: C7` turn → cc 32 → light.blacks (dial); C7` press+turn → cc 52 → light.whites (dial); C7` press → note 69 → view.beforeAfter {}",
-          "label": "Blacks",
-          "name": "Blacks",
+          "info": "LightCraft: BH6 hold → note 65 → view.fullScreenPreview {}; BI` press → note 66 → view.fullScreenPreview {}; BI` hold → note 67 → preset.applyByName {\"name\":\"BH - Iceland - Greens\"}; C7J turn left → key Ctrl+Alt+Shift+E → nudge light.exposure −; C7J turn right → key Ctrl+Alt+Shift+F → nudge light.exposure +; C7J press+turn left → key Ctrl+Alt+Shift+G → nudge wb.tint −; C7J press+turn right → key Ctrl+Alt+Shift+H → nudge wb.tint +; C7J press → note 68 → tool.radial {}; C7` turn left → key Ctrl+Alt+Shift+I → nudge light.blacks −; C7` turn right → key Ctrl+Alt+Shift+J → nudge light.blacks +; C7` press+turn left → key Ctrl+Alt+Shift+K → nudge light.whites −; C7` press+turn right → key Ctrl+Alt+Shift+L → nudge light.whites +; C7` press → note 69 → view.beforeAfter {}",
+          "label": "Compare Before and After",
+          "leftTurn": {
+            "key": "i",
+            "localCharacter": "i",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
+          },
+          "name": "Compare Before and After",
           "press": {
             "channel": 1,
             "midi": "note",
             "note": 69
           },
-          "pressAndTurn": {
-            "cc": 52,
-            "channel": 1,
-            "midi": "cc"
+          "pressAndLeftTurn": {
+            "key": "k",
+            "localCharacter": "k",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
           },
-          "turn": {
-            "cc": 32,
-            "channel": 1,
-            "midi": "cc"
+          "pressAndRightTurn": {
+            "key": "l",
+            "localCharacter": "l",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
+          },
+          "rightTurn": {
+            "key": "j",
+            "localCharacter": "j",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
           }
         }
       },
@@ -96,23 +126,53 @@
             "midi": "note",
             "note": 61
           },
-          "info": "LightCraft: AP> turn → cc 30 → crop.angle (dial); AP> press+turn → cc 50 → crop.x (dial); AP> press → note 60 → view.maskOverlay {}; AP> double-tap → note 61 → develop.resetControl {\"control\":\"crop.angle\"}",
-          "label": "Straighten",
-          "name": "Straighten",
+          "info": "LightCraft: AP> turn left → key Ctrl+Alt+Shift+A → nudge crop.angle −; AP> turn right → key Ctrl+Alt+Shift+B → nudge crop.angle +; AP> press+turn left → key Ctrl+Alt+Shift+C → nudge crop.x +; AP> press+turn right → key Ctrl+Alt+Shift+D → nudge crop.x −; AP> press → note 60 → view.maskOverlay {}; AP> double-tap → note 61 → develop.resetControl {\"control\":\"crop.angle\"}",
+          "label": "Show Mask Overlay",
+          "leftTurn": {
+            "key": "a",
+            "localCharacter": "a",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
+          },
+          "name": "Show Mask Overlay",
           "press": {
             "channel": 1,
             "midi": "note",
             "note": 60
           },
-          "pressAndTurn": {
-            "cc": 50,
-            "channel": 1,
-            "midi": "cc"
+          "pressAndLeftTurn": {
+            "key": "c",
+            "localCharacter": "c",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
           },
-          "turn": {
-            "cc": 30,
-            "channel": 1,
-            "midi": "cc"
+          "pressAndRightTurn": {
+            "key": "d",
+            "localCharacter": "d",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
+          },
+          "rightTurn": {
+            "key": "b",
+            "localCharacter": "b",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
           }
         }
       },
@@ -124,91 +184,196 @@
             "midi": "note",
             "note": 73
           },
-          "info": "LightCraft: C{> right turn → key up → nudge the slider under the pointer; C{> press → note 71 → preset.applyByName {\"name\":\"BH - NMD - 7 - TD\"}; H|r turn → cc 34 → wb.temp (dial); H|r press+turn → cc 55 → curve.lights (dial); H|r press → note 72 → tool.wbPicker {}; H|r double-tap → note 73 → develop.resetControl {\"control\":\"light.blacks\"}",
-          "label": "Temp",
-          "name": "Temp",
+          "info": "LightCraft: C7J press+turn left → key Ctrl+Alt+Shift+G → nudge wb.tint −; C7J press+turn right → key Ctrl+Alt+Shift+H → nudge wb.tint +; C7J press → note 68 → tool.radial {}; C7` turn left → key Ctrl+Alt+Shift+I → nudge light.blacks −; C7` turn right → key Ctrl+Alt+Shift+J → nudge light.blacks +; C7` press+turn left → key Ctrl+Alt+Shift+K → nudge light.whites −; C7` press+turn right → key Ctrl+Alt+Shift+L → nudge light.whites +; C7` press → note 69 → view.beforeAfter {}; CEZ turn left → key Ctrl+Alt+Shift+M → nudge crop.scale −; CEZ turn right → key Ctrl+Alt+Shift+N → nudge crop.scale +; CEZ press+turn left → key Ctrl+Alt+Shift+O → nudge crop.y −; CEZ press+turn right → key Ctrl+Alt+Shift+P → nudge crop.y +; CEZ press → note 70 → keys.send {\"keys\":\"Cmd+X\"}; CJ| slider → cc 22 → light.contrast; CXd slider → cc 23 → wb.temp; C{> press+turn left → key Ctrl+Alt+Shift+Q → nudge color.saturation −; C{> press+turn right → key Ctrl+Alt+Shift+R → nudge color.saturation +; C{> left turn → key down → nudge the slider under the pointer; C{> right turn → key up → nudge the slider under the pointer; C{> press → note 71 → preset.applyByName {\"name\":\"BH - NMD - 7 - TD\"}; H|r turn left → key Ctrl+Alt+Shift+S → nudge wb.temp −; H|r turn right → key Ctrl+Alt+Shift+T → nudge wb.temp +; H|r press+turn left → key Ctrl+Alt+Shift+U → nudge curve.lights −; H|r press+turn right → key Ctrl+Alt+Shift+V → nudge curve.lights +; H|r press → note 72 → tool.wbPicker {}; H|r double-tap → note 73 → develop.resetControl {\"control\":\"light.blacks\"}",
+          "label": "White Balance Selector",
+          "leftTurn": {
+            "key": "s",
+            "localCharacter": "s",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
+          },
+          "name": "White Balance Selector",
           "press": {
             "channel": 1,
             "midi": "note",
             "note": 72
           },
-          "pressAndTurn": {
-            "cc": 55,
-            "channel": 1,
-            "midi": "cc"
+          "pressAndLeftTurn": {
+            "key": "u",
+            "localCharacter": "u",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
           },
-          "turn": {
-            "cc": 34,
-            "channel": 1,
-            "midi": "cc"
+          "pressAndRightTurn": {
+            "key": "v",
+            "localCharacter": "v",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
+          },
+          "rightTurn": {
+            "key": "t",
+            "localCharacter": "t",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
           }
         }
       },
       {
         "settings": {
-          "info": "LightCraft: CEZ turn → cc 33 → crop.scale (dial); CEZ press+turn → cc 53 → crop.y (dial); CEZ press → note 70 → keys.send {\"keys\":\"Cmd+X\"}",
-          "label": "Crop scale",
-          "name": "Crop scale",
+          "info": "LightCraft: BI` press → note 66 → view.fullScreenPreview {}; BI` hold → note 67 → preset.applyByName {\"name\":\"BH - Iceland - Greens\"}; C7J turn left → key Ctrl+Alt+Shift+E → nudge light.exposure −; C7J turn right → key Ctrl+Alt+Shift+F → nudge light.exposure +; C7J press+turn left → key Ctrl+Alt+Shift+G → nudge wb.tint −; C7J press+turn right → key Ctrl+Alt+Shift+H → nudge wb.tint +; C7J press → note 68 → tool.radial {}; C7` turn left → key Ctrl+Alt+Shift+I → nudge light.blacks −; C7` turn right → key Ctrl+Alt+Shift+J → nudge light.blacks +; C7` press+turn left → key Ctrl+Alt+Shift+K → nudge light.whites −; C7` press+turn right → key Ctrl+Alt+Shift+L → nudge light.whites +; C7` press → note 69 → view.beforeAfter {}; CEZ turn left → key Ctrl+Alt+Shift+M → nudge crop.scale −; CEZ turn right → key Ctrl+Alt+Shift+N → nudge crop.scale +; CEZ press+turn left → key Ctrl+Alt+Shift+O → nudge crop.y −; CEZ press+turn right → key Ctrl+Alt+Shift+P → nudge crop.y +; CEZ press → note 70 → keys.send {\"keys\":\"Cmd+X\"}",
+          "label": "Send Keys",
+          "leftTurn": {
+            "key": "m",
+            "localCharacter": "m",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
+          },
+          "name": "Send Keys",
           "press": {
             "channel": 1,
             "midi": "note",
             "note": 70
           },
-          "pressAndTurn": {
-            "cc": 53,
-            "channel": 1,
-            "midi": "cc"
+          "pressAndLeftTurn": {
+            "key": "o",
+            "localCharacter": "o",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
           },
-          "turn": {
-            "cc": 33,
-            "channel": 1,
-            "midi": "cc"
+          "pressAndRightTurn": {
+            "key": "p",
+            "localCharacter": "p",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
+          },
+          "rightTurn": {
+            "key": "n",
+            "localCharacter": "n",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
           }
         }
       },
       {
         "settings": {
-          "info": "LightCraft: C7J turn → cc 31 → light.exposure (dial); C7J press+turn → cc 51 → wb.tint (dial); C7J press → note 68 → tool.radial {}",
-          "label": "Exposure",
-          "name": "Exposure",
+          "info": "LightCraft: BH6 press → note 64 → view.beforeAfter {}; BH6 hold → note 65 → view.fullScreenPreview {}; BI` press → note 66 → view.fullScreenPreview {}; BI` hold → note 67 → preset.applyByName {\"name\":\"BH - Iceland - Greens\"}; C7J turn left → key Ctrl+Alt+Shift+E → nudge light.exposure −; C7J turn right → key Ctrl+Alt+Shift+F → nudge light.exposure +; C7J press+turn left → key Ctrl+Alt+Shift+G → nudge wb.tint −; C7J press+turn right → key Ctrl+Alt+Shift+H → nudge wb.tint +; C7J press → note 68 → tool.radial {}",
+          "label": "Radial Gradient",
+          "leftTurn": {
+            "key": "e",
+            "localCharacter": "e",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
+          },
+          "name": "Radial Gradient",
           "press": {
             "channel": 1,
             "midi": "note",
             "note": 68
           },
-          "pressAndTurn": {
-            "cc": 51,
-            "channel": 1,
-            "midi": "cc"
+          "pressAndLeftTurn": {
+            "key": "g",
+            "localCharacter": "g",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
           },
-          "turn": {
-            "cc": 31,
-            "channel": 1,
-            "midi": "cc"
+          "pressAndRightTurn": {
+            "key": "h",
+            "localCharacter": "h",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
+          },
+          "rightTurn": {
+            "key": "f",
+            "localCharacter": "f",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
           }
         }
       },
       {
         "settings": {
           "color": "#000000",
-          "info": "LightCraft: C{> press+turn → cc 54 → color.saturation (dial); C{> left turn → key down → nudge the slider under the pointer; C{> right turn → key up → nudge the slider under the pointer; C{> press → note 71 → preset.applyByName {\"name\":\"BH - NMD - 7 - TD\"}",
-          "label": "Saturation",
+          "info": "LightCraft: C7J turn right → key Ctrl+Alt+Shift+F → nudge light.exposure +; C7J press+turn left → key Ctrl+Alt+Shift+G → nudge wb.tint −; C7J press+turn right → key Ctrl+Alt+Shift+H → nudge wb.tint +; C7J press → note 68 → tool.radial {}; C7` turn left → key Ctrl+Alt+Shift+I → nudge light.blacks −; C7` turn right → key Ctrl+Alt+Shift+J → nudge light.blacks +; C7` press+turn left → key Ctrl+Alt+Shift+K → nudge light.whites −; C7` press+turn right → key Ctrl+Alt+Shift+L → nudge light.whites +; C7` press → note 69 → view.beforeAfter {}; CEZ turn left → key Ctrl+Alt+Shift+M → nudge crop.scale −; CEZ turn right → key Ctrl+Alt+Shift+N → nudge crop.scale +; CEZ press+turn left → key Ctrl+Alt+Shift+O → nudge crop.y −; CEZ press+turn right → key Ctrl+Alt+Shift+P → nudge crop.y +; CEZ press → note 70 → keys.send {\"keys\":\"Cmd+X\"}; CJ| slider → cc 22 → light.contrast; CXd slider → cc 23 → wb.temp; C{> press+turn left → key Ctrl+Alt+Shift+Q → nudge color.saturation −; C{> press+turn right → key Ctrl+Alt+Shift+R → nudge color.saturation +; C{> left turn → key down → nudge the slider under the pointer; C{> right turn → key up → nudge the slider under the pointer; C{> press → note 71 → preset.applyByName {\"name\":\"BH - NMD - 7 - TD\"}",
+          "label": "BH - NMD - 7 - TD",
           "leftTurn": {
             "key": "down",
             "localCharacter": "down",
             "modifiers": [],
             "virtual": true
           },
-          "name": "Saturation",
+          "name": "BH - NMD - 7 - TD",
           "press": {
             "channel": 1,
             "midi": "note",
             "note": 71
           },
-          "pressAndTurn": {
-            "cc": 54,
-            "channel": 1,
-            "midi": "cc"
+          "pressAndLeftTurn": {
+            "key": "q",
+            "localCharacter": "q",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
+          },
+          "pressAndRightTurn": {
+            "key": "r",
+            "localCharacter": "r",
+            "modifiers": [
+              "control",
+              "alt",
+              "shift"
+            ],
+            "virtual": true
           },
           "rightTurn": {
             "key": "up",
@@ -223,7 +388,7 @@
       {
         "settings": {
           "color": "#000000",
-          "info": "LightCraft: Ak2 slider → cc 21 → light.shadows",
+          "info": "LightCraft: AP> press+turn right → key Ctrl+Alt+Shift+D → nudge crop.x −; AP> press → note 60 → view.maskOverlay {}; AP> double-tap → note 61 → develop.resetControl {\"control\":\"crop.angle\"}; Ajn slider → cc 20 → light.highlights; Ak2 slider → cc 21 → light.shadows",
           "label": "Shadows",
           "name": "Shadows",
           "pose": {
@@ -236,7 +401,7 @@
       {
         "settings": {
           "color": "#000000",
-          "info": "LightCraft: CJ| slider → cc 22 → light.contrast",
+          "info": "LightCraft: BI` hold → note 67 → preset.applyByName {\"name\":\"BH - Iceland - Greens\"}; C7J turn left → key Ctrl+Alt+Shift+E → nudge light.exposure −; C7J turn right → key Ctrl+Alt+Shift+F → nudge light.exposure +; C7J press+turn left → key Ctrl+Alt+Shift+G → nudge wb.tint −; C7J press+turn right → key Ctrl+Alt+Shift+H → nudge wb.tint +; C7J press → note 68 → tool.radial {}; C7` turn left → key Ctrl+Alt+Shift+I → nudge light.blacks −; C7` turn right → key Ctrl+Alt+Shift+J → nudge light.blacks +; C7` press+turn left → key Ctrl+Alt+Shift+K → nudge light.whites −; C7` press+turn right → key Ctrl+Alt+Shift+L → nudge light.whites +; C7` press → note 69 → view.beforeAfter {}; CEZ turn left → key Ctrl+Alt+Shift+M → nudge crop.scale −; CEZ turn right → key Ctrl+Alt+Shift+N → nudge crop.scale +; CEZ press+turn left → key Ctrl+Alt+Shift+O → nudge crop.y −; CEZ press+turn right → key Ctrl+Alt+Shift+P → nudge crop.y +; CEZ press → note 70 → keys.send {\"keys\":\"Cmd+X\"}; CJ| slider → cc 22 → light.contrast",
           "label": "Contrast",
           "name": "Contrast",
           "pose": {
@@ -249,11 +414,23 @@
       {
         "settings": {
           "color": "#000000",
-          "info": "LightCraft: Ajn slider → cc 20 → light.highlights",
+          "info": "LightCraft: AP> press+turn left → key Ctrl+Alt+Shift+C → nudge crop.x +; AP> press+turn right → key Ctrl+Alt+Shift+D → nudge crop.x −; AP> press → note 60 → view.maskOverlay {}; AP> double-tap → note 61 → develop.resetControl {\"control\":\"crop.angle\"}; Ajn slider → cc 20 → light.highlights",
           "label": "Highlights",
           "name": "Highlights",
           "pose": {
             "cc": 20,
+            "channel": 1,
+            "midi": "cc"
+          }
+        }
+      },
+      {
+        "settings": {
+          "info": "LightCraft: C7J turn left → key Ctrl+Alt+Shift+E → nudge light.exposure −; C7J turn right → key Ctrl+Alt+Shift+F → nudge light.exposure +; C7J press+turn left → key Ctrl+Alt+Shift+G → nudge wb.tint −; C7J press+turn right → key Ctrl+Alt+Shift+H → nudge wb.tint +; C7J press → note 68 → tool.radial {}; C7` turn left → key Ctrl+Alt+Shift+I → nudge light.blacks −; C7` turn right → key Ctrl+Alt+Shift+J → nudge light.blacks +; C7` press+turn left → key Ctrl+Alt+Shift+K → nudge light.whites −; C7` press+turn right → key Ctrl+Alt+Shift+L → nudge light.whites +; C7` press → note 69 → view.beforeAfter {}; CEZ turn left → key Ctrl+Alt+Shift+M → nudge crop.scale −; CEZ turn right → key Ctrl+Alt+Shift+N → nudge crop.scale +; CEZ press+turn left → key Ctrl+Alt+Shift+O → nudge crop.y −; CEZ press+turn right → key Ctrl+Alt+Shift+P → nudge crop.y +; CEZ press → note 70 → keys.send {\"keys\":\"Cmd+X\"}; CJ| slider → cc 22 → light.contrast; CXd slider → cc 23 → wb.temp",
+          "label": "Temp",
+          "name": "Temp",
+          "pose": {
+            "cc": 23,
             "channel": 1,
             "midi": "cc"
           }

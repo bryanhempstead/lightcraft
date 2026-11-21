@@ -172,7 +172,8 @@ fn midi_moves_sliders_and_runs_commands() {
     .unwrap();
     let out = d.join("LightCraft.monogram");
     let r = exec(&mut h, "keys.import", json!({"source": "monogram", "path": state, "write": out}));
-    assert_eq!(r["midi"], 4, "{r}");
+    assert_eq!(r["midi"], 3, "{r}");
+    assert_eq!(r["bindings"], 2, "the Exposure dial's two turn keys: {r}");
     let mono: Value = serde_json::from_slice(&std::fs::read(&out).unwrap()).unwrap();
     // Monogram's import format: lists per module type (the slider sends a CC)
     let sliders = mono["assignments"]["slider"].as_array().unwrap();
@@ -182,11 +183,15 @@ fn midi_moves_sliders_and_runs_commands() {
     // the Shadows slider at the top
     exec(&mut h, "keys.midi", json!({"midi": "cc", "number": 20, "value": 127}));
     assert_eq!(dev(&h).light.shadows, 100.0);
-    // the Exposure dial: two ticks right (two's complement), one left (64-offset)
+    // the Exposure dial sends keys (Core V1 firmware can't send relative MIDI): Ctrl+Alt+Shift+A
+    // = one detent left, +B = right. Two right, one left = one step up.
     let e0 = dev(&h).light.exposure;
-    exec(&mut h, "keys.midi", json!({"midi": "cc", "number": 30, "value": 2}));
-    exec(&mut h, "keys.midi", json!({"midi": "cc", "number": 30, "value": 63}));
-    assert!((dev(&h).light.exposure - e0 - 0.05).abs() < 1e-4, "{}", dev(&h).light.exposure);
+    let k = |h: &mut Headless, key: &str| h.request("ui.key", json!({"key": key, "ctrl": true, "alt": true, "shift": true}), T);
+    k(&mut h, "B");
+    k(&mut h, "B");
+    k(&mut h, "A");
+    h.step();
+    assert!(dev(&h).light.exposure > e0 + 1e-6, "{} → {}", e0, dev(&h).light.exposure);
     // the dial's press = Y = before / after
     let ba = h.app.ui.before_after;
     let r = exec(&mut h, "keys.midi", json!({"bytes": [0x90, 60, 100]}));
