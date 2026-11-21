@@ -333,3 +333,37 @@ Then the colour (4b), on a dense ProPhoto HSV grid (36 hues × 10 saturations ×
 
 Not done: Highlights / Shadows and Clarity / Texture / Dehaze against spatial targets (they stay
 fitted on previews); the WB mechanism; Nautica (3 photos, ~10).
+
+## Round 5 (2026-11-21): export and display colour, fresh held-out numbers
+
+Fresh held-out set `w9` (103 photos, seed 1121, real Lightroom renders only; 96 edited, 7 default —
+round 4's B had 40 defaults, so the totals are not comparable one to one). Current build:
+**4.99 / 12.8 / 8 passing** (edited 5.26 / 13.5 / 1; defaults 1.29 / 3.2 / 7 of 7). Per camera:
+R6 5.79, Leica M 4.39, GR III 4.33, X-T2 5.66, X100F 4.21, iPhone JPEG 6.96.
+
+**Export** (`tools/lr-compare/export_check.py`: every space × JPEG / PNG 8/16 / TIFF 8/16 against a
+32-bit linear Rec.2020 render, decoded through each file's own ICC profile, cross-checked with
+LittleCMS and ColorSync): profiles carry the published primaries (≤ 1e-5) and curves exactly, and
+both CMMs read them like we do (8-bit quantisation only). But the tone curves, a creative
+profile's table and grain acted on the *output* primaries, so an Adobe RGB / P3 / ProPhoto export
+of a curved photo differed from the sRGB one (16-bit: mean 0.1–0.3, p99 up to 2.4 ΔE in gamut).
+They now act in one space for every output (ProPhoto primaries, sRGB curve — Lightroom's
+Melissa RGB; `finish::STYLE_SPACE`, CPU and GPU), and Refine Saturation keeps luminance in linear
+light. 16-bit exports now agree with the reference to ΔE 0.001–0.003 in every space. Fidelity
+(sRGB exports): 4.99 → 4.97, R6 5.79 → 5.74, other cameras within ±0.03. Test:
+`exports_in_every_space_agree_in_colour_with_curves_and_grain` (fails on the old code: 0.093).
+Still differs from Lightroom's files: our profiles are ICC v4 (Lightroom embeds the v2 "sRGB
+IEC61966-2.1" and "Adobe RGB (1998)", v4 Display P3); no Exif `ColorSpace` tag.
+
+**Display**: the window's Metal layer is untagged (egui-wgpu asks wgpu for `Srgb`, which wgpu-hal
+maps to a nil `colorspace`), so macOS does not colour-match it: a window capture on the Studio
+Display shows the theme's sRGB accent (1, 101, 221) unchanged in display space, where a managed
+sRGB value would be (41, 100, 213). The Develop view's sRGB render is therefore shown as display
+(≈ P3) values: more saturated than the export. Fix needs a P3-tagged surface (egui-wgpu has no
+option) + rendering the view in Display P3.
+
+**Biggest gap found**: lens profiles chosen by name in Lightroom are not used.
+`lcp::for_raw` matches the Exif lens only, and fisheye profiles are skipped: 213 photos use the
+Sigma 15 mm diagonal fisheye profile (adapted lens, Exif "15.0 mm") — R6 default renders with it
+are 11.0 ΔE (geometry: Lightroom de-fishes and crops), the other R6 defaults 2.7; 469 Leica M
+photos use "Voigtlander VM 50mm f1.5 Nokton" by name (Exif lens "not selected").

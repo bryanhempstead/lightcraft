@@ -240,6 +240,18 @@ fn encode_srgb(v: f32) -> f32 {
     return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
 }
 
+// `finish::STYLE_LUMA`: luminance weights of the style space (ProPhoto) the curves and grain act in.
+const STYLE_LUMA: vec3<f32> = vec3<f32>(0.288075, 0.711835, 0.00009);
+
+// sRGB-curve-encoded → linear (clamped to 0..1), `lightcraft_color::transfer::srgb_to_linear`.
+fn decode_srgb(v: f32) -> f32 {
+    let e = clamp(v, 0.0, 1.0);
+    if (e > 0.04045) {
+        return pow((e + 0.055) / 1.055, 2.4);
+    }
+    return e / 12.92;
+}
+
 fn curve(ch: u32, x: f32) -> f32 {
     let o = pu(F_CURVE_OFF) + ch * CURVE_N;
     let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
@@ -445,7 +457,7 @@ fn calibrate(c0: vec3<f32>) -> vec3<f32> {
 
 // `finish::refine_saturation`.
 fn refine_saturation(before: vec3<f32>, after: vec3<f32>, refine: f32) -> vec3<f32> {
-    let lw = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let lw = STYLE_LUMA;
     let y0 = dot(before, lw);
     let y1 = dot(after, lw);
     let s0 = (max(before.x, max(before.y, before.z)) - min(before.x, min(before.y, before.z))) / max(y0, 1e-4);
@@ -454,7 +466,14 @@ fn refine_saturation(before: vec3<f32>, after: vec3<f32>, refine: f32) -> vec3<f
         return after;
     }
     let k = clamp(pow(s0 / s1, 1.0 - refine), 0.0, 4.0);
-    return y1 + (after - y1) * k;
+    if (abs(k - 1.0) < 1e-6) {
+        return after;
+    }
+    // chroma scaled in linear light around the luminance (`finish::refine_saturation`)
+    let lin = vec3<f32>(decode_srgb(after.x), decode_srgb(after.y), decode_srgb(after.z));
+    let yl = dot(lin, lw);
+    let o = max(yl + (lin - yl) * k, vec3<f32>(0.0));
+    return vec3<f32>(ad_lin_to_srgb(o.x), ad_lin_to_srgb(o.y), ad_lin_to_srgb(o.z));
 }
 
 fn ghash(i: i32, j: i32, seed: u32) -> f32 {
@@ -762,6 +781,46 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    // --- the look: curves and grain in the style space (ProPhoto primaries, sRGB curve;
+    // `finish::STYLE_SPACE`) whatever the output space, then back to linear working colour
+    if (pu(F_CURVES) != 0u || pu(F_GRAIN) != 0u) {
+        let sm = array<vec3<f32>, 3>(
+            vec3<f32>(pf(F_ST_TO), pf(F_ST_TO + 1u), pf(F_ST_TO + 2u)),
+            vec3<f32>(pf(F_ST_TO + 3u), pf(F_ST_TO + 4u), pf(F_ST_TO + 5u)),
+            vec3<f32>(pf(F_ST_TO + 6u), pf(F_ST_TO + 7u), pf(F_ST_TO + 8u)),
+        );
+        let sb = array<vec3<f32>, 3>(
+            vec3<f32>(pf(F_ST_FROM), pf(F_ST_FROM + 1u), pf(F_ST_FROM + 2u)),
+            vec3<f32>(pf(F_ST_FROM + 3u), pf(F_ST_FROM + 4u), pf(F_ST_FROM + 5u)),
+            vec3<f32>(pf(F_ST_FROM + 6u), pf(F_ST_FROM + 7u), pf(F_ST_FROM + 8u)),
+        );
+        let sd = mul3(sm, d);
+        var e = vec3<f32>(encode_srgb(sd.x), encode_srgb(sd.y), encode_srgb(sd.z));
+        if (pu(F_CURVES) != 0u) {
+            let e0 = e;
+            e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
+            let rs = pf(F_REFINE_SAT);
+            if (rs < 1.0) {
+                e = refine_saturation(e0, e, rs);
+            }
+        }
+        if (pu(F_GRAIN) != 0u) {
+            let px = f32(x) + 0.5;
+            let py = f32(y) + 0.5;
+            let gx = pf(F_GRAIN_AFF) * px + pf(F_GRAIN_AFF + 2u) * py + pf(F_GRAIN_AFF + 4u);
+            let gy = pf(F_GRAIN_AFF + 1u) * px + pf(F_GRAIN_AFF + 3u) * py + pf(F_GRAIN_AFF + 5u);
+            let sc = pf(F_GRAIN_SC);
+            let rough = pf(F_GRAIN_ROUGH);
+            let seed = pu(F_GRAIN_SEED);
+            var g = grain_noise(gx * sc, gy * sc, seed);
+            g = g * (1.0 - rough * GRAIN_FINE_DROP) + grain_noise(gx * sc / GRAIN_COARSE, gy * sc / GRAIN_COARSE, seed ^ 0x55u) * rough * GRAIN_COARSE_WEIGHT;
+            let lum = dot(e, STYLE_LUMA);
+            let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
+            e = e + k;
+        }
+        d = mul3(sb, vec3<f32>(decode_srgb(e.x), decode_srgb(e.y), decode_srgb(e.z)));
+    }
+
     // --- gamut map to the output space (desaturate towards luminance until in range)
     let om = array<vec3<f32>, 3>(
         vec3<f32>(pf(F_OUT_M), pf(F_OUT_M + 1u), pf(F_OUT_M + 2u)),
@@ -783,30 +842,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         r = yy + (r - yy) * tg;
     }
 
-    // --- encode, curves, grain
+    // --- encode (sRGB curve, then the output's own curve)
     var e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
-    if (pu(F_CURVES) != 0u) {
-        let e0 = e;
-        e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
-        let rs = pf(F_REFINE_SAT);
-        if (rs < 1.0) {
-            e = refine_saturation(e0, e, rs);
-        }
-    }
-    if (pu(F_GRAIN) != 0u) {
-        let px = f32(x) + 0.5;
-        let py = f32(y) + 0.5;
-        let gx = pf(F_GRAIN_AFF) * px + pf(F_GRAIN_AFF + 2u) * py + pf(F_GRAIN_AFF + 4u);
-        let gy = pf(F_GRAIN_AFF + 1u) * px + pf(F_GRAIN_AFF + 3u) * py + pf(F_GRAIN_AFF + 5u);
-        let sc = pf(F_GRAIN_SC);
-        let rough = pf(F_GRAIN_ROUGH);
-        let seed = pu(F_GRAIN_SEED);
-        var g = grain_noise(gx * sc, gy * sc, seed);
-        g = g * (1.0 - rough * GRAIN_FINE_DROP) + grain_noise(gx * sc / GRAIN_COARSE, gy * sc / GRAIN_COARSE, seed ^ 0x55u) * rough * GRAIN_COARSE_WEIGHT;
-        let lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
-        let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
-        e = e + k;
-    }
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
     out[i] = enc8(e.x) | (enc8(e.y) << 8u) | (enc8(e.z) << 16u) | (255u << 24u);
 }

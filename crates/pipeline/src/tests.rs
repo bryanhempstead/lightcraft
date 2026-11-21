@@ -313,9 +313,13 @@ fn refine_saturation_tames_a_contrast_curve() {
     s.curve.refine_saturation = 0.0;
     let refined = render(&src, &info, &s, &req).image.data[0];
     assert!(sat(full) > sat(refined), "{flat:?} {full:?} {refined:?}");
-    // the curve's tone change stays
-    let y = |p: [u8; 4]| 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32;
-    assert!((y(full) - y(refined)).abs() < 2.0);
+    // the curve's tone change stays (luminance in linear light)
+    let y = |p: [u8; 4]| {
+        let l = |v: u8| lightcraft_color::transfer::decode_srgb8(v);
+        0.2126 * l(p[0]) + 0.7152 * l(p[1]) + 0.0722 * l(p[2])
+    };
+    assert!((y(full) - y(refined)).abs() < 0.03 * y(full), "{flat:?} {full:?} {refined:?}");
+    assert!((y(full) - y(flat)).abs() > 0.1 * y(flat), "the curve changes the tone: {flat:?} {full:?}");
 }
 
 #[test]

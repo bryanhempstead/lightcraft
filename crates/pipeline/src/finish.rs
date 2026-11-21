@@ -275,6 +275,17 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
 
 /// Everything the per-pixel stage computes once per render: the CPU loop below and the GPU kernel
 /// (`lightcraft-gpu`) both read their parameters from here, so the two cannot drift apart.
+/// The space the "look" stages act in: the tone curves (parametric + point), a creative profile's
+/// colour table and grain see the colour in ProPhoto primaries encoded with the sRGB curve
+/// (Lightroom's "Melissa RGB", the space of its curve and histogram), for every output space.
+/// Before 2026-11-21 they acted on the *output* primaries, so an Adobe RGB, Display P3 or ProPhoto
+/// export of a photo with a curve or a creative look differed in colour from its sRGB export (and
+/// from the screen), and the look's table only saw colours already clipped to the output gamut.
+pub const STYLE_SPACE: lightcraft_color::RgbSpace = lightcraft_color::PROPHOTO;
+/// Luminance weights of [`STYLE_SPACE`] (`PROPHOTO.luma()`, rounded), for Refine Saturation and
+/// grain on style-space colours (the GPU kernel has the same numbers).
+pub const STYLE_LUMA: [f32; 3] = [0.288_075, 0.711_835, 0.000_090];
+
 pub struct FinishParams {
     /// A LUT profile and its blend (the amount 0..2 through [`crate::lut::Lut3d::blend`]):
     /// applied to the display-encoded colour or, for a profile table, after the tone map.
@@ -294,6 +305,10 @@ pub struct FinishParams {
     pub to_out: [[f32; 3]; 3],
     pub out_luma: [f32; 3],
     pub out_trc: OutputTrc,
+    /// Linear Rec.2020 → linear [`STYLE_SPACE`] and back: where the tone curves, a creative
+    /// profile's colour table and grain act, whatever the output space (see [`STYLE_SPACE`]).
+    pub to_style: [[f32; 3]; 3],
+    pub from_style: [[f32; 3]; 3],
     /// Soft proofing (CPU only; the GPU path declines proof renders).
     pub proof: Option<crate::output::ProofParams>,
     pub hl: f32,
@@ -391,6 +406,8 @@ impl FinishParams {
             to_out: space.from_working(),
             out_luma: space.luma(),
             out_trc: space.trc(),
+            to_style: lightcraft_color::REC2020.to_space(&STYLE_SPACE).to_f32(),
+            from_style: STYLE_SPACE.to_space(&lightcraft_color::REC2020).to_f32(),
             proof: None,
             hl,
             sh,
@@ -481,10 +498,6 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
         (l, k, m)
     });
 
-    // output primaries → working (for the profile table)
-    let from_out = lightcraft_color::Mat3(fp.to_out.map(|r| r.map(f64::from)))
-        .inverse()
-        .map_or([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], |m| m.to_f32());
     let FinishParams {
         tone,
         ops,
@@ -720,6 +733,39 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
             }
 
+            // --- the look: curves, the profile's colour table (a creative profile's look, measured
+            // against Lightroom: after the curves) and grain, in the style space (ProPhoto
+            // primaries, sRGB curve) whatever the output space, so every export and the screen
+            // agree; then back to linear working colour
+            let styled = curves.is_some() || profile_lut.is_some() || grain.is_some();
+            if styled {
+                let enc_s = |v: f32| if exact { linear_to_srgb(v.clamp(0.0, 1.0)) } else { encode_srgb(srgb, v) };
+                let mut e = mul3(&fp.to_style, d).map(enc_s);
+                if let Some(l) = curves {
+                    let e0 = e;
+                    e = [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])];
+                    if fp.refine_sat < 1.0 {
+                        e = refine_saturation(e0, e, fp.refine_sat);
+                    }
+                }
+                if let Some((l, k, m)) = &profile_lut {
+                    let lin = mul3(&fp.from_style, e.map(lightcraft_color::transfer::srgb_to_linear));
+                    e = mul3(&fp.to_style, l.apply_linear(lin, *k, m)).map(enc_s);
+                }
+                if let Some((amt, cell, rough, seed)) = *grain {
+                    let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                    let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
+                    let sc = cell;
+                    let mut g = grain_noise(gx * sc, gy * sc, seed);
+                    g = g * (1.0 - rough * GRAIN_FINE_DROP)
+                        + grain_noise(gx * sc / GRAIN_COARSE, gy * sc / GRAIN_COARSE, seed ^ 0x55) * rough * GRAIN_COARSE_WEIGHT;
+                    let lum = STYLE_LUMA[0] * e[0] + STYLE_LUMA[1] * e[1] + STYLE_LUMA[2] * e[2];
+                    let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
+                    e = e.map(|v| v + k);
+                }
+                d = mul3(&fp.from_style, e.map(|v| lightcraft_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0))));
+            }
+
             // --- gamut map to the output space (desaturate towards luminance until in range);
             // soft proofing maps into the proof space first and shows that in the output space
             let mut warn = None;
@@ -740,22 +786,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             }
             r = mapped;
 
-            // --- encode, curves, grain
-            let mut e = if exact { r.map(|v| linear_to_srgb(v.clamp(0.0, 1.0))) } else { r.map(|v| encode_srgb(srgb, v)) };
-            if let Some(l) = curves {
-                let e0 = e;
-                e = [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])];
-                if fp.refine_sat < 1.0 {
-                    e = refine_saturation(e0, e, fp.refine_sat);
-                }
-            }
-            // --- the profile's colour table (a creative profile's look), on the finished colour
-            // in its own primaries and encoding (measured against Lightroom: after the curves)
-            if let Some((l, k, m)) = &profile_lut {
-                let lin = mul3(&from_out, e.map(lightcraft_color::transfer::srgb_to_linear));
-                let t = mul3(to_out, l.apply_linear(lin, *k, m));
-                e = t.map(|v| if exact { linear_to_srgb(v.clamp(0.0, 1.0)) } else { encode_srgb(srgb, v) });
-            }
+            // --- encode (sRGB curve; `store` re-encodes with the output's own curve)
+            let e = if exact { r.map(|v| linear_to_srgb(v.clamp(0.0, 1.0))) } else { r.map(|v| encode_srgb(srgb, v)) };
             if let Some(d) = &dump {
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
                 let asum: f32 = p.masks.iter().map(|m| m.alpha.data[i].max(0.0)).sum();
@@ -763,17 +795,6 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let (mx, mn) = (tone_in[0].max(tone_in[1]).max(tone_in[2]), tone_in[0].min(tone_in[1]).min(tone_in[2]));
                 let sat = if mx > 1e-12 { (mx - mn) / mx } else { 0.0 };
                 d.put(i, [l0, hs_delta, local_delta, base, l1, wb, ev_in, asum, e[0], e[1], e[2], n.x as f32, n.y as f32, sat, l_exp, 0.0]);
-            }
-            if let Some((amt, cell, rough, seed)) = *grain {
-                let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
-                let sc = cell;
-                let mut g = grain_noise(gx * sc, gy * sc, seed);
-                g = g * (1.0 - rough * GRAIN_FINE_DROP)
-                    + grain_noise(gx * sc / GRAIN_COARSE, gy * sc / GRAIN_COARSE, seed ^ 0x55) * rough * GRAIN_COARSE_WEIGHT;
-                let lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-                let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
-                e = e.map(|v| v + k);
             }
             let e = match &p_lut {
                 Some((l, k)) => {
@@ -839,12 +860,15 @@ pub fn defringe_weight(c: [f32; 3], det: f32) -> f32 {
     smooth(0.04, 0.3, det.abs()) * smooth(0.02, 0.2, purple).max(smooth(0.02, 0.2, green))
 }
 
-/// Refine Saturation: scale the curved colour's chroma (around its luma, encoded values) so its
-/// saturation (chroma / luma) moves from the curve's towards the pre-curve one: the ratio is
-/// `(s_curve / s_before)^refine`, so 1 keeps the curve, 0 restores the original saturation.
+/// Refine Saturation: scale the curved colour's chroma so its saturation (chroma / luma of the
+/// encoded values) moves from the curve's towards the pre-curve one by the ratio
+/// `(s_before / s_curve)^(1 - refine)` (1 keeps the curve, 0 about restores the original
+/// saturation). The chroma is scaled in linear light around the colour's luminance, so the
+/// curve's tone change stays whatever the colour.
 #[inline]
 pub fn refine_saturation(before: [f32; 3], after: [f32; 3], refine: f32) -> [f32; 3] {
-    let luma = |e: [f32; 3]| 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+    use lightcraft_color::transfer::srgb_to_linear;
+    let luma = |e: [f32; 3]| STYLE_LUMA[0] * e[0] + STYLE_LUMA[1] * e[1] + STYLE_LUMA[2] * e[2];
     let chroma = |e: [f32; 3]| e[0].max(e[1]).max(e[2]) - e[0].min(e[1]).min(e[2]);
     let (y0, y1) = (luma(before), luma(after));
     let s0 = chroma(before) / y0.max(1e-4);
@@ -853,7 +877,12 @@ pub fn refine_saturation(before: [f32; 3], after: [f32; 3], refine: f32) -> [f32
         return after;
     }
     let k = (s0 / s1).powf(1.0 - refine).clamp(0.0, 4.0);
-    after.map(|v| y1 + (v - y1) * k)
+    if (k - 1.0).abs() < 1e-6 {
+        return after;
+    }
+    let lin = after.map(|v| srgb_to_linear(v.clamp(0.0, 1.0)));
+    let y = luma(lin);
+    lin.map(|v| linear_to_srgb((y + (v - y) * k).max(0.0)))
 }
 
 pub const SRGB_LUT_N: usize = 4096;
@@ -891,17 +920,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn style_luma_is_the_style_spaces_luminance() {
+        for (a, b) in STYLE_LUMA.iter().zip(STYLE_SPACE.luma()) {
+            assert!((f64::from(*a) - b).abs() < 1e-5, "{STYLE_LUMA:?} vs {:?}", STYLE_SPACE.luma());
+        }
+    }
+
+    #[test]
     fn refine_saturation_restores_the_pre_curve_saturation() {
         let before = [0.5, 0.3, 0.2];
         let after = [0.7, 0.35, 0.15]; // a contrasty curve: more saturated
         assert_eq!(refine_saturation(before, after, 1.0), after);
         let r = refine_saturation(before, after, 0.0);
-        let sat = |e: [f32; 3]| (e[0] - e[2]) / (0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2]);
-        assert!((sat(r) - sat(before)).abs() < 1e-4, "{r:?}");
+        let y = |e: [f32; 3]| STYLE_LUMA[0] * e[0] + STYLE_LUMA[1] * e[1] + STYLE_LUMA[2] * e[2];
+        let sat = |e: [f32; 3]| (e[0] - e[2]) / y(e);
+        assert!((sat(r) - sat(before)).abs() < 0.15 * sat(before), "{r:?}");
         let half = refine_saturation(before, after, 0.5);
-        assert!(sat(half) > sat(before) && sat(half) < sat(after));
-        // luma is kept
-        let y = |e: [f32; 3]| 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+        assert!(sat(half) > sat(r) && sat(half) < sat(after));
+        // luminance (linear light) is kept
+        let lin = |e: [f32; 3]| e.map(lightcraft_color::transfer::srgb_to_linear);
+        let (r, after) = (lin(r), lin(after));
         assert!((y(r) - y(after)).abs() < 1e-5);
     }
 

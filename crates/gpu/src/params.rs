@@ -77,6 +77,9 @@ const FIELDS: &[(&str, usize)] = &[
     ("SHADOW_TINT", 1),
     ("OUT_M", 9),
     ("OUT_Y", 3),
+    // linear Rec.2020 ↔ the style space of the curves and grain (`finish::STYLE_SPACE`)
+    ("ST_TO", 9),
+    ("ST_FROM", 9),
     ("OUT_TRC", 1),
     ("OUT_GAMMA", 1),
     // Adobe camera base (Bryan's fork, `lightcraft_pipeline::adobe::Finish`): ProPhoto matrices,
@@ -285,6 +288,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     }
     p.fs("OUT_M", fp.to_out.as_flattened());
     p.fs("OUT_Y", &fp.out_luma);
+    p.fs("ST_TO", fp.to_style.as_flattened());
+    p.fs("ST_FROM", fp.from_style.as_flattened());
     let (trc, gamma) = fp.out_trc.code();
     p.u("OUT_TRC", trc);
     p.f("OUT_GAMMA", gamma);

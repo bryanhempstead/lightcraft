@@ -2019,6 +2019,50 @@ mod tests {
         assert!(encode_rendered(&r16, &o, None).is_ok());
     }
 
+    /// An edit with tone curves, Refine Saturation and grain exported in every colour space decodes
+    /// (through each file's own embedded profile) to the same colours wherever the space can hold
+    /// them: the curves and grain act in one space whatever the output (`finish::STYLE_SPACE`, as
+    /// in Lightroom). Before 2026-11-21 they acted on the output primaries, and an Adobe RGB or P3
+    /// export of a curved photo differed from its sRGB export by up to ~2 ΔE.
+    #[test]
+    fn exports_in_every_space_agree_in_colour_with_curves_and_grain() {
+        use lightcraft_geom::Point;
+        let src = lightcraft_raster::Rgb32f::from_fn(96, 64, |x, y| {
+            let (u, v) = (x as f32 / 95.0, y as f32 / 63.0);
+            // moderately saturated colours all around the hue circle, dark to bright
+            let h = u * std::f32::consts::TAU;
+            let l = 0.03 + 0.5 * v;
+            [l * (1.0 + 0.5 * h.cos()), l * (1.0 + 0.5 * (h - 2.1).cos()), l * (1.0 + 0.5 * (h + 2.1).cos())]
+        });
+        let mut s = lightcraft_develop::DevelopSettings::default();
+        s.curve.master = vec![Point::new(0.0, 0.0), Point::new(0.3, 0.2), Point::new(0.7, 0.82), Point::new(1.0, 1.0)];
+        s.curve.red = vec![Point::new(0.0, 0.04), Point::new(0.5, 0.56), Point::new(1.0, 1.0)];
+        s.curve.refine_saturation = 60.0;
+        s.grain.amount = 25.0;
+        let info = lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() };
+        let export = |space| {
+            let req = lightcraft_pipeline::RenderRequest { space, depth: OutputDepth::U16, ..lightcraft_pipeline::RenderRequest::fit(96, 64) };
+            let r = lightcraft_pipeline::render(&src, &info, &s, &req);
+            let o = ExportOptions { format: ExportFormat::Tiff, color_space: space, bit_depth: Some(16), ..Default::default() };
+            let d = lightcraft_codecs::decode(&encode_rendered(&r, &o, None).unwrap(), Default::default()).expect("decodes");
+            assert_eq!(d.space.named, Some(named_space(space)), "{space:?}");
+            let m = d.space.to_space(&lightcraft_color::SRGB);
+            (0..64).flat_map(|y| (0..96).map(move |x| (x, y))).map(|(x, y)| m.apply_f32(d.image.get(x, y))).collect::<Vec<[f32; 3]>>()
+        };
+        let reference = export(OutputSpace::Srgb);
+        for space in [OutputSpace::DisplayP3, OutputSpace::AdobeRgb, OutputSpace::ProPhoto, OutputSpace::Rec2020] {
+            let px = export(space);
+            let mut worst = 0.0f32;
+            for (a, b) in reference.iter().zip(&px) {
+                // only where the sRGB export is not clipped
+                if a.iter().all(|v| (0.003..0.997).contains(v)) {
+                    worst = a.iter().zip(b).map(|(a, b)| (a - b).abs()).fold(worst, f32::max);
+                }
+            }
+            assert!(worst < 0.004, "{space:?}: linear sRGB differs by up to {worst} from the sRGB export");
+        }
+    }
+
     #[test]
     fn float_tiff_is_linear_with_a_linear_profile() {
         let o = ExportOptions { format: ExportFormat::Tiff, bit_depth: Some(32), color_space: OutputSpace::ProPhoto, ..Default::default() };
