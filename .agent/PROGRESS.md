@@ -6,6 +6,21 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (Claude, 2026-11-21 audit) **Rundown — Bryan's asks and where they stand** (from his messages 10-08…11-21):
+  - ✅ Lightroom catalog moved over and in sync: LightCraft 13,865 photos; LR-Cat2 has nothing captured after 10-09 (checked a copy of the .lrcat). Folders, collections, 187 presets, looks, keymap, LrSuperKeys, MIDI.
+  - ✅ Pipeline wiring (brain app LC. buttons, `library.folderStatus` / `importRated` / `app.export`, photo app. lr/lc/both): commands answer live.
+  - ✅ Library | Develop split, Import window, filmstrip, Classic right panel; shoots. area; any format (CR3, HEIC via macOS; Sony A7S III ARW checked 11-21: 0.7 s full render, Adobe Standard DCP installed).
+  - 🟡 Colour = Lightroom ("if this doesn't work I can't use this application"): held-out mean ΔE 3.95, 24/103 photos pass. Still visible side by side on edited photos. Next round: Highlights/Shadows + Clarity/Texture/Dehaze spatial match, custom-WB 2× (non-Leica), X-T2 extreme Temp.
+  - 🟡 Monogram: bridge built 10-08 but **LightCraft.monogram was never imported into Monogram Creator** (its state.json has only "Lightroom 1") — and it couldn't have worked: Monogram's importer (`Su`, service.js) reads `.monogram` assignments as LISTS per module type in the console's local-id order, so the uuid-keyed file imported empty. Fixed 11-21: `keymap::monogram_file` + `monogram_layout` (order from Monogram's own "Layout Updated" log line, read-only); `tools/monogram/LightCraft.monogram` regenerated. Hardware = Palette Gear Core V1 with its own USB-MIDI port; LightCraft's MIDI in hears it ("Palette Multi-function Device"). All 30 controls map (C{> ↓/↑ "adjust any slider" passes through to LightCraft's hover-nudge). Still untested end to end: needs Bryan to import the file in Monogram Creator and turn a dial. Protocol notes: `~/.hammerspoon/devices/re/MONOGRAM.md`.
+  - Bryan doesn't want Slideshow / Print / Book / Web (10-08: "I don't need … slideshow or layout") — keep them off the priority list.
+- [ ] (Claude, 2026-11-21) **Improvements vs Lightroom Classic, ranked for his wedding work:**
+  1. Colour round 5 (above) — the one blocker.
+  2. True 1:1 zoom: previews cap at 2,560 px, so 100 % isn't real pixels on a 24 MP M262/R6 file → focus checks while culling are unreliable (LR-VIEW-ZOOM, P0).
+  3. AI Denoise (Detail panel "Denoise…") — he shoots receptions at high ISO; LR's most-used Enhance.
+  4. Subject / Sky / People masks (SAM 3 is in `crates/segment`; weights need a mirror or manual install).
+  5. Detail panel 1:1 loupe box (LR shows a small zoomed preview above Sharpening).
+  6. Upstream storytold merges (60+ commits incl. wider preview fallback) — optional now.
+- [x] (Claude, 2026-11-21) Fixed: Temp slider was linear 2,000–50,000 K (daylight at 7 % of the track, ~340 K per pixel) → Lightroom-like non-linear track (`widgets::track_frac`); Leica's "not selected" lens tag hidden in the info overlay; unrated grid cells show five quiet dots instead of an empty footer; native menu leaves Tab / ⇧Tab to the app (the `shortcuts_map_to_accelerators` failure); Monogram ↓/↑ pass-through.
 - [x] (Hermes, 2026-10-11) Round-4 apply steps DONE: rebuilt (cargo 1.99, 40s), `library.rematchProfiles readCatalog=true` real run — 6,983 adobe:Adobe Color / 117 Standard / 56 Monochrome, lensCorrectionsOn 116, verified live in catalog.snap (seq 3014). App restarted via brain-app launcher so sources re-decode on the Adobe base (cache key changed).
 - [ ] Open colour items: Highlights / Shadows and Clarity / Texture / Dehaze vs spatial targets; why Lightroom's custom WB moves 2× (Leica 1×); X-T2 at 34 600 K; Nautica.
 - [x] (HEIC, 2026-10-11) `migrate-lightroom --only-new` is a no-op now (imported 0, 4,047 duplicates) — 50 HEIC incl. all 35 stragglers already in catalog (verified in catalog.snap). `library.importFailures` empty. Only remaining bit: app restart so the running app decodes HEIC too.
