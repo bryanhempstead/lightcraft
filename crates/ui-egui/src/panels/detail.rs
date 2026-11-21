@@ -504,7 +504,8 @@ fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &li
             }
             // Leica bodies write "not selected" for an uncoded lens: that's no lens name
             let lens = if m.lens.trim().eq_ignore_ascii_case("not selected") { "" } else { m.lens.as_str() };
-            let camera = [m.camera.as_str(), lens].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
+            let model = camera_model(&m.camera);
+            let camera = [model, lens].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
             let mut v = vec![photo.file_name.clone()];
             v.push(if exp.is_empty() { "No exposure information".into() } else { exp.join("  ") });
             if !camera.is_empty() {
@@ -517,14 +518,49 @@ fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &li
     let mut y = canvas.top() + 12.0;
     for (i, l) in lines.iter().enumerate() {
         let font = if i == 0 { t.semibold(15.0) } else { t.font(12.5) };
-        let g = p.layout_no_wrap(l.clone(), font, Color32::WHITE);
+        // PLACEHOLDER: the colour given to `galley` is the one drawn (black shadow, white text) —
+        // laid out white, the "shadow" was a second white copy and every line looked doubled
+        let g = p.layout_no_wrap(l.clone(), font, Color32::PLACEHOLDER);
         let at = pos2(canvas.left() + 14.0, y);
         // a soft shadow keeps the text readable on bright photos
-        p.galley(at + vec2(1.0, 1.0), g.clone(), Color32::from_black_alpha(200));
+        p.galley(at + vec2(0.0, 1.0), g.clone(), Color32::from_black_alpha(150));
         p.galley(at, g.clone(), Color32::WHITE);
         y += g.size().y + 3.0;
     }
     register(p.ctx(), "canvas:infoOverlay", Rect::from_min_max(canvas.min, pos2(canvas.left() + 320.0, y)));
+}
+
+/// The camera as Lightroom shows it (the Exif model): the stored "make model" loses the make when
+/// the model repeats it — "Canon Canon EOS R6" → "Canon EOS R6", "Leica Camera AG LEICA M (Typ 262)"
+/// → "LEICA M (Typ 262)"; "Canon EOS R6" or "SONY ILCE-7M3" stay as they are.
+pub(crate) fn camera_model(camera: &str) -> &str {
+    let words: Vec<&str> = camera.split_whitespace().collect();
+    let Some(first) = words.first() else { return camera.trim() };
+    for k in 1..words.len() {
+        if words[k].eq_ignore_ascii_case(first) {
+            // the model starts at the k-th word: return the rest of the original text
+            let mut rest = camera.trim_start();
+            for w in &words[..k] {
+                rest = rest.trim_start().strip_prefix(w).unwrap_or(rest);
+            }
+            return rest.trim();
+        }
+    }
+    camera.trim()
+}
+
+#[cfg(test)]
+mod camera_model_tests {
+    #[test]
+    fn camera_model_drops_a_repeated_make() {
+        use super::camera_model;
+        assert_eq!(camera_model("Canon Canon EOS R6"), "Canon EOS R6");
+        assert_eq!(camera_model("Leica Camera AG LEICA M (Typ 262)"), "LEICA M (Typ 262)");
+        assert_eq!(camera_model("RICOH IMAGING COMPANY, LTD. RICOH GR III"), "RICOH GR III");
+        assert_eq!(camera_model("Canon EOS R6"), "Canon EOS R6");
+        assert_eq!(camera_model("SONY ILCE-7M3"), "SONY ILCE-7M3");
+        assert_eq!(camera_model("  "), "");
+    }
 }
 
 /// What the user did to a face box this frame.
