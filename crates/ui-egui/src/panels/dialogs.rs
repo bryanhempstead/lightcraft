@@ -463,12 +463,16 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     group_checklist(ui, "presetInclude", groups);
                 }
                 Dialog::CopySettings { groups } => group_checklist(ui, "copyGroup", groups),
-                Dialog::SyncSettings { groups, match_exposure, auto_align } => {
+                Dialog::SyncSettings { groups, match_exposure, auto_align, match_color } => {
                     let n = app.session.selection.ids.len().saturating_sub(1);
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Copy to {n} other selected photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
                     group_checklist(ui, "syncGroup", groups);
                     ui.add_space(12.0);
                     ui.label(egui::RichText::new(crate::i18n::tr("Then, on each photo")).color(t.text_dim));
+                    let r = ui.checkbox(match_color, crate::i18n::tr("Match camera & lens color")).on_hover_text(crate::i18n::tr(
+                        "Make each photo's colour match this one when it was shot on another camera, lens or phone: a colour chart through both cameras' own colour profiles sets White Balance, HSL, Calibration and Saturation (ordinary sliders you can still change); lens and phone casts are learned from your own edits; photos shot within 30 minutes of this one also even out their neutrals",
+                    ));
+                    crate::widgets::register(ui.ctx(), "syncGroup:matchColor", r.rect);
                     let r = ui.checkbox(match_exposure, crate::i18n::tr("Match exposure")).on_hover_text(crate::i18n::tr(
                         "Set each photo's Exposure so it comes out as bright as this one — measured on the finished look, so photos shot 4 stops under or 3 over all land on it",
                     ));
@@ -478,7 +482,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         .on_hover_text(crate::i18n::tr("Level each photo's horizon (or plumb lines) with its crop angle"));
                     crate::widgets::register(ui.ctx(), "syncGroup:autoAlign", r.rect);
                     // remembered as checked, even when the dialog is cancelled
-                    let now = crate::state::SyncPrefs { groups: Some(groups.clone()), match_exposure: *match_exposure, auto_align: *auto_align };
+                    let now = crate::state::SyncPrefs { groups: Some(groups.clone()), match_exposure: *match_exposure, auto_align: *auto_align, match_color: *match_color };
                     if app.ui.sync_prefs != now {
                         app.ui.sync_prefs = now;
                     }
@@ -1085,9 +1089,10 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }),
         ),
         Dialog::CopySettings { groups } => app.run("develop.copy", json!({"groups": groups})),
-        Dialog::SyncSettings { groups, match_exposure, auto_align } => {
-            app.run("develop.sync", json!({"groups": groups, "matchExposure": match_exposure, "autoAlign": auto_align}))
-        }
+        Dialog::SyncSettings { groups, match_exposure, auto_align, match_color } => app.run(
+            "develop.sync",
+            json!({"groups": groups, "matchExposure": match_exposure, "autoAlign": auto_align, "matchCameraColor": match_color}),
+        ),
         Dialog::PasteSettings { groups } => app.run("develop.paste", json!({"groups": groups})),
         Dialog::Export { opts, full_size, resize, limit_kb, dir, .. } => {
             let mut p = export_dialog_params(opts, *full_size, resize, *limit_kb);

@@ -372,12 +372,15 @@ fn sync_dialog_remembers_its_checkboxes() {
     let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
     exec(&mut h, "library.select", json!({"ids": ids}));
     exec(&mut h, "dialog.syncSettings", json!({}));
-    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align }) = h.app.ui.dialog.clone() else { panic!("no sync dialog") };
-    assert!(!match_exposure && !auto_align, "match exposure / auto align start off");
+    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align, match_color }) = h.app.ui.dialog.clone() else {
+        panic!("no sync dialog")
+    };
+    assert!(!match_exposure && !auto_align && !match_color, "match exposure / auto align / match colour start off");
     // tick Match exposure, untick the first group, then cancel
     let first = groups[0].clone();
-    if let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, .. }) = &mut h.app.ui.dialog {
+    if let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, match_color, .. }) = &mut h.app.ui.dialog {
         *match_exposure = true;
+        *match_color = true;
         groups.retain(|g| *g != first);
     }
     h.step();
@@ -386,8 +389,10 @@ fn sync_dialog_remembers_its_checkboxes() {
     let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&h.app.ui).unwrap()).unwrap();
     h.app.ui.sync_prefs = back.sync_prefs;
     exec(&mut h, "dialog.syncSettings", json!({}));
-    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align }) = h.app.ui.dialog.clone() else { panic!("no sync dialog") };
-    assert!(match_exposure && !auto_align);
+    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align, match_color }) = h.app.ui.dialog.clone() else {
+        panic!("no sync dialog")
+    };
+    assert!(match_exposure && !auto_align && match_color);
     assert!(!groups.contains(&first), "{first} stays unchecked");
 }
 

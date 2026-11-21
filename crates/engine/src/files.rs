@@ -224,13 +224,66 @@ pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo),
     rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge))
 }
 
+/// A synthetic target "photographed" by a raw file's camera ([`chart_source`], `camera_match`):
+/// scene colours (linear Rec.2020 D65, one per pixel, `width × height`), lit by `white` (the
+/// file's own as-shot white when `None`); the camera's as-shot white balance takes that light.
+#[derive(Clone, Debug, Default)]
+pub struct ChartShot {
+    pub pixels: Vec<[f32; 3]>,
+    pub width: usize,
+    pub height: usize,
+    pub white: Option<lightcraft_color::Xy>,
+}
+
+impl ChartShot {
+    /// Camera RGB (before white balance) whose colour stage `m · (p ⊙ wb) · gain` gives each scene
+    /// colour back: the camera's own matrix inverted, so what differs between cameras is what
+    /// follows it (hue/sat map, look table, tone curve, white-balance model).
+    fn camera_image(&self, m: &lightcraft_color::Mat3, wb: [f32; 3], gain: f32) -> Result<Rgb32f, String> {
+        let inv = m.inverse().ok_or("the camera matrix is singular")?;
+        if self.width.checked_mul(self.height) != Some(self.pixels.len()) || self.pixels.is_empty() || !(gain.is_finite() && gain > 0.0) {
+            return Err("bad chart".into());
+        }
+        let mut img = Rgb32f::new(self.width, self.height);
+        for (o, p) in img.data.iter_mut().zip(&self.pixels) {
+            let c = inv.apply(p.map(|v| f64::from(v) / f64::from(gain)));
+            *o = std::array::from_fn(|i| (c[i] / f64::from(wb[i]).max(1e-6)) as f32);
+        }
+        Ok(img)
+    }
+}
+
+/// [`ChartShot`] through the raw decode of `bytes`, exactly as the file's own pixels go (Adobe
+/// base or LightCraft's colour; not scaled or oriented), with the file's source info and the
+/// white it was lit by. Raw files only.
+pub fn chart_source(bytes: &[u8], chart: &ChartShot) -> Result<(Rgb32f, SourceInfo, lightcraft_color::Xy), String> {
+    if lightcraft_raw::probe(bytes).is_none() {
+        return Err("not a raw file".into());
+    }
+    load_raw(std::borrow::Cow::Borrowed(bytes), usize::MAX, Some(chart))
+}
+
 fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
+        return load_raw(bytes, max_edge, None).map(|(img, info, _)| (img, info));
+    }
+    load_rendered(bytes, max_edge)
+}
+
+fn load_raw(
+    bytes: std::borrow::Cow<'_, [u8]>,
+    max_edge: usize,
+    chart: Option<&ChartShot>,
+) -> Result<(Rgb32f, SourceInfo, lightcraft_color::Xy), String> {
+    {
         let mut raw = match lightcraft_raw::decode(&bytes).map_err(|e| preview_reason(&bytes, e)) {
             Ok(r) => r,
+            Err(Ok(why)) if chart.is_some() => return Err(format!("unsupported raw ({why})")),
             Err(Ok(why)) => {
                 // show the camera's embedded JPEG (rendered, not raw) until the variant is supported
-                return load_embedded_preview(&bytes, max_edge).ok_or(format!("unsupported raw ({why}) without an embedded preview"));
+                return load_embedded_preview(&bytes, max_edge)
+                    .map(|(img, info)| (img, info, lightcraft_color::D65))
+                    .ok_or(format!("unsupported raw ({why}) without an embedded preview"));
             }
             Err(Err(e)) => return Err(e),
         };
@@ -238,6 +291,10 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
         // (removed before the camera look's binned sensor proxy too, which needs an empty `OpcodeList3`).
         let lens = embedded_lens(&raw.info());
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+        if let Some(w) = chart.and_then(|c| c.white) {
+            // the chart's light: the camera's as-shot white balance takes it too
+            raw.color.as_shot_white_xy = Some(w);
+        }
         let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
         let t = lightcraft_raw::color::camera_transform(&raw, xy);
         // Bryan's fork: the camera's Adobe Standard profile, through Adobe's DNG SDK
@@ -248,36 +305,43 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
             .and_then(|m| crate::adobe::standard_for(raw.metadata.make.as_deref(), m))
             .and_then(|cam| crate::adobe::decode_color(&cam, &raw).map(|c| (cam, c)));
         if let Some((cam, color)) = adobe {
-            return load_adobe(raw, lens, max_edge, &cam, color);
+            return load_adobe(raw, lens, max_edge, &cam, color, chart).map(|(img, info)| (img, info, xy));
         }
         let lightroom = crate::camera_preview::lightroom_look(&raw, &t);
         let from_lightroom = lightroom.is_some();
         let camera_look = lightroom.or_else(|| crate::camera_preview::fit_preview(&raw, &bytes, &t));
         drop(bytes);
+        let m64 = camera_look.as_ref().map(|p| p.matrix.mul(&t.matrix)).unwrap_or(t.matrix);
+        let m = m64.to_f32();
+        let hue_sat = camera_look.as_ref().and_then(|p| p.hue_sat.as_ref()).and_then(crate::camera_preview::HueSat::new);
+        let gain = 2f32.powf(t.baseline_exposure as f32);
+        let wb = t.wb;
         // Previews and thumbnails bin the mosaic straight to (about) the size they need; only
         // larger levels (exports, 1:1) demosaic the whole sensor.
         let t0 = web_time::Instant::now();
-        let binned = match bin_factor(&raw, max_edge) {
-            Some(k) => raw.develop_binned(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,
-            None => None,
-        };
-        let mut img = match binned {
-            Some(img) => img,
+        let mut stages = Vec::new();
+        let mut img = match chart {
+            Some(ch) => ch.camera_image(&m64, wb, gain)?,
             None => {
-                let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-                raw.develop(method).map_err(|e| e.to_string())?
+                let binned = match bin_factor(&raw, max_edge) {
+                    Some(k) => raw.develop_binned(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,
+                    None => None,
+                };
+                let mut img = match binned {
+                    Some(img) => img,
+                    None => {
+                        let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
+                        raw.develop(method).map_err(|e| e.to_string())?
+                    }
+                };
+                stages.push(("develop", t0.elapsed()));
+                lightcraft_raw::highlight::reconstruct(&mut img, t.wb, HIGHLIGHT_CLIP);
+                stages.push(("highlights", t0.elapsed()));
+                img
             }
         };
         // the samples aren't needed any more (the colour model below reads only the tags)
         raw.data = lightcraft_raw::RawData::U16(Vec::new());
-        let mut stages = vec![("develop", t0.elapsed())];
-        stages.push(("transform", t0.elapsed()));
-        lightcraft_raw::highlight::reconstruct(&mut img, t.wb, HIGHLIGHT_CLIP);
-        stages.push(("highlights", t0.elapsed()));
-        let m = camera_look.as_ref().map(|p| p.matrix.mul(&t.matrix)).unwrap_or(t.matrix).to_f32();
-        let hue_sat = camera_look.as_ref().and_then(|p| p.hue_sat.as_ref()).and_then(crate::camera_preview::HueSat::new);
-        let gain = 2f32.powf(t.baseline_exposure as f32);
-        let wb = t.wb;
         // A DNG's own profile look (hue/saturation map, look table), DNG spec chapter 6.
         // (a Lightroom-matched camera profile replaces the file's own profile look)
         let tables = if from_lightroom {
@@ -300,10 +364,8 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
             hue_sat.as_ref().map_or(rgb, |h| h.apply(rgb)).map(|v| v.max(0.0))
         });
         stages.push(("colour", t0.elapsed()));
-        let img = fit(&img, max_edge, max_edge, Filter::Box);
-        stages.push(("fit", t0.elapsed()));
-        let img = img.into_oriented(raw.orientation);
-        stages.push(("orient", t0.elapsed()));
+        let img = if chart.is_some() { img } else { fit(&img, max_edge, max_edge, Filter::Box).into_oriented(raw.orientation) };
+        stages.push(("fit + orient", t0.elapsed()));
         if lightcraft_pipeline::profiling() {
             let mut prev = std::time::Duration::ZERO;
             let parts: Vec<String> = stages
@@ -374,9 +436,10 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
                     native_long,
                     adobe: None,
                 },
+                xy,
             ));
         }
-        return Ok((
+        Ok((
             img,
             SourceInfo {
                 raw: true,
@@ -390,8 +453,13 @@ fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<
                 native_long,
                 adobe: None,
             },
-        ));
+            xy,
+        ))
     }
+}
+
+/// A rendered (display-referred or deep) file: decoded to linear Rec.2020, scaled, oriented.
+fn load_rendered(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
     let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::fit(max_edge as u32, max_edge as u32)).map_err(|e| e.to_string())?;
     drop(bytes);
     let img = d.to_working();
@@ -420,24 +488,31 @@ fn load_adobe(
     max_edge: usize,
     cam: &crate::adobe::Camera,
     color: crate::adobe::DecodeColor,
+    chart: Option<&ChartShot>,
 ) -> Result<(Rgb32f, SourceInfo), String> {
     let t0 = web_time::Instant::now();
-    let binned = match bin_factor(&raw, max_edge) {
-        Some(k) => raw.develop_binned(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,
-        None => None,
-    };
-    let mut img = match binned {
-        Some(img) => img,
-        None => {
-            let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-            raw.develop(method).map_err(|e| e.to_string())?
-        }
-    };
-    raw.data = lightcraft_raw::RawData::U16(Vec::new());
-    lightcraft_raw::highlight::reconstruct(&mut img, color.wb, HIGHLIGHT_CLIP);
     let m = color.matrix.to_f32();
     let wb = color.wb;
     let gain = 2f32.powf(color.gain_ev as f32);
+    let mut img = match chart {
+        Some(ch) => ch.camera_image(&color.matrix, wb, gain)?,
+        None => {
+            let binned = match bin_factor(&raw, max_edge) {
+                Some(k) => raw.develop_binned(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,
+                None => None,
+            };
+            let mut img = match binned {
+                Some(img) => img,
+                None => {
+                    let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
+                    raw.develop(method).map_err(|e| e.to_string())?
+                }
+            };
+            lightcraft_raw::highlight::reconstruct(&mut img, color.wb, HIGHLIGHT_CLIP);
+            img
+        }
+    };
+    raw.data = lightcraft_raw::RawData::U16(Vec::new());
     let tables = color.hue_sat.clone().and_then(|h| {
         let look = lightcraft_raw::profile::ProfileLook { hue_sat_map: [Some(h), None], ..Default::default() };
         lightcraft_raw::profile::ProfileTables::new(&look, 1.0)
@@ -455,7 +530,7 @@ fn load_adobe(
         }
         .map(|v| v.max(0.0))
     });
-    let img = fit(&img, max_edge, max_edge, Filter::Box).into_oriented(raw.orientation);
+    let img = if chart.is_some() { img } else { fit(&img, max_edge, max_edge, Filter::Box).into_oriented(raw.orientation) };
     if lightcraft_pipeline::profiling() {
         eprintln!(
             "[profile] raw source (Adobe {}) {}×{} in {:.1} ms",

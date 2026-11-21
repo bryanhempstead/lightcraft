@@ -633,7 +633,7 @@ fn sqlite3() -> PathBuf {
     if sys.is_file() { sys.to_path_buf() } else { PathBuf::from("sqlite3") }
 }
 
-fn query(db: &Path, sql: &str) -> Result<Vec<Value>, String> {
+pub(crate) fn query(db: &Path, sql: &str) -> Result<Vec<Value>, String> {
     let out = std::process::Command::new(sqlite3())
         .arg("-json")
         .arg(db)

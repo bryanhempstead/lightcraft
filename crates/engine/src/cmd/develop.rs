@@ -765,20 +765,25 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sync Settings",
             [],
             None,
-            "{groups?, matchExposure?: bool, autoAlign?: bool} — copy the active photo's settings to all selected photos; matchExposure then sets each one's Exposure so it renders as bright as the active photo (however far over / under it was shot); autoAlign levels each one's horizon → {changed, matched, aligned}",
+            "{groups?, matchExposure?: bool, autoAlign?: bool, matchCameraColor?: bool, scene?: bool} — copy the active photo's settings to all selected photos; matchCameraColor then matches each one's colour to the active photo across cameras / lenses / phones (develop.matchCameraColor); matchExposure sets each one's Exposure so it renders as bright as the active photo (however far over / under it was shot); autoAlign levels each one's horizon → {changed, matched, aligned, colour: [per photo]}",
             has_selection,
             |s, p| {
                 let id = active(s, "develop.sync")?;
                 let groups = groups_param(p).unwrap_or_else(SettingsGroup::default_copy);
                 let (match_exp, align) = (bool_or(p, "matchExposure", false), bool_or(p, "autoAlign", false));
+                let match_colour = bool_or(p, "matchCameraColor", false);
+                let scene = p.get("scene").and_then(Value::as_bool);
                 let d = s.develop_of(id).unwrap_or_default();
                 let partial = lightcraft_develop::extract_groups(&d, &groups);
                 let target = if match_exp { rendered_brightness(s, id, &d) } else { None };
                 let (r_ev, r_slider) = (gathered_ev(s, id), d.light.exposure);
-                let (mut ops, mut matched, mut aligned) = (Vec::new(), 0, 0);
+                let (mut ops, mut matched, mut aligned, mut colour) = (Vec::new(), 0, 0, Vec::new());
                 for x in s.selection.ids.clone().into_iter().filter(|x| *x != id) {
                     let Some(dd) = s.develop_of(x) else { continue };
                     let mut nd = lightcraft_develop::apply_partial(&dd, &partial, 1.0);
+                    if match_colour {
+                        colour.push(crate::camera_match::match_photo(s, id, &d, x, &mut nd, scene));
+                    }
                     if let Some(t) = target {
                         // start from the camera-settings difference, then match the rendered result
                         if let (Some(r), Some(ev)) = (r_ev, gathered_ev(s, x)) {
@@ -795,7 +800,68 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let n = ops.len();
                 s.commit("Sync Settings", Op::Batch { ops })?;
-                Ok(json!({"changed": n, "matched": matched, "aligned": aligned}))
+                Ok(json!({"changed": n, "matched": matched, "aligned": aligned, "colour": colour}))
+            }
+        ),
+        cmd!(
+            "develop.matchCameraColor",
+            "Match Camera & Lens Color",
+            ["Photo"],
+            None,
+            "{ids?, scene?: bool} — make each selected photo's colour match the active photo's across cameras, lenses and phones: a ColorChecker-style chart through both cameras' own colour paths sets Temp / Tint, HSL, Calibration and Saturation / Vibrance (raws of different cameras); the lens / device casts learned from your edits (develop.buildLensCasts) even out lens differences; with scene (default: shot within 30 min of each other) the two renders' neutrals and hue bands even out what is left. One undo step; same camera and lens without scene changes nothing → {changed, perPhoto: [{id, deltaE_before, deltaE_after, chart, lensCast, scene}]}",
+            has_selection,
+            |s, p| {
+                let c = "develop.matchCameraColor";
+                let reference = active(s, c)?;
+                let rd = s.develop_of(reference).unwrap_or_default();
+                let scene = p.get("scene").and_then(Value::as_bool);
+                let (mut ops, mut per) = (Vec::new(), Vec::new());
+                for id in s.targets(p).into_iter().filter(|x| *x != reference) {
+                    let Some(dd) = s.develop_of(id) else { continue };
+                    let mut nd = (*dd).clone();
+                    per.push(crate::camera_match::match_photo(s, reference, &rd, id, &mut nd, scene));
+                    if nd != *dd {
+                        ops.extend(s.develop_op(id, nd, "Match Camera & Lens Color"));
+                    }
+                }
+                let n = ops.len();
+                if n > 0 {
+                    s.commit("Match Camera & Lens Color", Op::Batch { ops })?;
+                }
+                Ok(json!({"changed": n, "perPhoto": per}))
+            }
+        ),
+        cmd!(
+            "develop.buildLensCasts",
+            "Learn Lens & Device Colour Casts",
+            [],
+            None,
+            "{catalog?: path to a Lightroom .lrcat (default: the library's own edits), minSessions?: 3, minPhotos?: 10, dryRun?} — learn each lens's (and phone's) colour cast from how you finished its photos next to your other lenses at the same events; saved locally (lens-casts.json in LightCraft's settings folder, never shared) for develop.matchCameraColor → {path, lenses, devices}",
+            always,
+            |s, p| {
+                let c = "develop.buildLensCasts";
+                let ev = crate::lens_casts::Evidence {
+                    min_sessions: f64_or(p, "minSessions", 3.0).clamp(1.0, 1000.0) as usize,
+                    min_photos: f64_or(p, "minPhotos", 10.0).clamp(1.0, 100_000.0) as usize,
+                };
+                let (rows, source) = match str_param(p, "catalog") {
+                    Some(cat) => {
+                        let scratch = str_param(p, "scratch").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+                        (
+                            crate::lens_casts::rows_from_lightroom(std::path::Path::new(cat), &scratch).map_err(|e| bad(c, e))?,
+                            format!("lightroom:{cat}"),
+                        )
+                    }
+                    None => (crate::lens_casts::rows_from_library(s), "library".to_string()),
+                };
+                let table = crate::lens_casts::build(&rows, ev, &source);
+                let mut out = table.summary();
+                out["rows"] = json!(rows.len());
+                if !bool_or(p, "dryRun", false) {
+                    let path = crate::lens_casts::save(&table).map_err(|e| bad(c, e))?;
+                    out["path"] = json!(path.display().to_string());
+                }
+                Ok(out)
             }
         ),
         cmd!(
