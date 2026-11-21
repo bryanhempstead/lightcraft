@@ -1,0 +1,22 @@
+[package]
+name = "lightcraft-libraw-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bryan's fork (L0): LibRaw (LGPL-2.1 / CDDL-1.0) as LightCraft's fallback raw decoder, behind a small C ABI shim and a safe API: unpacked sensor data, levels, CFA, white balance, colour matrix, geometry, orientation and camera / lens names. No LibRaw demosaic or colour. Built from vendor/LibRaw-0.22.3 (fetched by tools/fetch-libraw.sh, never committed); without it every call reports \"unavailable\"."
+links = "lclibraw"
+build = "build.rs"
+
+# One of the workspace's few crates allowed `unsafe` (FFI into the C ABI shim), like
+# lightcraft-dng-sdk-sys and lightcraft-sysmem.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+
+[build-dependencies]
+cc = { version = "1.2", features = ["parallel"] }

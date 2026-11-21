@@ -39,6 +39,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("tiff", Class::Layer(0)),
     ("sysmem", Class::Layer(0)),
     ("dng-sdk-sys", Class::Standalone),
+    ("libraw-sys", Class::Standalone),
     ("fetch", Class::Layer(0)),
     ("raw", Class::Layer(1)),
     ("codecs", Class::Layer(1)),

@@ -23,7 +23,7 @@ duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | Dimension | Estimate | What's true today | Biggest gaps |
 |---|---:|---|---|
 | **Feature checklist** | 79.7% | P0 core and P1 nearly complete: import (Add / Copy / Move, templates, devices), library, grid/loupe/compare/survey, every Edit slider, curves, colour grading, masking tools, crop/Upright, heal/clone, presets/profiles, versions/history, sync, export, menus, shortcuts | P0: full-resolution zoom detail; P1: lens-profile database, content-aware fill (patch synthesis), video playback/trim |
-| **RAW coverage** (formats people shoot) | ~55% | DNG (all kinds), CR2, CR3 lossless Bayer and version 0x100/0x200 C-RAW (M50/R100/R8 pixel-exact corpus; EOS R6 full-frame and 1.6× crop RAW checked on 92 of Bryan's files, sensor identical to upstream's decoder), ARW, NEF (uncompressed + Huffman lossless/lossy), RAF (uncompressed, lossless/lossy compressed Bayer and X-Trans), uncompressed ORF, RW2 / RWL / Panasonic RAW (every raw format, checked on 178 files from 118 Panasonic and Leica bodies), PEF; every container's embedded preview (incl. CR3) | CR3 unverified CRX variants, compressed ORF, Nikon lossy-after-split, Canon sRAW, HEIC/AVIF. NEFs labelled compressed but stored uncompressed (Z 6 packed 14-bit, D850 12-bit uncompressed). Per-model verification is thin (~55 corpus files vs >1,000 models) |
+| **RAW coverage** (formats people shoot) | ~80% | DNG (all kinds), CR2, CR3 lossless Bayer and version 0x100/0x200 C-RAW (M50/R100/R8 pixel-exact corpus; 2,451 of 2,451 of Bryan's R6 files), ARW, NEF (uncompressed + Huffman lossless/lossy), RAF (uncompressed, lossless/lossy compressed Bayer and X-Trans), uncompressed ORF, RW2 / RWL / Panasonic RAW (every raw format, checked on 178 files from 118 Panasonic and Leica bodies), PEF; every container's embedded preview (incl. CR3). **This fork: LibRaw 0.22.3 as the fallback decoder** (`crates/libraw-sys`, `tools/fetch-libraw.sh`; native decoder first, then LibRaw, then the embedded preview): every camera LibRaw lists (1,258 models) decodes from sensor data, developed by LightCraft's own pipeline (Adobe profile via the DNG SDK): checked on Canon sRAW, R6 crop-mode C-RAW, CRW, Minolta MRW, Samsung SRW | Per-model verification is thin (~55 corpus files vs >1,000 models); LibRaw-decoded files have no camera-JPEG colour fit (Adobe matrix / profile instead); JPEG XL DNG, Foveon X3F; HEIC/AVIF in pure Rust; without `vendor/` (and on the web) the old gaps return: compressed ORF variants, Nikon lossy-after-split, Canon sRAW, unverified CRX variants |
 | **Colour & image quality** | ~55–65% | Pipeline is complete and fast; GPU path CPU-exact within 1/255 | **No measured camera calibration database**: ARW, NEF, RW2, RAF and CR3 have guarded camera-JPEG colour estimates, with bundled ILCE-7M4, X-H2S and X-T4 profiles (docs/camera-preview-colour.md); other non-DNG raws and rejected estimates use a neutral matrix. Colour fidelity remains incomplete. No lens-profile database. No measured fidelity against Lightroom (tone, highlights, texture/clarity, NR, sharpening are tuned by eye) |
 | **AI & computational** | ~15–20% | Assisted culling (focus, bursts), auto tone, HDR/panorama merge; subject/sky/background masks as classical heuristics | Real segmentation masks (subject, sky, people, objects, landscape, depth), AI denoise, super resolution, lens blur, generative remove, faces/people, natural-language search. **Blocked on a model strategy** (licensable weights or our own training; pure-Rust inference is feasible) |
 | **Workflow & library** | ~85% (single machine) | Robust catalog (journal + snapshots, background compaction, crash-tested), 85k-photo libraries stay responsive, Local browsing with automatic cleanup, XMP interop, keywords, smart albums, Move import | Opening an 85k library takes 1.7–4.7 s; no cloud sync (out of scope), no tablet companion (#74, roadmap), shared albums, publish services, tethering |
@@ -38,7 +38,7 @@ duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | JPEG / DNG shooter, single machine | ~85% | Fidelity polish, AI masks |
 | Nikon / Sony / Panasonic / older-Canon raw shooter | ~65% | Camera colour fidelity and coverage (ARW, NEF and RW2 preview estimates are only a starting point); Panasonic compacts and kit zooms also miss their embedded distortion correction |
 | Fujifilm raw shooter | ~65% | Uncompressed and lossless/lossy compressed RAF decoded; camera colour calibration remains missing. Verified on 13 bodies, including 14/16-bit GFX; see `docs/raf-compression.md` |
-| Canon CR3 / Olympus compressed-raw shooter | ~45% | CR3 lossless Bayer and version 0x100/0x200 C-RAW develop from sensor data (M50, R100, R8 verified pixel for pixel; EOS R6 checked on 92 private files, 4,312 library photos that said "not decoded yet" are rechecked and develop from raw); other CRX variants and compressed ORF open as embedded JPEG previews. Camera colour and broader model verification remain |
+| Canon CR3 / Olympus compressed-raw shooter | ~65% | CR3 lossless Bayer and version 0x100/0x200 C-RAW develop from sensor data (M50, R100, R8 verified pixel for pixel; all 2,451 of Bryan's R6 CR3s); other CRX variants (e.g. R6 crop-mode C-RAW) and compressed ORF go through LibRaw in this fork instead of the embedded JPEG. Camera colour and broader model verification remain |
 | Lightroom Classic power user | ~45% | Print, Book, Map, publish, tethering |
 | Relies on AI (masks, denoise) | ~25% | Object / Describe masks via optional SAM 3 (download not yet hosted); no AI denoise |
 
@@ -49,9 +49,10 @@ Priorities, in order. Each points at tracker rows in [`docs/parity.md`](docs/par
 1. **Camera colour calibration of our own** (LR-PROF-CAMERACOLOR, P0): fit each camera to its own embedded JPEG, use
    matrices the files carry themselves, then chart shots. Sony ARW, Nikon NEF, Panasonic RW2 and Fujifilm RAF have the file-local fit
    (matrix + tone curve from their own JPEG); generalise it to the other makes' raws (PEF, ORF…), then validate fidelity.
-2. **Raw formats, clean-room** (LR-IMP-FORMATS, P0): Remaining **unverified CR3 CRX** variants, compressed ORF, NEF
-   lossy-after-split, sRAW. Decided 2026-10-05: write our own decoders from prose descriptions (never decoder source,
-   no LGPL dependency); compressed NEF (#86) is the template.
+2. **Raw formats** (LR-IMP-FORMATS, P0): this fork falls back to LibRaw (2026-11-21; GPL/LGPL allowed for Bryan's
+   personal build), so unverified CR3 CRX variants, compressed ORF, NEF lossy-after-split, sRAW, CRW/MRW/SRW and the
+   long tail decode when `tools/fetch-libraw.sh` has run. Left: JPEG XL DNG, Foveon, pure-Rust HEIC/AVIF, and native
+   (faster, wasm-capable) decoders for the variants that now only LibRaw reads.
 3. **Verified camera coverage** (LR-IMP-CAMERA-COVERAGE, P0): a CC0 sample per model in the corpus, each decoded and
    checked for plausible colour; fix per-model bugs (#85).
 4. **Render fidelity suite** (LR-BEHAV-RENDER-FIDELITY, P1): measure our output against Lightroom on the same CC0 raws
@@ -123,7 +124,7 @@ trip, slideshow, auto import…) in ≈ 12 h on 2026-10-02; four to six parallel
 | Work package | Tracker rows | Agent-hours | Risk |
 |---|---|---:|---|
 | Remaining P0/P1 UI and library features (folder rename/move, keyword painter, people view…) | ≈ 8 | 5–10 | low |
-| Raw codecs: CR3 (CRX), compressed ORF, NEF lossy-after-split, HEIC/AVIF decode, JPEG XL DNG | LR-IMP-FORMATS | 40–80 | **high** — clean-room black-box analysis, no permissive specs |
+| Raw codecs: JPEG XL DNG, HEIC/AVIF decode (the CRX variants, compressed ORF, NEF lossy-after-split and sRAW are LibRaw-decoded in this fork) | LR-IMP-FORMATS | 15–30 | medium |
 | Lens-profile database of our own (calibration targets, fitting, data) | LR-EDIT-OPTICS-PROFILE | 15–30 | data collection |
 | Video: playback, trim, edits, export (pure-Rust decode, ideally shared with FilmCraft) | R. Video | 20–40 | medium |
 | AI: subject / sky / background / people / object masks, object-aware remove, AI denoise, super resolution, lens blur, people & faces, natural-language search, culling | ≈ 30 | 80–150 | **high** — permissively licensed weights, pure-Rust inference, maybe training |
@@ -179,7 +180,21 @@ X-Trans, 14/16-bit real-file verification), RW2 / Leica RWL / Panasonic RAW in e
 packed formats 2, 5 and 7, the 16-bit words of the 2005–2007 bodies; all recovered by black-box analysis of 178 CC0 files from
 118 bodies, `crates/raw/src/vendor/rw2.rs`), PEF (uncompressed and Huffman), ORF uncompressed (16-bit and 12-bit packed). Supported containers yield their embedded JPEG preview when present (including CR3). The engine uses it for RAW variants it cannot decode yet; HEVC-only CR3 previews are not decoded.
 
-Not decoded yet — preview only (no permissively licensed description; black-box analysis incomplete):
+**LibRaw fallback (this fork, 2026-11-21).** `crates/libraw-sys` builds LibRaw 0.22.3 (LGPL-2.1 / CDDL-1.0, fetched
+and checksum-pinned by `tools/fetch-libraw.sh` into the gitignored `vendor/`, never committed) behind a C ABI shim that
+only opens and unpacks: the sensor samples, black/white levels (Canon's SpecularWhiteLevel), CFA, as-shot white balance,
+Adobe's XYZ→camera matrix, geometry, default crop, orientation and names become an ordinary `RawImage`, which
+LightCraft demosaics and colours itself (the camera's Adobe profile through the DNG SDK when installed). Order: the
+native decoder, then LibRaw (a data error LibRaw reports counts as a failure), then the embedded preview with the native
+decoder's reason. CRW, MRW and Phase One IIQ are recognised only when LibRaw is built in. `LIGHTCRAFT_RAW_DECODER`
+(`libraw`, `nolibraw`, `none`) changes the order for comparisons; `crates/raw/examples/decodecheck.rs` reports which
+decoder read each file. Checked: all 2,451 of Bryan's R6 CR3s still decode natively (identical levels, crop and samples
+when forced through LibRaw, 156 ms vs 86 ms per 20 MP; against Lightroom's previews of 37 default-setting R6 photos
+mean CIEDE2000 2.52 (dE128 1.49) through LibRaw = native 2.52, vs 3.46 (2.72) from the embedded JPEG); CC0 samples that were preview-only now decode with matching
+framing and orientation: Canon 5D Mark III sRAW2, R6 crop-mode C-RAW, EOS 10D CRW, Minolta DiMAGE A2 MRW, Samsung NX300 SRW.
+Without `vendor/` (and on the web) the list below still applies.
+
+Not decoded natively — LibRaw in this fork, else preview only (no permissively licensed description; black-box analysis incomplete):
 - **Nikon "lossy after split" NEF** (non-zero split row in maker note `0x0096`, e.g. some D3400/D5000/D5200/D5500/D5600
   files): rows above the split decode with the regular lossy table; from the split row on a different code is used
   that our black-box analysis has not recovered yet (none of the four regular tables fits, also not with byte
@@ -206,6 +221,7 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   16-bit words), black levels, in-camera aspect crops and mapped-out defects established on 178 CC0 files from 118
   bodies; RW2 gets the file-local camera look (accepted on 140 of 174 files with a preview).
 - 2026-10-08: independent Rust CR3 lossless and version 0x100/0x200 C-RAW decoding, six exact full-sensor regressions on M50/R100/R8; any CR3 decode error falls back to the embedded JPEG; guarded CR3 camera-JPEG colour fitting with independent framing validation (`docs/cr3.md`). Unverified CRX variants and broader model verification remain.
+- 2026-11-21 (fork): LibRaw 0.22.3 as the fallback raw decoder (`crates/libraw-sys`): native first, then LibRaw, then the embedded preview; 1,258 camera models; sRAW, CRX variants, compressed ORF, CRW/MRW/SRW and the long tail decode from sensor data.
 
 ## Chinese and Japanese interfaces, and text watermarks
 

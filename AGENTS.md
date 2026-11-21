@@ -38,8 +38,9 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
   "unsupported" error or is disabled. Sole exception: a provably infallible literal, as `#[allow(clippy::expect_used)]`
   + `.expect("why it can't fail")`.
 - **`unsafe` lives only in `crates/sysmem`** (one FFI call, `malloc_zone_pressure_relief`, that returns freed
-  allocator pages to macOS after raw decodes) **and `crates/dng-sdk-sys`** (the C ABI shim over Adobe's DNG SDK; see
-  *Fork rules*). Every other production crate root has `#![forbid(unsafe_code)]`. A new
+  allocator pages to macOS after raw decodes), **`crates/dng-sdk-sys`** (the C ABI shim over Adobe's DNG SDK; see
+  *Fork rules*) **and `crates/libraw-sys`** (the C ABI shim over LibRaw, the fallback raw decoder: open + unpack only,
+  every exception caught, everything it reports bounds-checked in safe Rust). Every other production crate root has `#![forbid(unsafe_code)]`. A new
   unsafe need goes in an isolated, well-tested helper crate like it: `// SAFETY:` on every block, a safe API, a safe
   fallback where possible, and a line here naming it.
 - **Input-derived numbers are hostile:** `get()` instead of `[i]`/`[a..b]` for offsets from files, users, agents or
@@ -77,7 +78,8 @@ of it. Full standard: `../craftrules/standards/never-crash.md`
 
 ## Non-negotiables
 - **Layering** (`plan/architecture.md` §3, enforced by `cargo xtask layers`): nothing below L5 depends on egui/eframe/winit/rfd.
-  `dng-sdk-sys` is an L0 helper (no LightCraft deps); `color`/`pipeline` use it behind its safe API.
+  `dng-sdk-sys` and `libraw-sys` are L0 helpers (no LightCraft deps); `color`/`pipeline` use the DNG SDK and `raw`
+  uses LibRaw behind their safe APIs.
 - **Everything is a command** (`crates/engine`): id, label, menu path, shortcut, params, enabled(), run(). UI, CLI, control channel and MCP all dispatch by id. Every slider is a `develop` control spec.
 - **Resolution independence:** settings use normalized image coordinates and relative radii; previews and exports must match.
 - **Quality gates** before every commit: `cargo xtask ci` (fmt, clippy -D warnings, tests, layers, assets, wasm).

@@ -3000,6 +3000,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-libraw-sys"
+version = "0.4.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "lightcraft-mcp"
 version = "0.4.0"
 dependencies = [
@@ -3086,6 +3093,7 @@ dependencies = [
  "jpeg-encoder",
  "lightcraft-color",
  "lightcraft-geom",
+ "lightcraft-libraw-sys",
  "lightcraft-meta",
  "lightcraft-raster",
  "lightcraft-tiff",
