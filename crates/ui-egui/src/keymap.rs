@@ -1400,9 +1400,23 @@ pub fn monogram_layout() -> Vec<(u64, String, String)> {
     logs.sort_by_key(|l| std::cmp::Reverse(l.0));
     for (_, path) in logs.into_iter().take(5) {
         let Ok(text) = std::fs::read_to_string(&path) else { continue };
-        let Some(line) = text.lines().rev().find(|l| l.contains("Layout Updated")) else { continue };
-        let Some(at) = line.find('{') else { continue };
-        let Ok(v) = serde_json::from_str::<Value>(line.get(at..).unwrap_or("")) else { continue };
+        // the very last layout can be half-enumerated (console reconnecting): take the fullest of the
+        // last few
+        fn count(n: &Value, depth: usize) -> usize {
+            if depth > 64 || !n.is_object() {
+                return 0;
+            }
+            1 + n.get("c").and_then(Value::as_array).into_iter().flatten().map(|c| count(c, depth + 1)).sum::<usize>()
+        }
+        let recent: Vec<Value> = text
+            .lines()
+            .filter(|l| l.contains("Layout Updated"))
+            .filter_map(|l| serde_json::from_str::<Value>(l.get(l.find('{')?..)?).ok())
+            .collect();
+        let Some(v) = recent.iter().skip(recent.len().saturating_sub(6)).max_by_key(|v| count(v.get("layout").unwrap_or(&Value::Null), 0)).cloned()
+        else {
+            continue;
+        };
         let mut out = Vec::new();
         fn walk(n: &Value, out: &mut Vec<(u64, String, String)>, depth: usize) {
             if depth > 64 || !n.is_object() {
