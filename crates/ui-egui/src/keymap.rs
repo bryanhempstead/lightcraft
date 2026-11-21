@@ -1786,6 +1786,16 @@ pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, Str
         crate::shortcuts::dispatch(app, &ctx, "preset.applyByName", json!({"name": rest}));
         return Ok(json!({"preset": rest}));
     }
+    // LightCraft's own one-shots: `lc_cmd = <command id> [JSON params]` (Merge…, Match Brightness,
+    // Auto Align… — what Lightroom's console list has no input for)
+    if name == "lc_cmd" {
+        let (cmd, params) = match rest.split_once(' ') {
+            Some((c, p)) => (c, serde_json::from_str(p).map_err(|e| format!("{line}: {e}"))?),
+            None => (rest, json!({})),
+        };
+        crate::shortcuts::dispatch(app, &ctx, cmd, params);
+        return Ok(json!({"run": cmd}));
+    }
     if let Some(&(_, keys)) = LR_TRIGGER_KEYS.iter().find(|(l, _)| l.eq_ignore_ascii_case(line)) {
         let (cmd, params) = keystroke_command(keys);
         crate::shortcuts::dispatch(app, &ctx, &cmd, params.clone());

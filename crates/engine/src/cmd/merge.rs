@@ -1,4 +1,4 @@
-//! Photo Merge commands: `merge.hdr`, `merge.panorama`, `merge.hdrPanorama`.
+//! Photo Merge commands: `merge.hdr`, `merge.panorama`, `merge.hdrPanorama`, `merge.focus`, `merge.take` (+ `merge.faces`).
 //!
 //! Run synchronously here (CLI, MCP, control channel); the desktop UI plans the same job with
 //! [`Session::plan_merge`] and runs it on a worker thread. `preview: true` merges ≤ 1024 px frames
@@ -68,6 +68,37 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?, bracket=0 (auto from EXIF), align, deghost, projection, boundaryWarp, autoCrop, fillEdges, autoSettings, stack, preview, previewPath?}",
             can_merge,
             |s, p| run(s, "merge.hdrPanorama", p)
+        ),
+        cmd!(
+            "merge.focus",
+            "Focus Stack Merge",
+            [],
+            None,
+            "{ids?, align=true, autoSettings=true, stack=false, preview=false, previewPath?} — photos focused at different distances → one DNG sharp throughout (`<name>-Focus.dng`)",
+            can_merge,
+            |s, p| run(s, "merge.focus", p)
+        ),
+        cmd!(
+            "merge.faces",
+            "Find Faces for Best Take",
+            [],
+            None,
+            "{ids?} — the people in the photos, matched across them by position → {people: [{name, boxes: [[x, y, w, h] | null per photo]}]} (tagged faces, else Apple Vision on macOS)",
+            can_merge,
+            |s, p| {
+                let ids: Vec<PhotoId> = s.targets(p);
+                let people = s.take_faces(&ids).map_err(|e| bad("merge.faces", e))?;
+                Ok(json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "people": people}))
+            }
+        ),
+        cmd!(
+            "merge.take",
+            "Best Take Merge",
+            [],
+            None,
+            "{ids?, base: index of the photo to start from, swaps: [{donor: photo index, baseBox: [x, y, w, h], donorBox}] (boxes from merge.faces), autoSettings=true, stack=false, preview=false, previewPath?} — each picked face onto the base photo → `<name>-Take.dng`",
+            can_merge,
+            |s, p| run(s, "merge.take", p)
         ),
     ]
 }

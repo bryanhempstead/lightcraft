@@ -1,10 +1,10 @@
-//! Photo Merge (HDR, Panorama, HDR Panorama) in the library.
+//! Photo Merge (HDR, Panorama, HDR Panorama, Focus Stack, Best Take) in the library.
 //!
 //! A merge is planned from the session ([`crate::Session::plan_merge`] → [`MergeJob`], which is
 //! `Send` and self-contained), run anywhere (a worker thread in the app, inline for the CLI/MCP:
 //! [`MergeJob::run`], with progress and cancellation), and finished on the session
 //! ([`crate::Session::finish_merge`]): the DNG is written next to the first source photo
-//! (`<name>-HDR.dng`, `-Pano.dng`, `-HDR-Pano.dng`), imported, selected, and given Auto Settings /
+//! (`<name>-HDR.dng`, `-Pano.dng`, `-HDR-Pano.dng`, `-Focus.dng`, `-Take.dng`), imported, selected, and given Auto Settings /
 //! the auto-crop rectangle when asked. A *preview* run works on ≤ 1024 px frames and returns a
 //! rendered image (with the deghost overlay when asked) instead of a file.
 
@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use lightcraft_catalog::{PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
-use lightcraft_merge::{Deghost, Frame, HdrOptions, PanoOptions, Projection};
+use lightcraft_merge::{Deghost, FocusOptions, Frame, HdrOptions, PanoOptions, Projection, TakeOptions};
 use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo};
 use lightcraft_raster::{Rgb32f, Rgba8};
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,14 @@ pub enum MergeKind {
         pano: PanoOptions,
         bracket: usize,
     },
+    /// Photos focused at different distances → one sharp throughout.
+    Focus {
+        focus: FocusOptions,
+    },
+    /// Best Take: each person's face from the frame picked for them, onto the base frame.
+    Take {
+        take: TakeOptions,
+    },
 }
 
 impl MergeKind {
@@ -46,6 +54,8 @@ impl MergeKind {
             MergeKind::Hdr { .. } => "HDR",
             MergeKind::Panorama { .. } => "Pano",
             MergeKind::HdrPanorama { .. } => "HDR-Pano",
+            MergeKind::Focus { .. } => "Focus",
+            MergeKind::Take { .. } => "Take",
         }
     }
     fn min_photos(&self) -> usize {
@@ -201,6 +211,23 @@ impl MergeJob {
                     None,
                 )
             }
+            MergeKind::Focus { focus } => {
+                let frames = self.load(false, progress, (0.0, 0.3))?;
+                let p = sub(0.3, 0.9);
+                let r = lightcraft_merge::merge_focus(frames, focus, &p).map_err(err)?;
+                let info = json!({
+                    "alignment": r.alignments.iter().map(|a| json!({"model": a.model, "inliers": a.inliers, "rmsPx": a.rms})).collect::<Vec<_>>(),
+                });
+                // the sources' own range, like a panorama
+                (r.image, r.color, r.orientation, r.metadata, r.baseline_exposure, lightcraft_merge::DngSamples::U16, None, info, None)
+            }
+            MergeKind::Take { take } => {
+                let frames = self.load(false, progress, (0.0, 0.4))?;
+                let p = sub(0.4, 0.9);
+                let r = lightcraft_merge::best_take(frames, take, &p).map_err(err)?;
+                let info = json!({"base": self.sources.get(take.base).map(|s| s.0.0), "swaps": take.swaps.len(), "shiftsPx": r.shifts});
+                (r.image, r.color, r.orientation, r.metadata, r.baseline_exposure, lightcraft_merge::DngSamples::U16, None, info, None)
+            }
         };
         if !progress(0.9, "Writing DNG") {
             return Err("cancelled".into());
@@ -330,6 +357,13 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
     let kind = match id {
         "merge.hdr" => MergeKind::Hdr { hdr },
         "merge.panorama" => MergeKind::Panorama { pano },
+        "merge.take" => MergeKind::Take {
+            take: TakeOptions {
+                base: p.get("base").and_then(Value::as_u64).unwrap_or(0) as usize,
+                swaps: serde_json::from_value(p.get("swaps").cloned().unwrap_or(json!([]))).map_err(|e| bad(format!("swaps: {e}")))?,
+            },
+        },
+        "merge.focus" => MergeKind::Focus { focus: FocusOptions { align: p.get("align").and_then(Value::as_bool).unwrap_or(true) } },
         _ => MergeKind::HdrPanorama { hdr, pano, bracket: p.get("bracket").and_then(Value::as_u64).unwrap_or(0) as usize },
     };
     let finish = MergeFinish {

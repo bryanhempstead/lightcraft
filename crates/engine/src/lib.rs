@@ -23,6 +23,7 @@ pub mod demo;
 pub mod devices;
 pub mod disks;
 pub mod export;
+pub mod faces;
 pub mod files;
 pub mod fonts;
 pub mod guard;

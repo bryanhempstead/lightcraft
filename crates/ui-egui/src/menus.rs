@@ -163,9 +163,13 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.mergeHdr", "HDR…", Some("Ctrl+H"), "Photo>Photo Merge"),
     ("dialog.mergePanorama", "Panorama…", Some("Ctrl+M"), "Photo>Photo Merge"),
     ("dialog.mergeHdrPanorama", "HDR Panorama…", None, "Photo>Photo Merge"),
+    ("dialog.mergeFocus", "Focus Stack…", Some("Ctrl+Alt+F"), "Photo>Photo Merge"),
+    ("dialog.mergeTake", "Best Take…", Some("Ctrl+Alt+T"), "Photo>Photo Merge"),
+    ("dialog.merge", "Merge…", Some("Ctrl+Alt+M"), "Photo>Photo Merge"),
     ("merge.hdrLast", "HDR with Last Settings", Some("Ctrl+Shift+H"), "Photo>Photo Merge"),
     ("merge.panoramaLast", "Panorama with Last Settings", Some("Ctrl+Shift+M"), "Photo>Photo Merge"),
     ("merge.hdrPanoramaLast", "HDR Panorama with Last Settings", None, "Photo>Photo Merge"),
+    ("merge.focusLast", "Focus Stack with Last Settings", None, "Photo>Photo Merge"),
     ("file.addPhotos", "Import Photos and Video…", Some("Cmd+Shift+I"), "File"),
     // the Import window's source column: browse to a folder / pick a device (`{path, subfolders?}`)
     ("import.source", "Import Source", None, ""),
@@ -1169,6 +1173,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "dialog.mergeHdr" => crate::merge::open(app, "merge.hdr"),
         "dialog.mergePanorama" => crate::merge::open(app, "merge.panorama"),
         "dialog.mergeHdrPanorama" => crate::merge::open(app, "merge.hdrPanorama"),
+        "dialog.mergeFocus" => crate::merge::open(app, "merge.focus"),
+        "dialog.mergeTake" => crate::merge::open(app, "merge.take"),
+        "dialog.merge" => crate::merge::open(app, "merge"),
+        "merge.focusLast" => crate::merge::start_last(app, "merge.focus"),
         "app.about" => {
             app.ui.dialog = Some(Dialog::About);
             Ok(Value::Null)

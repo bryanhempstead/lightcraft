@@ -308,3 +308,60 @@ fn monogram_lightroom_lines_drive_lightcraft() {
     let _ = h.request("engine.execute", json!({"command": "keys.lrinput", "params": {"line": "nonsense"}}), T);
     let _ = h.request("engine.execute", json!({"command": "keys.lrinput", "params": {"line": "Exposure = ^,,"}}), T);
 }
+
+#[test]
+fn monogram_lc_cmd_opens_merge_and_it_remembers_the_kind() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
+    exec(&mut h, "library.select", json!({"ids": ids}));
+    exec(&mut h, "keys.lrinput", json!({"line": "lc_cmd = dialog.merge"}));
+    let kind = |h: &Headless| match &h.app.ui.dialog {
+        Some(crate::state::Dialog::Merge { opts }) => opts.command.clone(),
+        _ => String::new(),
+    };
+    assert_eq!(kind(&h), "merge.hdr", "Merge… opens on HDR the first time");
+    // the panorama shortcut still opens the panorama dialog straight away
+    exec(&mut h, "dialog.mergePanorama", json!({}));
+    assert_eq!(kind(&h), "merge.panorama");
+    exec(&mut h, "dialog.mergeFocus", json!({}));
+    assert_eq!(kind(&h), "merge.focus");
+    // Merge… opens on the kind merged last
+    h.app.merge.last_kind = Some("merge.focus".into());
+    exec(&mut h, "dialog.merge", json!({}));
+    assert_eq!(kind(&h), "merge.focus");
+}
+
+#[test]
+fn best_take_dialog_lists_people_and_builds_swaps() {
+    let mut h = demo();
+    let ids: Vec<lightcraft_catalog::PhotoId> = h.app.session.catalog.photos().take(2).map(|p| p.id).collect();
+    for (k, x) in [(0, 0.30), (1, 0.32)] {
+        let mut m = h.app.session.catalog.photo(ids[k]).unwrap().meta.clone();
+        m.regions = vec![lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: x, y0: 0.2, x1: x + 0.1, y1: 0.35 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: Some("Kate".into()),
+            description: None,
+        }];
+        h.app.session.commit("t", lightcraft_catalog::Op::SetMeta { id: ids[k], meta: Box::new(m) }).unwrap();
+    }
+    exec(&mut h, "library.select", json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>()}));
+    h.app.session.selection.active = Some(ids[0]);
+    exec(&mut h, "dialog.mergeTake", json!({}));
+    let Some(crate::state::Dialog::Merge { opts }) = h.app.ui.dialog.clone() else { panic!("no merge dialog") };
+    assert_eq!(opts.command, "merge.take");
+    assert_eq!((opts.base, opts.people.len()), (0, 1));
+    assert_eq!(opts.people[0].name, "Kate");
+    assert!(opts.params()["swaps"].as_array().unwrap().is_empty(), "everyone on the start photo: nothing to swap");
+    let mut o = opts.clone();
+    o.people[0].from = 1;
+    let sw = o.params()["swaps"].clone();
+    assert_eq!(sw[0]["donor"], 1, "{sw}");
+    assert!((sw[0]["donorBox"][0].as_f64().unwrap() - 0.32).abs() < 1e-9 && (sw[0]["baseBox"][0].as_f64().unwrap() - 0.30).abs() < 1e-9);
+    // the engine takes those params
+    assert!(lightcraft_engine::merge::parse("merge.take", &o.params()).is_ok());
+    // not found in photo 2: still pickable, from the spot in photo 1
+    o.people[0].boxes[1] = None;
+    let sw = o.params()["swaps"].clone();
+    assert!((sw[0]["donorBox"][0].as_f64().unwrap() - 0.30).abs() < 1e-9, "{sw}");
+}

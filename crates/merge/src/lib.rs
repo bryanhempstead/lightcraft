@@ -6,6 +6,8 @@
 //! - [`pano`]: overlapping photos → one panorama (features, matching, RANSAC, rotation bundle
 //!   adjustment, spherical/cylindrical/perspective projection, exposure compensation, seams,
 //!   multi-band blending, boundary warp, auto crop, fill edges).
+//! - [`focus`]: photos focused at different distances → one photo sharp throughout (focus stacking).
+//! - [`take`]: Best Take — each person's face from the frame picked for them, onto one frame.
 //! - [`output`]: results as linear DNGs (16-bit float for HDR) with the source's colour tags.
 //!
 //! Every algorithm here is our own implementation from published papers (cited in each module);
@@ -15,6 +17,7 @@
 
 pub mod align;
 pub mod features;
+pub mod focus;
 pub mod frame;
 pub mod hdr;
 pub mod linalg;
@@ -22,11 +25,14 @@ pub mod output;
 pub mod pano;
 pub mod ransac;
 pub mod synth;
+pub mod take;
 
+pub use focus::{FocusOptions, FocusResult, merge_focus};
 pub use frame::{Frame, FrameColor, load_frame};
 pub use hdr::{Deghost, HdrOptions, HdrResult, merge_hdr};
 pub use output::{DngSamples, write_linear_dng};
 pub use pano::{PanoOptions, PanoResult, Projection, stitch};
+pub use take::{FaceSwap, TakeOptions, TakeResult, best_take};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum MergeError {

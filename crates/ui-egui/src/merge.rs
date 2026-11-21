@@ -22,7 +22,7 @@ use crate::LightcraftApp;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MergeDialog {
-    /// "merge.hdr" | "merge.panorama" | "merge.hdrPanorama".
+    /// "merge.hdr" | "merge.panorama" | "merge.hdrPanorama" | "merge.focus".
     pub command: String,
     pub align: bool,
     /// none | low | medium | high
@@ -37,6 +37,33 @@ pub struct MergeDialog {
     pub fill_edges: bool,
     /// HDR panorama: photos per bracket (0 = from EXIF).
     pub bracket: u32,
+    /// Best take: the photo (index into the merged photos) everything else comes from.
+    pub base: usize,
+    /// Best take: the people found, and the photo each one's face comes from.
+    pub people: Vec<TakePick>,
+}
+
+/// One person in a best take.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TakePick {
+    pub name: String,
+    /// Their face in each photo (`None` where it wasn't found): normalized `[x, y, w, h]`.
+    pub boxes: Vec<Option<[f64; 4]>>,
+    /// The photo (index) their face comes from.
+    pub from: usize,
+}
+
+impl TakePick {
+    /// Their face in photo `i`: where it was found there, else where it was found in the nearest
+    /// photo (a burst barely moves; the merge's patch search lines it up).
+    pub fn box_at(&self, i: usize) -> Option<[f64; 4]> {
+        if let Some(b) = self.boxes.get(i).copied().flatten() {
+            return Some(b);
+        }
+        let n = self.boxes.len();
+        (1..n).find_map(|d| [i.checked_sub(d), i.checked_add(d)].into_iter().flatten().find_map(|j| self.boxes.get(j).copied().flatten()))
+    }
 }
 
 impl Default for MergeDialog {
@@ -53,6 +80,8 @@ impl Default for MergeDialog {
             auto_crop: true,
             fill_edges: false,
             bracket: 0,
+            base: 0,
+            people: Vec::new(),
         }
     }
 }
@@ -65,17 +94,43 @@ impl MergeDialog {
         match self.command.as_str() {
             "merge.panorama" => "Panorama Merge Preview",
             "merge.hdrPanorama" => "HDR Panorama Merge Preview",
+            "merge.focus" => "Focus Stack Merge Preview",
+            "merge.take" => "Best Take Merge Preview",
             _ => "HDR Merge Preview",
         }
     }
+    /// What it makes, for messages ("HDR merge added").
+    pub fn what(&self) -> &'static str {
+        match self.command.as_str() {
+            "merge.panorama" => "Panorama",
+            "merge.hdrPanorama" => "HDR panorama",
+            "merge.focus" => "Focus stack",
+            "merge.take" => "Best take",
+            _ => "HDR",
+        }
+    }
     pub fn is_hdr(&self) -> bool {
-        self.command != "merge.panorama"
+        matches!(self.command.as_str(), "merge.hdr" | "merge.hdrPanorama")
     }
     pub fn is_pano(&self) -> bool {
-        self.command != "merge.hdr"
+        matches!(self.command.as_str(), "merge.panorama" | "merge.hdrPanorama")
     }
     pub fn params(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        let mut v = serde_json::to_value(self).unwrap_or_default();
+        if self.command == "merge.take" {
+            // each person whose face comes from another photo: their face there onto them here
+            let swaps: Vec<Value> = self
+                .people
+                .iter()
+                .filter(|p| p.from != self.base)
+                .filter_map(|p| {
+                    let (donor, base) = (p.box_at(p.from)?, p.box_at(self.base)?);
+                    Some(json!({"donor": p.from, "baseBox": base, "donorBox": donor}))
+                })
+                .collect();
+            v["swaps"] = json!(swaps);
+        }
+        v
     }
 }
 
@@ -107,6 +162,36 @@ pub struct MergeState {
     pub ids: Vec<PhotoId>,
     /// The options of the last merge started, per kind ("merge.hdr" …): Merge with Last Settings.
     pub last: std::collections::HashMap<String, MergeDialog>,
+    /// The kind of the last merge started: what Merge… opens on.
+    pub last_kind: Option<String>,
+}
+
+/// The kinds the Merge… dialog switches between: (command, button label, hover text).
+pub const KINDS: [(&str, &str, &str); 5] = [
+    ("merge.hdr", "hdr.", "HDR — exposure brackets (the same view shot darker and brighter) → one photo with the whole range"),
+    ("merge.panorama", "pano.", "Panorama — overlapping photos → one wide photo"),
+    ("merge.hdrPanorama", "hdr.pano.", "HDR panorama — a bracket at each position → merged, then stitched"),
+    ("merge.focus", "focus.", "Focus stack — the same view focused near to far → one photo sharp throughout"),
+    ("merge.take", "take.", "Best take — a burst or group shot: pick, per person, the photo their face comes from"),
+];
+
+/// Best take: find the people in the merged photos (tagged faces, else Apple Vision) and start
+/// everyone on the base photo. Keeps earlier picks for the same people.
+fn load_faces(app: &mut LightcraftApp, opts: &mut MergeDialog) {
+    let ids = app.merge.ids.clone();
+    if opts.people.first().is_some_and(|p| p.boxes.len() == ids.len()) {
+        return;
+    }
+    if let Some(a) = app.session.active() {
+        opts.base = ids.iter().position(|x| *x == a).unwrap_or(0);
+    }
+    match app.session.take_faces(&ids) {
+        Ok(people) => {
+            opts.people = people.into_iter().map(|p| TakePick { name: p.name, boxes: p.boxes, from: opts.base }).collect();
+            app.merge.error = opts.people.is_empty().then(|| crate::i18n::tr("No faces found in these photos").to_string());
+        }
+        Err(e) => app.merge.error = Some(e),
+    }
 }
 
 impl MergeState {
@@ -156,7 +241,14 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     if let Some(t) = app.merge.preview_task.take() {
         t.cancel.store(true, Ordering::Relaxed);
     }
-    app.ui.dialog = Some(crate::state::Dialog::Merge { opts: MergeDialog::for_command(command) });
+    // Merge… ("merge"): the kind used last, with the options used last
+    let command = if command == "merge" { app.merge.last_kind.clone().unwrap_or_else(|| "merge.hdr".into()) } else { command.to_string() };
+    let mut opts = app.merge.last.get(&command).cloned().unwrap_or_else(|| MergeDialog::for_command(&command));
+    if command == "merge.take" {
+        opts.people.clear(); // other photos than last time
+        load_faces(app, &mut opts);
+    }
+    app.ui.dialog = Some(crate::state::Dialog::Merge { opts });
     Ok(json!({"photos": app.merge.ids.len()}))
 }
 
@@ -172,6 +264,7 @@ pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value,
     let task = spawn(app, opts, &ids, false)?;
     app.merge.final_task = Some(task);
     app.merge.last.insert(opts.command.clone(), opts.clone());
+    app.merge.last_kind = Some(opts.command.clone());
     Ok(json!({"started": true, "photos": ids.len()}))
 }
 
@@ -247,13 +340,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         match t.rx.try_recv() {
             Ok(r) => {
                 let Some(t) = app.merge.final_task.take() else { return };
-                let what = if t.options.command == "merge.panorama" {
-                    "Panorama"
-                } else if t.options.command == "merge.hdrPanorama" {
-                    "HDR panorama"
-                } else {
-                    "HDR"
-                };
+                let what = t.options.what();
                 match r.map_err(lightcraft_engine::EngineError::Other).and_then(|out| app.session.finish_merge(&t.job, out)) {
                     Ok(v) => {
                         app.merge.last_result = Some(v);
@@ -309,7 +396,12 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             }
             let info = app.merge.preview.as_ref().map(|p| p.3.clone());
             if let Some(info) = info {
-                let txt = if opts.is_pano() {
+                let txt = if opts.command == "merge.take" {
+                    let n = opts.people.iter().filter(|p| p.from != opts.base).count();
+                    format!("{} · {n} {}", crate::i18n::tr_format!("{} photos", app.merge.ids.len()), crate::i18n::tr("faces swapped"))
+                } else if opts.command == "merge.focus" {
+                    format!("{} · {}", crate::i18n::tr_format!("{} photos", app.merge.ids.len()), crate::i18n::tr("focus stack"))
+                } else if opts.is_pano() {
                     format!(
                         "{} photos · {} · {:.0}° × {:.0}°",
                         info["used"].as_array().map_or(0, Vec::len),
@@ -329,6 +421,34 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
         // options
         ui.vertical(|ui| {
             ui.set_width(220.0);
+            // the kind: switch between the merges without closing the dialog
+            ui.label(egui::RichText::new(crate::i18n::tr("Merge")).color(t.text_label));
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+                for (cmd, label, tip) in KINDS {
+                    let r =
+                        crate::widgets::text_button(ui, &format!("mergeKind-{cmd}"), label, opts.command == cmd).on_hover_text(crate::i18n::tr(tip));
+                    if r.clicked() && opts.command != cmd {
+                        // keep the shared options, take this kind's own from its last use
+                        let keep = (opts.auto_settings, opts.stack);
+                        *opts = app.merge.last.get(cmd).cloned().unwrap_or_else(|| MergeDialog::for_command(cmd));
+                        (opts.auto_settings, opts.stack) = keep;
+                        if cmd == "merge.take" {
+                            opts.people.clear();
+                            load_faces(app, opts);
+                        }
+                    }
+                }
+            });
+            ui.add_space(12.0);
+            if opts.command == "merge.take" {
+                take_picker(app, ui, opts);
+            }
+            if opts.command == "merge.focus" {
+                ui.checkbox(&mut opts.align, crate::i18n::tr("Auto Align"))
+                    .on_hover_text(crate::i18n::tr("Line the photos up first (handheld, or focus breathing changes the scale)"));
+                ui.add_space(4.0);
+            }
             if opts.is_pano() {
                 ui.label(egui::RichText::new(crate::i18n::tr("Projection")).color(t.text_label));
                 for (v, l) in [("auto", "Auto Select"), ("spherical", "Spherical"), ("cylindrical", "Cylindrical"), ("perspective", "Perspective")] {
@@ -372,6 +492,90 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             ui.label(egui::RichText::new(crate::i18n::tr_format!("{} photos", app.merge.ids.len())).color(t.text_dim));
         });
     });
+}
+
+/// Best take: which photo to start from, then per person their face in each photo — click the one
+/// to use (the highlighted face is used; faces in the start photo stay as they are).
+fn take_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let ids = app.merge.ids.clone();
+    ui.label(egui::RichText::new(crate::i18n::tr("Start from photo")).color(t.text_label));
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+        for (i, id) in ids.iter().enumerate() {
+            let name = app.session.catalog.photo(*id).map(|p| p.file_name.clone()).unwrap_or_default();
+            let r = crate::widgets::text_button(ui, &format!("takeBase-{i}"), &format!("{}.", i + 1), opts.base == i).on_hover_text(name);
+            if r.clicked() && opts.base != i {
+                // people still on the old start photo move with it
+                for p in opts.people.iter_mut().filter(|p| p.from == opts.base) {
+                    p.from = i;
+                }
+                opts.base = i;
+            }
+        }
+    });
+    ui.add_space(12.0);
+    if opts.people.is_empty() {
+        ui.label(egui::RichText::new(crate::i18n::tr("No faces found in these photos")).color(t.text_dim));
+        if crate::widgets::text_button(ui, "takeFind", "find.", false).on_hover_text(crate::i18n::tr("Look for faces again")).clicked() {
+            load_faces(app, opts);
+        }
+        return;
+    }
+    let base = opts.base;
+    egui::ScrollArea::vertical().id_salt("takePeople").max_height(300.0).show(ui, |ui| {
+        for (pi, person) in opts.people.iter_mut().enumerate() {
+            ui.label(egui::RichText::new(&person.name).color(t.text));
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+                for (fi, id) in ids.iter().enumerate() {
+                    let Some(b) = person.box_at(fi) else { continue };
+                    let found = person.boxes.get(fi).is_some_and(Option::is_some);
+                    super_thumb_request(app, *id);
+                    let size = egui::vec2(44.0, 44.0);
+                    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+                    crate::widgets::register(ui.ctx(), format!("takeFace-{pi}-{fi}"), rect);
+                    ui.painter().rect_filled(rect, 4.0, t.canvas);
+                    if let Some(tex) = app.renderer.thumb(*id) {
+                        // the face, a little loose, from the photo's (cropped) thumbnail
+                        let crop = app.session.develop_of(*id).map(|d| d.crop.geometry.rect);
+                        let to_thumb = |u: f64, v: f64| match crop {
+                            Some(c) if c.x1 > c.x0 && c.y1 > c.y0 => ((u - c.x0) / (c.x1 - c.x0), (v - c.y0) / (c.y1 - c.y0)),
+                            _ => (u, v),
+                        };
+                        let pad = 0.25;
+                        let (x0, y0) = to_thumb(b[0] - b[2] * pad, b[1] - b[3] * pad);
+                        let (x1, y1) = to_thumb(b[0] + b[2] * (1.0 + pad), b[1] + b[3] * (1.0 + pad));
+                        let c = |v: f64| v.clamp(0.0, 1.0) as f32;
+                        let uv = egui::Rect::from_min_max(egui::pos2(c(x0), c(y0)), egui::pos2(c(x1), c(y1)));
+                        if uv.width() > 0.0 && uv.height() > 0.0 {
+                            let tint = if found { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(170) };
+                            ui.painter().image(tex.tex.id(), rect.shrink(2.0), uv, tint);
+                        }
+                    }
+                    let picked = person.from == fi;
+                    if picked {
+                        ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+                    }
+                    let tip = match (fi == base, found) {
+                        (true, _) => crate::i18n::tr("photo {n} (the start photo): keep this face"),
+                        (false, true) => crate::i18n::tr("photo {n}: use this face"),
+                        (false, false) => {
+                            crate::i18n::tr("photo {n}: use this face (not found there: taken from the same spot as in the nearest photo)")
+                        }
+                    };
+                    if resp.on_hover_text(tip.replace("{n}", &(fi + 1).to_string())).clicked() {
+                        person.from = fi;
+                    }
+                }
+            });
+            ui.add_space(12.0);
+        }
+    });
+}
+
+fn super_thumb_request(app: &mut LightcraftApp, id: PhotoId) {
+    crate::panels::grid::request_thumb(app, id, 512, 4);
 }
 
 const BOUNDARY_WARP: lightcraft_develop::ControlSpec = lightcraft_develop::ControlSpec {

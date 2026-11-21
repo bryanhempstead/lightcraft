@@ -92,3 +92,65 @@ fn panorama_command_with_auto_crop() {
     assert!(s.execute("merge.panorama", &json!({"ids": [ids[0]]})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn focus_merge_command_creates_and_imports_a_dng() {
+    let dir = temp_dir("focus");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(320, 240, &[0.0, 0.0, 0.0]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    let r = s.execute("merge.focus", &json!({"ids": ids, "autoSettings": false, "stack": true})).unwrap();
+    assert!(r["path"].as_str().unwrap().ends_with("IMG_0-Focus.dng"), "{r}");
+    let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    let p = s.catalog.photo(id).unwrap().clone();
+    assert_eq!((p.width, p.height), (320, 240));
+    assert_eq!(s.catalog.stack_of(id).unwrap().top(), id);
+    assert!(s.execute("merge.focus", &json!({"ids": [ids[0]]})).is_err(), "one photo is not a stack");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn best_take_finds_tagged_people_and_swaps_a_face() {
+    let dir = temp_dir("take");
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(320, 240, &[0.0, 0.3]).unwrap().into_iter().enumerate() {
+        let p = dir.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    // a tagged face on both (as Lightroom's People writes them), a little apart
+    for (k, x) in [(0, 0.40), (1, 0.42)] {
+        let id = lightcraft_catalog::PhotoId(ids[k]);
+        let mut m = s.catalog.photo(id).unwrap().meta.clone();
+        m.regions = vec![lightcraft_meta::Region {
+            rect: lightcraft_geom::Rect { x0: x, y0: 0.3, x1: x + 0.2, y1: 0.6 },
+            kind: lightcraft_meta::RegionKind::Face,
+            name: Some("Kate".into()),
+            description: None,
+        }];
+        s.commit("t", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(m) }).unwrap();
+    }
+    let f = s.execute("merge.faces", &json!({"ids": ids})).unwrap();
+    let people = f["people"].as_array().unwrap();
+    assert_eq!(people.len(), 1, "{f}");
+    assert_eq!(people[0]["name"], "Kate");
+    let (bb, db) = (people[0]["boxes"][0].clone(), people[0]["boxes"][1].clone());
+    assert!(bb.is_array() && db.is_array(), "{f}");
+    let r = s
+        .execute("merge.take", &json!({"ids": ids, "base": 0, "swaps": [{"donor": 1, "baseBox": bb, "donorBox": db}], "autoSettings": false}))
+        .unwrap();
+    assert!(r["path"].as_str().unwrap().ends_with("IMG_0-Take.dng"), "{r}");
+    let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    assert_eq!(s.catalog.photo(id).map(|p| (p.width, p.height)), Some((320, 240)));
+    // a bad swap is an error, not a crash
+    assert!(s.execute("merge.take", &json!({"ids": ids, "swaps": [{"donor": 9, "baseBox": bb, "donorBox": db}]})).is_err());
+    assert!(s.execute("merge.take", &json!({"ids": ids, "swaps": "nope"})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
