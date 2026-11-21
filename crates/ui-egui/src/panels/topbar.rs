@@ -147,28 +147,32 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         });
 }
 
-/// The module picker: Classic's identity-plate text links, the active module bright, the other
-/// dim with a divider between. Returns its left edge.
+/// The module tabs: library. | develop. — the one you're in is a filled accent pill with bright
+/// text, the other quiet (a hover shows it can be clicked). Returns their left edge.
 pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
     let t = Tokens::get(ui.ctx());
-    let font = t.font(17.0);
-    let mut x = full.right() - 6.0;
+    let font = t.semibold(15.0);
+    let mut x = full.right() - 10.0;
     let items =
         [("develop", "Develop", crate::state::Module::Develop, "Develop (D)"), ("library", "Library", crate::state::Module::Library, "Library (G)")];
     for (i, (id, label, module, tip)) in items.into_iter().enumerate() {
         let on = app.ui.module == module;
-        let g = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), font.clone(), t.text);
-        let r = Rect::from_min_max(pos2(x - g.size().x - 8.0, full.top() + 4.0), pos2(x + 2.0, full.bottom() - 4.0));
+        // Bryan's label style: lowercase with a period ("library.", "develop."), in every language
+        let text = format!("{}.", crate::i18n::tr(label).to_lowercase());
+        let g = ui.painter().layout_no_wrap(text, font.clone(), t.text);
+        let h = (full.height() - 12.0).clamp(22.0, 30.0);
+        let r = Rect::from_min_max(pos2(x - g.size().x - 28.0, full.center().y - h / 2.0), pos2(x, full.center().y + h / 2.0));
         let resp = ui.interact(r, egui::Id::new(("module", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
         register(ui.ctx(), format!("module:{id}"), r);
-        let c = if on {
-            t.text
+        let (fill, c) = if on {
+            (t.accent, egui::Color32::WHITE)
         } else if resp.hovered() {
-            t.text_label
+            (t.hover, t.text)
         } else {
-            t.text_dim
+            (egui::Color32::TRANSPARENT, t.text_dim)
         };
-        ui.painter().galley(pos2(r.left() + 4.0, r.center().y - g.size().y / 2.0), g, c);
+        ui.painter().rect_filled(r, h / 2.0, fill);
+        ui.painter().galley(pos2(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, c);
         if resp.clicked() {
             let cmd = if module == crate::state::Module::Develop { "view.develop" } else { "view.library" };
             if let Err(e) = app.run(cmd, json!({})) {
@@ -177,10 +181,7 @@ pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> 
         }
         x = r.left();
         if i == 0 {
-            // the divider between the links
-            let d = Rect::from_center_size(pos2(x - 8.0, full.center().y), vec2(1.0, 16.0));
-            ui.painter().rect_filled(d, 0.0, t.text_disabled);
-            x -= 16.0;
+            x -= 8.0; // the gap between the tabs
         }
     }
     x

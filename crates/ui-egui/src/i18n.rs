@@ -827,7 +827,8 @@ mod tests {
         // the module picker is translated too
         for language in [Locale::Ja, Locale::ZhHans, Locale::PtBr] {
             let text = painted_text(&ctx, &mut app, language);
-            assert!(text.contains(language.tr("Library")) && text.contains(language.tr("Develop")), "{language:?}: {text}");
+            let tab = |l: &str| format!("{}.", language.tr(l).to_lowercase());
+            assert!(text.contains(&tab("Library")) && text.contains(&tab("Develop")), "{language:?}: {text}");
         }
         set_language(Locale::En);
     }

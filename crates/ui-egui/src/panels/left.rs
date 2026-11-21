@@ -204,6 +204,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // Lightroom Classic's Library left panel: Navigator, then Catalog, Folders and
         // Collections (scrolling), then Import… / Export… at the bottom
         navigator(app, ui);
+        selection_actions(app, ui);
         let counts = app.caches.counts(&app.session.catalog);
         let (total, picks, deleted, previous) = (counts.total, counts.picks, counts.deleted, counts.previous_import);
         let list_h = (ui.available_height() - BOTTOM_BAR).max(0.0);
@@ -266,6 +267,53 @@ fn bottom_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         {
             app.toast(ui.ctx(), e);
         }
+    }
+}
+
+/// With 2+ photos selected: what can be done with them, right under the Navigator — compare,
+/// sync, the merges, match brightness, auto align, stack. (`ui-egui` tests: `selection_actions_…`.)
+const SELECTION_ACTIONS: &[(&str, &str, &str)] = &[
+    ("compare.", "view.compare", "Compare the active photo with the next selected one (C)"),
+    ("survey.", "view.survey", "All the selected photos side by side (N)"),
+    ("sync.", "dialog.syncSettings", "Copy the active photo's settings to the others — with Match exposure / Auto align (⌘⇧S)"),
+    ("match.", "develop.matchBrightness", "Set each photo's Exposure so it comes out as bright as the active one (⌘⌥⇧M)"),
+    ("align.", "develop.autoAlign", "Level every selected photo's horizon (⌘⌥⇧U)"),
+    ("merge.", "dialog.merge", "Merge — pick HDR, panorama, HDR panorama, focus stack or best take (⌃⌥M)"),
+    ("hdr.", "dialog.mergeHdr", "HDR merge — exposure brackets → one photo (⌃H)"),
+    ("pano.", "dialog.mergePanorama", "Panorama — overlapping photos → one wide photo (⌃M)"),
+    ("focus.", "dialog.mergeFocus", "Focus stack — focused near to far → sharp throughout (⌃⌥F)"),
+    ("take.", "dialog.mergeTake", "Best take — pick each person's face from the photo you like (⌃⌥T)"),
+    ("stack.", "stack.group", "Stack the selected photos (⌘G)"),
+];
+
+fn selection_actions(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let n = app.session.selection.ids.len();
+    if n < 2 {
+        return;
+    }
+    let title = format!("{n} {}", crate::i18n::tr("selected"));
+    let (_, open) = sidebar_section_header(app, ui, "selection", &title);
+    if !open {
+        return;
+    }
+    ui.add_space(8.0);
+    let mut run = None;
+    // lined up with the section titles; every wrapped row indented the same
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 18, right: 12, top: 0, bottom: 0 }).show(ui, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 10.0);
+            for (label, cmd, tip) in SELECTION_ACTIONS {
+                if crate::widgets::text_button(ui, &format!("sel-{cmd}"), label, false).on_hover_text(crate::i18n::tr(tip)).clicked() {
+                    run = Some(*cmd);
+                }
+            }
+        });
+    });
+    ui.add_space(12.0);
+    if let Some(cmd) = run
+        && let Err(e) = app.run(cmd, serde_json::json!({}))
+    {
+        app.toast(ui.ctx(), e);
     }
 }
 

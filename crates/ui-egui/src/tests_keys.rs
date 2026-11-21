@@ -390,3 +390,25 @@ fn sync_dialog_remembers_its_checkboxes() {
     assert!(match_exposure && !auto_align);
     assert!(!groups.contains(&first), "{first} stays unchecked");
 }
+
+#[test]
+fn selection_actions_show_for_two_or_more_photos() {
+    let mut h = demo();
+    h.request("ui.set", json!({"module": "library", "view": "grid"}), T);
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(1).map(|p| p.id.0).collect();
+    exec(&mut h, "library.select", json!({"ids": ids}));
+    h.step();
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
+    assert!(!has(&h, "button:sel-dialog.merge"), "one photo: no selection actions");
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(3).map(|p| p.id.0).collect();
+    exec(&mut h, "library.select", json!({"ids": ids}));
+    h.step();
+    for w in ["button:sel-view.compare", "button:sel-dialog.syncSettings", "button:sel-dialog.merge", "button:sel-dialog.mergeTake"] {
+        assert!(has(&h, w), "{w} missing");
+    }
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "button:sel-dialog.merge"}), T)["ok"], true);
+    h.step();
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Merge { .. })));
+    // the module tabs are there and the active one is known
+    assert!(has(&h, "module:library") && has(&h, "module:develop"));
+}
