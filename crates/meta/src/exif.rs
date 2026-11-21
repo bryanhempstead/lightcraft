@@ -258,6 +258,12 @@ pub(crate) mod tests {
 /// `Exif\0\0` prefix): IFD0 (make, model, software, artist, copyright, description, orientation,
 /// date), the Exif IFD (capture settings, lens) and, when present, the GPS IFD.
 pub fn write_exif(meta: &Metadata) -> Vec<u8> {
+    write_exif_with(meta, None)
+}
+
+/// [`write_exif`] with the Exif `ColorSpace` tag (0xA001) of the pixels it goes with: 1 = sRGB,
+/// 0xFFFF = uncalibrated (any other space; its ICC profile says which), as Lightroom writes it.
+pub fn write_exif_with(meta: &Metadata, color_space: Option<u16>) -> Vec<u8> {
     use lightcraft_tiff::writer::{rational, srational};
     use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
     let ascii = |s: &Option<String>| s.as_ref().filter(|v| !v.is_empty()).map(|v| Value::Ascii(v.clone()));
@@ -278,6 +284,9 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
     }
     let mut ex = IfdBuilder::new();
     ex.set(t::EXIF_VERSION, Value::Undefined(b"0232".to_vec()));
+    if let Some(cs) = color_space {
+        ex.set(0xA001, Value::Short(vec![cs]));
+    }
     let r = |v: Option<f64>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| Value::Rational(vec![rational(v)]));
     for (tag, v) in [
         (t::DATE_TIME_ORIGINAL, meta.capture_time.map(|d| Value::Ascii(d.to_exif()))),
@@ -349,5 +358,17 @@ mod write_tests {
         assert_eq!(back.lens_model, m.lens_model);
         let g = back.gps.unwrap();
         assert!((g.latitude - 43.7904).abs() < 1e-5 && (g.longitude + 110.6818).abs() < 1e-5, "{g:?}");
+    }
+
+    #[test]
+    fn exif_color_space_is_written_when_given() {
+        // the IFD entry (little-endian): tag 0xA001, SHORT, count 1, value
+        let color_space = |b: &[u8]| {
+            (0..b.len().saturating_sub(10)).find(|&i| b[i..i + 8] == [0x01, 0xA0, 3, 0, 1, 0, 0, 0]).map(|i| u16::from_le_bytes([b[i + 8], b[i + 9]]))
+        };
+        let m = Metadata { make: Some("Synthetic".into()), ..Default::default() };
+        assert_eq!(color_space(&write_exif_with(&m, Some(1))), Some(1));
+        assert_eq!(color_space(&write_exif_with(&m, Some(0xFFFF))), Some(0xFFFF));
+        assert_eq!(color_space(&write_exif(&m)), None);
     }
 }

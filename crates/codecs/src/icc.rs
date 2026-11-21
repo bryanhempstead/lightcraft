@@ -200,9 +200,124 @@ fn align_tags(b: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A profile for one of the well-known spaces with its standard curve.
+/// A profile for one of the well-known spaces with its standard curve, as Lightroom embeds them:
+/// ICC v2 "sRGB IEC61966-2.1" and "Adobe RGB (1998)" (the forms every reader knows; their
+/// colorants and curves generated here from the published specs), v4 for the others.
 pub fn write_named(n: NamedSpace) -> Vec<u8> {
-    write_matrix_trc(&n.rgb_space(), &n.trc())
+    match n {
+        NamedSpace::Srgb => write_v2(&n.rgb_space(), &n.trc(), "sRGB IEC61966-2.1"),
+        NamedSpace::AdobeRgb => write_v2(&n.rgb_space(), &n.trc(), "Adobe RGB (1998)"),
+        _ => write_matrix_trc(&n.rgb_space(), &n.trc()),
+    }
+}
+
+/// An ICC v2.1 display-class matrix/TRC profile for `space` (D50 PCS, Bradford-adapted colorants,
+/// the media white point = the space's own white, as v2 profiles state it), its curve `curv` (a
+/// pure gamma in u8Fixed8 when it is one exactly, else a 1024-entry table), and `desc` as the
+/// `textDescriptionType` description. Deterministic: no date, no profile ID.
+pub fn write_v2(space: &RgbSpace, trc: &Trc, desc: &str) -> Vec<u8> {
+    let m = rgb_to_xyz_d50(space).0;
+    let s15 = |v: f64| ((v * 65536.0).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32).to_be_bytes();
+    let xyz = |v: [f64; 3]| -> Vec<u8> {
+        let mut t = b"XYZ \0\0\0\0".to_vec();
+        for c in v {
+            t.extend_from_slice(&s15(c));
+        }
+        t
+    };
+    let text = |s: &str| -> Vec<u8> {
+        let mut t = b"text\0\0\0\0".to_vec();
+        t.extend(s.bytes().filter(u8::is_ascii));
+        t.push(0);
+        t
+    };
+    let description = {
+        let ascii: Vec<u8> = desc.bytes().filter(u8::is_ascii).collect();
+        let mut t = b"desc\0\0\0\0".to_vec();
+        t.extend_from_slice(&(ascii.len() as u32 + 1).to_be_bytes());
+        t.extend_from_slice(&ascii);
+        t.push(0);
+        // no Unicode or ScriptCode strings: language + count 0, code + count 0, 67 bytes
+        t.extend_from_slice(&[0; 8]);
+        t.extend_from_slice(&[0; 3]);
+        t.extend_from_slice(&[0; 67]);
+        t
+    };
+    let curve = {
+        let mut t = b"curv\0\0\0\0".to_vec();
+        let gamma = match trc {
+            Trc::Gamma(g) if ((*g as f64) * 256.0).fract() == 0.0 && *g > 0.0 && *g < 255.0 => Some(*g as f64),
+            Trc::Linear => Some(1.0),
+            _ => None,
+        };
+        match gamma {
+            Some(g) => {
+                t.extend_from_slice(&1u32.to_be_bytes());
+                t.extend_from_slice(&((g * 256.0).round() as u16).to_be_bytes());
+            }
+            None => {
+                const N: usize = 1024;
+                t.extend_from_slice(&(N as u32).to_be_bytes());
+                for i in 0..N {
+                    let v = trc.to_linear(i as f32 / (N - 1) as f32).clamp(0.0, 1.0);
+                    t.extend_from_slice(&((v as f64 * 65535.0).round() as u16).to_be_bytes());
+                }
+            }
+        }
+        t
+    };
+    let w = space.white;
+    let white = [w.x / w.y, 1.0, (1.0 - w.x - w.y) / w.y];
+    let col = |j: usize| [m[0][j], m[1][j], m[2][j]];
+    // tag data, then the tags pointing at it (the three curves share one)
+    let data: Vec<(Vec<u8>, &[&[u8; 4]])> = vec![
+        (description, &[b"desc"]),
+        (text("No copyright, use freely"), &[b"cprt"]),
+        (xyz(white), &[b"wtpt"]),
+        (xyz(col(0)), &[b"rXYZ"]),
+        (xyz(col(1)), &[b"gXYZ"]),
+        (xyz(col(2)), &[b"bXYZ"]),
+        (curve, &[b"rTRC", b"gTRC", b"bTRC"]),
+    ];
+    let n_tags: usize = data.iter().map(|(_, sigs)| sigs.len()).sum();
+    let mut table = Vec::new();
+    let mut body = Vec::new();
+    let mut off = 128 + 4 + 12 * n_tags;
+    for (bytes, sigs) in &data {
+        for sig in sigs.iter() {
+            table.extend_from_slice(*sig);
+            table.extend_from_slice(&(off as u32).to_be_bytes());
+            table.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+        }
+        body.extend_from_slice(bytes);
+        off += bytes.len();
+        while !body.len().is_multiple_of(4) {
+            body.push(0);
+            off += 1;
+        }
+    }
+    let size = 128 + 4 + table.len() + body.len();
+    let mut out = Vec::with_capacity(size);
+    out.extend_from_slice(&(size as u32).to_be_bytes());
+    out.extend_from_slice(&[0; 4]); // preferred CMM: none
+    out.extend_from_slice(&[0x02, 0x10, 0, 0]); // version 2.1.0
+    out.extend_from_slice(b"mntrRGB XYZ ");
+    out.extend_from_slice(&[0; 12]); // date: unspecified
+    out.extend_from_slice(b"acsp");
+    out.extend_from_slice(b"APPL");
+    out.extend_from_slice(&[0; 4]); // flags
+    out.extend_from_slice(&[0; 8]); // manufacturer, model
+    out.extend_from_slice(&[0; 8]); // attributes: reflective, glossy, positive, colour
+    out.extend_from_slice(&0u32.to_be_bytes()); // perceptual
+    for c in ICC_D50 {
+        out.extend_from_slice(&s15(c));
+    }
+    out.extend_from_slice(&[0; 4]); // creator
+    out.resize(128, 0);
+    out.extend_from_slice(&(n_tags as u32).to_be_bytes());
+    out.extend_from_slice(&table);
+    out.extend_from_slice(&body);
+    out
 }
 
 fn linear_rec2020_profile() -> ColorProfile {
@@ -327,6 +442,65 @@ mod tests {
         let lin = write_matrix_trc(&PROPHOTO, &Trc::Linear);
         assert_eq!(lin, write_matrix_trc(&PROPHOTO, &Trc::Linear));
         assert_eq!(&lin[24..36], &[0u8; 12]);
+    }
+
+    /// sRGB and Adobe RGB are embedded as ICC v2 like Lightroom's files: version 2.1, the
+    /// descriptions Lightroom's profiles carry, the published colorants (Bradford to D50; the
+    /// values HP's and Adobe's v2 profiles state, to 1e-4) and curves (sRGB as a 1024-entry table,
+    /// Adobe RGB as gamma 563/256), and every reader we have recognises them.
+    #[test]
+    fn srgb_and_adobe_rgb_are_v2_like_lightrooms() {
+        let be32 = |b: &[u8], i: usize| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        let tag = |b: &[u8], sig: &[u8; 4]| -> Option<(usize, usize)> {
+            (0..be32(b, 128) as usize)
+                .map(|t| 132 + 12 * t)
+                .find(|&e| &b[e..e + 4] == sig)
+                .map(|e| (be32(b, e + 4) as usize, be32(b, e + 8) as usize))
+        };
+        let s15 = |b: &[u8], i: usize| i32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]) as f64 / 65536.0;
+        for (n, desc, red) in
+            [(NamedSpace::Srgb, "sRGB IEC61966-2.1", [0.4361, 0.2225, 0.0139]), (NamedSpace::AdobeRgb, "Adobe RGB (1998)", [0.6097, 0.3111, 0.0195])]
+        {
+            let b = write_named(n);
+            assert_eq!(be32(&b, 0) as usize, b.len());
+            assert_eq!(&b[8..12], &[0x02, 0x10, 0, 0], "{n:?}: v2.1");
+            assert_eq!(&b[12..24], b"mntrRGB XYZ ");
+            assert_eq!(&b[36..40], b"acsp");
+            for (off, len) in
+                ["desc", "cprt", "wtpt", "rXYZ", "gXYZ", "bXYZ", "rTRC", "gTRC", "bTRC"].map(|t| tag(&b, t.as_bytes().try_into().unwrap()).unwrap())
+            {
+                assert!(off % 4 == 0 && off + len <= b.len());
+            }
+            let (r, _) = tag(&b, b"rXYZ").unwrap();
+            for k in 0..3 {
+                assert!((s15(&b, r + 8 + 4 * k) - red[k]).abs() < 1e-4, "{n:?} rXYZ");
+            }
+            let (wp, _) = tag(&b, b"wtpt").unwrap();
+            assert!((s15(&b, wp + 8) - 0.9505).abs() < 1e-3 && (s15(&b, wp + 16) - 1.0891).abs() < 1e-3, "D65 media white");
+            let (c, _) = tag(&b, b"rTRC").unwrap();
+            assert_eq!(&b[c..c + 4], b"curv");
+            let count = be32(&b, c + 8);
+            match n {
+                NamedSpace::AdobeRgb => assert_eq!((count, &b[c + 12..c + 14]), (1, &[0x02, 0x33][..])),
+                _ => {
+                    assert_eq!(count, 1024);
+                    let at = |i: usize| u16::from_be_bytes([b[c + 12 + 2 * i], b[c + 13 + 2 * i]]) as f64 / 65535.0;
+                    for i in [0, 10, 300, 700, 1023] {
+                        let want = Trc::Srgb.to_linear(i as f32 / 1023.0) as f64;
+                        assert!((at(i) - want).abs() < 2e-5, "{i}");
+                    }
+                }
+            }
+            let info = parse(&b).expect("parses");
+            assert_eq!(info.named, Some(n));
+            assert_eq!(info.description.as_deref(), Some(desc));
+            assert!(matches!(info.kind, IccKind::MatrixTrc { .. }));
+            assert_eq!(b, write_named(n), "deterministic");
+        }
+        // Display P3 stays v4, as Apple's (and Lightroom's) is
+        let p3 = write_named(NamedSpace::DisplayP3);
+        assert_eq!(p3[8], 4);
+        assert_eq!(parse(&p3).unwrap().description.as_deref(), Some("Display P3"));
     }
 
     #[test]

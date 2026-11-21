@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
 use crate::lr_migrate::{
-    MigrateOptions, Records, default_catalog, default_preset_dirs, dump_catalog, flatten_wrapper, migrate, read_records, rematch_profiles,
-    repair_migration, resume_point,
+    MigrateOptions, Records, default_catalog, default_preset_dirs, dump_catalog, flatten_wrapper, migrate, read_records, rematch_lens_profiles,
+    rematch_profiles, repair_migration, resume_point,
 };
 use crate::{Result, Session};
 
@@ -113,6 +113,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "{profileDirs?: [folders/files] (default: Camera Raw / Lightroom profile and preset folders), profiles?: bool (default true: import those first), catalog?: path.lrcat | records?: path | readCatalog?: bool (also read the catalog, default the newest, for photos the migration didn't record), lookMap?: {lookName: profileId}, force?: bool (also photos whose profile was changed since), dryRun?: bool} — give migrated photos the creative profile their Lightroom look names (Summer Fields, Nautica…), once it is imported; one undo step → {matched, byLook, keptOwnProfile, unmatched: {look: photos}, profiles}",
             always,
             rematch
+        ),
+        cmd!(
+            "library.rematchLensProfiles",
+            "Match Lightroom Lens Profiles",
+            [],
+            None,
+            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy) | records?: path, force?: bool (also photos given another lens profile here since), dryRun?: bool} — give library photos the lens profile Lightroom chose for them (by name, file and digest: e.g. a fisheye or a manual lens the camera didn't record), with Lightroom's Enable Profile Corrections and amounts; rendered from the installed Adobe .lcp; one undo step → {changed, byProfile, notInstalled, alreadySet, keptOwnChoice, notInLibrary}",
+            always,
+            |s, p| {
+                let rec = load_records(p).map_err(|e| bad("library.rematchLensProfiles", e))?;
+                rematch_lens_profiles(s, &rec, bool_or(p, "dryRun", false), bool_or(p, "force", false))
+            }
         ),
         cmd!(
             "library.repairLightroomMigration",

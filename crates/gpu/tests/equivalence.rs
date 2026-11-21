@@ -467,6 +467,7 @@ fn embedded_lens_perspective_edges_match() {
             planes: [[1.0, -0.03, 0.01, 0.0, 0.001, -0.002], [1.0, -0.028, 0.01, 0.0, 0.001, -0.002], [1.0, -0.026, 0.01, 0.0, 0.001, -0.002]],
             center: Point::new(0.52, 0.48),
             radius: 0.6,
+            fisheye: false,
         }),
         vignette: Some(EmbeddedVignette { k: [0.4, -0.1, 0.02, 0.0, 0.0], center: Point::new(0.5, 0.5), radius: 0.6 }),
     };
@@ -478,6 +479,20 @@ fn embedded_lens_perspective_edges_match() {
     check("embedded lens + perspective", &src, &info, &s, &RenderRequest::fit(700, 700));
     s.orientation = Orientation::Rotate270;
     check("embedded lens rotated", &src, &info, &s, &RenderRequest::fit(700, 700));
+    // a de-fished fisheye lens profile (Adobe `.lcp` FisheyeModel)
+    let far = 450f64.hypot(300.0);
+    let plane = [far / (375.0 * 0.76), -0.016, -0.005, 375.0 / far, 0.0, 0.0];
+    let fisheye = EmbeddedLens {
+        warp: Some(EmbeddedWarp { planes: [plane; 3], center: Point::new(0.5, 0.5), radius: far / 900.0, fisheye: true }),
+        vignette: Some(EmbeddedVignette { k: [0.3, 0.1, 0.0, 0.0, 0.0], center: Point::new(0.5, 0.5), radius: far / 900.0 }),
+    };
+    let info = SourceInfo { lens: Some(fisheye), ..raw };
+    let mut s = DevelopSettings::default();
+    s.optics.lens_profile = true;
+    check("fisheye lens profile", &src, &info, &s, &RenderRequest::fit(700, 700));
+    s.geometry.rotate = 4.0;
+    s.orientation = Orientation::Rotate90;
+    check("fisheye lens profile rotated", &src, &info, &s, &RenderRequest::fit(700, 700));
 }
 
 #[test]

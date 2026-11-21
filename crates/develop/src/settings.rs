@@ -496,11 +496,16 @@ impl Default for Detail {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Optics {
     pub remove_ca: bool,
     pub lens_profile: bool,
+    /// The lens profile chosen by name (Lightroom's `LensProfileName` / `LensProfileFilename` /
+    /// `LensProfileDigest`): used by "Enable Profile Corrections" instead of the profile matched
+    /// from the file's own lens tag. `None` = match from the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_profile_ref: Option<LensProfileRef>,
     pub profile_distortion: f64,
     pub profile_vignetting: f64,
     pub defringe_purple_amount: f64,
@@ -523,6 +528,7 @@ impl Default for Optics {
         Self {
             remove_ca: false,
             lens_profile: false,
+            lens_profile_ref: None,
             profile_distortion: 100.0,
             profile_vignetting: 100.0,
             defringe_purple_amount: 0.0,
@@ -540,11 +546,26 @@ impl Default for Optics {
     }
 }
 
+/// A lens profile named by Lightroom / Camera Raw (`crs:LensProfile*`): found again among the
+/// installed `.lcp` files by digest (the file's MD5), file name or profile name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LensProfileRef {
+    /// `LensProfileName`, e.g. "Adobe (Canon EF 24mm f/1.4L II USM)".
+    pub name: String,
+    /// `LensProfileFilename`, the `.lcp` file's name.
+    pub filename: String,
+    /// `LensProfileDigest`: the MD5 of the `.lcp` file, upper-case hex.
+    pub digest: String,
+    /// Picked by hand (`LensProfileSetup = "Custom"`) rather than by the lens defaults.
+    pub custom: bool,
+}
+
 /// Lens corrections embedded in the file, converted to the oriented, default-cropped image: a DNG's `OpcodeList3`
 /// (`WarpRectilinear`, `FixVignetteRadial`), or a raw reader's equivalent of the camera's own correction (Panasonic /
 /// Leica RW2 distortion, `lightcraft_raw`'s `vendor/rw2.rs`). This is camera/file data (stored on the photo record, not in the develop
 /// settings); "Enable Profile Corrections" applies it, scaled by the profile distortion/vignetting amounts.
-/// LightCraft never uses Adobe LCP lens profiles.
+/// Bryan's fork also builds it from an installed Adobe `.lcp` lens profile (`lightcraft_engine::lcp`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EmbeddedLens {
@@ -554,6 +575,9 @@ pub struct EmbeddedLens {
 
 /// DNG `WarpRectilinear`: per plane (R, G, B) `[kr0, kr1, kr2, kr3, kt0, kt1]`. For an output (corrected) point at
 /// offset `d = (p − center) / radius`, the source point is `center + radius · (d·f(r²) + tangential(d))`.
+///
+/// With `fisheye`, a plane is `[a, k1, k2, b, 0, 0]` instead (an Adobe fisheye lens profile, de-fished): for
+/// `r = |d|`, `θ = atan(a·r)`, the source point is `center + radius · d · b·θ(1 + k1 θ² + k2 θ⁴) / r`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct EmbeddedWarp {
     pub planes: [[f64; 6]; 3],
@@ -561,6 +585,8 @@ pub struct EmbeddedWarp {
     pub center: Point,
     /// Normalisation radius as a fraction of the oriented image's long edge.
     pub radius: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fisheye: bool,
 }
 
 /// DNG `FixVignetteRadial`: gain `1 + k0 r² + k1 r⁴ + … + k4 r¹⁰` with `r = |p − center| / radius`.

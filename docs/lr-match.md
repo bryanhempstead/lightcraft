@@ -367,3 +367,40 @@ option) + rendering the view in Display P3.
 Sigma 15 mm diagonal fisheye profile (adapted lens, Exif "15.0 mm") — R6 default renders with it
 are 11.0 ΔE (geometry: Lightroom de-fishes and crops), the other R6 defaults 2.7; 469 Leica M
 photos use "Voigtlander VM 50mm f1.5 Nokton" by name (Exif lens "not selected").
+
+## Round 6 (2026-11-21): lens profiles Lightroom chose, export profiles like Lightroom's
+
+**Lens profiles by name.** Lightroom's `LensProfileName` / `LensProfileFilename` /
+`LensProfileDigest` (+ `Setup`) now come over with the migration, XMP sidecars and presets as
+`optics.lens_profile_ref`, and `library.rematchLensProfiles {dryRun?, force?}` adds them to a
+library migrated earlier (one undo step). Renders resolve the installed `.lcp` by file name
+(the copy whose MD5 is the digest when Camera Raw and Lightroom both hold one), else by profile
+name; a profile that isn't installed falls back to the file's own lens match. New in `lcp.rs`:
+manual-lens profiles (no `FocalLength`: the Voigtländer on the M262) and **fisheye models**:
+`r_d = θ(1 + k1 θ² + k2 θ⁴)` de-fished to a rectilinear view (`EmbeddedWarp::fisheye`, CPU +
+GPU, interval-bounded coverage). Lightroom's output scale, fitted on six R6 Sigma 15 mm renders
+(fx 0.4185, scale 0.7641, corr 0.996 on all six), is "as little zoom as fills the frame": the
+short side's edges land on the photo's edges (our rule: 0.7636). The profile's Vignetting amount
+scales the model (`1 + a·(V − 1)`), not the gain: on the Voigtländer set (amount 156) corners went
+−2.4 → −0.2 L* and the mean 4.51 → 4.37, on both halves of the set (linear 4.79 / 4.12, gain^a
+4.74 / 4.03, model 4.68 / 3.92). Amount 100 is unchanged.
+
+| set (held out) | before | after |
+|---|---|---|
+| Sigma 15 mm fisheye, R6 (`fe`, 19, not the 6 fitted) | 6.23 / 20.9 / 0 | **2.28 / 5.3 / 7** |
+| r6d (37 R6 defaults) — its 6 fisheye photos | 4.01 / 11.9 / 4 — 11.01 / 34.4 / 0 | **2.52 / 7.0 / 9** — 1.77 / 4.1 / 5 |
+| Voigtländer 50 mm on M262 (`vg`, 49, files read from the LOT48 backup) | 6.73 / 18.2 / 0 | **4.37 / 13.7 / 0** |
+| w9 (103) | 4.97 / 12.8 / 8 | 4.96 / 12.7 / 8 (R6 5.74 → 5.73, X100F 4.16 → 4.07) |
+
+**Export profiles.** sRGB and Adobe RGB exports embed ICC **v2.1** profiles generated from the
+published specs (`icc::write_v2`: "sRGB IEC61966-2.1" with a 1024-entry curve, "Adobe RGB
+(1998)" with gamma 0x0233, D50 Bradford colorants, D65 `wtpt`; nothing copied from HP's / Adobe's
+files); Display P3 / ProPhoto / Rec.2020 stay v4. Exif `ColorSpace` = 1 for sRGB, 0xFFFF
+otherwise; Make and Model are written apart (`export::split_camera`). `export_check.py`: 20 files,
+0 failures (16-bit ΔE ≤ 0.004, LittleCMS / ColorSync agree); `sips -g profile` reads the names.
+TIFF exports still carry no Exif IFD (Make / Model only through XMP).
+
+**Adobe Color default.** A raw imported fresh (no sidecar) gets `lc.color`, which on a camera
+with an Adobe Standard DCP renders as Adobe Standard + the Adobe Color look: pixel-identical to
+setting `adobe:Adobe Color` (R6 CR3 checked). The profile browser names it "Color", not "Adobe
+Color"; lens corrections start off unless the file has embedded ones.

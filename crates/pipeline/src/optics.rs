@@ -193,7 +193,7 @@ impl Warp {
         if self.lens_vig != 0.0
             && let Some(v) = self.lens.and_then(|l| l.vignette)
         {
-            g *= 1.0 + (embedded_vignette_gain(&v, src, self.w, self.h) - 1.0) * self.lens_vig;
+            g *= 1.0 / (1.0 + self.lens_vig * (1.0 / embedded_vignette_gain(&v, src, self.w, self.h).max(1e-6) - 1.0)).max(0.05);
         }
         g as f32
     }
@@ -274,6 +274,16 @@ fn embedded_warp_real<T: Real>(wp: &EmbeddedWarp, x: T, y: T, ch: usize, w: f64,
     let dx = (x - cx) / m;
     let dy = (y - cy) / m;
     let r2 = dx * dx + dy * dy;
+    if wp.fisheye {
+        // de-fish: the corrected (rectilinear) point at radius r looks along θ = atan(a·r), which the
+        // fisheye images at radius b·θ(1 + k1 θ² + k2 θ⁴)
+        let (a, k1, k2, b) = (kr0, kr1, kr2, kr3);
+        let r = r2.sqrt().clamp_tiny(1e-12);
+        let th = (r * a).atan();
+        let t2 = th * th;
+        let g = th * ((t2 * k2 + k1) * t2 + 1.0) * b / r;
+        return (dx * g * m + cx, dy * g * m + cy);
+    }
     let f = (((r2 * kr3 + kr2) * r2 + kr1) * r2) + kr0;
     let sx = dx * f + dx * (kt0 * 2.0) * dy + (r2 + dx * 2.0 * dx) * kt1;
     let sy = dy * f + dx * (kt1 * 2.0) * dy + (r2 + dy * 2.0 * dy) * kt0;
@@ -313,7 +323,8 @@ pub fn reorient_lens(lens: &EmbeddedLens, o: Orientation, w: f64, h: f64) -> Emb
             let e = o.map(c.x + kt1, c.y + kt0, w, h);
             [a, b, cc, d, e.1 - c2.1, e.0 - c2.0]
         });
-        EmbeddedWarp { planes, center: map_pt(wp.center), radius: wp.radius * long_ratio }
+        let planes = if wp.fisheye { wp.planes } else { planes };
+        EmbeddedWarp { planes, center: map_pt(wp.center), radius: wp.radius * long_ratio, fisheye: wp.fisheye }
     });
     let vignette = lens.vignette.map(|v| EmbeddedVignette { k: v.k, center: map_pt(v.center), radius: v.radius * long_ratio });
     EmbeddedLens { warp, vignette }
@@ -645,7 +656,7 @@ mod tests {
                 ]
             };
             let planes = [plane(), plane(), plane()];
-            let warp = EmbeddedWarp { planes, center: Point::new(r.range(0.4, 0.6), r.range(0.4, 0.6)), radius: r.range(0.5, 0.8) };
+            let warp = EmbeddedWarp { planes, center: Point::new(r.range(0.4, 0.6), r.range(0.4, 0.6)), radius: r.range(0.5, 0.8), fisheye: false };
             wp.lens = Some(EmbeddedLens { warp: Some(warp), vignette: None });
             wp.lens_dist = r.maybe(0.0, 2.0);
         }
@@ -756,6 +767,7 @@ mod tests {
                 planes: [[1.0, -0.03, 0.01, 0.0, 0.001, -0.002], [1.0, -0.028, 0.01, 0.0, 0.001, -0.002], [1.0, -0.026, 0.01, 0.0, 0.001, -0.002]],
                 center: Point::new(0.52, 0.48),
                 radius: 0.6,
+                fisheye: false,
             }),
             vignette: None,
         };
@@ -804,6 +816,66 @@ mod tests {
             // strong distortion leaves blank margins wide enough for whole blocks
             assert!(blank > 0 || i < 2, "case {i}: no blank block decided");
             assert_eq!(wp.block_coverage(&o2t, 5, 5, 0, 1), None, "empty block");
+        }
+    }
+
+    /// A de-fishing warp (`EmbeddedWarp::fisheye`) maps a corrected point at angle θ off the axis to
+    /// the fisheye's radius `f·θ(1 + k1 θ² + k2 θ⁴)`, its interval evaluation encloses every f64
+    /// result, and whole-block coverage agrees with every pixel.
+    #[test]
+    fn fisheye_warp_defishes_and_is_bounded() {
+        let (w, h) = (900.0, 600.0);
+        let (f, scale, k1, k2) = (375.0, 0.76, -0.016, -0.005);
+        let far = (w / 2.0f64).hypot(h / 2.0);
+        let plane = [far / (f * scale), k1, k2, f / far, 0.0, 0.0];
+        let ew = EmbeddedWarp { planes: [plane; 3], center: Point::new(0.5, 0.5), radius: far / w, fisheye: true };
+        for (dx, dy) in [(100.0, 0.0), (0.0, -250.0), (300.0, 200.0), (1e-9, 0.0), (0.0, 0.0)] {
+            let s = embedded_warp(&ew, Point::new(w / 2.0 + dx, h / 2.0 + dy), 1, w, h);
+            let r = f64::hypot(dx, dy);
+            let th = (r / (f * scale)).atan();
+            let want = f * th * (1.0 + k1 * th * th + k2 * th.powi(4));
+            let got = (s.x - w / 2.0).hypot(s.y - h / 2.0);
+            assert!((got - want).abs() < 1e-6 * f, "({dx}, {dy}): {got} vs {want}");
+            assert!(s.x.is_finite() && s.y.is_finite());
+        }
+        // the centre is magnified by 1 / scale, the periphery compressed back into the fisheye
+        let s = embedded_warp(&ew, Point::new(w / 2.0 + 1.0, h / 2.0), 1, w, h);
+        assert!(((s.x - w / 2.0) - 1.0 / scale).abs() < 1e-3, "{s:?}");
+        let lens = EmbeddedLens { warp: Some(ew), vignette: None };
+        let mut s = DevelopSettings::default();
+        s.optics.lens_profile = true;
+        for orientation in [Orientation::Normal, Orientation::Rotate90] {
+            s.orientation = orientation;
+            s.geometry.rotate = 3.0;
+            let fr = crate::geometry::Frame::with_lens(900, 600, &s, true, Some(&lens));
+            let wp = fr.warp.as_ref().expect("warp");
+            let (ow, oh) = fr.fit(500, 500);
+            let o2t = fr.out_to_oriented(ow, oh);
+            let (mut decided, mut tiles) = (0, 0);
+            for (tw, th) in [(32, 8), (7, 5)] {
+                for y0 in (0..oh).step_by(th) {
+                    for x0 in (0..ow).step_by(tw) {
+                        let (x1, y1) = ((x0 + tw).min(ow), (y0 + th).min(oh));
+                        tiles += 1;
+                        let (ix, iy) = (Interval::new(x0 as f64 + 0.5, x1 as f64 - 0.5), Interval::new(y0 as f64 + 0.5, y1 as f64 - 0.5));
+                        let (_, (sx, sy)) = wp.framing(&o2t, ix, iy);
+                        if sx.is_decided() && sy.is_decided() {
+                            for (x, y) in [(x0, y0), (x1 - 1, y1 - 1), ((x0 + x1) / 2, (y0 + y1) / 2)] {
+                                let (_, (fx, fy)) = wp.framing(&o2t, x as f64 + 0.5, y as f64 + 0.5);
+                                assert!(sx.lo() <= fx && fx <= sx.hi() && sy.lo() <= fy && fy <= sy.hi(), "({x}, {y}) outside the bounds");
+                            }
+                        }
+                        let Some(all) = wp.block_coverage(&o2t, x0, x1, y0, y1) else { continue };
+                        decided += 1;
+                        for y in y0..y1 {
+                            for x in x0..x1 {
+                                assert_eq!(wp.covers(&o2t, x, y), all, "pixel {x},{y}");
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(decided * 10 > tiles * 8, "{decided}/{tiles} blocks decided");
         }
     }
 
@@ -861,7 +933,7 @@ mod tests {
     #[test]
     fn reorient_keeps_centre_mapping() {
         let lens = EmbeddedLens {
-            warp: Some(EmbeddedWarp { planes: [[1.0, 0.01, 0.0, 0.0, 0.001, 0.002]; 3], center: Point::new(0.4, 0.5), radius: 0.6 }),
+            warp: Some(EmbeddedWarp { planes: [[1.0, 0.01, 0.0, 0.0, 0.001, 0.002]; 3], center: Point::new(0.4, 0.5), radius: 0.6, fisheye: false }),
             vignette: Some(EmbeddedVignette { k: [0.2, 0.0, 0.0, 0.0, 0.0], center: Point::new(0.4, 0.5), radius: 0.6 }),
         };
         let r = reorient_lens(&lens, Orientation::Rotate90, 300.0, 200.0);

@@ -1111,7 +1111,7 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
         draw_watermark(&mut img, &wm);
     }
     let profile = icc::write_named(named_space(space));
-    let exif = meta.map(lightcraft_meta::write_exif);
+    let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_color_space(space))));
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let e = EncodeImage::rgba8(&img);
@@ -1198,7 +1198,7 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
         DeepSamples::F32(_) => icc::write_matrix_trc(&img.space.rgb_space(), &lightcraft_codecs::Trc::Linear),
         DeepSamples::U16(_) => icc::write_named(named_space(img.space)),
     };
-    let exif = meta.map(lightcraft_meta::write_exif);
+    let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_color_space(img.space))));
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let (w, h) = (img.width as u32, img.height as u32);
@@ -1223,6 +1223,57 @@ fn parse_shutter(s: &str) -> Option<f64> {
         None => s.parse().ok(),
     }
     .filter(|v: &f64| v.is_finite() && *v > 0.0)
+}
+
+/// The Exif `ColorSpace` for pixels in `space`, as Lightroom writes it: 1 = sRGB, else 0xFFFF
+/// (uncalibrated: the embedded ICC profile names the space).
+fn exif_color_space(space: lightcraft_pipeline::OutputSpace) -> u16 {
+    if space == lightcraft_pipeline::OutputSpace::Srgb { 1 } else { 0xFFFF }
+}
+
+/// The camera's Exif `Make` and `Model` back from the library's "make model" string (as import
+/// joined them): a known maker's name, else up to where the model repeats the maker's first word
+/// ("Canon Canon EOS R6", "LEICA CAMERA AG LEICA Q2"), else the first word.
+pub fn split_camera(camera: &str) -> (Option<String>, Option<String>) {
+    const MAKES: &[&str] = &[
+        "RICOH IMAGING COMPANY, LTD.",
+        "OLYMPUS IMAGING CORP.",
+        "OLYMPUS CORPORATION",
+        "OM Digital Solutions",
+        "EASTMAN KODAK COMPANY",
+        "Minolta Co., Ltd.",
+        "KONICA MINOLTA",
+        "NIKON CORPORATION",
+        "LEICA CAMERA AG",
+        "Blackmagic Design",
+        "Phase One",
+        "Hasselblad",
+        "PENTAX Corporation",
+        "SAMSUNG TECHWIN",
+    ];
+    let c = camera.trim();
+    if c.is_empty() {
+        return (None, None);
+    }
+    let split = |at: usize| {
+        let (make, model) = (c[..at].trim(), c[at..].trim());
+        (Some(make.to_string()).filter(|m| !m.is_empty()), Some(model.to_string()).filter(|m| !m.is_empty()))
+    };
+    if let Some(m) = MAKES
+        .iter()
+        .find(|m| c.len() > m.len() && c.is_char_boundary(m.len()) && c[..m.len()].eq_ignore_ascii_case(m) && c[m.len()..].starts_with(' '))
+    {
+        return split(m.len());
+    }
+    let words: Vec<(usize, &str)> = c.split_whitespace().map(|w| ((w.as_ptr() as usize).saturating_sub(c.as_ptr() as usize), w)).collect();
+    let Some(&(_, first)) = words.first() else { return (None, None) };
+    if words.len() == 1 {
+        return (None, Some(c.to_string()));
+    }
+    if let Some(&(i, _)) = words.iter().skip(1).find(|(_, w)| w.eq_ignore_ascii_case(first)) {
+        return split(i);
+    }
+    words.get(1).map_or((None, Some(c.to_string())), |&(i, _)| split(i))
 }
 
 /// The metadata to embed for `photo` under `o.metadata` / `o.remove_location`. `None` = embed nothing.
@@ -1263,7 +1314,7 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> 
         out.gps = m.gps.map(|(latitude, longitude)| Gps { latitude, longitude, altitude: None });
     }
     if o.metadata == MetadataPolicy::All {
-        out.model = text(&m.camera);
+        (out.make, out.model) = split_camera(&m.camera);
         out.lens_model = text(&m.lens);
         out.focal_length = m.focal_mm.map(f64::from);
         out.f_number = m.aperture.map(f64::from);
@@ -1622,7 +1673,7 @@ mod tests {
         p.meta.shutter = "1/250".into();
         p.meta.gps = Some((43.0, -110.0));
         let all = export_metadata(&p, &ExportOptions::default()).unwrap();
-        assert_eq!(all.model.as_deref(), Some("Synthetic X2"));
+        assert_eq!((all.make.as_deref(), all.model.as_deref()), (Some("Synthetic"), Some("X2")), "Exif Make and Model apart");
         assert!((all.exposure_time.unwrap() - 0.004).abs() < 1e-9);
         assert!(all.gps.is_some());
         let o = ExportOptions { metadata: MetadataPolicy::AllExceptCamera, remove_location: true, ..Default::default() };
@@ -1639,11 +1690,66 @@ mod tests {
         // embedded and readable back from the JPEG
         let jpg = encode_with_metadata(&test_image(), &ExportOptions::default(), Some(&all)).unwrap();
         let back = lightcraft_meta::extract(&jpg);
-        assert_eq!(back.model.as_deref(), Some("Synthetic X2"));
+        assert_eq!((back.make.as_deref(), back.model.as_deref()), (Some("Synthetic"), Some("X2")));
         assert_eq!(back.copyright.as_deref(), Some("(c) Me"));
         assert_eq!((back.copyright_marked, back.usage_terms.as_deref()), (Some(true), Some("Editorial use only")));
         assert_eq!(back.copyright_url.as_deref(), Some("https://example.com/rights"));
         assert!(back.gps.is_some());
+    }
+
+    /// The library keeps "make model" in one string; exports write Exif Make and Model apart, as
+    /// the camera (and Lightroom's exports) did.
+    #[test]
+    fn camera_names_split_into_make_and_model() {
+        for (camera, make, model) in [
+            ("Canon Canon EOS R6", Some("Canon"), Some("Canon EOS R6")),
+            ("LEICA CAMERA AG LEICA Q2", Some("LEICA CAMERA AG"), Some("LEICA Q2")),
+            ("Leica Camera AG LEICA M (Typ 262)", Some("Leica Camera AG"), Some("LEICA M (Typ 262)")),
+            ("RICOH IMAGING COMPANY, LTD. RICOH GR III", Some("RICOH IMAGING COMPANY, LTD."), Some("RICOH GR III")),
+            ("NIKON CORPORATION NIKON D850", Some("NIKON CORPORATION"), Some("NIKON D850")),
+            ("FUJIFILM X-T2", Some("FUJIFILM"), Some("X-T2")),
+            ("Apple iPhone 13 Pro Max", Some("Apple"), Some("iPhone 13 Pro Max")),
+            ("OLYMPUS IMAGING CORP. E-M1", Some("OLYMPUS IMAGING CORP."), Some("E-M1")),
+            ("X100F", None, Some("X100F")),
+            ("  ", None, None),
+            ("Ünïcode  Café ✓", Some("Ünïcode"), Some("Café ✓")),
+        ] {
+            assert_eq!(split_camera(camera), (make.map(str::to_string), model.map(str::to_string)), "{camera}");
+        }
+    }
+
+    /// Exports name their colour space in Exif like Lightroom's: 1 = sRGB, 0xFFFF otherwise.
+    #[test]
+    fn exif_color_space_follows_the_export_space() {
+        let p = lightcraft_catalog::Photo::new(
+            lightcraft_catalog::PhotoId(1),
+            lightcraft_catalog::Source::Demo { scene: 0 },
+            "a.jpg",
+            "jpeg",
+            10,
+            10,
+            "2026-09-30T00:00:00",
+        );
+        let meta = export_metadata(&p, &ExportOptions::default()).unwrap();
+        for (space, want, desc) in [
+            (OutputSpace::Srgb, 1u16, "sRGB IEC61966-2.1"),
+            (OutputSpace::AdobeRgb, 0xFFFF, "Adobe RGB (1998)"),
+            (OutputSpace::DisplayP3, 0xFFFF, "Display P3"),
+            (OutputSpace::ProPhoto, 0xFFFF, "ProPhoto RGB"),
+        ] {
+            let o = ExportOptions { color_space: space, ..Default::default() };
+            let jpg = encode_with_metadata(&test_image(), &o, Some(&meta)).unwrap();
+            let entry = [0x01u8, 0xA0, 3, 0, 1, 0, 0, 0];
+            let at = jpg.windows(8).position(|w| w == entry).expect("ColorSpace tag");
+            assert_eq!(u16::from_le_bytes([jpg[at + 8], jpg[at + 9]]), want, "{space:?}");
+            // the profile Lightroom would embed (v2 for sRGB / Adobe RGB)
+            let icc = jpg.windows(12).position(|w| w == b"ICC_PROFILE\0").expect("ICC");
+            let v2 = matches!(space, OutputSpace::Srgb | OutputSpace::AdobeRgb);
+            assert_eq!(jpg[icc + 14 + 8], if v2 { 2 } else { 4 }, "{space:?} version");
+            let profile = lightcraft_codecs::icc::write_named(named_space(space));
+            assert_eq!(lightcraft_codecs::icc::parse(&profile).and_then(|i| i.description).as_deref(), Some(desc));
+            assert!(!v2 || jpg.windows(desc.len()).any(|w| w == desc.as_bytes()), "{space:?}: v2 ASCII description");
+        }
     }
 
     #[test]

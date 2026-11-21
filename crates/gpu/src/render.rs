@@ -396,7 +396,8 @@ fn warp_params(
     p.extend(wp.ca.map(f));
     p.push(f(wp.lens_dist));
     let warp = wp.lens.and_then(|l| l.warp);
-    p.push(warp.is_some() as u32);
+    // 0 = none, 1 = DNG WarpRectilinear, 2 = de-fish (planes `[a, k1, k2, b, 0, 0]`)
+    p.push(warp.map_or(0, |w| if w.fisheye { 2 } else { 1 }));
     let w = warp.unwrap_or_default();
     p.extend(w.planes.iter().flatten().map(|v| f(*v)));
     p.extend([f(w.center.x), f(w.center.y), f(w.radius)]);
@@ -1015,6 +1016,7 @@ mod tests {
                 planes: [[1.0, -0.03, 0.01, 0.0, 0.001, -0.002]; 3],
                 center: lightcraft_geom::Point::new(0.52, 0.48),
                 radius: 0.6,
+                fisheye: false,
             }),
             vignette: None,
         };

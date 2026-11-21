@@ -71,7 +71,7 @@ fn sample_affine(@builtin(global_invocation_id) g: vec3<u32>) {
 // --- the lens / perspective warp (`lightcraft_pipeline::optics::Warp`), in oriented-source px.
 // P layout (see `geom_warp_params`): 0 bw, 1 bh, 2 w, 3 h, 4..10 output → transformed affine,
 // 10 sx, 11 sy, 12 W, 13 H, 14 persp?, 15..24 persp_inv, 24 k1, 25..28 ca, 28 lens_dist,
-// 29 warp?, 30..48 warp planes (3 × 6), 48 warp centre x, 49 y, 50 warp radius, 51 vig_stops,
+// 29 warp? (1 = rectilinear, 2 = fisheye), 30..48 warp planes (3 × 6), 48 warp centre x, 49 y, 50 warp radius, 51 vig_stops,
 // 52 vig_power, 53 lens_vig, 54 vignette?, 55..60 vignette k, 60 vignette centre x, 61 y,
 // 62 vignette radius, 63 per-channel?, 64 gain?
 const WP_N: u32 = 65u;
@@ -104,6 +104,14 @@ fn embedded_warp(p: vec2<f32>, ch: u32) -> vec2<f32> {
     let o = 30u + 6u * min(ch, 2u);
     let d = (p - cc) / m;
     let r2 = d.x * d.x + d.y * d.y;
+    if (pu(29u) == 2u) {
+        // de-fish (`EmbeddedWarp::fisheye`): plane = [a, k1, k2, b, 0, 0]
+        let r = max(sqrt(r2), 1e-12);
+        let th = atan(r * pf(o));
+        let t2 = th * th;
+        let g = th * (1.0 + t2 * (pf(o + 1u) + t2 * pf(o + 2u))) * pf(o + 3u) / r;
+        return cc + m * d * g;
+    }
     let f = pf(o) + r2 * (pf(o + 1u) + r2 * (pf(o + 2u) + r2 * pf(o + 3u)));
     let kt0 = pf(o + 4u);
     let kt1 = pf(o + 5u);
@@ -156,7 +164,7 @@ fn warp_gain(s: vec2<f32>) -> f32 {
             vg += pf(55u + k) * rp;
             rp *= r2;
         }
-        g *= 1.0 + (vg - 1.0) * lv;
+        g *= 1.0 / max(1.0 + lv * (1.0 / max(vg, 1e-6) - 1.0), 0.05);
     }
     return g;
 }

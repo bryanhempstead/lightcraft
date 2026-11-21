@@ -781,3 +781,82 @@ fn sidecar_settings_lose_to_the_catalog() {
     assert_eq!(s2.catalog.photo(id).unwrap().develop.light.exposure, 0.0);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Lightroom's lens profile choice (name, file, digest; Custom for a lens the camera didn't
+/// record) is carried into the develop settings; a profile embedded in the file is not named.
+#[test]
+fn lens_profile_choice_is_migrated_and_rematched() {
+    let lens = |embedded: bool| {
+        format!(
+            "s = {{ Exposure2012 = 0.25,\nLensProfileDigest = \"4F398F43BF654C94ABC323C29C22E9B8\",\nLensProfileDistortionScale = 67,\nLensProfileEnable = 1,\nLensProfileFilename = \"Leica Camera AG (Voigtlander VM 50mm f1.5 Nokton Aspherical II MC) - RAW.lcp\",\nLensProfileIsEmbedded = {embedded},\nLensProfileName = \"Adobe (Voigtlander VM 50mm f/1.5 Nokton Aspherical II MC)\",\nLensProfileSetup = \"Custom\",\nLensProfileVignettingScale = 156 }}"
+        )
+    };
+    let m = map_develop(&lens(false), true, 1.5).unwrap();
+    let o = &m.partial["optics"];
+    assert_eq!(o["lens_profile"], json!(true));
+    assert_eq!((o["profile_distortion"].clone(), o["profile_vignetting"].clone()), (json!(67.0), json!(156.0)));
+    let r: lightcraft_develop::LensProfileRef = serde_json::from_value(o["lens_profile_ref"].clone()).unwrap();
+    assert_eq!(r.name, "Adobe (Voigtlander VM 50mm f/1.5 Nokton Aspherical II MC)");
+    assert_eq!(r.filename, "Leica Camera AG (Voigtlander VM 50mm f1.5 Nokton Aspherical II MC) - RAW.lcp");
+    assert_eq!(r.digest, "4F398F43BF654C94ABC323C29C22E9B8");
+    assert!(r.custom);
+    assert!(m.unmapped.is_empty(), "{:?}", m.unmapped);
+    let d = lightcraft_develop::apply_partial(&lightcraft_develop::DevelopSettings::default(), &m.partial, 1.0);
+    assert_eq!(d.optics.lens_profile_ref.as_ref(), Some(&r));
+    // it round-trips through the library's settings
+    let back: lightcraft_develop::DevelopSettings = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+    assert_eq!(back.optics.lens_profile_ref, Some(r.clone()));
+    assert!(serde_json::to_string(&lightcraft_develop::DevelopSettings::default()).unwrap().find("lens_profile_ref").is_none());
+    // the file's own (embedded) profile: nothing to name
+    assert!(map_develop(&lens(true), true, 1.5).unwrap().partial["optics"].get("lens_profile_ref").is_none());
+
+    // a library migrated before the choice was read: rematched from the catalog's records
+    let dir = std::env::temp_dir().join(format!("lc-lrlens-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let photos = dir.join("shoot");
+    std::fs::create_dir_all(&photos).unwrap();
+    let img = lightcraft_raster::Rgba8::filled(20, 16, [120, 120, 120, 255]);
+    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(photos.join("a.png"), bytes).unwrap();
+    let root = format!("{}/", dir.display());
+    let images = vec![json!({"id": 1, "root": root, "folder": "shoot/", "base": "a", "ext": "png", "develop": lens(false), "edits": 2})];
+    let rec = records_from_rows("t.lrcat", &images, &[], &[], &[], &[], &[]);
+    let rec_path = dir.join("records.json");
+    std::fs::write(&rec_path, serde_json::to_vec(&rec).unwrap()).unwrap();
+    let rec_s = rec_path.to_string_lossy().to_string();
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    s.execute("library.migrateLightroom", &json!({"records": rec_s, "presets": false})).unwrap();
+    let a = s.catalog.photos().next().cloned().unwrap();
+    assert_eq!(a.develop.optics.lens_profile_ref, Some(r.clone()), "migrated with the choice");
+    // as an older migration left it
+    let mut old = (*a.develop).clone();
+    old.optics.lens_profile_ref = None;
+    old.optics.lens_profile = false;
+    s.set_develop(a.id, old, "old").unwrap();
+    let dry = s.execute("library.rematchLensProfiles", &json!({"records": rec_s, "dryRun": true})).unwrap();
+    assert_eq!(dry["changed"], json!(1), "{dry}");
+    assert!(s.catalog.photo(a.id).unwrap().develop.optics.lens_profile_ref.is_none(), "dry run");
+    let n = s.execute("library.rematchLensProfiles", &json!({"records": rec_s})).unwrap();
+    assert_eq!(n["byProfile"][&r.name], json!(1), "{n}");
+    let p = s.catalog.photo(a.id).cloned().unwrap();
+    assert_eq!(p.develop.optics.lens_profile_ref, Some(r.clone()));
+    assert!(p.develop.optics.lens_profile);
+    assert_eq!(p.develop.light.exposure, 0.25, "the rest stays");
+    assert_eq!(s.execute("library.rematchLensProfiles", &json!({"records": rec_s})).unwrap()["alreadySet"], json!(1));
+    // a different profile chosen here is kept unless forced
+    let mut mine = (*p.develop).clone();
+    mine.optics.lens_profile_ref = Some(lightcraft_develop::LensProfileRef { name: "Adobe (Mine)".into(), ..Default::default() });
+    s.set_develop(a.id, mine, "mine").unwrap();
+    assert_eq!(s.execute("library.rematchLensProfiles", &json!({"records": rec_s})).unwrap()["keptOwnChoice"], json!(1));
+    assert_eq!(s.execute("library.rematchLensProfiles", &json!({"records": rec_s, "force": true})).unwrap()["changed"], json!(1));
+    s.undo_step().unwrap();
+    assert_eq!(
+        s.catalog.photo(a.id).unwrap().develop.optics.lens_profile_ref.as_ref().map(|r| r.name.as_str()),
+        Some("Adobe (Mine)"),
+        "one undo step"
+    );
+    // rendering a photo whose named profile isn't installed falls back without failing
+    assert!(s.render_now(a.id, 24, 16).is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -75,7 +75,7 @@ pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop
             lightcraft_raw::Opcode::WarpRectilinear { planes, center } if !planes.is_empty() && lens.warp.is_none() => {
                 let (center, radius) = centre(*center);
                 let p = |i: usize| planes[i.min(planes.len() - 1)];
-                lens.warp = Some(EmbeddedWarp { planes: [p(0), p(1), p(2)], center, radius });
+                lens.warp = Some(EmbeddedWarp { planes: [p(0), p(1), p(2)], center, radius, fisheye: false });
             }
             lightcraft_raw::Opcode::FixVignetteRadial { k, center } if lens.vignette.is_none() => {
                 let (center, radius) = centre(*center);

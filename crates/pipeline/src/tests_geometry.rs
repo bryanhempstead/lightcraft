@@ -138,7 +138,7 @@ fn profile_corrections_use_embedded_lens_only_when_enabled() {
     let (w, h) = (300usize, 200usize);
     let src = synth(w, h, |p| p, |p| [grid_value(p, 30.0); 3]);
     let lens = EmbeddedLens {
-        warp: Some(EmbeddedWarp { planes: [[1.0, -0.08, 0.0, 0.0, 0.0, 0.0]; 3], center: Point::new(0.5, 0.5), radius: 0.6 }),
+        warp: Some(EmbeddedWarp { planes: [[1.0, -0.08, 0.0, 0.0, 0.0, 0.0]; 3], center: Point::new(0.5, 0.5), radius: 0.6, fisheye: false }),
         vignette: Some(EmbeddedVignette { k: [0.5, 0.0, 0.0, 0.0, 0.0], center: Point::new(0.5, 0.5), radius: 0.6 }),
     };
     let info = SourceInfo { lens: Some(lens), ..SourceInfo::default() };

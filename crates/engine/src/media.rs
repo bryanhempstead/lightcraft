@@ -470,6 +470,40 @@ pub struct RenderJob {
     pub stages: Option<Arc<StageCache>>,
     /// Keep a full-quality result here as the photo's view preview ([`crate::Session::loupe_job`]).
     pub view_cache: Option<(Arc<PreviewCache>, Hash128)>,
+    /// What a lens profile named in `settings` needs to know of the photo (Lightroom's choice,
+    /// [`DevelopSettings::optics`]`.lens_profile_ref`): `None` = the file's own lens data only.
+    pub lens_facts: Option<LensFacts>,
+}
+
+/// The photo facts a lens profile's corrections depend on: its size (oriented, default crop),
+/// focal length and f-number.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LensFacts {
+    pub width: f64,
+    pub height: f64,
+    pub focal: Option<f64>,
+    pub f_number: Option<f64>,
+}
+
+impl LensFacts {
+    pub fn of(p: &Photo) -> Option<LensFacts> {
+        if !matches!(p.source, Source::File { .. }) || p.width < 2 || p.height < 2 {
+            return None;
+        }
+        Some(LensFacts {
+            width: f64::from(p.width),
+            height: f64::from(p.height),
+            focal: p.meta.focal_mm.map(f64::from).filter(|f| f.is_finite() && *f > 0.0),
+            f_number: p.meta.aperture.map(f64::from).filter(|f| f.is_finite() && *f > 0.0),
+        })
+    }
+
+    /// The corrections of the lens profile `s` names, when profile corrections are on and it is
+    /// installed (Bryan's fork: Adobe's `.lcp` files, [`crate::lcp`]).
+    pub fn chosen(&self, s: &DevelopSettings) -> Option<lightcraft_develop::EmbeddedLens> {
+        let r = s.optics.lens_profile_ref.as_ref().filter(|_| s.optics.lens_profile && s.section_enabled("optics"))?;
+        crate::lcp::for_ref(r, self.width, self.height, self.focal, self.f_number)
+    }
 }
 
 pub struct RenderResult {
@@ -551,7 +585,10 @@ impl RenderJob {
         match self.source.load_source() {
             Ok(source) => {
                 let src = &source.image;
-                let info = source.info_or(self.info);
+                let mut info = source.info_or(self.info);
+                if let Some(lens) = self.lens_facts.and_then(|f| f.chosen(&self.settings)) {
+                    info.lens = Some(lens);
+                }
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
@@ -779,6 +816,7 @@ impl crate::Session {
             cache,
             stages: None,
             view_cache: None,
+            lens_facts: LensFacts::of(&p),
         })
     }
 
@@ -829,6 +867,7 @@ impl crate::Session {
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
             view_cache: None,
+            lens_facts: LensFacts::of(&p),
         })
     }
 
@@ -874,6 +913,7 @@ impl crate::Session {
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
             view_cache: None,
+            lens_facts: LensFacts::of(&p),
         })
     }
 

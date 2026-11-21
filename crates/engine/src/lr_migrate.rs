@@ -379,6 +379,66 @@ pub fn rematch_profiles(s: &mut Session, rec: Option<&Records>, opts: &MigrateOp
     )
 }
 
+/// Give library photos the lens profile Lightroom chose for them (`crs:LensProfileName` /
+/// `Filename` / `Digest`), with its switch and amounts: for libraries migrated before LightCraft
+/// read the choice, or photos whose lens it matched differently. `force` also overwrites a
+/// different choice made here since. One undo step.
+pub fn rematch_lens_profiles(s: &mut Session, rec: &Records, dry_run: bool, force: bool) -> crate::Result<Value> {
+    let by_path = photos_by_path(s);
+    let (mut changed, mut same, mut kept, mut not_found) = (0usize, 0usize, 0usize, 0usize);
+    let mut by_profile: BTreeMap<String, usize> = BTreeMap::new();
+    let mut missing: BTreeMap<String, usize> = BTreeMap::new();
+    let mut ops = Vec::new();
+    for im in rec.images.iter().filter(|i| i.master.is_none()) {
+        let Some(&id) = by_path.get(&im.path) else {
+            not_found += 1;
+            continue;
+        };
+        let Some(partial) = prepare_image(im, None).develop else { continue };
+        let optics = &partial["optics"];
+        let Some(want) = optics.get("lens_profile_ref").and_then(|r| serde_json::from_value::<lightcraft_develop::LensProfileRef>(r.clone()).ok())
+        else {
+            continue;
+        };
+        let Some(p) = s.catalog.photo(id) else { continue };
+        let mut d = (*p.develop).clone();
+        let o = &mut d.optics;
+        if o.lens_profile_ref.as_ref().is_some_and(|r| r != &want) && !force {
+            kept += 1;
+            continue;
+        }
+        o.lens_profile_ref = Some(want.clone());
+        if let Some(on) = optics["lens_profile"].as_bool() {
+            o.lens_profile = on;
+        }
+        if let Some(v) = optics["profile_distortion"].as_f64() {
+            o.profile_distortion = v.clamp(0.0, 200.0);
+        }
+        if let Some(v) = optics["profile_vignetting"].as_f64() {
+            o.profile_vignetting = v.clamp(0.0, 200.0);
+        }
+        if d.optics == p.develop.optics {
+            same += 1;
+            continue;
+        }
+        changed += 1;
+        let label = if want.name.is_empty() { want.filename.clone() } else { want.name.clone() };
+        if crate::lcp::find_ref(&want).is_none() {
+            *missing.entry(label.clone()).or_default() += 1;
+        }
+        *by_profile.entry(label).or_default() += 1;
+        if !dry_run {
+            ops.push(Op::SetDevelop { id, settings: Arc::new(d), label: "Match Lens Profiles".into(), edited: p.edited.clone() });
+        }
+    }
+    if !ops.is_empty() {
+        s.commit("Match Lightroom Lens Profiles", Op::Batch { ops })?;
+    }
+    Ok(
+        json!({"dryRun": dry_run, "changed": changed, "byProfile": by_profile, "notInstalled": missing, "alreadySet": same, "keptOwnChoice": kept, "notInLibrary": not_found}),
+    )
+}
+
 // ---------------------------------------------------------------------------------- reading
 
 /// Lightroom (Cocoa) seconds → ISO 8601 UTC.

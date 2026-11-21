@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use lightcraft_develop::{EmbeddedLens, EmbeddedVignette, EmbeddedWarp};
+use lightcraft_develop::{EmbeddedLens, EmbeddedVignette, EmbeddedWarp, LensProfileRef};
 use lightcraft_geom::Point;
 
 /// Largest `.lcp` read.
@@ -37,29 +37,32 @@ fn norm(s: &str) -> String {
 /// Every `.lcp` by its lens part (the file name's last parenthesis), normalised.
 fn index() -> &'static Vec<(String, PathBuf)> {
     static I: OnceLock<Vec<(String, PathBuf)>> = OnceLock::new();
-    I.get_or_init(|| {
-        let mut out = Vec::new();
-        for d in dirs() {
-            let mut stack = vec![(d, 0usize)];
-            while let Some((dir, depth)) = stack.pop() {
-                let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-                for e in rd.flatten() {
-                    if out.len() > 50_000 {
-                        break;
-                    }
-                    let p = e.path();
-                    if p.is_dir() && depth < 4 {
-                        stack.push((p, depth + 1));
-                    } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("lcp")) {
-                        let name = e.file_name().to_string_lossy().into_owned();
-                        let lens = name.rfind('(').and_then(|a| name[a + 1..].find(')').map(|b| &name[a + 1..a + 1 + b])).unwrap_or(&name);
-                        out.push((norm(lens), p));
-                    }
+    I.get_or_init(|| scan(&dirs()))
+}
+
+/// The `.lcp` files under `roots` (four folders deep at most), by their normalised lens part.
+fn scan(roots: &[PathBuf]) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    for d in roots.iter().cloned() {
+        let mut stack = vec![(d, 0usize)];
+        while let Some((dir, depth)) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            for e in rd.flatten() {
+                if out.len() > 50_000 {
+                    break;
+                }
+                let p = e.path();
+                if p.is_dir() && depth < 4 {
+                    stack.push((p, depth + 1));
+                } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("lcp")) {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    let lens = name.rfind('(').and_then(|a| name[a + 1..].find(')').map(|b| &name[a + 1..a + 1 + b])).unwrap_or(&name);
+                    out.push((norm(lens), p));
                 }
             }
         }
-        out
-    })
+    }
+    out
 }
 
 /// One profile entry (`rdf:li`) of an `.lcp`.
@@ -73,6 +76,10 @@ pub struct Entry {
     pub distance: f64,
     /// APEX aperture value (`2·log2(N)`).
     pub aperture: f64,
+    /// `ProfileName`, e.g. "Adobe (Canon EF 24mm f/1.4L II USM)".
+    pub profile_name: String,
+    /// A fisheye model (`FisheyeModel`): `geom` is then fx, fy, cx, cy, k1, k2, 0 of
+    /// `r_d = θ(1 + k1 θ² + k2 θ⁴)`, θ the angle off the axis.
     pub fisheye: bool,
     /// Perspective model: fx, fy, cx, cy (in units of the long side), k1, k2, k3.
     pub geom: Option<[f64; 7]>,
@@ -139,13 +146,19 @@ pub fn parse(text: &str) -> Vec<Entry> {
             focal: num(li, "FocalLength").unwrap_or(0.0),
             distance: num(li, "FocusDistance").unwrap_or(0.0),
             aperture: num(li, "ApertureValue").unwrap_or(0.0),
+            profile_name: field(li, "ProfileName").unwrap_or_default(),
             fisheye: li.contains("FisheyeModel"),
             ..Entry::default()
         };
-        if let Some(p) = element(li, "PerspectiveModel") {
+        // without FocalLengthX: the focal length over the sensor's long side (36 mm full frame,
+        // divided by the crop factor)
+        let format = num(li, "SensorFormatFactor").filter(|f| *f > 0.05 && *f < 20.0).unwrap_or(1.0);
+        let default_fx = (e.focal > 0.0).then(|| e.focal * format / 36.0);
+        let model = if e.fisheye { element(li, "FisheyeModel") } else { element(li, "PerspectiveModel") };
+        if let Some(p) = model {
             let own = without(p, &["VignetteModel", "ChromaticRedGreenModel", "ChromaticGreenModel", "ChromaticBlueGreenModel"]);
             let base = |k: &str, d: f64| num(&own, k).unwrap_or(d);
-            let fx = num(&own, "FocalLengthX").filter(|f| *f > 0.0);
+            let fx = num(&own, "FocalLengthX").filter(|f| *f > 0.0).or(default_fx);
             let (cx, cy) = (base("ImageXCenter", f64::NAN), base("ImageYCenter", f64::NAN));
             if let Some(fx) = fx {
                 let fy = base("FocalLengthY", fx);
@@ -166,7 +179,11 @@ pub fn parse(text: &str) -> Vec<Entry> {
                 ]);
             }
         }
-        if e.focal > 0.0 && (e.geom.is_some() || e.vignette.is_some()) && !e.fisheye {
+        // a manual lens (no FocalLength: one focal length) is a prime: its model's focal length
+        if e.focal.is_nan() || e.focal <= 0.0 {
+            e.focal = e.geom.or(e.vignette).map_or(0.0, |m| m[0] * 36.0 / format);
+        }
+        if e.focal.is_finite() && e.focal > 0.0 && (e.geom.is_some() || e.vignette.is_some()) {
             out.push(e);
         }
     }
@@ -301,18 +318,27 @@ pub fn corrections(entries: &[Entry], w: f64, h: f64, focal: f64, f_number: Opti
         (cx.clamp(0.0, w), cy.clamp(0.0, h))
     };
     let far = |cx: f64, cy: f64| [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().map(|&(x, y)| (x - cx).hypot(y - cy)).fold(0.0, f64::max).max(1.0);
-    let geom = interpolate(entries, focal, f_number, distance, |e| e.geom);
-    let warp = geom.and_then(|g| {
-        let (cx, cy) = centre(g[2], g[3]);
-        let r = far(cx, cy);
-        let s = r / (g[0] * dmax).max(1e-9);
-        let plane = [1.0, g[4] * s.powi(2), g[5] * s.powi(4), g[6] * s.powi(6), 0.0, 0.0];
-        plane.iter().all(|v| v.is_finite() && v.abs() < 10.0).then(|| EmbeddedWarp {
-            planes: [plane; 3],
-            center: Point::new(cx / w, cy / h),
-            radius: r / dmax,
+    let fisheye = entries.iter().any(|e| e.fisheye && e.geom.is_some());
+    let geom = interpolate(entries, focal, f_number, distance, |e| e.geom.filter(|_| e.fisheye == fisheye));
+    let warp = if fisheye {
+        geom.and_then(|g| {
+            let (cx, cy) = centre(g[2], g[3]);
+            defish(g, w, h, cx, cy, far(cx, cy))
         })
-    });
+    } else {
+        geom.and_then(|g| {
+            let (cx, cy) = centre(g[2], g[3]);
+            let r = far(cx, cy);
+            let s = r / (g[0] * dmax).max(1e-9);
+            let plane = [1.0, g[4] * s.powi(2), g[5] * s.powi(4), g[6] * s.powi(6), 0.0, 0.0];
+            plane.iter().all(|v| v.is_finite() && v.abs() < 10.0).then(|| EmbeddedWarp {
+                planes: [plane; 3],
+                center: Point::new(cx / w, cy / h),
+                radius: r / dmax,
+                fisheye: false,
+            })
+        })
+    };
     let vig = interpolate(entries, focal, f_number, distance, |e| e.vignette).and_then(|v| {
         let (cx, cy) = centre(v[2], v[3]);
         let r = far(cx, cy);
@@ -343,6 +369,156 @@ pub fn corrections(entries: &[Entry], w: f64, h: f64, focal: f64, f_number: Opti
         k.iter().all(|x| x.abs() < 100.0).then(|| EmbeddedVignette { k, center: Point::new(cx / w, cy / h), radius: r / dmax })
     });
     (warp.is_some() || vig.is_some()).then_some(EmbeddedLens { warp, vignette: vig })
+}
+
+/// A fisheye profile's correction for a `w × h` image (optical centre `cx, cy` px, `far` = its
+/// distance to the farthest corner): the rectilinear view of the scene, scaled as Lightroom does —
+/// as little as possible while every pixel of the frame still comes from the photo (measured on
+/// Lightroom's renders of the Sigma 15 mm diagonal fisheye: the frame's short-side edges touch
+/// the photo's, ±0.1 %).
+fn defish(g: [f64; 7], w: f64, h: f64, cx: f64, cy: f64, far: f64) -> Option<EmbeddedWarp> {
+    let dmax = w.max(h);
+    let f = g[0] * dmax;
+    let (k1, k2) = (g[4], g[5]);
+    if !(f.is_finite() && f > 0.0 && k1.is_finite() && k2.is_finite()) {
+        return None;
+    }
+    let rho = |th: f64| th * (1.0 + th * th * (k1 + k2 * th * th));
+    // the source position of frame position (x, y) at output scale `s`
+    let source = |x: f64, y: f64, s: f64| {
+        let (dx, dy) = (x - cx, y - cy);
+        let r = dx.hypot(dy);
+        if r < 1e-9 {
+            return (cx, cy);
+        }
+        let k = f * rho((r / (f * s)).atan()) / r;
+        (cx + dx * k, cy + dy * k)
+    };
+    const N: usize = 64;
+    let tol = 1e-6 * dmax;
+    let covered = |s: f64| {
+        (0..=N).all(|i| {
+            let t = i as f64 / N as f64;
+            [(t * w, 0.0), (t * w, h), (0.0, t * h), (w, t * h)].iter().all(|&(x, y)| {
+                let (sx, sy) = source(x, y, s);
+                sx >= -tol && sy >= -tol && sx <= w + tol && sy <= h + tol
+            })
+        })
+    };
+    let (mut lo, mut hi) = (0.02, 50.0);
+    if !covered(hi) {
+        return None;
+    }
+    for _ in 0..60 {
+        let mid = (lo * hi).sqrt();
+        if covered(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let plane = [far / (f * hi), k1, k2, f / far, 0.0, 0.0];
+    plane.iter().all(|v| v.is_finite() && v.abs() < 1e3).then(|| EmbeddedWarp {
+        planes: [plane; 3],
+        center: Point::new(cx / w, cy / h),
+        radius: far / dmax,
+        fisheye: true,
+    })
+}
+
+/// The installed profile a develop setting names (Lightroom's `LensProfileFilename`,
+/// `LensProfileName`, `LensProfileDigest`).
+pub fn find_ref(r: &LensProfileRef) -> Option<(PathBuf, Arc<Vec<Entry>>)> {
+    find_ref_in(index(), r)
+}
+
+/// [`find_ref`] among `index`: the file of that name (the one with that digest when several are
+/// installed: Camera Raw's folder and Lightroom's own hold copies), else a file whose entries carry
+/// that profile name (that digest first).
+fn find_ref_in(index: &[(String, PathBuf)], r: &LensProfileRef) -> Option<(PathBuf, Arc<Vec<Entry>>)> {
+    let digest = r.digest.trim().to_ascii_lowercase();
+    let digest_ok = |p: &Path| !digest.is_empty() && file_md5(p).is_some_and(|d| d == digest);
+    let first_ok = |cands: Vec<(PathBuf, Arc<Vec<Entry>>)>| {
+        let i = cands.iter().position(|(p, _)| digest_ok(p)).unwrap_or(0);
+        cands.into_iter().nth(i)
+    };
+    let file = r.filename.trim();
+    if !file.is_empty() {
+        let same: Vec<(PathBuf, Arc<Vec<Entry>>)> = index
+            .iter()
+            .filter(|(_, p)| p.file_name().is_some_and(|n| n.to_string_lossy().trim().eq_ignore_ascii_case(file)))
+            .filter_map(|(_, p)| Some((p.clone(), parsed(p)?)))
+            .collect();
+        if !same.is_empty() {
+            return first_ok(same);
+        }
+    }
+    let name = r.name.trim();
+    let want = norm(name);
+    if want.len() < 4 {
+        return None;
+    }
+    let named: Vec<(PathBuf, Arc<Vec<Entry>>)> = index
+        .iter()
+        .filter(|(key, _)| key.len() >= 4 && want.contains(key.as_str()))
+        .filter_map(|(_, p)| Some((p.clone(), parsed(p)?)))
+        .filter(|(_, e)| e.iter().any(|e| e.profile_name.trim().eq_ignore_ascii_case(name)))
+        .collect();
+    if named.is_empty() { None } else { first_ok(named) }
+}
+
+/// The lens corrections of the profile `r` names for a `w × h` photo (oriented, default crop) at
+/// `focal` mm and `f_number`: `None` when it isn't installed (or has no usable model).
+pub fn for_ref(r: &LensProfileRef, w: f64, h: f64, focal: Option<f64>, f_number: Option<f64>) -> Option<EmbeddedLens> {
+    let (_, entries) = find_ref(r)?;
+    corrections(&entries, w, h, focal.unwrap_or(0.0), f_number, None)
+}
+
+/// The MD5 of a file, lower-case hex (Lightroom's `LensProfileDigest`), cached.
+fn file_md5(path: &Path) -> Option<String> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().unwrap_or_else(PoisonError::into_inner).get(path) {
+        return hit.clone();
+    }
+    let v = std::fs::metadata(path).ok().filter(|m| m.len() <= MAX_LCP).and_then(|_| std::fs::read(path).ok()).map(|b| md5_hex(&b));
+    cache.lock().unwrap_or_else(PoisonError::into_inner).insert(path.to_path_buf(), v.clone());
+    v
+}
+
+/// MD5 (RFC 1321) of `data` as lower-case hex: only to recognise the profile file a digest names.
+fn md5_hex(data: &[u8]) -> String {
+    const S: [u32; 64] = [
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16,
+        23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+    ];
+    let k: [u32; 64] = std::array::from_fn(|i| ((i as f64 + 1.0).sin().abs() * 4_294_967_296.0) as u32);
+    let mut st: [u32; 4] = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&((data.len() as u64).wrapping_mul(8)).to_le_bytes());
+    for chunk in msg.as_chunks::<64>().0 {
+        let m: [u32; 16] = std::array::from_fn(|i| u32::from_le_bytes(chunk.get(i * 4..i * 4 + 4).and_then(|b| b.try_into().ok()).unwrap_or([0; 4])));
+        let [mut a, mut b, mut c, mut d] = st;
+        for i in 0..64 {
+            let (f, g) = match i / 16 {
+                0 => ((b & c) | (!b & d), i),
+                1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
+                2 => (b ^ c ^ d, (3 * i + 5) % 16),
+                _ => (c ^ (b | !d), (7 * i) % 16),
+            };
+            let t = d;
+            d = c;
+            c = b;
+            b = b.wrapping_add(a.wrapping_add(f).wrapping_add(k[i]).wrapping_add(m[g]).rotate_left(S[i]));
+            a = t;
+        }
+        st = [st[0].wrapping_add(a), st[1].wrapping_add(b), st[2].wrapping_add(c), st[3].wrapping_add(d)];
+    }
+    st.iter().flat_map(|w| w.to_le_bytes()).map(|b| format!("{b:02x}")).collect()
 }
 
 /// The lens profile corrections for a raw (its make, model, lens, focal length and aperture;
@@ -392,6 +568,103 @@ mod tests {
         assert!(warp.planes[0][1] < 0.0 && (warp.planes[0][0] - 1.0).abs() < 1e-12);
     }
 
+    /// A diagonal fisheye's entry the way Adobe writes them: no FocalLengthX (the focal length
+    /// over the 36 mm frame), no principal point, nested chromatic models.
+    const FISHEYE: &str = r#"<x:xmpmeta><rdf:RDF><rdf:Description><photoshop:CameraProfiles><rdf:Seq>
+     <rdf:li><rdf:Description stCamera:Make="Canon" stCamera:CameraRawProfile="True" stCamera:Lens="15mm"
+       stCamera:ProfileName="Adobe (Test 15mm FISHEYE, Canon)" stCamera:SensorFormatFactor="1"
+       stCamera:FocalLength="15" stCamera:FocusDistance="1" stCamera:ApertureValue="2.97">
+      <stCamera:FisheyeModel><rdf:Description stCamera:RadialDistortParam1="-0.015918" stCamera:RadialDistortParam2="-0.004867">
+       <stCamera:ChromaticRedGreenModel stCamera:ScaleFactor="1.0004" stCamera:RadialDistortParam1="0.5"/>
+       <stCamera:VignetteModel stCamera:VignetteModelParam1="-0.015" stCamera:VignetteModelParam2="-0.25" stCamera:VignetteModelParam3="0.05"/>
+      </rdf:Description></stCamera:FisheyeModel></rdf:Description></rdf:li>
+    </rdf:Seq></photoshop:CameraProfiles></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+
+    #[test]
+    fn fisheye_profiles_defish_and_fill_the_frame() {
+        let e = parse(FISHEYE);
+        assert_eq!(e.len(), 1);
+        assert!(e[0].fisheye);
+        assert_eq!(e[0].profile_name, "Adobe (Test 15mm FISHEYE, Canon)");
+        let g = e[0].geom.unwrap();
+        assert!((g[0] - 15.0 / 36.0).abs() < 1e-12, "{g:?}");
+        assert_eq!((g[4], g[5]), (-0.015918, -0.004867), "the fisheye's own terms, not a chromatic model's");
+        let (w, h) = (6000.0, 4000.0);
+        let lens = corrections(&e, w, h, 15.0, Some(2.8), None).unwrap();
+        let warp = lens.warp.unwrap();
+        assert!(warp.fisheye && lens.vignette.is_some());
+        let at = |x: f64, y: f64| lightcraft_pipeline::optics::embedded_warp(&warp, Point::new(x, y), 1, w, h);
+        // every frame edge comes from the photo, and the short side's edges are where it stops
+        // (Lightroom's scale: measured 0.764 on its renders of the Sigma 15 mm with this model)
+        for i in 0..=40 {
+            let t = i as f64 / 40.0;
+            for (x, y) in [(t * w, 0.0), (t * w, h), (0.0, t * h), (w, t * h)] {
+                let s = at(x, y);
+                assert!(s.x >= -0.01 && s.y >= -0.01 && s.x <= w + 0.01 && s.y <= h + 0.01, "({x}, {y}) → {s:?}");
+            }
+        }
+        assert!(at(w / 2.0, 0.0).y.abs() < 0.5, "{:?}", at(w / 2.0, 0.0));
+        let fs = (15.0 / 36.0) * w;
+        let scale = 1.0 / (warp.planes[0][0] * fs / (warp.radius * w));
+        assert!((scale - 0.7613).abs() < 0.002, "{scale}");
+        // the centre is shown 1 / scale larger than the fisheye shows it
+        let c = at(w / 2.0 + 10.0, h / 2.0);
+        assert!(((c.x - w / 2.0) - 10.0 / scale).abs() < 0.01, "{c:?}");
+        // portrait frames fill too
+        let p = corrections(&e, h, w, 15.0, None, None).unwrap().warp.unwrap();
+        let s = lightcraft_pipeline::optics::embedded_warp(&p, Point::new(0.0, w / 2.0), 1, h, w);
+        assert!(s.x.abs() < 0.5, "{s:?}");
+    }
+
+    /// A manual lens's profile (Voigtländer on a Leica M): no FocalLength in its entries.
+    #[test]
+    fn manual_lens_profiles_without_a_focal_length_parse() {
+        let manual = LCP.replace("<stCamera:FocalLength>24</stCamera:FocalLength>", "").replace(" stCamera:FocalLength=\"24\"", "");
+        let e = parse(&manual);
+        assert_eq!(e.len(), 2, "{manual}");
+        assert!((e[0].focal - 0.708 * 36.0).abs() < 1e-9);
+        let lens = corrections(&e, 6000.0, 4000.0, 0.0, None, None).unwrap();
+        assert!(lens.warp.is_some() && lens.vignette.is_some());
+    }
+
+    #[test]
+    fn md5_matches_the_rfc_vectors() {
+        assert_eq!(md5_hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(md5_hex(b"12345678901234567890123456789012345678901234567890123456789012345678901234567890"), "57edf4a22be3c955ac49da2e2107b67a");
+    }
+
+    #[test]
+    fn profiles_are_found_by_file_name_digest_and_name() {
+        let dir = std::env::temp_dir().join(format!("lc-lcp-ref-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (a, b) = (dir.join("CameraRaw/LensProfiles/1.0/Sigma"), dir.join("Lightroom/LensProfiles/1.0/Sigma"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let file = "Canon (Test_15mm_FISHEYE ) - RAW.lcp";
+        // two copies of the same file name: an older one, and the one Lightroom's digest names
+        let old = FISHEYE.replace("-0.015918", "-0.02");
+        std::fs::write(a.join(file), &old).unwrap();
+        std::fs::write(b.join(file), FISHEYE).unwrap();
+        std::fs::write(a.join("Canon (Other lens) - RAW.lcp"), LCP).unwrap();
+        let idx = scan(std::slice::from_ref(&dir));
+        assert_eq!(idx.len(), 3);
+        let digest = md5_hex(FISHEYE.as_bytes()).to_ascii_uppercase();
+        let by_file = LensProfileRef { filename: file.into(), digest: digest.clone(), ..Default::default() };
+        let (p, e) = find_ref_in(&idx, &by_file).unwrap();
+        assert_eq!(p, b.join(file), "the copy with Lightroom's digest");
+        assert_eq!(e[0].geom.unwrap()[4], -0.015918);
+        // without a digest: a file of that name
+        assert!(find_ref_in(&idx, &LensProfileRef { filename: file.to_lowercase(), ..Default::default() }).is_some());
+        // by profile name only (the file renamed since), digest first
+        let by_name = LensProfileRef { name: "Adobe (Test 15mm FISHEYE, Canon)".into(), filename: "gone.lcp".into(), digest, custom: true };
+        assert_eq!(find_ref_in(&idx, &by_name).unwrap().0, b.join(file));
+        // unknown: nothing (the file's own lens match stays)
+        assert!(find_ref_in(&idx, &LensProfileRef { name: "Adobe (Nope)".into(), ..Default::default() }).is_none());
+        assert!(find_ref_in(&idx, &LensProfileRef::default()).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn garbage_is_ignored() {
         assert!(parse("").is_empty());
@@ -400,5 +673,13 @@ mod tests {
         let e = parse(LCP);
         assert!(corrections(&e, 0.0, 0.0, 24.0, None, None).is_none());
         assert!(corrections(&e, 1000.0, 800.0, f64::NAN, Some(f64::NAN), Some(-1.0)).is_some());
+        // a fisheye model that can't fill any frame, or with nonsense terms: no warp, no panic
+        for (k1, k2) in [("-5", "0"), ("NaN", "1e308"), ("1e300", "-1e300")] {
+            let bad = FISHEYE.replace("-0.015918", k1).replace("-0.004867", k2);
+            let e = parse(&bad);
+            let _ = corrections(&e, 600.0, 400.0, 15.0, None, None);
+        }
+        assert!(defish([0.4, 0.4, f64::NAN, f64::NAN, 0.0, 0.0, 0.0], 600.0, 400.0, 300.0, 200.0, 360.0).is_some());
+        assert!(defish([0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0], 600.0, 400.0, 300.0, 200.0, 360.0).is_none());
     }
 }

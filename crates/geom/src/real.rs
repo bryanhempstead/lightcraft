@@ -21,11 +21,21 @@ pub trait Real:
 {
     /// `if |v| < tiny { tiny } else { v }`: the guard of a denominator against zero ([`crate::Homography::apply`]).
     fn clamp_tiny(self, tiny: f64) -> Self;
+    /// Square root (NaN below zero, as `f64::sqrt`).
+    fn sqrt(self) -> Self;
+    /// Arc tangent (`f64::atan`).
+    fn atan(self) -> Self;
 }
 
 impl Real for f64 {
     fn clamp_tiny(self, tiny: f64) -> f64 {
         if self.abs() < tiny { tiny } else { self }
+    }
+    fn sqrt(self) -> f64 {
+        f64::sqrt(self)
+    }
+    fn atan(self) -> f64 {
+        f64::atan(self)
     }
 }
 
@@ -165,6 +175,16 @@ impl Real for Interval {
     fn clamp_tiny(self, tiny: f64) -> Interval {
         if self.lo >= tiny || self.hi <= -tiny { self } else { Interval::UNDECIDED }
     }
+    /// Undecided when the interval reaches below zero (where `f64::sqrt` is NaN). `f64::sqrt` is
+    /// correctly rounded and monotonic, so the bounds' roots (moved outward) enclose every root.
+    fn sqrt(self) -> Interval {
+        if self.lo >= 0.0 { Interval::outward(self.lo.sqrt(), self.hi.sqrt()) } else { Interval::UNDECIDED }
+    }
+    /// `f64::atan` is monotonic (within an ulp of the exact value), so the bounds' arc tangents,
+    /// moved outward, enclose every result.
+    fn atan(self) -> Interval {
+        Interval::outward(self.lo.atan(), self.hi.atan())
+    }
 }
 
 #[cfg(test)]
@@ -198,6 +218,10 @@ mod tests {
             prop_assert!(contains(ia + k, a + k));
             prop_assert!(contains(ia - k, a - k));
             prop_assert!(contains(ia * k, a * k));
+            prop_assert!(contains(ia.atan(), a.atan()));
+            let r = ia.sqrt();
+            let sqrt_ok = if ia.lo() >= 0.0 { contains(r, a.sqrt()) } else { !r.is_decided() };
+            prop_assert!(sqrt_ok);
             prop_assert!(k == 0.0 || contains(ia / k, a / k));
             let c = ib.clamp_tiny(1.0);
             prop_assert!(!c.is_decided() || contains(c, b.clamp_tiny(1.0)));

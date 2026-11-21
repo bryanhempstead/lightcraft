@@ -322,9 +322,24 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     n(o, "GrainSize", "grain.size");
     n(o, "GrainFrequency", "grain.roughness");
 
-    // ---- Optics (manual corrections; lens profiles are ours, only the switch carries over)
+    // ---- Optics: the switch, and the lens profile Lightroom chose (by name, file and digest;
+    // Bryan's fork renders it from the installed `.lcp`). A profile embedded in the file
+    // (`LensProfileIsEmbedded`) is the file's own: nothing to name.
     if let Some(b) = boolean(props, "crs:LensProfileEnable") {
         put(o, "optics.lens_profile", json!(b));
+    }
+    let embedded = boolean(props, "crs:LensProfileIsEmbedded").unwrap_or(false);
+    let (name, file) = (first(props, "crs:LensProfileName").unwrap_or(""), first(props, "crs:LensProfileFilename").unwrap_or(""));
+    let digest = first(props, "crs:LensProfileDigest").unwrap_or("");
+    let setup = first(props, "crs:LensProfileSetup").unwrap_or("");
+    if !embedded && (!name.is_empty() || !file.is_empty()) {
+        let r = lightcraft_develop::LensProfileRef {
+            name: name.to_string(),
+            filename: file.to_string(),
+            digest: digest.to_string(),
+            custom: setup.eq_ignore_ascii_case("custom"),
+        };
+        put(o, "optics.lens_profile_ref", json!(r));
     }
     if let Some(b) = boolean(props, "crs:AutoLateralCA") {
         put(o, "optics.remove_ca", json!(b));
