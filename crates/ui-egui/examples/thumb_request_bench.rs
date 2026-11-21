@@ -197,7 +197,7 @@ fn real() {
         p.as_shot_wb = probe.as_shot_wb;
         p.embedded_lens = probe.embedded_lens;
         p.content_hash = probe.content_hash;
-        p.preview_only = probe.preview_only;
+        p.set_preview_only(probe.preview_only);
         lightcraft_engine::import::apply_import_defaults(&session, &mut p);
         session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     }

@@ -1321,5 +1321,7 @@
   "Media Type": "Тип медиа",
   "Minimal": "Минимальные",
   "Embedded & Sidecar": "Встроенные и сопутствующие",
-  "Import Photos and Video…": "Импорт фото и видео…"
+  "Import Photos and Video…": "Импорт фото и видео…",
+  "Checking raw files": "Проверка RAW-файлов",
+  "1 raw can now be developed from its raw data": "1 RAW-файл теперь можно проявлять из RAW-данных"
 }

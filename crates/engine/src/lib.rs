@@ -445,6 +445,23 @@ impl Session {
         }
     }
 
+    /// Apply an op that is LightCraft's own bookkeeping rather than something the user did (raws
+    /// rechecked after a decoder update): journaled like any op, but not an undo step, and it
+    /// leaves the redo stack alone.
+    pub(crate) fn apply_bookkeeping(&mut self, op: Op) -> Result<()> {
+        let fwd = op.clone();
+        self.catalog.apply(op)?;
+        self.pending_log.push(fwd);
+        Ok(())
+    }
+
+    /// Which library load this session's catalog came from: changes every time a library is
+    /// opened (also a reopen of the same one), so work started for one library can tell when the
+    /// result arrives for another.
+    pub fn library_generation(&self) -> u64 {
+        self.catalog.revision >> 32
+    }
+
     /// Fold the last `n` undo steps into one (commands that commit step by step because each op
     /// depends on the state the previous one left).
     pub fn merge_undo(&mut self, n: usize, label: &str) {
@@ -832,6 +849,8 @@ mod tests_organize;
 mod tests_persist;
 #[cfg(test)]
 mod tests_prefs;
+#[cfg(test)]
+mod tests_recheck;
 #[cfg(test)]
 mod tests_segment;
 #[cfg(test)]

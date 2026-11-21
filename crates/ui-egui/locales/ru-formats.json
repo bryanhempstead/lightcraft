@@ -186,5 +186,6 @@
   "Preset: {name} · {n} photo{}": "Пресет: {name} · фото: {n}{:.0}",
   "Rated {n} star{} or more": "Рейтинг от {n}{:.0}",
   "{path}: click the box to tag the selection, the name to show its photos": "{path}: флажок — добавить к выбранным, имя — показать фото",
-  "{total} photo{}": "Фото: {total}{:.0}"
+  "{total} photo{}": "Фото: {total}{:.0}",
+  "{n} raws can now be developed from their raw data": "RAW-файлов, которые теперь можно проявлять из RAW-данных: {n}"
 }

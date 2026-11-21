@@ -1809,5 +1809,7 @@
   "Media Type": "Medientyp",
   "Minimal": "Minimal",
   "Embedded & Sidecar": "Eingebettet und Filialdatei",
-  "Import Photos and Video…": "Fotos und Videos importieren…"
+  "Import Photos and Video…": "Fotos und Videos importieren…",
+  "Checking raw files": "RAW-Dateien werden geprüft",
+  "1 raw can now be developed from its raw data": "1 RAW-Datei kann jetzt aus ihren Rohdaten entwickelt werden"
 }

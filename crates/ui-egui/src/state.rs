@@ -474,6 +474,10 @@ pub struct UiState {
     /// The result of the last Find Missing Photos (it searches in the background).
     #[serde(skip)]
     pub last_find_missing: Option<serde_json::Value>,
+    /// The library (its `Session::library_generation`) whose preview-only raws were rechecked
+    /// (`crate::recheck`).
+    #[serde(skip)]
+    pub rechecked_library: Option<u64>,
     #[serde(skip)]
     pub status: String,
     #[serde(skip)]
@@ -752,6 +756,7 @@ impl Default for UiState {
             reference: None,
             toast: None,
             last_find_missing: None,
+            rechecked_library: None,
             status: String::new(),
             dialog: None,
         }

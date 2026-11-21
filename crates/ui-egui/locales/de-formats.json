@@ -186,5 +186,6 @@
   "Preset: {name} · {n} photo{}": "Vorgabe: {name} · {n} Foto{}",
   "Rated {n} star{} or more": "Ab {n} Stern(en){:.0}",
   "{path}: click the box to tag the selection, the name to show its photos": "{path}: Kästchen klicken = Auswahl verschlagworten, Name klicken = Fotos zeigen",
-  "{total} photo{}": "{total} Foto{}"
+  "{total} photo{}": "{total} Foto{}",
+  "{n} raws can now be developed from their raw data": "{n} RAW-Dateien können jetzt aus ihren Rohdaten entwickelt werden"
 }

@@ -169,10 +169,13 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
 /// `None` when nothing changed. Covers a raw that became decodable (or stopped being: a different
 /// file relinked), i.e. a change of [`lightcraft_catalog::Photo::preview_only`].
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
+    // a preview-only flag another build decided gets this build's stamp, even with the same reason
+    let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
     let same = info.content_hash == ph.content_hash
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
-        && info.preview_only == ph.preview_only;
+        && info.preview_only == ph.preview_only
+        && preview_checked == ph.preview_checked;
     (!same).then_some(Op::SetContent {
         id,
         width: info.width,
@@ -180,6 +183,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
         file_size: info.file_size,
         content_hash: info.content_hash,
         preview_only: info.preview_only,
+        preview_checked,
     })
 }
 
@@ -210,6 +214,39 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     ops
 }
 
+/// The ops that bring photo `id` and its virtual copies up to date with what their file is now
+/// (`info`, a fresh probe), appended to `ops`; the photos they change are appended to `changed`.
+/// Reload and the preview-only recheck (`library.recheckPreviewOnly`) share it.
+pub(crate) fn reload_ops(
+    cat: &lightcraft_catalog::Catalog,
+    id: lightcraft_catalog::PhotoId,
+    info: &crate::media::ProbeInfo,
+    ops: &mut Vec<Op>,
+    changed: &mut Vec<lightcraft_catalog::PhotoId>,
+) {
+    let Some(ph) = cat.photo(id) else { return };
+    // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
+    // nothing already set is overwritten
+    let meta_ops = fill_missing_meta(id, ph, info);
+    let Some(op) = content_op(id, ph, info.clone()) else {
+        if !meta_ops.is_empty() {
+            ops.extend(meta_ops);
+            changed.push(id);
+        }
+        return;
+    };
+    ops.push(op);
+    ops.extend(meta_ops);
+    changed.push(id);
+    // virtual copies share the file
+    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
+        if let Some(op) = content_op(c.id, c, info.clone()) {
+            ops.push(op);
+            changed.push(c.id);
+        }
+    }
+}
+
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
 /// dimensions and content hash, cached sources dropped. → {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
@@ -225,25 +262,8 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     let mut ops = Vec::new();
     let mut reloaded = Vec::new();
     for ((id, _), info) in paths.into_iter().zip(probed) {
-        let (Ok(info), Some(ph)) = (info, s.catalog.photo(id)) else { continue };
-        // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
-        // nothing already set is overwritten
-        let meta_ops = fill_missing_meta(id, ph, &info);
-        let Some(op) = content_op(id, ph, info.clone()) else {
-            if !meta_ops.is_empty() {
-                ops.extend(meta_ops);
-                reloaded.push(id);
-            }
-            continue;
-        };
-        ops.push(op);
-        ops.extend(meta_ops);
-        // virtual copies share the file
-        for c in s.catalog.photos().filter(|c| c.copy_of == Some(id)) {
-            ops.extend(content_op(c.id, c, info.clone()));
-            reloaded.push(c.id);
-        }
-        reloaded.push(id);
+        let Ok(info) = info else { continue };
+        reload_ops(&s.catalog, id, &info, &mut ops, &mut reloaded);
     }
     for id in &reloaded {
         s.media.forget(*id);

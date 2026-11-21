@@ -1654,5 +1654,7 @@
   "Media Type": "媒体类型",
   "Minimal": "最小",
   "Embedded & Sidecar": "嵌入与附属文件",
-  "Import Photos and Video…": "导入照片和视频…"
+  "Import Photos and Video…": "导入照片和视频…",
+  "Checking raw files": "正在检查 RAW 文件",
+  "1 raw can now be developed from its raw data": "1 个 RAW 现在可以从 RAW 数据冲印"
 }
