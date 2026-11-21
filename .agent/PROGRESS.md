@@ -6,6 +6,15 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [x] (Claude, 2026-11-21 evening) **Committed**: 7096c20 LR-COLOR round 6 (Lightroom's named lens profiles incl. Sigma 15 mm
+  fisheye + Voigtländer, ICC v2 sRGB / Adobe RGB, Exif ColorSpace, Make/Model; held-out fisheye 6.23 → 2.28 ΔE, R6 defaults
+  4.01 → 2.52, M262 + Voigtländer 6.73 → 4.37 — docs/lr-match.md Round 6), 07d0f3c LC-SYNC (Sync ▸ Match exposure on the
+  finished render, Match Brightness ⌘⌥⇧M, Auto Align ⌘⌥⇧U), 79dbc70 LC-MERGE (Focus Stack ⌃⌥F, Best Take ⌃⌥T with per-person
+  face picks — Apple Vision helper `crates/engine/src/faces.swift` built once into ~/Library/Application Support/LightCraft/bin —,
+  Merge… ⌃⌥M kind picker, `lc_cmd = <command>` Monogram lines). Logitech Options+ has a LightCraft profile copied from
+  Lightroom's (backup in ~/Library/Application Support/LogiOptionsPlus/backup-2026-11-21/; needs.you #136).
+  Left: TIFF exports have no Exif block; lens CA models unused; auto lens profile for fresh imports whose lens tag doesn't
+  match; display colour management (P3); `ui-egui tests_library_problem` flakes under heavy load (passes alone).
 - [x] (Claude, 2026-11-21 later) **Monogram console = a LightCraft integration** (d11982a, 8f724a2): LightCraft listens on
   127.0.0.1:50111 (`apps/lightcraft/src/monogram_server.rs`) for Monogram's app protocols (`keys.lrinput`: Lightroom lines
   and the JSON "adobe" lines); registered with Monogram from `~/.hammerspoon/devices/dev.py monoIntegrate` (ADD_APP, unsigned
