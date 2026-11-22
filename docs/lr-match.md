@@ -563,3 +563,25 @@ ProRAW / embedded-profile photos kept the older OkLCh approximation. They now us
 (4): 7.03 → 6.80 ΔE (per photo 10.03 → 9.80, 5.87 → 5.22, 6.72 → 6.65, 5.49 → 5.52); no other
 photo changes. Their remaining error is tone (ΔL* +4.3: rendered files' Basic tone, R02) and the
 look table.
+
+### Not done this round (R04, R16, R19–R23)
+
+With the catalog's previews gone no new ground truth could be sampled, and the acceptance set has
+only 4 Nautica, 1 Monochrome, 3 X-T2 and 7 X100F photos and none with Point Color or masks, so
+these stay measured only:
+
+- **Nautica (R04)**: R6 4 photos 5.45 ΔE / p95 17.3; iPhone Nautica not in the set.
+- **Radial / linear masks (R16)**: their local Exposure / Shadows run the same local operator as
+  R02, which is what's wrong; nothing to fit until R02 is.
+- **Point Color (R19)**, **Color Grading (R20)**: no oracle sweep yet (`make_color.py` is the
+  template); no acceptance photos.
+- **Texture / Clarity / Dehaze (R21)** against the oracle (single slider, R6 colour): Texture +40
+  3.18 ΔE on the grid / 0.61 on the spatial scene, Clarity +40 1.55 / 1.69, Dehaze +30 0.89 / 1.31
+  (base 0.42 / 0.55): Texture is far too strong on small detail.
+- **B&W / Monochrome (R22)**: 1 photo, 5.05 ΔE.
+- **Fujifilm (R23)**: Summer Fields X-T2 5.66 ΔE with ΔL* +2.9 (too bright), X100F 5.00 (PV5,
+  ΔL* −2.6) / 2.33 (PV6).
+
+Bryan runs: reopening the catalog in Lightroom Classic rebuilds `Previews.lrdata`; then
+`lr_compare.py prepare --spec tools/lr-compare/acceptance.json --seed 1122` gives the full recipe
+set (Nautica × iPhone, PV5 R6, Monochrome, X-T2) for the next round.
