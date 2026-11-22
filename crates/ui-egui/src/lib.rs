@@ -62,6 +62,8 @@ mod tests_loupe_info;
 #[cfg(test)]
 mod tests_masking;
 #[cfg(test)]
+mod tests_media;
+#[cfg(test)]
 mod tests_metadata_views;
 #[cfg(test)]
 mod tests_offline;
@@ -442,6 +444,13 @@ impl LightcraftApp {
 
     pub fn toast(&mut self, ctx: &egui::Context, text: impl Into<String>) {
         self.toast_for(ctx, text, TOAST_SECONDS);
+    }
+
+    /// A toast that stays `secs` seconds counted from the frame that first draws it: for feedback
+    /// set outside a frame or after a modal file/folder picker, when every clock the app has is
+    /// still the one from before the picker blocked (the tethered-capture toast vanished that way).
+    pub fn toast_soon(&mut self, text: impl Into<String>, secs: f64) {
+        self.ui.toast = Some((text.into(), -secs.max(0.1), None));
     }
 
     /// A toast that stays `secs` seconds (messages that say where to look or what to do next).

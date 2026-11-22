@@ -263,8 +263,8 @@ fn keyword_list(app: &mut LightcraftApp, ui: &mut egui::Ui, active: Option<Photo
             if crate::widgets::text_button(ui, "keywordListPurge", "purge.", false).on_hover_text(crate::i18n::tr("Purge Unused Keywords")).clicked()
             {
                 match app.run("keyword.purgeUnused", json!({})) {
-                    Ok(v) => app.ui.toast = Some((format!("Purged {} unused keywords", v["purged"]), app.last_time + 4.0, None)),
-                    Err(e) => app.ui.toast = Some((e, app.last_time + 6.0, None)),
+                    Ok(v) => app.toast_soon(format!("Purged {} unused keywords", v["purged"]), 4.0),
+                    Err(e) => app.toast_soon(e, 6.0),
                 }
             }
         });

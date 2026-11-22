@@ -668,6 +668,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                 }
                 Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } => {
+                    // taller than a small window: the options scroll inside, the buttons stay in view
+                    let room = (screen.height() - 170.0).max(220.0);
+                    egui::ScrollArea::vertical().id_salt("exportScroll").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
                     use lightcraft_engine::export::{Anchor as P, ExportFormat as F, MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
                     let n = app.session.selection.ids.len().max(1);
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
@@ -1103,6 +1106,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             ui.add(egui::TextEdit::singleline(preset_name).hint_text(crate::i18n::tr("Preset name")).desired_width(ui.available_width()));
                         });
                     });
+                    });
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
@@ -1488,7 +1492,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             let r = app.run("library.importCatalog", json!({"path": path, "replace": replace}));
             if let Ok(v) = &r {
                 let msg = format!("Imported {} photos and {} albums ({} replaced, {} skipped)", v["added"], v["albums"], v["replaced"], v["skipped"]);
-                app.ui.toast = Some((msg, app.last_time + 5.0, None));
+                app.toast_soon(msg, 5.0);
             }
             r
         }

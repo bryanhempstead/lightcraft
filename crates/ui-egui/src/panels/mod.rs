@@ -67,7 +67,14 @@ pub fn resizable_side(
 /// The HUD toast at the bottom centre of the canvas.
 pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
-    let Some((text, until, label)) = app.ui.toast.clone() else { return };
+    let Some((text, mut until, label)) = app.ui.toast.clone() else { return };
+    // (a negative expiry is a duration that starts now: `LightcraftApp::toast_soon`)
+    if until < 0.0 {
+        until = now - until;
+        if let Some(t) = app.ui.toast.as_mut() {
+            t.1 = until;
+        }
+    }
     if now > until {
         app.ui.toast = None;
         return;

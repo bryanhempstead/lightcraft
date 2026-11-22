@@ -140,6 +140,11 @@ impl Headless {
         self.frames
     }
 
+    /// Move the frame clock on by `secs` (time spent outside a frame, e.g. in a modal picker).
+    pub fn advance_time(&mut self, secs: f64) {
+        self.time += secs.max(0.0);
+    }
+
     /// `app.quit` was requested.
     pub fn quit_requested(&self) -> bool {
         self.quit

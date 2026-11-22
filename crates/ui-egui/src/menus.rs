@@ -522,7 +522,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             let r = app.run("preset.apply", q);
             if r.is_ok() {
-                app.ui.toast = Some((name.clone(), app.last_time + 1.4, None));
+                app.toast_soon(name.clone(), 1.4);
             }
             r
         })(),
@@ -1465,14 +1465,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let r = app.run("tether.start", json!({"folder": folder, "session": session}));
             if let Ok(v) = &r {
                 let how = if v["gphoto2"] == true { "gphoto2 is capturing from the camera" } else { "save shots into it from the camera's app" };
-                app.ui.toast = Some((format!("Tethered: {} — {how}", v["folder"].as_str().unwrap_or("")), app.last_time + 8.0, None));
+                app.toast_soon(format!("Tethered: {} — {how}", v["folder"].as_str().unwrap_or("")), 8.0);
             }
             r
         }
         "dialog.tetherStop" => {
             let r = app.run("tether.stop", json!({}));
             if r.is_ok() {
-                app.ui.toast = Some(("Tethered capture stopped".into(), app.last_time + 4.0, None));
+                app.toast_soon("Tethered capture stopped", 4.0);
             }
             r
         }
@@ -1494,7 +1494,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             if n("damaged") > 0 {
                 let _ = app.run("library.select", json!({"ids": r["damaged"]}));
             }
-            app.ui.toast = Some((msg, app.last_time + 8.0, None));
+            app.toast_soon(msg, 8.0);
             Ok(r)
         }
         "file.emailPhotos" => {
@@ -1553,7 +1553,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let Some(path) = path else { return Some(Ok(Value::Null)) };
             let r = app.run("keyword.import", json!({"path": path}));
             if let Ok(v) = &r {
-                app.ui.toast = Some((format!("Imported keywords: {} added, {} updated", v["added"], v["updated"]), app.last_time + 4.0, None));
+                app.toast_soon(format!("Imported keywords: {} added, {} updated", v["added"], v["updated"]), 4.0);
             }
             r
         }
@@ -1565,7 +1565,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let Some(path) = path else { return Some(Ok(Value::Null)) };
             let r = app.run("keyword.export", json!({"path": path}));
             if let Ok(v) = &r {
-                app.ui.toast = Some((format!("Exported {} keywords", v["keywords"]), app.last_time + 4.0, None));
+                app.toast_soon(format!("Exported {} keywords", v["keywords"]), 4.0);
             }
             r
         }
