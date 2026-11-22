@@ -36,6 +36,7 @@ mod query;
 pub mod recheck;
 pub mod shoot;
 pub mod shoots;
+pub mod tether;
 mod xmp;
 
 use serde::Serialize;
@@ -158,6 +159,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(delete::specs());
         v.extend(naming::specs());
         v.extend(cameras::specs());
+        v.extend(tether::specs());
         v
     })
 }

@@ -285,6 +285,8 @@ pub struct Session {
     pub metadata_status: std::collections::HashMap<PhotoId, sidecar::MetadataStatus>,
     /// Photos whose sidecar the running command wrote or read (they match it now).
     xmp_synced_now: Vec<PhotoId>,
+    /// L33: the running tethered capture, if any.
+    pub tether: Option<cmd::tether::Tether>,
 }
 
 impl Default for Session {
@@ -365,6 +367,7 @@ impl Session {
             cameras_mem: Vec::new(),
             metadata_status: Default::default(),
             xmp_synced_now: Vec::new(),
+            tether: None,
         }
     }
 
@@ -970,6 +973,8 @@ mod tests_segment;
 mod tests_settings_files;
 #[cfg(test)]
 mod tests_spots;
+#[cfg(test)]
+mod tests_tether;
 #[cfg(test)]
 mod tests_validate_dng;
 #[cfg(test)]

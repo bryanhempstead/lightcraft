@@ -194,6 +194,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.importCatalog", "Import from Another Library…", None, "File"),
     // L23: Library ▸ Validate DNG Files… (the result as a toast; damaged ones selected)
     ("dialog.validateDng", "Validate DNG Files…", None, "Library"),
+    // L33: File ▸ Tethered Capture
+    ("dialog.tetherStart", "Start Tethered Capture…", None, "File"),
+    ("dialog.tetherStop", "Stop Tethered Capture", None, "File"),
     // E12: File ▸ Email Photos…
     ("file.emailPhotos", "Email Photos…", Some("Cmd+Shift+M"), "File"),
     // L26: Compare ▸ Link Focus
@@ -1359,6 +1362,31 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.quit" => {
             app.ui.quit = true;
             Ok(Value::Null)
+        }
+        "dialog.tetherStart" => {
+            let folder = match p.get("folder").and_then(Value::as_str) {
+                Some(f) => Some(f.to_string()),
+                None => app.services.pick_folder.as_mut().and_then(|f| f()),
+            };
+            let Some(folder) = folder else { return Some(Ok(Value::Null)) };
+            let session = p
+                .get("session")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Tethered {}", (app.session.clock)().get(..10).unwrap_or("")));
+            let r = app.run("tether.start", json!({"folder": folder, "session": session}));
+            if let Ok(v) = &r {
+                let how = if v["gphoto2"] == true { "gphoto2 is capturing from the camera" } else { "save shots into it from the camera's app" };
+                app.ui.toast = Some((format!("Tethered: {} — {how}", v["folder"].as_str().unwrap_or("")), app.last_time + 8.0, None));
+            }
+            r
+        }
+        "dialog.tetherStop" => {
+            let r = app.run("tether.stop", json!({}));
+            if r.is_ok() {
+                app.ui.toast = Some(("Tethered capture stopped".into(), app.last_time + 4.0, None));
+            }
+            r
         }
         "dialog.validateDng" => {
             let r = match app.run("library.validateDng", p.clone()) {

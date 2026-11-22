@@ -337,3 +337,20 @@ fn validate_dng_menu_toast() {
     settle(&mut h);
     shot(&mut h, "l23-validate-dng.png");
 }
+
+/// L33: File ▸ Start / Stop Tethered Capture.
+#[test]
+fn tethered_capture_menu() {
+    let dir = temp("tether");
+    let mut s = lightcraft_engine::Session::new().with_fs();
+    s.open_library(dir.0.join("lib"), false).unwrap();
+    let mut h = headless(s);
+    let r = h.app.run("dialog.tetherStart", json!({"folder": dir.0.join("shots").to_string_lossy(), "session": "Studio"})).unwrap();
+    assert_eq!(r["running"], true, "{r}");
+    let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
+    assert!(toast.starts_with("Tethered:"), "{toast}");
+    settle(&mut h);
+    shot(&mut h, "l33-tethered.png");
+    h.app.run("dialog.tetherStop", json!({})).unwrap();
+    assert_eq!(h.app.session.execute("tether.status", &json!({})).unwrap()["running"], false);
+}
