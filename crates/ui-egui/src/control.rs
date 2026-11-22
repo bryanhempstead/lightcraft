@@ -260,8 +260,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             ok(Value::Null)
         }
         "ui.scroll" => {
+            // {dx, dy, unit?: "point" (a trackpad, the default) | "line" (mouse-wheel notches)}
+            let unit = if s("unit") == Some("line") { egui::MouseWheelUnit::Line } else { egui::MouseWheelUnit::Point };
             app.synthetic.push(egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
+                unit,
                 delta: egui::vec2(f("dx").unwrap_or(0.0) as f32, f("dy").unwrap_or(0.0) as f32),
                 phase: egui::TouchPhase::Move,
                 modifiers: modifiers(p),

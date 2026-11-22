@@ -13,6 +13,8 @@ lightcraft-geom = { workspace = true }
 lightcraft-meta = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
+# the loupe's layout image (View ▸ Loupe Overlay ▸ Layout Image: a PNG or JPEG)
+lightcraft-codecs = { workspace = true }
 lightcraft-develop = { workspace = true }
 lightcraft-pipeline = { workspace = true }
 lightcraft-catalog = { workspace = true }
@@ -26,7 +28,6 @@ log = { workspace = true }
 
 [dev-dependencies]
 lightcraft-vision = { workspace = true }
-lightcraft-codecs = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

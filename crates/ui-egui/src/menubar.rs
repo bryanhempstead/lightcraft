@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 use crate::menus::MenuEntry;
-use crate::state::{RightPanel, ViewMode};
+use crate::state::{CropOverlay, RightPanel, ViewMode};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -164,6 +164,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.zoomToggle",
             "view.zoomFit",
             "view.zoom100",
+            "@Zoom Behavior",
             "---",
             "view.clipping",
             "view.visualizeHdr",
@@ -174,6 +175,10 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.maskOverlayColor",
             "view.maskPins",
             "view.cropOverlay",
+            "@Composition Overlay",
+            "@Aspect Ratio Frames",
+            "@Loupe Overlay",
+            "view.loupeOverlay",
             "---",
             "@Sort",
             "@Stacks",
@@ -364,6 +369,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.autoAdvance" => Some(u.auto_advance),
         "view.filterBar" => Some(u.filter_bar),
         "view.navigator" => Some(u.navigator),
+        "view.loupeOverlay" => Some(u.loupe_overlay.show != crate::state::OverlayShow::Never),
         "view.fullScreenPreview" => Some(u.fullscreen),
         "view.enterFullScreen" => Some(app.window_is_fullscreen),
         "panel.edit" => panel(RightPanel::Edit),
@@ -504,6 +510,73 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
                 ));
             }
             v.push(item("dialog.labelNames", Value::Null, "Edit Label Names…", None, true, None));
+            v
+        }
+        // LR-VIEW-ZOOM: what a click zooms to and what the scroll wheel does (kept until changed)
+        "Zoom Behavior" => {
+            let mut v: Vec<MenuNode> = crate::state::CLICK_ZOOMS
+                .into_iter()
+                .map(|pct| {
+                    let ratio = if pct == 0 { json!("fill") } else { json!(pct as f64 / 100.0) };
+                    let label =
+                        if pct == 0 { "Click Zooms to Fill".to_string() } else { format!("Click Zooms to {}", crate::state::click_zoom_label(pct)) };
+                    item("view.clickZoom", json!({"ratio": ratio}), label, None, true, Some(app.ui.click_zoom == pct))
+                })
+                .collect();
+            v.push(MenuNode::Separator);
+            for m in crate::state::WheelMode::ALL {
+                v.push(item("view.wheelZoom", json!({"mode": m.id()}), m.label(), None, true, Some(app.ui.wheel == m)));
+            }
+            v.push(MenuNode::Separator);
+            for s in crate::state::WHEEL_STEPS {
+                v.push(item("view.wheelZoom", json!({"step": s}), format!("Wheel Notch Zooms {s}%"), None, true, Some(app.ui.wheel_step == s)));
+            }
+            v
+        }
+        // LRC-VIEW-LOUPEOVERLAY: Lightroom Classic's View ▸ Loupe Overlay, plus when overlays show
+        "Loupe Overlay" => {
+            let o = &app.ui.loupe_overlay;
+            use crate::state::OverlayShow;
+            vec![
+                item("view.layoutImage", json!({"on": !o.layout}), "Layout Image", None, !o.layout_path.is_empty(), Some(o.layout)),
+                item("view.loupeGrid", json!({"on": !o.grid}), "Grid", None, true, Some(o.grid)),
+                item("view.loupeGuides", json!({"on": !o.guides}), "Guides", None, true, Some(o.guides)),
+                MenuNode::Separator,
+                item("view.overlayShow", json!({"mode": "always"}), "Show Always", None, true, Some(o.show == OverlayShow::Always)),
+                item("view.overlayShow", json!({"mode": "auto"}), "Show While Adjusting", None, true, Some(o.show == OverlayShow::Auto)),
+                item("view.overlayShow", json!({"mode": "never"}), "Never Show", None, true, Some(o.show == OverlayShow::Never)),
+                MenuNode::Separator,
+                item("view.chooseLayoutImage", Value::Null, "Choose Layout Image…", None, true, None),
+                item("view.loupeGuides", json!({"reset": true}), "Reset Guides", None, o.guides, None),
+            ]
+        }
+        "Composition Overlay" => {
+            let cur = app.ui.loupe_overlay.composition;
+            let mut v: Vec<MenuNode> = CropOverlay::ALL
+                .into_iter()
+                .map(|k| item("view.compositionOverlay", json!({"overlay": k.id()}), k.label(), None, true, Some(cur == k)))
+                .collect();
+            v.push(MenuNode::Separator);
+            v.push(item("view.compositionOverlay", Value::Null, "Cycle Composition Overlay", Some("O"), true, None));
+            v.push(item(
+                "view.compositionOverlayOrientation",
+                Value::Null,
+                "Cycle Overlay Orientation",
+                Some("Shift+O"),
+                cur != CropOverlay::None,
+                None,
+            ));
+            v
+        }
+        "Aspect Ratio Frames" => {
+            let o = &app.ui.loupe_overlay;
+            let mut v: Vec<MenuNode> = crate::state::FRAME_GUIDES
+                .into_iter()
+                .map(|f| item("view.frameGuides", json!({"toggle": f}), f, None, true, Some(o.frames.iter().any(|x| x == f))))
+                .collect();
+            v.push(MenuNode::Separator);
+            v.push(item("view.frameGuides", json!({"dim": !o.frame_dim}), "Dim Outside the Frame", None, true, Some(o.frame_dim)));
+            v.push(item("view.frameGuides", json!({"frames": []}), "Clear Frames", None, !o.frames.is_empty(), None));
             v
         }
         "Grid Info" => ["filename", "exposure", "date"]

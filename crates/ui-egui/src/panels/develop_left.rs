@@ -108,7 +108,7 @@ pub(crate) fn nav_more_zooms(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect
         for z in NAV_MORE_ZOOMS {
             let label = if z < 100.0 { format!("1:{:.0}  ({z:.0}%)", 100.0 / z) } else { format!("{:.0}:1", z / 100.0) };
             if ui.button(label).clicked() {
-                let _ = app.run("view.navigate", json!({"zoom": {"percent": z}}));
+                let _ = app.run("view.navigate", json!({"zoom": {"percent": z}, "remember": true}));
                 ui.close();
             }
         }
@@ -169,7 +169,8 @@ fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 "fill" => json!("fill"),
                 pct => json!({"percent": pct.parse::<f32>().unwrap_or(100.0)}),
             };
-            let _ = app.run("view.navigate", json!({"zoom": zoom}));
+            // as in Lightroom, the level picked becomes what a click on the photo zooms to
+            let _ = app.run("view.navigate", json!({"zoom": zoom, "remember": true}));
         }
         x = r.left() - 6.0;
     }

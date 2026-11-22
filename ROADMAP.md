@@ -286,6 +286,11 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   metadata choices, Simple Copyright Watermark and nine anchors, Open in Adobe Photoshop / Other Application… / Go to
   Export Actions Folder Now, plug.ins. and done.; extras: a before-export preview with the estimated file size, export
   progress in the activity strip with pause / resume and a queue.
+- 2026-11-22 (fork): zoom the way Bryan asked — a click zooms to the remembered click level (Fill … 16:1; picked in
+  the toolbar, its zoom menu or the Navigator, kept across restarts), the mouse wheel zooms in steps under the pointer
+  while a trackpad still pans (or every scroll zooms / pans: View ▸ Zoom Behavior); Lightroom's Loupe Overlay (grid,
+  guides, layout image), every crop composition overlay and aspect-ratio frames on the normal loupe (ovl., O / ⇧O,
+  ⌘⌥O); a banner over a photo whose original is missing with loc. / fldr.
 
 ## Chinese and Japanese interfaces, and text watermarks
 

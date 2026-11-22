@@ -447,6 +447,19 @@ fn run_fired(app: &mut LightcraftApp, ctx: &egui::Context, f: String) {
             let _ = app.run("view.maskOverlayColor", json!({}));
             return;
         }
+        // in the loupe outside the crop and masking tools: O cycles the composition overlay,
+        // Shift+O turns it (LRC-VIEW-LOUPEOVERLAY)
+        if app.ui.view == crate::state::ViewMode::Detail
+            && !matches!(app.ui.right, crate::state::RightPanel::Crop | crate::state::RightPanel::Masking)
+            && let Some(cmd) = match f.as_str() {
+                "view.maskOverlay" => Some("view.compositionOverlay"),
+                "view.cropOverlay" => Some("view.compositionOverlayOrientation"),
+                _ => None,
+            }
+        {
+            let _ = app.run(cmd, json!({}));
+            return;
+        }
         // while cropping: O cycles the guides, Shift+O their orientation, A locks the aspect
         if app.ui.right == crate::state::RightPanel::Crop {
             let crop_key = match f.as_str() {
