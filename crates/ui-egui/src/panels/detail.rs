@@ -283,6 +283,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
     if let Some(job) = app.session.loupe_job(id, rw.max(8), rh.max(8), !crop_tool) {
         let job = if interacting { job.draft() } else { job };
+        app.ui.alt_down = ui.input(|i| i.modifiers.alt);
         let job = job.with_overlay(view_overlay(app, &d)).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         app.renderer.request(Slot::Main, job, 100);
     }
@@ -826,12 +827,19 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
     }
 }
 
-/// The diagnostic overlay the loupe shows (the selected mask, Point Color's visualized range,
-/// Visualize Spots).
+/// The diagnostic overlay the loupe shows (an Alt-drag preview, the selected mask, Point Color's
+/// visualized range, Visualize Spots).
 pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcraft_pipeline::Overlay {
     use lightcraft_pipeline::{MaskView, Overlay};
     if app.ui.fullscreen {
         return Overlay::None;
+    }
+    // Alt/Option-drag on Exposure / Highlights / Whites, Shadows / Blacks, Sharpening, Noise
+    // Reduction: Lightroom's temporary preview while the slider moves
+    if app.ui.alt_down
+        && let Some(o) = app.ui.dragging_control.as_deref().and_then(Overlay::for_control)
+    {
+        return o;
     }
     if app.ui.right == RightPanel::Masking
         && app.ui.mask_overlay

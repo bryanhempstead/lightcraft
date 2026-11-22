@@ -33,6 +33,8 @@ pub mod theme;
 pub mod widgets;
 
 #[cfg(test)]
+mod tests_alt_preview;
+#[cfg(test)]
 mod tests_classic;
 #[cfg(test)]
 mod tests_curve;

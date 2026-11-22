@@ -376,6 +376,10 @@ pub struct UiState {
     /// The develop control whose slider is being dragged (geometry sliders show a grid).
     #[serde(skip)]
     pub dragging_control: Option<String>,
+    /// Alt (Option) is held this frame: dragging a Light / Detail slider then shows its preview
+    /// (clipping, greyscale, sharpening detail or mask).
+    #[serde(skip)]
+    pub alt_down: bool,
     pub search: String,
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
@@ -760,6 +764,7 @@ impl Default for UiState {
             folders_open: Default::default(),
             hidden_locations: Vec::new(),
             dragging_control: None,
+            alt_down: false,
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
