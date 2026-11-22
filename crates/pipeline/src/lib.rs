@@ -25,6 +25,7 @@
 
 pub mod adobe;
 pub mod auto;
+pub mod black_cr;
 pub mod bw_cr;
 pub mod colorops;
 pub mod colortab;
@@ -577,7 +578,17 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         _ => local::Planes { key: lin_key, ..Default::default() },
     };
     let tex_space = texture_cr::space(info);
-    let prep = local::prepare(lin.clone(), s, frame, px_per_long, info.native_long, req.quality, &mut planes, tex_space.as_ref().map(|m| &m.0));
+    let prep = local::prepare(
+        lin.clone(),
+        s,
+        frame,
+        px_per_long,
+        info.native_long,
+        req.quality,
+        &mut planes,
+        tex_space.as_ref().map(|m| &m.0),
+        info.adobe.is_some(),
+    );
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });

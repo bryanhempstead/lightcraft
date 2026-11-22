@@ -9,8 +9,10 @@
 //! Here: a Laplacian pyramid (5-tap binomial reduce / expand) of the log luminance, each level
 //! compressed where it is strong (`band / (1 + (band / t)²)`) and weighted, the sum scaled by a
 //! strength that the slider sets. RAWmakase takes the detail of each colour channel; LightCraft
-//! applies it to log luminance like its other local-contrast operators (the masks' Texture reads
-//! the same plane). Checked against our own Camera Raw oracle renders (`oracle/make_fx.py fx2`).
+//! (round 12) takes the luminance's detail plus each channel's colour detail (its log ratio to the
+//! luminance) at [`CHROMA_GAIN`], compressed only past [`CHROMA_SCALE`]× the thresholds, so the
+//! contrast between neighbouring saturated colours is not compressed away as Camera Raw does not.
+//! Checked against our own Camera Raw oracle renders (`oracle/make_fx.py fx2`, `oracle/make_r12.py`).
 
 use lightcraft_raster::{Plane, par_rows};
 
@@ -156,35 +158,82 @@ pub fn detail_rgb(img: &lightcraft_raster::Rgb32f, offset: usize) -> lightcraft_
 /// [`detail_rgb`] with each pixel first taken through `from` (linear working → camera RGB,
 /// [`space`]).
 pub fn detail_rgb_in(img: &lightcraft_raster::Rgb32f, offset: usize, from: Option<&[[f32; 3]; 3]>) -> lightcraft_raster::Rgb32f {
-    let ch = |k: usize| {
-        let v = |p: &[f32; 3]| match from {
-            Some(m) => m[k][0] * p[0] + m[k][1] * p[1] + m[k][2] * p[2],
-            None => p[k],
+    let v = |p: &[f32; 3], k: usize| match from {
+        Some(m) => m[k][0] * p[0] + m[k][1] * p[1] + m[k][2] * p[2],
+        None => p[k],
+    };
+    let log = |x: f32| if x.is_finite() { x.max(1e-6).log2() } else { 0.0 };
+    let (w, h) = (img.width, img.height);
+    if let (Some(gain), tscale) = chroma() {
+        // luminance detail as Camera Raw's gratings measured it, plus each channel's colour
+        // detail (its log ratio to the luminance) with its own, gentler compression: neighbouring
+        // saturated colours keep their contrast
+        let y: Vec<f32> = img.data.iter().map(|p| log(lightcraft_color::luminance_2020(std::array::from_fn(|k| v(p, k))))).collect();
+        let ch = |k: usize| {
+            let data = img.data.iter().zip(&y).map(|(p, y)| log(v(p, k)) - y).collect();
+            detail_from_t(&Plane { width: w, height: h, data }, offset, tscale)
         };
-        let data = img
-            .data
-            .iter()
-            .map(|p| {
-                let x = v(p);
-                if x.is_finite() { x.max(1e-6).log2() } else { 0.0 }
+        let lum = || detail(&Plane { width: w, height: h, data: y.clone() }, offset);
+        let (l, (r, (g, b))) =
+            lightcraft_raster::par_join(lum, || lightcraft_raster::par_join(|| ch(0), || lightcraft_raster::par_join(|| ch(1), || ch(2))));
+        let data = (0..w * h)
+            .map(|i| {
+                let d = at(&l.data, i);
+                [d + gain * at(&r.data, i), d + gain * at(&g.data, i), d + gain * at(&b.data, i)]
             })
             .collect();
-        detail(&Plane { width: img.width, height: img.height, data }, offset)
+        return lightcraft_raster::Rgb32f { width: w, height: h, data };
+    }
+    let ch = |k: usize| {
+        let data = img.data.iter().map(|p| log(v(p, k))).collect();
+        detail(&Plane { width: w, height: h, data }, offset)
     };
     let (r, (g, b)) = lightcraft_raster::par_join(|| ch(0), || lightcraft_raster::par_join(|| ch(1), || ch(2)));
-    let data = (0..img.width * img.height).map(|i| [at(&r.data, i), at(&g.data, i), at(&b.data, i)]).collect();
-    lightcraft_raster::Rgb32f { width: img.width, height: img.height, data }
+    let data = (0..w * h).map(|i| [at(&r.data, i), at(&g.data, i), at(&b.data, i)]).collect();
+    lightcraft_raster::Rgb32f { width: w, height: h, data }
 }
 
+/// Texture's colour detail ([`detail_rgb_in`]): its weight against the luminance detail and how
+/// much gentler its compression is (thresholds × the factor); `None`: each channel's own
+/// compressed detail (round 10). `LIGHTCRAFT_TEX_CHROMA=gain,scale` (or `0`) overrides for
+/// measurement runs, read once.
+pub fn chroma() -> (Option<f32>, f32) {
+    static C: std::sync::OnceLock<(Option<f32>, f32)> = std::sync::OnceLock::new();
+    *C.get_or_init(|| {
+        let env = std::env::var("LIGHTCRAFT_TEX_CHROMA").ok();
+        let parsed = env.as_deref().and_then(|v| {
+            let mut it = v.split(',').map(|x| x.trim().parse::<f32>().ok());
+            Some((it.next()??, it.next().flatten().unwrap_or(1.0)))
+        });
+        match parsed {
+            _ if env.as_deref() == Some("0") => (None, 1.0),
+            Some((g, t)) if g.is_finite() && t.is_finite() && t > 0.0 => (Some(g), t),
+            _ => (CHROMA_GAIN, CHROMA_SCALE),
+        }
+    })
+}
+
+/// The colour detail's weight ([`chroma`]); `None` keeps the per-channel detail. Fitted on the
+/// oracle's colour grid at Texture ±25 / ±50 / ±100 (round 12: 2.77 → 2.14 ΔE; held out, the PV 6
+/// grid at +40: 2.72 → 2.09; neutral scenes unchanged).
+pub const CHROMA_GAIN: Option<f32> = Some(0.7);
+/// How much higher the colour detail's compression thresholds sit than the luminance's.
+pub const CHROMA_SCALE: f32 = 3.0;
+
 fn detail_from(plane: &Plane, level: usize) -> Plane {
+    detail_from_t(plane, level, 1.0)
+}
+
+/// [`detail_from`] with every level's compression threshold scaled by `tscale`.
+fn detail_from_t(plane: &Plane, level: usize, tscale: f32) -> Plane {
     if level >= LEVELS || plane.width < 4 || plane.height < 4 {
         return Plane { width: plane.width, height: plane.height, data: vec![0.0; plane.width * plane.height] };
     }
     let coarse = down(plane);
-    let mut out = up(&detail_from(&coarse, level + 1), plane.width, plane.height);
+    let mut out = up(&detail_from_t(&coarse, level + 1, tscale), plane.width, plane.height);
     let blurred = up(&coarse, plane.width, plane.height);
     drop(coarse);
-    let (wt, t) = (WEIGHTS[level], THRESHOLDS[level]);
+    let (wt, t) = (WEIGHTS[level], THRESHOLDS[level] * tscale);
     let w = plane.width;
     par_rows(&mut out.data, w, |y, row| {
         for (x, o) in row.iter_mut().enumerate() {

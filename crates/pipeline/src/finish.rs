@@ -544,6 +544,8 @@ pub struct FinishParams {
     pub scene: Option<std::sync::Arc<crate::scene_cr::SceneTone>>,
     /// The camera RGB Texture's gain applies in ([`crate::texture_cr::space`]): working → camera, back.
     pub tex_space: Option<([[f32; 3]; 3], [[f32; 3]; 3])>,
+    /// Contrast's pivot key ([`crate::tone::lr::ToneStats::key`]) the tone map was made with.
+    pub tone_key: Option<f32>,
 }
 
 /// Chroma gain of `crs:SDRBlend` at ±100 on the brightest SDR tones (Camera Raw's "highlight
@@ -663,6 +665,7 @@ impl FinishParams {
             px_per_long,
             scene: None,
             tex_space: crate::texture_cr::space(info),
+            tone_key,
         }
     }
 
@@ -681,6 +684,10 @@ impl FinishParams {
         let hs_used = s.light.highlights != 0.0 || s.light.shadows != 0.0 || masks(|a| a.highlights) || masks(|a| a.shadows);
         let hs = sc::hs_measured() && self.adobe.is_some() && hs_used;
         let dehaze = sc::HAZE_MEASURED && (self.dehaze > 0.0 || s.masks.iter().any(|m| m.adjust.dehaze > 0.0));
+        // Camera Raw's default black follows the photo's dark key, after Shadows (`black_cr`)
+        if let (Some(m), true) = (map, self.adobe.is_some() && self.peak <= 1.0) {
+            self.black_from_map(m, s, hs);
+        }
         let map = map.filter(|_| clarity || hs);
         let haze = haze.filter(|_| dehaze);
         // a flat stand-in map when only the haze is needed (its grid is the haze's)
@@ -700,7 +707,7 @@ impl FinishParams {
             let _ = t.map.detail();
         }
         if hs && let Some(m) = map {
-            let hs_ev = if sc::HS_BEFORE_EXPOSURE { 0.0 } else { self.ev };
+            let hs_ev = if sc::hs_before_exposure() { 0.0 } else { self.ev };
             t.hs = Some((m.hs_curves(hs_ev), (s.light.shadows / 100.0) as f32, (s.light.highlights / 100.0) as f32));
             t.hs_shift = self.ev - hs_ev;
             self.hs_lut = None;
@@ -708,6 +715,27 @@ impl FinishParams {
         t.haze = haze.map(|h| (h.clone(), h.air.map(|a| a * self.gain)));
         self.scene = Some(std::sync::Arc::new(t));
         self
+    }
+}
+
+impl FinishParams {
+    /// The tone map with Camera Raw's default black at the photo's dark key ([`crate::black_cr`]),
+    /// moved by Shadows when the rule renders it (`hs`).
+    fn black_from_map(&mut self, m: &crate::scene_cr::MapBase, s: &DevelopSettings, hs: bool) {
+        use crate::black_cr as b;
+        let mode = b::mode();
+        if mode == b::Mode::Off {
+            return;
+        }
+        let Some(a) = self.adobe.as_ref() else { return };
+        let ev = self.ev;
+        let sh = (s.light.shadows / 100.0) as f32;
+        let shift = if hs && sh != 0.0 { m.shadows_key_shift(ev, sh) } else { 0.0 };
+        let key = m.dark + ev;
+        let from = if mode == b::Mode::Shift { key } else { b::RAMP_KEY + ev };
+        let Some(c) = b::correction(key + shift, from, b::remaining((s.light.blacks / 100.0) as f32)) else { return };
+        self.tone = ToneMap::adobe_lr_black(&a.base, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks, self.tone_key, Some(&c[..]))
+            .with_headroom(self.peak);
     }
 }
 

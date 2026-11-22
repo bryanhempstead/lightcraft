@@ -912,7 +912,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, inf
         })
     });
     // Camera Raw's scene tone map and haze: measured on the CPU (a small map, once per image)
-    let (need_map, need_haze) = lightcraft_pipeline::scene_cr::needs(&plan.settings);
+    let (need_map, need_haze) = lightcraft_pipeline::scene_cr::needs(&plan.settings, info.adobe.is_some());
     let missing = (need_map && planes.scene_map.is_none()) || (need_haze && planes.haze.is_none());
     if let Some(img) = missing.then(|| cx.read_rgb(lin, w, h)) {
         if need_map && planes.scene_map.is_none() {

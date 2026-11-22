@@ -35,3 +35,12 @@ to global sliders, Bryan's readable split-A raws with one-slider sidecars), `lcr
 (now also the raw clones in SET/v, at 1536 px), `r11cmp.py A.txt B.txt` (two `lccmp.py` runs side by side,
 per-setting means), `clafit.py SET DUMPDIR` (refits Clarity's weights from `LIGHTCRAFT_CLARITY_DUMP` term
 dumps). `LIGHTCRAFT_HS_CR=1` renders with the H/S rule while it is off.
+
+Round 12 (default black, H/S on Bryan's own combinations, Texture's colour, Calibration's order):
+`make_r12.py SET ACC` (his split-A raws with H/S: own Basic tone, without H/S, H/S only, S / H only, plus a
+Shadows × Highlights sweep on three photos), `r12ana.py SET LCDIR` (per photo: ΔE, ΔL* by band, each
+setting's effect against its reference), `r12sum.py SET LCDIR…` (runs side by side, R6 apart), `r12lift.py`
+(Shadows' lift per photo), `r12reg.py` (a change split into regional and detail parts), `r12grat.py`
+(full-frame gratings: mean and contrast change). Measurement switches: `LIGHTCRAFT_BLACK_CR=0|shift|photo`,
+`LIGHTCRAFT_HS_CR=0|1`, `LIGHTCRAFT_HS_SUP`, `LIGHTCRAFT_HS_PRE`, `LIGHTCRAFT_HUE_SAT_FINISH=0|1`,
+`LIGHTCRAFT_TEX_CHROMA=gain,scale|0`, `LIGHTCRAFT_CLA_LEVEL`; `lcrun.sh` takes another build in `ORACLE_BIN`.

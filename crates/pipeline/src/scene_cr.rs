@@ -61,17 +61,22 @@ pub const CLARITY_FINE: bool = true;
 /// Render positive Dehaze with Camera Raw's haze model; `false`: LightCraft's dark-channel mix.
 pub const HAZE_MEASURED: bool = true;
 /// Render Highlights / Shadows of Adobe-profiled raws with Camera Raw's global rule; `false`:
-/// LightCraft's preview-fitted tables (`tone::lr::adobe_hs_lut_previews`).
-pub const HS_MEASURED: bool = false;
+/// LightCraft's preview-fitted tables (`tone::lr::adobe_hs_lut_previews`). On since round 12, with
+/// the photo's default black (`black_cr`) and [`SHADOWS_UP_SCALE`]: Bryan's acceptance set 3.99 →
+/// 3.77 ΔE, photos passing 25 → 31, Summer Fields · R6 5.83 → 4.63 (`docs/lr-match.md` → Round 12).
+pub const HS_MEASURED: bool = true;
 
-/// Whether Highlights / Shadows render with the rule: [`HS_MEASURED`], or `LIGHTCRAFT_HS_CR=1` in
+/// Whether Highlights / Shadows render with the rule: [`HS_MEASURED`], or `LIGHTCRAFT_HS_CR=1|0` in
 /// the environment (measurement runs: the oracle and the acceptance gate compare both with one
-/// build), read once.
+/// build), read once; [`force_hs_measured`] wins.
 pub fn hs_measured() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    HS_MEASURED
-        || HS_FORCED.load(std::sync::atomic::Ordering::Relaxed)
-        || *ON.get_or_init(|| std::env::var("LIGHTCRAFT_HS_CR").is_ok_and(|v| v == "1"))
+    HS_FORCED.load(std::sync::atomic::Ordering::Relaxed)
+        || *ON.get_or_init(|| match std::env::var("LIGHTCRAFT_HS_CR").as_deref() {
+            Ok("1") => true,
+            Ok("0") => false,
+            _ => HS_MEASURED,
+        })
 }
 
 static HS_FORCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -86,6 +91,16 @@ pub fn force_hs_measured(on: bool) {
 /// RAWmakase's map at the render's Exposure, which round 11 measured closer on Bryan's tone recipe
 /// (Exposure −1.1 with H +30 / S +69: 3.37 before Exposure, 3.22 at it, mean of 9 raws).
 pub const HS_BEFORE_EXPOSURE: bool = false;
+
+/// [`HS_BEFORE_EXPOSURE`], or `LIGHTCRAFT_HS_PRE=1|0` in the environment (measurement runs), read once.
+pub fn hs_before_exposure() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| match std::env::var("LIGHTCRAFT_HS_PRE").as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => HS_BEFORE_EXPOSURE,
+    })
+}
 
 /// Long edge of the map (RAWmakase's `MAP_EDGE`).
 pub const MAP_EDGE: usize = 512;
@@ -243,6 +258,9 @@ pub struct MapBase {
     a: Vec<f32>,
     b: Vec<f32>,
     clarity_key: f32,
+    /// The photo's dark key before Exposure: the 0.1th percentile of the map's log2 luminance
+    /// ([`crate::black_cr::dark_of`]).
+    pub dark: f32,
     detail: OnceLock<ClarityDetail>,
     rule: OnceLock<RuleStats>,
 }
@@ -269,7 +287,8 @@ impl MapBase {
         let r = ((RADIUS * w.max(h) as f32).round() as usize).max(1);
         let (a, b) = guided_coefficients(&logs, w, h, r, EPSILON);
         let clarity_key = 0.25 * percentile(&logs, 0.999) + 0.75 * percentile(&logs, 0.99);
-        Some(MapBase { w, h, logs, a, b, clarity_key, detail: OnceLock::new(), rule: OnceLock::new() })
+        let dark = crate::black_cr::dark_of(&logs).unwrap_or(FLOOR.log2());
+        Some(MapBase { w, h, logs, a, b, clarity_key, dark, detail: OnceLock::new(), rule: OnceLock::new() })
     }
 
     /// The guided base's coefficients on the map (the base is `A · level + B`), before Exposure.
@@ -299,6 +318,34 @@ impl MapBase {
         }
         let r = RuleStats::new(&self.logs, &self.bases(), self.w, self.h);
         self.rule.get_or_init(|| r)
+    }
+
+    /// How far Shadows `sh` (−1..1, alone) moves the dark key Camera Raw's default black reads, at
+    /// Exposure `ev` (RAWmakase `pipeline/tone.rs`): positive, the median of its gain over the map;
+    /// negative, the median on the darkest 0.1 % of it.
+    pub fn shadows_key_shift(&self, ev: f32, sh: f32) -> f32 {
+        if sh == 0.0 || !sh.is_finite() {
+            return 0.0;
+        }
+        let curves = self.hs_curves(ev);
+        let bases = self.bases();
+        let mut gains: Vec<f32> = if sh > 0.0 {
+            bases.iter().map(|b| curves.gain(b + ev, sh, 0.0)).collect()
+        } else {
+            let count = (self.logs.len() / 1000).max(1);
+            let mut order: Vec<usize> = (0..self.logs.len()).collect();
+            if count < order.len() {
+                order.select_nth_unstable_by(count - 1, |a, b| self.logs[*a].total_cmp(&self.logs[*b]));
+            }
+            order.truncate(count);
+            order.iter().filter_map(|&i| bases.get(i)).map(|b| curves.gain(b + ev, sh, 0.0)).collect()
+        };
+        if gains.is_empty() {
+            return 0.0;
+        }
+        let k = (gains.len() - 1) / 2;
+        let g = *gains.select_nth_unstable_by(k, f32::total_cmp).1;
+        if g.is_finite() { g } else { 0.0 }
     }
 
     /// The four unit curves (Shadows +100, Highlights −100, Shadows −100, Highlights +100) at
@@ -411,7 +458,22 @@ fn coefficients(weights: &[[f32; KNOTS]], base: f32, blurs: [f32; 4]) -> [f32; 2
         let weight = at(w);
         [a + weight, b - weight * blur]
     });
-    [a, b + weights.get(4).map_or(0., at)]
+    [a, b + clarity_level_scale() * weights.get(4).map_or(0., at)]
+}
+
+/// The fine Clarity's level row (its regional move) scaled by this.
+pub const CLARITY_LEVEL_SCALE: f32 = 1.0;
+
+/// [`CLARITY_LEVEL_SCALE`], or `LIGHTCRAFT_CLA_LEVEL=<scale>` in the environment (measurement runs), read once.
+pub fn clarity_level_scale() -> f32 {
+    static S: OnceLock<f32> = OnceLock::new();
+    *S.get_or_init(|| {
+        std::env::var("LIGHTCRAFT_CLA_LEVEL")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite() && (0.0..=4.0).contains(v))
+            .unwrap_or(CLARITY_LEVEL_SCALE)
+    })
 }
 
 /// The bracket of fitted positions for `amount` (RAWmakase's `bracket`): the first fit (0 for
@@ -646,6 +708,24 @@ fn mul3(m: &[[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
 }
 
 // ---------------------------------------------------------------- Highlights / Shadows
+
+/// Positive Shadows' curve scaled by this (round 12: on 40 of Bryan's split-A raws, Camera Raw
+/// against LightCraft, the rule lifted the darks by a median 1.12× Camera Raw's, R6, M262 and
+/// GR III alike; at 0.89 the oracle's real-raw H/S renders go 1.92 / 1.50 / 1.91 → 1.77 / 1.38 /
+/// 1.87 ΔE on its three sets, Shadows +100 alone on the R6 4.63 → 2.72).
+pub const SHADOWS_UP_SCALE: f32 = 0.89;
+
+/// [`SHADOWS_UP_SCALE`], or `LIGHTCRAFT_HS_SUP=<scale>` in the environment (measurement runs), read once.
+pub fn shadows_up_scale() -> f32 {
+    static S: OnceLock<f32> = OnceLock::new();
+    *S.get_or_init(|| {
+        std::env::var("LIGHTCRAFT_HS_SUP")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite() && (0.0..=2.0).contains(v))
+            .unwrap_or(SHADOWS_UP_SCALE)
+    })
+}
 
 /// Levels at which a curve samples the rule.
 pub const LEVELS: usize = 48;
@@ -988,8 +1068,9 @@ impl RuleStats {
         let step = (hi - lo) / LEVELS as f32;
         std::array::from_fn(|k| {
             let lifts = k == 0 || k == 3;
+            let scale = if k == 0 { shadows_up_scale() } else { 1. };
             let mut table: [f32; LEVELS] = std::array::from_fn(|i| {
-                let g = gains.get(i).map_or(0., |g| g[k]);
+                let g = gains.get(i).map_or(0., |g| g[k]) * scale;
                 let g = if g.is_finite() { g } else { 0. };
                 if lifts { g.max(0.) } else { g.min(0.) }
             });
@@ -1026,14 +1107,23 @@ impl RuleStats {
 
 // ---------------------------------------------------------------- one render
 
-/// Which of the operators a render needs (`(map, haze)`), from its settings.
-pub fn needs(s: &lightcraft_develop::DevelopSettings) -> (bool, bool) {
+/// Which of the operators a render needs (`(map, haze)`), from its settings; `adobe`: the photo
+/// renders on an Adobe base (whose default black reads the map's dark key, [`crate::black_cr`]).
+pub fn needs(s: &lightcraft_develop::DevelopSettings, adobe: bool) -> (bool, bool) {
     let effects = s.section_enabled("effects");
     let masks = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
     let clarity = CLARITY_MEASURED && ((effects && s.effects.clarity != 0.0) || masks(|a| a.clarity));
     let hs = hs_measured() && (s.light.highlights != 0.0 || s.light.shadows != 0.0 || masks(|a| a.highlights) || masks(|a| a.shadows));
+    // the photo's dark key for Camera Raw's default black (`black_cr`): every render with the
+    // photo's key, Shadows' shift of it with the rule
+    let black = adobe
+        && match crate::black_cr::mode() {
+            crate::black_cr::Mode::Photo => true,
+            crate::black_cr::Mode::Shift => hs && s.light.shadows != 0.0,
+            crate::black_cr::Mode::Off => false,
+        };
     let haze = HAZE_MEASURED && ((effects && s.effects.dehaze > 0.0) || s.masks.iter().any(|m| m.adjust.dehaze > 0.0));
-    (clarity || hs, haze)
+    (clarity || hs || black, haze)
 }
 
 /// Bilinear neighbours of a render pixel on the map.
