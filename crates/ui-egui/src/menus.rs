@@ -1136,8 +1136,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "dialog.pasteSettings" => {
-            let groups =
-                app.session.copy_groups.iter().filter_map(|g| serde_json::to_value(g).ok().and_then(|v| v.as_str().map(str::to_string))).collect();
+            let groups = crate::state::group_ids(&app.session.copy_groups);
             app.ui.dialog = Some(Dialog::PasteSettings { groups });
             Ok(Value::Null)
         }
@@ -1150,19 +1149,19 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let groups = crate::state::default_preset_groups();
             // what was checked last time (Match exposure / Auto align / Match camera & lens color start off)
             let prefs = app.ui.sync_prefs.clone();
-            let groups = prefs.groups.unwrap_or(groups);
+            let groups = prefs.groups.map(|g| crate::state::normalize_groups(&g)).unwrap_or(groups);
             app.ui.dialog = Some(Dialog::SyncSettings {
                 groups,
                 match_exposure: prefs.match_exposure,
                 auto_align: prefs.auto_align,
                 match_color: prefs.match_color,
+                masks: None,
             });
             Ok(Value::Null)
         }
         "dialog.copySettings" => {
-            let groups =
-                app.session.copy_groups.iter().filter_map(|g| serde_json::to_value(g).ok().and_then(|v| v.as_str().map(str::to_string))).collect();
-            app.ui.dialog = Some(Dialog::CopySettings { groups });
+            let groups = crate::state::group_ids(&app.session.copy_groups);
+            app.ui.dialog = Some(Dialog::CopySettings { groups, masks: None });
             Ok(Value::Null)
         }
         // File ▸ Sync from Lightroom Classic…: the catalog is read in the background (lr_sync.rs)

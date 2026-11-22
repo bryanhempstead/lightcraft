@@ -34,7 +34,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | K. Masking (MASK) | 14 | 4 | 5 | 0 | 8/8 (100%) | 5/5 (100%) |
 | L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
-| N. Copy / paste / sync (SYNC) | 5 | 0 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
+| N. Copy / paste / sync (SYNC) | 6 | 0 | 0 | 0 | 3/3 (100%) | 2/2 (100%) |
 | O. Merge (MERGE) | 4 | 0 | 0 | 0 | — | — |
 | P. Enhance (ENH) | 0 | 0 | 2 | 0 | — | — |
 | Q. HDR (HDR) | 0 | 0 | 5 | 0 | — | — |
@@ -48,9 +48,9 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
 | Lightroom Classic extras | 38 | 10 | 39 | 9 | — | 28/29 (97%) |
-| **Total** | 397 | 35 | 86 | 36 | 193/200 (97%) | 148/157 (94%) |
+| **Total** | 398 | 35 | 86 | 36 | 193/200 (97%) | 149/158 (94%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.0%** of 518 in-scope rows — P0 98.2% of 200 · P1 96.2% of 157 · P2 41.6% of 160.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.1%** of 519 in-scope rows — P0 98.2% of 200 · P1 96.2% of 158 · P2 41.6% of 160.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -390,7 +390,8 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-SYNC-COPY | Copy edit settings | P0 | ✅ | `cmd:develop.copy` | |
-| LR-SYNC-CHOOSE | Choose settings to copy | P0 | ✅ | `cmd:dialog.copySettings` | groups are coarser than per-slider |
+| LR-SYNC-CHOOSE | Choose settings to copy | P0 | ✅ | `cmd:dialog.copySettings`, `cmd:develop.settingsGroups`, `crates/develop/src/presets.rs` (`HEADINGS`) | Lightroom's per-setting checklist (43 checkboxes under 14 headings: Exposure … Black Clipping, Texture … Saturation, Parametric / Point Curve, HSL Hue / Sat / Lum, Sharpening, Luminance / Color Noise, Lens Profile, CA, Upright Mode / Transforms, Straighten Angle, Aspect Ratio …) in Copy, Sync, Paste Selected and New Preset; tri-state headings; Masking lists the photo's masks (`masks`). No Process Version / HDR / Output checkboxes (not modelled) |
+| LR-SYNC-SUBSETS | Check All / None / Default / Modified, saved subsets | P1 | ✅ | `cmd:develop.modifiedGroups`, `cmd:develop.subsets`, `cmd:develop.saveSubset`, `cmd:develop.renameSubset`, `cmd:develop.deleteSubset` | all. / none. / def. / mod. under every checklist; saved subsets (prefs.json) by name in the dialogs and as `subset` on develop.copy / sync / paste / preset.create |
 | LR-SYNC-PASTE | Paste to selection | P0 | ✅ | `cmd:develop.paste` | no separate "paste selected" (choose at copy time instead) |
 | LR-SYNC-SYNCBTN | Sync active → selected | P1 | ✅ | `cmd:develop.sync` | |
 | LR-SYNC-PREVIOUS | Paste from previous / auto sync [Classic] | P2 | ✅ | `cmd:develop.pastePrevious`, `cmd:develop.autoSync` | ⌥⌘V pastes the previously active photo's settings (copy groups); Auto Sync (⌥⇧⌘A) |

@@ -5,6 +5,7 @@ use lightcraft_develop::{DevelopSettings, Preset, Section, SettingsGroup, Treatm
 use lightcraft_geom::{CropGeometry, CropHandle, Point, Rect, crop_fit_angle, drag_crop};
 use serde_json::{Value, json};
 
+use super::copy_subsets::{groups_param, masks_param};
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, f64_req, has_active, has_clipboard, has_selection, ok, str_param};
 use crate::{Result, Session, media::SourceLevel};
 
@@ -24,10 +25,6 @@ fn edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut DevelopSettin
 fn section_param(p: &Value, c: &str) -> Result<Section> {
     let v = p.get("section").cloned().ok_or_else(|| bad(c, "missing `section`"))?;
     serde_json::from_value(v).map_err(|e| bad(c, e.to_string()))
-}
-
-fn groups_param(p: &Value) -> Option<Vec<SettingsGroup>> {
-    p.get("groups").and_then(|g| serde_json::from_value(g.clone()).ok())
 }
 
 /// Turn the crop to `angle`, keeping its size if it still fits, else shrinking it to fit.
@@ -698,15 +695,21 @@ pub fn specs() -> Vec<CommandSpec> {
             "Copy Edit Settings",
             ["Edit"],
             Some("Cmd+C"),
-            "{groups?: [settingsGroup]} (default: all but crop, masks, remove)",
+            "{groups?: [settingsGroup] (per-setting ids from develop.settingsGroups, or a heading id such as light / detail / crop), subset?: all | none | default | modified | a saved subset (develop.saveSubset), masks?: [mask id] (only these masks)} (default: the groups last copied; at first all but crop, masking, remove and red eye) → {groups}",
             has_active,
             |s, p| {
-                let id = active(s, "develop.copy")?;
-                if let Some(g) = groups_param(p) {
+                let c = "develop.copy";
+                let id = active(s, c)?;
+                if let Some(g) = groups_param(s, p, c)? {
                     s.copy_groups = g;
                 }
+                let masks = masks_param(p, c)?;
                 let d = s.develop_of(id).unwrap_or_default();
-                s.clipboard = Some(lightcraft_develop::extract_groups(&d, &s.copy_groups));
+                let mut clip = lightcraft_develop::extract_groups(&d, &s.copy_groups);
+                if let Some(m) = masks {
+                    lightcraft_develop::retain_masks(&mut clip, &m);
+                }
+                s.clipboard = Some(clip);
                 Ok(json!({"groups": s.copy_groups}))
             }
         ),
@@ -715,13 +718,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Settings from Previous",
             ["Edit"],
             Some("Cmd+Alt+V"),
-            "{ids?, groups?: [settingsGroup] (default: the copy groups)} — from the photo that was active before this one",
+            "{ids?, groups?: [settingsGroup], subset? (default: the copy groups)} — from the photo that was active before this one",
             has_active,
             |s, p| {
                 let c = "develop.pastePrevious";
                 let prev =
                     s.previous_active.filter(|id| s.catalog.photo(*id).is_some_and(|ph| !ph.deleted)).ok_or_else(|| bad(c, "no previous photo"))?;
-                let groups = groups_param(p).unwrap_or_else(|| s.copy_groups.clone());
+                let groups = groups_param(s, p, c)?.unwrap_or_else(|| s.copy_groups.clone());
                 let partial = lightcraft_develop::extract_groups(&s.develop_of(prev).unwrap_or_default(), &groups);
                 let ids: Vec<PhotoId> = s.targets(p).into_iter().filter(|id| *id != prev).collect();
                 let ops = ids
@@ -739,11 +742,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Edit Settings",
             ["Edit"],
             Some("Cmd+V"),
-            "{ids?, groups?: [settingsGroup] (paste only these of the copied groups)}",
+            "{ids?, groups?: [settingsGroup], subset? (paste only these of the copied groups)}",
             has_clipboard,
             |s, p| {
                 let mut clip = s.clipboard.clone().unwrap_or_default();
-                if let Some(only) = groups_param(p) {
+                if let Some(only) = groups_param(s, p, "develop.paste")? {
                     // the clipboard holds whole groups: rebuild it with just the chosen (copied) ones
                     let only: Vec<_> = only.into_iter().filter(|g| s.copy_groups.contains(g)).collect();
                     let full = lightcraft_develop::apply_partial(&DevelopSettings::default(), &clip, 1.0);
@@ -765,16 +768,21 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sync Settings",
             [],
             None,
-            "{groups?, matchExposure?: bool, autoAlign?: bool, matchCameraColor?: bool, scene?: bool} — copy the active photo's settings to all selected photos; matchCameraColor then matches each one's colour to the active photo across cameras / lenses / phones (develop.matchCameraColor); matchExposure sets each one's Exposure so it renders as bright as the active photo (however far over / under it was shot); autoAlign levels each one's horizon → {changed, matched, aligned, colour: [per photo]}",
+            "{groups?: [settingsGroup] | subset? (as develop.copy; default: Lightroom's default subset), masks?: [mask id], matchExposure?: bool, autoAlign?: bool, matchCameraColor?: bool, scene?: bool} — copy the active photo's settings to all selected photos; matchCameraColor then matches each one's colour to the active photo across cameras / lenses / phones (develop.matchCameraColor); matchExposure sets each one's Exposure so it renders as bright as the active photo (however far over / under it was shot); autoAlign levels each one's horizon → {changed, matched, aligned, colour: [per photo]}",
             has_selection,
             |s, p| {
-                let id = active(s, "develop.sync")?;
-                let groups = groups_param(p).unwrap_or_else(SettingsGroup::default_copy);
+                let c = "develop.sync";
+                let id = active(s, c)?;
+                let groups = groups_param(s, p, c)?.unwrap_or_else(SettingsGroup::default_copy);
+                let masks = masks_param(p, c)?;
                 let (match_exp, align) = (bool_or(p, "matchExposure", false), bool_or(p, "autoAlign", false));
                 let match_colour = bool_or(p, "matchCameraColor", false);
                 let scene = p.get("scene").and_then(Value::as_bool);
                 let d = s.develop_of(id).unwrap_or_default();
-                let partial = lightcraft_develop::extract_groups(&d, &groups);
+                let mut partial = lightcraft_develop::extract_groups(&d, &groups);
+                if let Some(m) = masks {
+                    lightcraft_develop::retain_masks(&mut partial, &m);
+                }
                 let target = if match_exp { rendered_brightness(s, id, &d) } else { None };
                 let (r_ev, r_slider) = (gathered_ev(s, id), d.light.exposure);
                 let (mut ops, mut matched, mut aligned, mut colour) = (Vec::new(), 0, 0, Vec::new());
@@ -1019,16 +1027,30 @@ pub fn specs() -> Vec<CommandSpec> {
             s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
             ok()
         }),
-        cmd!("preset.create", "Create Preset", ["Photo"], None, "{name, group?, groups?: [settingsGroup]}", has_active, |s, p| {
-            let id = active(s, "preset.create")?;
-            let name = str_param(p, "name").ok_or_else(|| bad("preset.create", "missing name"))?;
-            let group = str_param(p, "group").unwrap_or("User Presets");
-            let groups = groups_param(p).unwrap_or_else(SettingsGroup::default_copy);
-            let d = s.develop_of(id).unwrap_or_default();
-            let pid = format!("user.{}.{}", s.presets.len(), name.to_lowercase().replace(' ', "-"));
-            s.presets.push(Preset::from_settings(&pid, name, group, &d, &groups));
-            Ok(json!({"id": pid}))
-        }),
+        cmd!(
+            "preset.create",
+            "Create Preset",
+            ["Photo"],
+            None,
+            "{name, group?, groups?: [settingsGroup] | subset?, masks?: [mask id]}",
+            has_active,
+            |s, p| {
+                let c = "preset.create";
+                let id = active(s, c)?;
+                let groups = groups_param(s, p, c)?.unwrap_or_else(SettingsGroup::default_copy);
+                let masks = masks_param(p, c)?;
+                let name = str_param(p, "name").ok_or_else(|| bad(c, "missing name"))?;
+                let group = str_param(p, "group").unwrap_or("User Presets");
+                let d = s.develop_of(id).unwrap_or_default();
+                let pid = format!("user.{}.{}", s.presets.len(), name.to_lowercase().replace(' ', "-"));
+                let mut preset = Preset::from_settings(&pid, name, group, &d, &groups);
+                if let Some(m) = masks {
+                    lightcraft_develop::retain_masks(&mut preset.settings, &m);
+                }
+                s.presets.push(preset);
+                Ok(json!({"id": pid}))
+            }
+        ),
         cmd!("preset.delete", "Delete Preset", [], None, "{id}", always, |s, p| {
             let pid = str_param(p, "id").ok_or_else(|| bad("preset.delete", "missing id"))?;
             let i = s.presets.iter().position(|x| x.id == pid).ok_or_else(|| bad("preset.delete", "unknown preset"))?;
@@ -1067,7 +1089,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let c = "preset.update";
                 let id = active(s, c)?;
                 let current = s.develop_of(id).unwrap_or_default().to_json();
-                let groups = groups_param(p);
+                let groups = groups_param(s, p, c)?;
                 let pr = user_preset(s, p, c)?;
                 pr.settings = match groups {
                     Some(g) => lightcraft_develop::extract_groups(&serde_json::from_value(current).unwrap_or_default(), &g),

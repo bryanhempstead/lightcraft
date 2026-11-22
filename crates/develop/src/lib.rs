@@ -12,7 +12,7 @@ pub mod segmask;
 pub mod settings;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
-pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
+pub use presets::{GroupHeading, HEADINGS, Preset, SettingsGroup, apply_partial, extract_groups, retain_masks};
 pub use segmask::SegMask;
 pub use settings::*;
 

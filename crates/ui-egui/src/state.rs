@@ -489,13 +489,23 @@ pub struct UiState {
 /// Settings group ids (`SettingsGroup` serde names) a new preset includes by default: everything
 /// but crop, masks, spots and red eye.
 pub fn default_preset_groups() -> Vec<String> {
-    lightcraft_develop::SettingsGroup::default_copy().iter().filter_map(|g| serde_json::to_value(g).ok()?.as_str().map(str::to_string)).collect()
+    group_ids(&lightcraft_develop::SettingsGroup::default_copy())
+}
+
+/// Per-setting group ids for the checklists.
+pub fn group_ids(groups: &[lightcraft_develop::SettingsGroup]) -> Vec<String> {
+    groups.iter().map(|g| g.id()).collect()
+}
+
+/// Remembered group ids (maybe the coarse ones of older versions) as per-setting ids.
+pub fn normalize_groups(ids: &[String]) -> Vec<String> {
+    group_ids(&lightcraft_develop::SettingsGroup::parse_ids_lenient(ids))
 }
 
 impl Dialog {
     /// A fresh Create Preset dialog.
     pub fn create_preset() -> Dialog {
-        Dialog::CreatePreset { name: String::new(), group: "User Presets".into(), groups: default_preset_groups() }
+        Dialog::CreatePreset { name: String::new(), group: "User Presets".into(), groups: default_preset_groups(), masks: None }
     }
 }
 
@@ -593,9 +603,14 @@ pub enum Dialog {
         group: String,
         #[serde(default = "default_preset_groups")]
         groups: Vec<String>,
+        /// The masks that go along (`None`: all of them).
+        #[serde(default)]
+        masks: Option<Vec<u32>>,
     },
     CopySettings {
         groups: Vec<String>,
+        #[serde(default)]
+        masks: Option<Vec<u32>>,
     },
     /// Synchronize Settings (Classic's Sync…): which groups of the active photo's settings go to
     /// the other selected photos.
@@ -607,6 +622,9 @@ pub enum Dialog {
         auto_align: bool,
         /// First match each photo's colour to the active one across cameras, lenses and phones.
         match_color: bool,
+        /// The masks that go along (`None`: all of them).
+        #[serde(default)]
+        masks: Option<Vec<u32>>,
     },
     /// Paste Selected Settings: which of the copied groups to paste.
     PasteSettings {

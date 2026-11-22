@@ -227,6 +227,8 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   Lightroom since the migration / last sync, without overwriting edits made here unless asked; migrated photos keep
   their Lightroom history (side files, History panel) and snapshots (versions); Upright uses the transform Lightroom
   stored.
+- 2026-11-21 (fork): Copy / Sync / Paste Selected / New Preset use Lightroom's per-setting checklist (43 settings
+  under 14 headings, choose masks) with all. / none. / def. / mod. and saved subsets; older coarse group ids still work.
 
 ## Chinese and Japanese interfaces, and text watermarks
 

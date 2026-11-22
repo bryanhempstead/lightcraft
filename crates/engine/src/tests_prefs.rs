@@ -317,3 +317,65 @@ fn reopening_a_library_retires_the_old_cache_so_its_jobs_cannot_write_after_a_cl
     drop(s);
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+/// U01: Lightroom's per-setting copy checklist: copy just Exposure (not Contrast), sync just
+/// Sharpening (not noise reduction), the Modified subset, choose masks, saved subsets persist.
+#[test]
+fn per_setting_copy_sync_modified_and_saved_subsets() {
+    let lib = temp_dir("subsets");
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, true).unwrap();
+        let ids: Vec<_> = s.visible().iter().copied().take(3).collect();
+        s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
+        let v = json!({"light.exposure": 1.0, "light.contrast": 30, "detail.sharpenAmount": 90, "detail.nrLuminance": 40});
+        s.execute("develop.set", &json!({"values": v})).unwrap();
+        let groups = s.execute("develop.modifiedGroups", &json!({})).unwrap()["groups"].clone();
+        for g in ["exposure", "contrast", "sharpening", "luminanceNoise"] {
+            assert!(groups.as_array().unwrap().iter().any(|x| x == g), "{g} modified: {groups}");
+        }
+        assert!(!groups.as_array().unwrap().iter().any(|x| x == "highlights"), "{groups}");
+        // copy only Exposure
+        s.execute("develop.copy", &json!({"groups": ["exposure"]})).unwrap();
+        s.execute("develop.paste", &json!({"ids": [ids[1].0]})).unwrap();
+        let d = s.develop_of(ids[1]).unwrap();
+        assert_eq!((d.light.exposure, d.light.contrast), (1.0, 0.0));
+        // sync only Sharpening, from the active photo to the selection
+        s.execute("library.select", &json!({"ids": [ids[0].0, ids[2].0]})).unwrap();
+        s.execute("develop.sync", &json!({"groups": ["sharpening"]})).unwrap();
+        let d = s.develop_of(ids[2]).unwrap();
+        assert_eq!((d.detail.sharpen_amount, d.detail.nr_luminance, d.light.exposure), (90.0, 0.0, 0.0));
+        // a heading id still works, unknown ids are an error, not a silent default
+        s.execute("develop.copy", &json!({"groups": ["light"]})).unwrap();
+        assert!(s.copy_groups.contains(&lightcraft_develop::SettingsGroup::Blacks));
+        assert!(s.execute("develop.copy", &json!({"groups": ["exposur"]})).unwrap_err().to_string().contains("exposur"));
+        // subsets: modified (on the active photo), saved ones by name
+        let r = s.execute("develop.copy", &json!({"subset": "modified"})).unwrap();
+        assert_eq!(r["groups"], groups);
+        assert!(s.execute("develop.saveSubset", &json!({"name": "Default", "groups": ["grain"]})).is_err(), "built-in name");
+        s.execute("develop.saveSubset", &json!({"name": "Tone only", "groups": ["light", "toneCurve"]})).unwrap();
+        s.execute("develop.renameSubset", &json!({"name": "tone only", "to": "Tone"})).unwrap();
+        let r = s.execute("develop.copy", &json!({"subset": "tone"})).unwrap();
+        assert_eq!(r["groups"].as_array().unwrap().len(), 8, "{r}");
+        assert!(s.execute("develop.copy", &json!({"subset": "nope"})).is_err());
+        // masks: only the chosen one goes along
+        s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
+        s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
+        s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+        let masks: Vec<u32> = s.develop_of(ids[0]).unwrap().masks.iter().map(|m| m.id).collect();
+        assert_eq!(masks.len(), 2);
+        s.execute("develop.copy", &json!({"groups": ["masks"], "masks": [masks[1]]})).unwrap();
+        s.execute("develop.paste", &json!({"ids": [ids[1].0]})).unwrap();
+        assert_eq!(s.develop_of(ids[1]).unwrap().masks.len(), 1);
+        let list = s.execute("develop.settingsGroups", &json!({})).unwrap();
+        assert!(list["headings"].as_array().unwrap().len() >= 12, "{list}");
+        s.close_library().unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let r = s.execute("develop.subsets", &json!({})).unwrap();
+    assert_eq!(r["subsets"][0]["name"], "Tone", "saved with the library preferences: {r}");
+    s.execute("develop.deleteSubset", &json!({"name": "tone"})).unwrap();
+    assert!(s.copy_subsets.is_empty());
+    let _ = std::fs::remove_dir_all(&lib);
+}

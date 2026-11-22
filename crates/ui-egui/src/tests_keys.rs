@@ -372,7 +372,7 @@ fn sync_dialog_remembers_its_checkboxes() {
     let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
     exec(&mut h, "library.select", json!({"ids": ids}));
     exec(&mut h, "dialog.syncSettings", json!({}));
-    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align, match_color }) = h.app.ui.dialog.clone() else {
+    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align, match_color, .. }) = h.app.ui.dialog.clone() else {
         panic!("no sync dialog")
     };
     assert!(!match_exposure && !auto_align && !match_color, "match exposure / auto align / match colour start off");
@@ -389,11 +389,81 @@ fn sync_dialog_remembers_its_checkboxes() {
     let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&h.app.ui).unwrap()).unwrap();
     h.app.ui.sync_prefs = back.sync_prefs;
     exec(&mut h, "dialog.syncSettings", json!({}));
-    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align, match_color }) = h.app.ui.dialog.clone() else {
+    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align, match_color, .. }) = h.app.ui.dialog.clone() else {
         panic!("no sync dialog")
     };
     assert!(match_exposure && !auto_align && match_color);
     assert!(!groups.contains(&first), "{first} stays unchecked");
+}
+
+/// U01: the Sync dialog's per-setting checklist (Lightroom's): none., tick one slider, the Basic
+/// Tone heading ticks its six, mod. picks what was changed, a typed name saves a subset; only the
+/// ticked sliders go to the other photos.
+#[test]
+fn sync_dialog_per_setting_checklist_and_subsets() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
+    exec(&mut h, "library.select", json!({"ids": [ids[0]]}));
+    exec(
+        &mut h,
+        "develop.set",
+        json!({"values": {"light.exposure": 1.0, "light.contrast": 30, "detail.sharpenAmount": 90, "detail.nrLuminance": 40}}),
+    );
+    exec(&mut h, "library.select", json!({"ids": ids, "active": ids[0]}));
+    exec(&mut h, "dialog.syncSettings", json!({}));
+    // the (centred) window takes a few frames to find its size
+    for _ in 0..8 {
+        h.step();
+    }
+    let click = |h: &mut Headless, w: &str| {
+        let r = h.request("ui.clickWidget", json!({"id": w}), T);
+        assert_eq!(r["ok"], true, "{w}: {r}");
+        h.step();
+    };
+    let groups = |h: &Headless| match &h.app.ui.dialog {
+        Some(crate::state::Dialog::SyncSettings { groups, .. }) => groups.clone(),
+        d => panic!("dialog: {d:?}"),
+    };
+    click(&mut h, "syncGroup:none");
+    assert!(groups(&h).is_empty());
+    click(&mut h, "syncGroup:light");
+    assert_eq!(groups(&h).len(), 6, "the heading ticks its six sliders");
+    click(&mut h, "syncGroup:contrast");
+    assert_eq!(groups(&h).len(), 5);
+    click(&mut h, "syncGroup:modified");
+    let modified = groups(&h);
+    for g in ["exposure", "contrast", "sharpening", "luminanceNoise"] {
+        assert!(modified.iter().any(|x| x == g), "{g}: {modified:?}");
+    }
+    click(&mut h, "syncGroup:none");
+    click(&mut h, "syncGroup:sharpening");
+    click(&mut h, "syncGroup:exposure");
+    // save the two as a subset
+    click(&mut h, "field:syncGroupSubset");
+    h.request("ui.text", json!({"text": "Sharp + exp"}), T);
+    h.step();
+    click(&mut h, "syncGroup:saveSubset");
+    assert_eq!(h.app.session.copy_subsets.len(), 1, "saved");
+    assert_eq!(h.app.session.copy_subsets[0].groups, ["exposure", "sharpening"]);
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let d = h.app.session.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
+    assert_eq!((d.light.exposure, d.light.contrast, d.detail.sharpen_amount, d.detail.nr_luminance), (1.0, 0.0, 90.0, 0.0));
+    // remembered per setting
+    assert_eq!(h.app.ui.sync_prefs.groups.as_deref(), Some(&["exposure".to_string(), "sharpening".to_string()][..]));
+}
+
+/// Sync prefs saved by older versions (coarse groups) open as their per-setting checkboxes.
+#[test]
+fn old_coarse_sync_prefs_open_as_per_setting_checkboxes() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
+    exec(&mut h, "library.select", json!({"ids": ids}));
+    h.app.ui.sync_prefs.groups = Some(vec!["light".into(), "detail".into(), "gone".into()]);
+    exec(&mut h, "dialog.syncSettings", json!({}));
+    let Some(crate::state::Dialog::SyncSettings { groups, .. }) = h.app.ui.dialog.clone() else { panic!("no sync dialog") };
+    assert_eq!(groups.len(), 10, "{groups:?}");
+    assert!(groups.contains(&"blacks".to_string()) && groups.contains(&"colorNoise".to_string()));
 }
 
 #[test]

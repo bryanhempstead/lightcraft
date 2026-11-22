@@ -8,6 +8,7 @@ mod before;
 pub(crate) mod browse;
 mod color;
 pub(crate) mod convert;
+pub mod copy_subsets;
 mod cull;
 pub mod curves;
 pub(crate) mod develop;
@@ -123,6 +124,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(edit::specs());
         v.extend(library::specs());
         v.extend(develop::specs());
+        v.extend(copy_subsets::specs());
         v.extend(color::specs());
         v.extend(curves::specs());
         v.extend(masks::specs());
