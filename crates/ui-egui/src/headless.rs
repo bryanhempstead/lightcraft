@@ -734,7 +734,7 @@ mod tests {
         }
         let w1 = width(&mut h);
         assert!((w1 - w0).abs() < 0.5, "the export dialog grew from {w0} to {w1}");
-        assert!(w1 < 700.0, "{w1}");
+        assert!(w1 < crate::export_dialog::DIALOG_W as f64 + 80.0, "{w1}");
     }
 
     #[test]

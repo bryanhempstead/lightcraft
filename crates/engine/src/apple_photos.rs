@@ -139,7 +139,7 @@ pub fn options(params: &Value) -> Result<ExportOptions, String> {
         }
     }
     let mut o = ExportOptions::from_params(&p).map_err(|e| e.to_string())?;
-    o.same_folder = false;
+    o.export_to = crate::export::ExportTo::SpecificFolder;
     o.add_to_catalog = false;
     o.add_to_stack = None;
     o.subfolder.clear();
@@ -235,7 +235,7 @@ mod tests {
     fn options_default_to_jpeg_and_stay_out_of_the_catalog() {
         let o = options(&json!({"ids": [1], "album": "A", "addToCatalog": true, "sameFolder": true, "longEdge": 1024})).unwrap();
         assert_eq!(o.format, crate::export::ExportFormat::Jpeg);
-        assert!(!o.add_to_catalog && !o.same_folder);
+        assert!(!o.add_to_catalog && o.export_to != crate::export::ExportTo::SameFolder);
         assert!(o.resize.is_some());
         assert!(options(&json!({"format": "nonsense"})).is_err());
     }

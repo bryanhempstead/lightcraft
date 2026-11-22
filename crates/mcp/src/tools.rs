@@ -202,7 +202,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
                 "sharpenAmount": {"type": "string", "enum": ["low", "standard", "high"]},
                 "naming": {"type": "string", "description": "File-name template, e.g. {name}-{seq} or {date:%Y-%m-%d}_{title}_{seq:2} (tokens: {name} {num} {seq} {seq:N} {date} {date:%…} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext})"},
                 "startNumber": {"type": "integer", "description": "First {seq} value (default 1)"},
-                "metadata": {"type": "string", "enum": ["all", "allExceptCamera", "copyright", "none"]},
+                "metadata": {"type": "string", "enum": ["all", "allExceptCameraRaw", "allExceptCamera", "copyrightContact", "copyright", "none"]},
                 "removeLocation": {"type": "boolean"},
                 "dngCompression": {"type": "string", "enum": ["lossless", "deflate", "uncompressed"], "description": "DNG: how the raw data is stored (default lossless JPEG)"},
                 "dngPreview": {"type": "string", "enum": ["none", "medium", "full"], "description": "DNG: the embedded JPEG preview, rendered with the edits (default medium, 1024 px; needs Adobe's DNG SDK)"},

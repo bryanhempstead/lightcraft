@@ -147,6 +147,8 @@ struct PrefsFile {
     last_export: Option<serde_json::Value>,
     /// The user's export presets.
     export_presets: Vec<crate::export::ExportPreset>,
+    /// The user's export preset folders.
+    export_preset_folders: Vec<String>,
     /// Metadata presets.
     metadata_presets: Vec<crate::cmd::metadata::MetadataPreset>,
     /// Filter presets.
@@ -361,6 +363,7 @@ impl Session {
         self.xmp = prefs.xmp;
         self.last_export = prefs.last_export;
         self.export_presets = prefs.export_presets;
+        self.export_preset_folders = prefs.export_preset_folders;
         self.metadata_presets = prefs.metadata_presets;
         self.filter_presets = prefs.filter_presets;
         self.curve_presets = prefs.curve_presets;
@@ -607,6 +610,7 @@ impl Session {
             xmp: self.xmp,
             last_export: self.last_export.clone(),
             export_presets: self.export_presets.clone(),
+            export_preset_folders: self.export_preset_folders.clone(),
             metadata_presets: self.metadata_presets.clone(),
             filter_presets: self.filter_presets.clone(),
             curve_presets: self.curve_presets.clone(),

@@ -278,6 +278,14 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   export instead of looking more saturated (Settings ▸ Interface ▸ Photo color).
 - 2026-11-21 (fork): point curve Snap to Grid, copy / paste a channel, Show All Curves.
 - 2026-11-21 (fork): Remove tool ⌥-drag marquee deletes the spots inside it.
+- 2026-11-22 (fork): the Export dialog is laid out like Lightroom Classic's — "Export N Files", Export To (Hard Drive /
+  Email / CD/DVD / Apple Photos), the preset list with Lightroom's four built-ins, folders, checkboxes for several
+  presets, add. / remove. and Update / Rename / Move / Export… / Delete, `.lrtemplate` import; the nine sections in
+  Lightroom's order with one-line summaries; Export To Choose folder later / Home / Documents / Pictures / Desktop,
+  Existing Files ▸ Ask what to do (per file, Apply to all), Width & Height vs Dimensions, in / cm / ppcm, the five
+  metadata choices, Simple Copyright Watermark and nine anchors, Open in Adobe Photoshop / Other Application… / Go to
+  Export Actions Folder Now, plug.ins. and done.; extras: a before-export preview with the estimated file size, export
+  progress in the activity strip with pause / resume and a queue.
 
 ## Chinese and Japanese interfaces, and text watermarks
 

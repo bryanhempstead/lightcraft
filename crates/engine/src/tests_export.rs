@@ -114,7 +114,7 @@ fn presets_conflicts_and_subfolders() {
     assert!(s.execute("export.savePreset", &json!({"name": "JPEG (Large)", "params": {}})).is_err(), "built-in names are reserved");
     s.execute("export.savePreset", &json!({"name": "Web", "params": {"format": "png", "width": 64, "ids": [1], "dir": "/x"}})).unwrap();
     let web = s.export_params(&json!({"preset": "Web"})).unwrap();
-    assert_eq!(web, json!({"format": "png", "width": 64}), "targets are not part of a preset");
+    assert_eq!(web, json!({"format": "png", "width": 64, "dir": "/x"}), "targets are not part of a preset; its folder is (as in Lightroom)");
     s.execute("export.savePreset", &json!({"name": "web", "params": {"format": "webp"}})).unwrap();
     assert_eq!(s.export_presets.len(), 1, "same name (any case) replaces");
     s.execute("export.deletePreset", &json!({"name": "WEB"})).unwrap();

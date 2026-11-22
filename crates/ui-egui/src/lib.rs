@@ -10,6 +10,7 @@ pub mod control;
 pub mod credits;
 pub mod display_p3;
 pub mod enhance;
+pub mod export_dialog;
 pub mod export_task;
 pub mod hdr_view;
 pub mod headless;
@@ -48,6 +49,8 @@ mod tests_cameras;
 mod tests_classic;
 #[cfg(test)]
 mod tests_curve;
+#[cfg(test)]
+mod tests_export_dialog;
 #[cfg(test)]
 mod tests_filmstrip;
 #[cfg(test)]
@@ -259,6 +262,8 @@ pub struct LightcraftApp {
     pub scan: Option<import::ScanTask>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// Exports waiting for the running one (started in order).
+    pub export_queue: Vec<export_task::Queued>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
@@ -337,6 +342,7 @@ impl LightcraftApp {
             import: None,
             scan: None,
             export: None,
+            export_queue: Vec::new(),
             tasks: Default::default(),
             last_export_result: None,
             hover_preview: None,

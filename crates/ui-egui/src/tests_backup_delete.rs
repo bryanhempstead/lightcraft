@@ -256,7 +256,7 @@ fn painter_modes() {
 fn export_with_several_presets() {
     let dir = temp("presets-export");
     let mut h = headless(lightcraft_engine::Session::with_demo());
-    let names: Vec<String> = h.app.session.all_export_presets().into_iter().take(2).map(|(p, _)| p.name).collect();
+    let names: Vec<String> = vec!["JPEG (Small)".into(), "JPEG (Large)".into()];
     assert_eq!(names.len(), 2);
     let id = h.app.session.visible_cloned()[0];
     let r = h.app.run("app.export", json!({"presets": names, "ids": [id.0], "dir": dir.0.to_string_lossy(), "longEdge": 64})).unwrap();

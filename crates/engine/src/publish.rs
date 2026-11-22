@@ -472,7 +472,7 @@ pub fn publisher_for(s: &crate::Session, svc: &Service) -> Result<Box<dyn Publis
 pub fn service_options(svc: &Service) -> Result<ExportOptions, String> {
     let params = if svc.export.is_object() { svc.export.clone() } else { json!({}) };
     let mut o = ExportOptions::from_params(&ExportOptions::known_keys_only(&params)).map_err(|e| e.to_string())?;
-    o.same_folder = false;
+    o.export_to = crate::export::ExportTo::SpecificFolder;
     o.add_to_catalog = false;
     o.add_to_stack = None;
     o.subfolder.clear();

@@ -160,6 +160,7 @@ fn export_dialog_exports_a_trimmed_video() {
     }
     settle(&mut h);
     assert!(widget_rect(&mut h, "check:exportVideoInclude").is_some(), "the Video section shows");
+    crate::tests_library2::click(&mut h, "combo:exportVideoQuality");
     crate::tests_library2::click(&mut h, "button:exportVideoQuality-3");
     shot(&mut h, "video-export-dialog.png");
     crate::tests_library2::click(&mut h, "button:dialogOk");

@@ -1435,7 +1435,17 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             // no previous export: 2048 px long edge; a previous full-size export: full size
             let full_size = opts.resize.is_none() && lightcraft_engine::export::ExportOptions::has_size_param(&prev);
             let resize = opts.resize.unwrap_or_default();
-            app.ui.dialog = Some(Dialog::Export { opts, full_size, resize, preset_name: String::new(), limit_kb: u("limitKb", 0) as u32, dir });
+            app.ui.dialog = Some(Dialog::Export {
+                opts: Box::new(opts),
+                full_size,
+                resize,
+                preset_name: String::new(),
+                limit_kb: u("limitKb", 0) as u32,
+                dir,
+                selected: None,
+                checked: Vec::new(),
+                album: "LightCraft".into(),
+            });
             Ok(Value::Null)
         }
         "merge.hdrLast" => crate::merge::start_last(app, "merge.hdr"),
@@ -1608,7 +1618,21 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 return Some(Err("Email Photos needs the desktop app (Mail)".into()));
             }
             let dir = std::env::temp_dir().join(format!("LightCraft Email {}", (app.session.clock)().replace([':', 'T'], "-")));
-            let mut q = json!({"format": "jpeg", "longEdge": p.get("longEdge").and_then(Value::as_u64).unwrap_or(1600), "quality": 80, "dir": dir.to_string_lossy(), "background": false, "metadata": "copyright"});
+            // the Export dialog's Export To ▸ Email passes its own `settings`
+            let mut q = match p.get("settings").filter(|s| s.is_object()) {
+                Some(s) => s.clone(),
+                None => {
+                    json!({"format": "jpeg", "longEdge": p.get("longEdge").and_then(Value::as_u64).unwrap_or(1600), "quality": 80, "metadata": "copyright"})
+                }
+            };
+            if let Some(o) = q.as_object_mut() {
+                o.remove("service");
+                o.insert("exportTo".into(), json!("specificFolder"));
+                o.insert("after".into(), json!("nothing"));
+                o.insert("addToCatalog".into(), json!(false));
+            }
+            q["dir"] = json!(dir.to_string_lossy());
+            q["background"] = json!(false);
             if let Some(ids) = p.get("ids") {
                 q["ids"] = ids.clone();
             }
