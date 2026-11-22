@@ -566,6 +566,15 @@ pub struct ExportOptions {
     pub naming: String,
     /// First `{seq}` value.
     pub start_number: u32,
+    /// `{text}`: Lightroom's Custom Text.
+    pub custom_text: String,
+    /// The appended extension's case (Lightroom's Extensions popup).
+    pub ext_case: crate::rename::ExtCase,
+    /// Post-Processing: what happens once the files are written.
+    pub after: AfterExport,
+    /// [`AfterExport::OpenInApp`]: the application (name or path; empty = each file's default
+    /// app) or an Export Action (an app or script in the Export Actions folder).
+    pub after_app: String,
     /// Created inside the destination folder (empty = none).
     pub subfolder: String,
     /// When a file of the same name exists in the destination folder.
@@ -586,6 +595,118 @@ pub struct ExportOptions {
     pub bit_depth: Option<u8>,
 }
 
+/// Lightroom's Export ▸ Post-Processing ▸ After Export.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AfterExport {
+    /// Do nothing.
+    #[default]
+    Nothing,
+    /// Show the exported files in the Finder (Explorer, the file manager).
+    ShowInFinder,
+    /// Open them in an application (Lightroom's Open in Photoshop / Other Application…) or hand
+    /// them to an Export Action (an app or script from the Export Actions folder).
+    OpenInApp,
+}
+
+/// The Export Actions folder (`~/Library/Application Support/LightCraft/Export Actions` on macOS,
+/// `$XDG_CONFIG_HOME/lightcraft/Export Actions` elsewhere): apps, aliases and scripts put there
+/// are offered under After Export, like Lightroom's.
+pub fn export_actions_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os(if cfg!(windows) { "APPDATA" } else { "HOME" }).map(std::path::PathBuf::from)?;
+    Some(if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/LightCraft/Export Actions")
+    } else if cfg!(windows) {
+        home.join("LightCraft").join("Export Actions")
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from).unwrap_or_else(|| home.join(".config")).join("lightcraft/Export Actions")
+    })
+}
+
+/// The Export Actions (name, path), sorted by name; hidden files skipped.
+pub fn export_actions() -> Vec<(String, String)> {
+    let Some(dir) = export_actions_dir() else { return vec![] };
+    let Ok(rd) = std::fs::read_dir(&dir) else { return vec![] };
+    let mut v: Vec<(String, String)> = rd
+        .flatten()
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| {
+            let p = e.path();
+            let name = p.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            (name, p.to_string_lossy().to_string())
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+/// The program and arguments [`post_process`] runs for the written `paths` (`None`: nothing to
+/// run). Pure, so it is tested without launching anything.
+pub fn post_process_command(o: &ExportOptions, paths: &[String]) -> Option<(String, Vec<String>)> {
+    let first = paths.first()?;
+    match o.after {
+        AfterExport::Nothing => None,
+        AfterExport::ShowInFinder => Some(if cfg!(target_os = "macos") {
+            ("/usr/bin/open".into(), std::iter::once("-R".to_string()).chain(paths.iter().cloned()).collect())
+        } else if cfg!(windows) {
+            ("explorer".into(), vec![format!("/select,{first}")])
+        } else {
+            let dir = std::path::Path::new(first).parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+            ("xdg-open".into(), vec![dir])
+        }),
+        AfterExport::OpenInApp => {
+            let app = o.after_app.trim();
+            let path = std::path::Path::new(app);
+            let is_bundle = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"));
+            if !app.is_empty() && path.is_file() && !is_bundle {
+                // an Export Action script / program: run it with the files
+                return Some((app.to_string(), paths.to_vec()));
+            }
+            Some(if cfg!(target_os = "macos") {
+                let mut args = Vec::new();
+                if !app.is_empty() {
+                    args.push("-a".to_string());
+                    args.push(app.to_string());
+                }
+                args.extend(paths.iter().cloned());
+                ("/usr/bin/open".into(), args)
+            } else if app.is_empty() {
+                (if cfg!(windows) { "explorer".into() } else { "xdg-open".into() }, vec![first.clone()])
+            } else {
+                (app.to_string(), paths.to_vec())
+            })
+        }
+    }
+}
+
+/// Post-Processing after an export: run [`post_process_command`] for the files it wrote (per-photo
+/// results with a `path`). Never fails the export; returns what was done to report, or `None`.
+pub fn post_process(o: &ExportOptions, files: &[serde_json::Value]) -> Option<serde_json::Value> {
+    if o.after == AfterExport::Nothing {
+        return None;
+    }
+    let paths: Vec<String> = files.iter().filter_map(|f| f.get("path").and_then(serde_json::Value::as_str)).map(str::to_string).collect();
+    let Some((program, args)) = post_process_command(o, &paths) else {
+        return Some(serde_json::json!({"after": o.after, "skipped": "no files written"}));
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match std::process::Command::new(&program).args(&args).spawn() {
+            // reaped on a thread: no zombie, and the export never waits for the app
+            Ok(mut child) => {
+                let _ = std::thread::Builder::new().name("export-after".into()).spawn(move || child.wait());
+                Some(serde_json::json!({"after": o.after, "program": program, "files": paths.len()}))
+            }
+            Err(e) => Some(serde_json::json!({"after": o.after, "program": program, "error": e.to_string()})),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = args;
+        Some(serde_json::json!({"after": o.after, "program": program, "error": "not available in the browser"}))
+    }
+}
+
 impl Default for ExportOptions {
     fn default() -> Self {
         Self {
@@ -598,6 +719,10 @@ impl Default for ExportOptions {
             sharpen_amount: SharpenAmount::Standard,
             naming: "{name}".into(),
             start_number: 1,
+            custom_text: String::new(),
+            ext_case: crate::rename::ExtCase::Keep,
+            after: AfterExport::Nothing,
+            after_app: String::new(),
             subfolder: String::new(),
             conflict: Conflict::Unique,
             tiff_compression: TiffCompression::Deflate,
@@ -633,6 +758,10 @@ pub const OPTION_PARAMS: &[&str] = &[
     "sharpenAmount",
     "naming",
     "startNumber",
+    "customText",
+    "extCase",
+    "after",
+    "afterApp",
     "subfolder",
     "conflict",
     "tiffCompression",
@@ -776,7 +905,12 @@ impl ExportOptions {
                 "dontEnlarge" | "removeLocation" | "background" => {
                     boolean(k, v)?;
                 }
-                "naming" | "subfolder" | "path" | "dir" | "preset" => {
+                "extCase" => one_of(k, v, &["keep", "lower", "upper"])?,
+                "after" => one_of(k, v, &["nothing", "showInFinder", "openInApp"])?,
+                "afterApp" => {
+                    string(cmd, k, v)?;
+                }
+                "naming" | "subfolder" | "path" | "dir" | "preset" | "customText" => {
                     string(cmd, k, v)?;
                 }
                 "sharpen" => one_of(k, v, &["none", "screen", "matte", "glossy"])?,
@@ -887,6 +1021,10 @@ impl ExportOptions {
             sharpen_amount: enm(p, "sharpenAmount").unwrap_or(d.sharpen_amount),
             naming: s("naming").map_or(d.naming, str::to_string),
             start_number: u("startNumber").map_or(d.start_number, |v| v.min(999_999) as u32),
+            custom_text: s("customText").map_or(d.custom_text, crate::rename::Batch::clean),
+            ext_case: s("extCase").and_then(crate::rename::ExtCase::parse).unwrap_or(d.ext_case),
+            after: enm(p, "after").unwrap_or(d.after),
+            after_app: s("afterApp").map_or(d.after_app, |v| v.trim().to_string()),
             subfolder: s("subfolder").map_or(d.subfolder, |v| v.trim().replace(['\\', ':', '\0'], "_")),
             conflict: enm(p, "conflict").unwrap_or(d.conflict),
             tiff_compression: match s("tiffCompression").map(str::to_ascii_lowercase).as_deref() {
@@ -999,9 +1137,15 @@ impl ExportOptions {
     /// Output file name for photo `p` at 1-based position `seq` in a batch (the original's
     /// extension is kept for [`ExportFormat::Original`]).
     pub fn file_name_for(&self, p: &lightcraft_catalog::Photo, seq: usize) -> String {
+        self.file_name_in(p, seq, 0)
+    }
+
+    /// [`ExportOptions::file_name_for`] in a batch of `total` photos (`{total}`).
+    pub fn file_name_in(&self, p: &lightcraft_catalog::Photo, seq: usize, total: usize) -> String {
         let base = if self.naming.trim().is_empty() { "{name}" } else { self.naming.as_str() };
         let n = seq + self.start_number.max(1) as usize - 1;
-        let name = crate::rename::expand_tokens(base, p, n, 3);
+        let batch = crate::rename::Batch { total, text: self.custom_text.clone(), ext_case: self.ext_case, ..Default::default() };
+        let name = crate::rename::expand_tokens_in(base, p, n, 3, &batch);
         let mut name: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '_' } else { c }).collect();
         let (stem, ext) = p.file_name.rsplit_once('.').unwrap_or((&p.file_name, ""));
         if name.trim().is_empty() {
@@ -1010,9 +1154,9 @@ impl ExportOptions {
         }
         if self.format == ExportFormat::Original {
             let base = name.trim_end_matches('.');
-            if ext.is_empty() { base.to_string() } else { format!("{base}.{ext}") }
+            if ext.is_empty() { base.to_string() } else { format!("{base}.{}", self.ext_case.apply(ext)) }
         } else {
-            format!("{name}.{}", self.format.extension())
+            format!("{name}.{}", self.ext_case.apply(self.format.extension()))
         }
     }
 }
@@ -1390,13 +1534,13 @@ pub fn prepare_export(
     seq: usize,
 ) -> Result<PreparedExport, String> {
     let guard = std::sync::Arc::new(session.original_guard());
-    prepare_guarded(session, id, o, seq, guard)
+    prepare_guarded(session, id, o, seq, 0, guard)
 }
 
 /// [`prepare_export`] for each of `ids` in order (`{seq}` = position, from 1).
 pub fn prepare_batch(session: &mut crate::Session, ids: &[lightcraft_catalog::PhotoId], o: &ExportOptions) -> Result<Vec<PreparedExport>, String> {
     let guard = std::sync::Arc::new(session.original_guard());
-    ids.iter().enumerate().map(|(i, id)| prepare_guarded(session, *id, o, i + 1, guard.clone())).collect()
+    ids.iter().enumerate().map(|(i, id)| prepare_guarded(session, *id, o, i + 1, ids.len(), guard.clone())).collect()
 }
 
 fn prepare_guarded(
@@ -1404,10 +1548,11 @@ fn prepare_guarded(
     id: lightcraft_catalog::PhotoId,
     o: &ExportOptions,
     seq: usize,
+    total: usize,
     guard: std::sync::Arc<crate::originals::OriginalGuard>,
 ) -> Result<PreparedExport, String> {
     let p = session.catalog.photo(id).ok_or("no such photo")?;
-    let file_name = o.file_name_for(p, seq);
+    let file_name = o.file_name_in(p, seq, total);
     let work = if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
         let meta = export_metadata(p, o);

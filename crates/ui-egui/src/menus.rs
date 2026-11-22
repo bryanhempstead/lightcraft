@@ -176,6 +176,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.addFolder", "Import from Folder…", None, "File"),
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "File"),
+    ("dialog.deleteRejected", "Delete Rejected Photos…", Some("Cmd+Delete"), "Photo"),
     ("file.backupLibrary", "Back Up Library…", None, "File"),
     ("file.restoreLibrary", "Restore Library from Backup…", None, "File"),
     ("photo.locate", "Locate Missing File…", None, ""),
@@ -681,17 +682,27 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.settings" => {
             let tab = p.get("tab").and_then(Value::as_str).unwrap_or("general");
             if !crate::panels::settings::TABS.iter().any(|(id, _)| *id == tab) {
-                return Some(Err(format!("unknown settings tab `{tab}` (general|import|performance|interface|shortcuts|controllers)")));
+                return Some(Err(format!("unknown settings tab `{tab}` (general|import|performance|backup|interface|shortcuts|controllers)")));
             }
             app.ui.dialog = Some(Dialog::Settings { tab: tab.into() });
             Ok(Value::Null)
         }
         "app.openLibrary" => crate::panels::settings::open_library(app, p),
+        "dialog.deleteRejected" => delete_rejected(app),
         "file.backupLibrary" | "file.restoreLibrary" => {
             let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
             match action {
                 Some(f) => f(&mut app.session),
-                None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+                // a library folder on disk: dated catalog backups (L02)
+                None if app.session.backup_root().is_some() => {
+                    if id == "file.backupLibrary" {
+                        app.session.execute("library.backup", &json!({})).map_err(|e| e.to_string())
+                    } else {
+                        app.ui.dialog = Some(Dialog::Backups { pick: None });
+                        Ok(Value::Null)
+                    }
+                }
+                None => Err("not available here: this library isn't a folder on disk".into()),
             }
         }
         "view.filmstrip" => {
@@ -1127,7 +1138,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "dialog.rename" => {
             let template = p.get("template").and_then(Value::as_str).unwrap_or("{name}").to_string();
-            app.ui.dialog = Some(Dialog::Rename { template, start: p.get("start").and_then(Value::as_u64).unwrap_or(1) as u32 });
+            let text = p.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+            app.ui.dialog = Some(Dialog::Rename { template, start: p.get("start").and_then(Value::as_u64).unwrap_or(1) as u32, text });
             Ok(Value::Null)
         }
         "dialog.createPreset" => {
@@ -1674,15 +1686,32 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
 /// With Settings → General → "Confirm before deleting" on, open the confirmation dialog instead
 /// of deleting; true when it did (the dialog's OK runs `photo.delete`).
 pub fn confirm_delete(app: &mut LightcraftApp) -> bool {
+    let targets = app.session.targets(&json!({}));
+    if targets.is_empty() {
+        return false;
+    }
+    if app.ui.settings.trash_delete {
+        let copies = targets.iter().filter(|id| app.session.catalog.photo(**id).is_some_and(|p| p.copy_of.is_some())).count();
+        app.ui.dialog = Some(Dialog::DeletePhotos { count: targets.len(), copies, rejected: false });
+        return true;
+    }
     if !app.ui.settings.confirm_delete {
         return false;
     }
-    let count = app.session.targets(&json!({})).len();
-    if count == 0 {
-        return false;
-    }
-    app.ui.dialog = Some(Dialog::ConfirmDelete { count });
+    app.ui.dialog = Some(Dialog::ConfirmDelete { count: targets.len() });
     true
+}
+
+/// Photo ▸ Delete Rejected Photos (⌘⌫): ask Delete from Disk / Remove for the view's rejects.
+fn delete_rejected(app: &mut LightcraftApp) -> Result<Value, String> {
+    let r = app.session.execute("library.rejected", &json!({})).map_err(|e| e.to_string())?;
+    let count = r["count"].as_u64().unwrap_or(0) as usize;
+    if count == 0 {
+        return Err(crate::i18n::tr("There are no rejected photos here.").into());
+    }
+    let copies = r["virtualCopies"].as_u64().unwrap_or(0) as usize;
+    app.ui.dialog = Some(Dialog::DeletePhotos { count, copies, rejected: true });
+    Ok(json!({"count": count}))
 }
 
 /// Platform-appropriate label for revealing a file in the system file manager.

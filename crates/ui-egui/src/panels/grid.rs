@@ -168,6 +168,9 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     super::chips::show(app, ui, &chips);
     if app.ui.filter_bar {
         super::filterbar::show(app, ui);
+        if app.ui.column_browser {
+            super::columns::show(app, ui);
+        }
     }
     app.canvas_rect = Some(ui.max_rect());
     if ids.is_empty() {

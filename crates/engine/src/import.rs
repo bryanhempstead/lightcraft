@@ -92,6 +92,8 @@ pub struct ImportOptions {
     /// `{seq:N}`, `{date:%Y%m%d}`, `{camera}`…), numbered from `rename_start`.
     pub rename: Option<String>,
     pub rename_start: usize,
+    /// Custom Text, Shoot Name, Import # / Image # and the extension case for `rename`.
+    pub rename_batch: crate::rename::Batch,
     /// A metadata preset (by name) applied to every imported photo.
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
@@ -231,9 +233,14 @@ pub fn has_import_look(p: &Photo) -> bool {
 
 /// User defaults applied on import (Settings → Import; saved in the library's `prefs.json`).
 /// Presets are referenced by id; a preset that no longer exists is ignored.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ImportDefaults {
+    /// Raws start with Enable Profile Corrections on (Lightroom's import step did this for the
+    /// photos migrated from his catalog; on by default).
+    pub lens_corrections: bool,
+    /// Raws start with Remove Chromatic Aberration on (on by default).
+    pub remove_ca: bool,
     /// Preset applied to raw files (`None` = the LightCraft default).
     pub raw_preset: Option<String>,
     /// Use a camera's own default (below) when the photo's camera has one.
@@ -266,6 +273,25 @@ pub struct CameraDefault {
     pub preset: Option<String>,
 }
 
+impl Default for ImportDefaults {
+    fn default() -> Self {
+        ImportDefaults {
+            lens_corrections: true,
+            remove_ca: true,
+            raw_preset: None,
+            per_camera: false,
+            cameras: Vec::new(),
+            other_preset: None,
+            copyright: String::new(),
+            creator: String::new(),
+            metadata_preset: None,
+            auto_folder: None,
+            auto_copy: false,
+            auto_album: None,
+        }
+    }
+}
+
 impl ImportDefaults {
     /// The preset id that applies to a photo of this kind and camera, if any.
     pub fn preset_for(&self, raw: bool, camera: &str) -> Option<&str> {
@@ -295,21 +321,22 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
     if let Some(mp) = d.metadata_preset.as_ref().and_then(|n| s.metadata_presets.iter().find(|m| m.name.eq_ignore_ascii_case(n))) {
         crate::cmd::metadata::apply_to(&mut p.meta, &mp.fields);
     }
-    let base = p.camera_defaults();
+    let cam = p.camera_defaults();
     // a raw shown from its embedded JPEG gets the rendered-file default, not the raw one
     let raw = p.develops_raw();
-    let preset = s.import_defaults.preset_for(raw, &p.meta.camera).and_then(|id| s.presets.iter().find(|x| x.id == id));
-    match preset {
-        Some(pr) => {
-            let look = std::sync::Arc::new(pr.apply(&base, 1.0));
-            p.develop = look.clone();
-            p.import_look = (*look != base).then_some(look);
-        }
-        None => {
-            p.develop = std::sync::Arc::new(base);
-            p.import_look = None;
-        }
+    let mut base = cam.clone();
+    if raw {
+        base.optics.lens_profile |= d.lens_corrections;
+        base.optics.remove_ca |= d.remove_ca;
     }
+    let preset = s.import_defaults.preset_for(raw, &p.meta.camera).and_then(|id| s.presets.iter().find(|x| x.id == id));
+    let look = std::sync::Arc::new(match preset {
+        Some(pr) => pr.apply(&base, 1.0),
+        None => base,
+    });
+    p.develop = look.clone();
+    // what import gave the photo counts as unedited (and is what Reset goes back to)
+    p.import_look = (*look != cam).then_some(look);
 }
 
 pub fn is_supported(path: &Path) -> bool {
@@ -812,7 +839,7 @@ impl ImportJob {
                     q.captured = info.captured.clone();
                     q.meta = info.meta.clone();
                     let name = opts.rename.as_deref().filter(|t| !t.trim().is_empty()).map(|t| {
-                        let n = crate::rename::expand(t, &q, self.seq);
+                        let n = crate::rename::expand_in(t, &q, self.seq, &opts.rename_batch);
                         self.seq += 1;
                         n
                     });

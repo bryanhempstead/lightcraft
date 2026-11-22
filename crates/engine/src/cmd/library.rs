@@ -79,8 +79,9 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         keywords: strs(p, "keywords"),
         destination: str_param(p, "destination").map(str::to_string),
         organize,
-        rename: str_param(p, "rename").map(str::to_string),
+        rename: super::naming::template_param(s, p, "rename", "renameTemplate", "library.import")?,
         rename_start: p.get("renameStart").and_then(Value::as_u64).unwrap_or(1) as usize,
+        rename_batch: super::naming::import_batch(s, p)?,
         metadata_preset,
         convert_dng: bool_or(p, "dng", false),
         local: bool_or(p, "local", false),
@@ -94,6 +95,7 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
 /// `album`).
 pub fn import_batch_done(s: &mut Session, report: crate::import::ImportReport, mut album: Option<u64>, album_name: Option<&str>) -> Result<Value> {
     let mut report = serde_json::to_value(report).unwrap_or_default();
+    super::naming::count_import(s, report["imported"].as_array().map_or(0, Vec::len));
     // photos an import restored from Recently Deleted take part like new ones (album, selection)
     let imported: Vec<u64> =
         ["imported", "restored"].iter().flat_map(|k| report[*k].as_array().into_iter().flatten().filter_map(Value::as_u64)).collect();
@@ -125,6 +127,31 @@ fn strs(p: &Value, key: &str) -> Vec<String> {
 
 fn ids_param(p: &Value) -> Option<Vec<PhotoId>> {
     p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(PhotoId).collect())
+}
+
+/// `[` / `]`: each target's rating moved by `delta` (clamped 0..5); unchanged photos make no op.
+fn step_rating(s: &mut Session, p: &Value, delta: i8, label: &str) -> Result<Value> {
+    let cur: std::collections::HashMap<PhotoId, u8> = s.targets(p).iter().filter_map(|id| s.catalog.photo(*id).map(|ph| (*id, ph.rating))).collect();
+    let v = for_targets(s, p, label, |id| {
+        let r = *cur.get(&id)?;
+        let n = (i16::from(r) + i16::from(delta)).clamp(0, 5) as u8;
+        (n != r).then_some(Op::SetRating { id, rating: n })
+    })?;
+    advance_if(s, p);
+    let rating = s.active().and_then(|a| s.catalog.photo(a)).map(|ph| ph.rating);
+    Ok(json!({"changed": v["changed"], "rating": rating}))
+}
+
+/// `` ` `` / Cmd+Up / Cmd+Down: each target's flag through `next`.
+fn step_flag(s: &mut Session, p: &Value, label: &str, next: fn(Flag) -> Flag) -> Result<Value> {
+    let cur: std::collections::HashMap<PhotoId, Flag> = s.targets(p).iter().filter_map(|id| s.catalog.photo(*id).map(|ph| (*id, ph.flag))).collect();
+    let v = for_targets(s, p, label, |id| {
+        let f = *cur.get(&id)?;
+        (next(f) != f).then_some(Op::SetFlag { id, flag: next(f) })
+    })?;
+    advance_if(s, p);
+    let flag = s.active().and_then(|a| s.catalog.photo(a)).map(|ph| ph.flag);
+    Ok(json!({"changed": v["changed"], "flag": flag}))
 }
 
 /// Apply one op per target as a single undo step.
@@ -209,8 +236,9 @@ fn select_by(s: &mut Session, p: &Value) -> Result<Value> {
         Some(l) => Some(Some(serde_json::from_value(json!(l)).map_err(|_| bad(C, format!("unknown label `{l}`")))?)),
         None => None,
     };
-    if flag.is_none() && rating.is_none() && label.is_none() {
-        return Err(bad(C, "give flag, rating and/or label"));
+    let edited = p.get("edited").and_then(Value::as_bool);
+    if flag.is_none() && rating.is_none() && label.is_none() && edited.is_none() {
+        return Err(bad(C, "give flag, rating, label and/or edited"));
     }
     let matches = |ph: &lightcraft_catalog::Photo| {
         flag.is_none_or(|f| ph.flag == f)
@@ -220,13 +248,29 @@ fn select_by(s: &mut Session, p: &Value) -> Result<Value> {
                 _ => ph.rating >= r,
             })
             && label.is_none_or(|l| ph.label == l)
+            && edited.is_none_or(|e| ph.is_edited() == e)
     };
-    let mut ids: Vec<PhotoId> = if bool_or(p, "add", false) { s.selection.ids.clone() } else { Vec::new() };
-    for id in s.visible_cloned() {
-        if !ids.contains(&id) && s.catalog.photo(id).is_some_and(|ph| matches(ph)) {
-            ids.push(id);
-        }
-    }
+    let mode = match str_param(p, "mode") {
+        Some(m) => m,
+        None if bool_or(p, "add", false) => "add",
+        None => "replace",
+    };
+    let hits: Vec<PhotoId> = s.visible_cloned().into_iter().filter(|id| s.catalog.photo(*id).is_some_and(|ph| matches(ph))).collect();
+    select_set(s, &hits, mode, C)
+}
+
+/// Lightroom's set operations on the selection: replace it with `hits`, add them, subtract them,
+/// or keep only the selected ones among them (in view order).
+fn select_set(s: &mut Session, hits: &[PhotoId], mode: &str, c: &str) -> Result<Value> {
+    let cur: std::collections::HashSet<PhotoId> = s.selection.ids.iter().copied().collect();
+    let hit: std::collections::HashSet<PhotoId> = hits.iter().copied().collect();
+    let ids: Vec<PhotoId> = match mode {
+        "replace" => hits.to_vec(),
+        "add" => s.selection.ids.iter().copied().chain(hits.iter().copied().filter(|h| !cur.contains(h))).collect(),
+        "subtract" => s.selection.ids.iter().copied().filter(|id| !hit.contains(id)).collect(),
+        "intersect" => s.selection.ids.iter().copied().filter(|id| hit.contains(id)).collect(),
+        other => return Err(bad(c, format!("mode must be replace|add|subtract|intersect, not `{other}`"))),
+    };
     let active = s.selection.active.filter(|a| ids.contains(a)).or(ids.first().copied());
     let n = ids.len();
     s.selection = Selection { ids, active };
@@ -542,9 +586,83 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select by Flag, Rating or Label",
             [],
             None,
-            "{flag?: pick|reject|none, rating?: 0..5, ratingOp?: gte|eq|lte (default gte), label?: red|…|none, add?: bool (extend the selection)} — among the photos in view",
+            "{flag?: pick|reject|none, rating?: 0..5, ratingOp?: gte|eq|lte (default gte), label?: red|…|none, edited?: bool, mode?: replace|add|subtract|intersect (Lightroom's Add to / Subtract from / Intersect with Selection; add?: true = add)} — among the photos in view",
             always,
             select_by
+        ),
+        cmd!(
+            "library.refinePhotos",
+            "Refine Photos",
+            ["Library"],
+            None,
+            "{} — Lightroom's Refine Photos on the photos in view: unflagged photos become rejects, picks become unflagged (one undo step) → {rejected, unflagged}",
+            always,
+            |s, _| {
+                let mut ops = Vec::new();
+                let (mut rej, mut unf) = (0, 0);
+                for id in s.visible_cloned() {
+                    match s.catalog.photo(id).map(|p| p.flag) {
+                        Some(Flag::None) => {
+                            ops.push(Op::SetFlag { id, flag: Flag::Reject });
+                            rej += 1;
+                        }
+                        Some(Flag::Pick) => {
+                            ops.push(Op::SetFlag { id, flag: Flag::None });
+                            unf += 1;
+                        }
+                        _ => {}
+                    }
+                }
+                if !ops.is_empty() {
+                    s.commit("Refine Photos", Op::Batch { ops })?;
+                }
+                Ok(json!({"rejected": rej, "unflagged": unf}))
+            }
+        ),
+        cmd!("library.selectFlagged", "Select Flagged Photos", ["Edit"], Some("Cmd+Alt+A"), "{} — the picks in view", always, |s, _| {
+            select_by(s, &json!({"flag": "pick"}))
+        }),
+        cmd!(
+            "library.deselectUnflagged",
+            "Deselect Unflagged Photos",
+            ["Edit"],
+            Some("Cmd+Alt+Shift+D"),
+            "{} — keeps only the picks and rejects of the selection",
+            always,
+            |s, _| {
+                let unflagged: Vec<PhotoId> =
+                    s.selection.ids.iter().copied().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.flag == Flag::None)).collect();
+                select_set(s, &unflagged, "subtract", "library.deselectUnflagged")
+            }
+        ),
+        cmd!("library.selectEdited", "Select Edited Photos", ["Edit"], None, "{mode?: replace|add|subtract|intersect}", always, |s, p| {
+            let mut q = json!({"edited": true});
+            if let Some(m) = p.get("mode") {
+                q["mode"] = m.clone();
+            }
+            select_by(s, &q)
+        }),
+        cmd!("library.invertSelection", "Invert Selection", ["Edit"], None, "{} — the photos in view that weren't selected", always, |s, _| {
+            let cur: std::collections::HashSet<PhotoId> = s.selection.ids.iter().copied().collect();
+            let ids: Vec<PhotoId> = s.visible_cloned().into_iter().filter(|id| !cur.contains(id)).collect();
+            select_set(s, &ids, "replace", "library.invertSelection")
+        }),
+        cmd!(
+            "library.deselectActive",
+            "Deselect Active Photo",
+            ["Edit"],
+            None,
+            "{} — the active photo leaves the selection; the next selected one becomes active",
+            always,
+            |s, _| {
+                let Some(a) = s.selection.active else { return ok() };
+                if s.selection.ids.len() <= 1 {
+                    return ok();
+                }
+                let ids: Vec<PhotoId> = s.selection.ids.iter().copied().filter(|id| *id != a).collect();
+                s.selection = Selection { active: ids.first().copied(), ids };
+                Ok(json!({"selected": s.selection.ids.len()}))
+            }
         ),
         cmd!("library.selectNone", "Deselect All", ["Edit"], Some("Cmd+Shift+A"), "{}", always, |s, _| {
             let a = s.selection.active;
@@ -578,6 +696,53 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("photo.unflag", "Unflag", ["Photo", "Set Flag"], Some("U"), "{ids?}", has_selection, |s, p| {
             for_targets(s, p, "Unflag", |id| Some(Op::SetFlag { id, flag: Flag::None }))
         }),
+        // Lightroom Classic: [ / ] step the rating, ` toggles the flag, Cmd+Up / Cmd+Down raise /
+        // lower it — each photo from its own value
+        cmd!(
+            "photo.increaseRating",
+            "Increase Rating",
+            ["Photo", "Set Rating"],
+            None,
+            "{ids?, advance?: bool} — one star more on each photo (up to 5); the app's ] key outside the brush tools",
+            has_selection,
+            |s, p| step_rating(s, p, 1, "Increase Rating")
+        ),
+        cmd!(
+            "photo.decreaseRating",
+            "Decrease Rating",
+            ["Photo", "Set Rating"],
+            None,
+            "{ids?, advance?: bool} — one star less on each photo (down to none); the app's [ key outside the brush tools",
+            has_selection,
+            |s, p| step_rating(s, p, -1, "Decrease Rating")
+        ),
+        cmd!(
+            "photo.toggleFlag",
+            "Toggle Flag",
+            ["Photo", "Set Flag"],
+            Some("`"),
+            "{ids?, advance?: bool} — flagged ↔ unflagged per photo (a rejected photo becomes flagged)",
+            has_selection,
+            |s, p| step_flag(s, p, "Toggle Flag", |f| if f == Flag::Pick { Flag::None } else { Flag::Pick })
+        ),
+        cmd!(
+            "photo.increaseFlag",
+            "Increase Flag Status",
+            ["Photo", "Set Flag"],
+            Some("Cmd+Up"),
+            "{ids?, advance?: bool} — rejected → unflagged → flagged (stops at flagged)",
+            has_selection,
+            |s, p| step_flag(s, p, "Increase Flag Status", |f| if f == Flag::Reject { Flag::None } else { Flag::Pick })
+        ),
+        cmd!(
+            "photo.decreaseFlag",
+            "Decrease Flag Status",
+            ["Photo", "Set Flag"],
+            Some("Cmd+Down"),
+            "{ids?, advance?: bool} — flagged → unflagged → rejected (stops at rejected)",
+            has_selection,
+            |s, p| step_flag(s, p, "Decrease Flag Status", |f| if f == Flag::Pick { Flag::None } else { Flag::Reject })
+        ),
         cmd!(
             "photo.label",
             "Set Color Label",
@@ -1115,7 +1280,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Photos",
             ["File"],
             Some("Cmd+Shift+I"),
-            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source — only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`) — dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each; blank = keep names), renameStart?: 1, metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, keywords?: [..], onDeleted?: skip|restore|fresh (a file that is in Recently Deleted: skip = leave it there and say so, restore = bring the photo back with its edits, fresh = delete the trashed record and import the file as new)} → {imported, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
+            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source — only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`) — dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {date} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext} {EXT} {original} {originalnum} {copyname} {text} {shoot} {total} {import} {image} {yyyymmdd} {yymmdd} {yyyy} {yy} {month} {mon} {mm} {dd} {julian} {hour} {minute} {second} {longdate} {caption} {copyright} {location} {city} {state} {country} {make} {model} {focal} {aperture} {shutter} {dimensions} {label}, {seq:N}, {date:%Y%m%d}; photo.renameTokens explains each; blank = keep names), renameTemplate?: a naming.templates name instead, renameText?: Custom Text, shootName?: Shoot Name, renameExtCase?: keep|lower|upper, renameStart?: 1, metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, keywords?: [..], onDeleted?: skip|restore|fresh (a file that is in Recently Deleted: skip = leave it there and say so, restore = bring the photo back with its edits, fresh = delete the trashed record and import the file as new)} → {imported, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
             always,
             |s, p| {
                 let req = import_params(s, p)?;

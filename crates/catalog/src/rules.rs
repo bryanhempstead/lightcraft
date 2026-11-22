@@ -84,7 +84,102 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("album", "Album", Kind::Number),
     ("sharpness", "Focus (assisted culling)", Kind::Number),
     ("bestOfGroup", "Best of Similar Shots", Kind::Bool),
+    // Lightroom Classic's other smart-collection fields (L08)
+    ("labelText", "Label Text", Kind::Text),
+    ("copyName", "Copy Name", Kind::Text),
+    ("folder", "Folder", Kind::Text),
+    ("sublocation", "Sublocation", Kind::Text),
+    ("city", "City", Kind::Text),
+    ("state", "State / Province", Kind::Text),
+    ("country", "Country / Region", Kind::Text),
+    ("gps", "GPS Data", Kind::Choice(&["coordinates", "none"])),
+    ("altText", "Alt Text", Kind::Text),
+    ("extendedDescription", "Extended Description", Kind::Text),
+    ("usageTerms", "Rights Usage Terms", Kind::Text),
+    ("person", "Person", Kind::Text),
+    ("hasFaces", "Has People", Kind::Bool),
+    ("shutter", "Shutter Speed (seconds)", Kind::Number),
+    ("hasSnapshots", "Has Snapshots", Kind::Bool),
+    ("hasAdjustments", "Has Adjustments", Kind::Bool),
+    ("cropped", "Cropped", Kind::Bool),
+    ("treatment", "Treatment", Kind::Choice(&["color", "bw"])),
+    ("lensCorrections", "Lens Profile Corrections", Kind::Bool),
+    ("removeCA", "Remove Chromatic Aberration", Kind::Bool),
+    (
+        "masking",
+        "Masking",
+        Kind::Choice(&[
+            "any",
+            "brush",
+            "linear",
+            "radial",
+            "color",
+            "luminance",
+            "depth",
+            "subject",
+            "sky",
+            "background",
+            "object",
+            "people",
+            "landscape",
+            "none",
+        ]),
+    ),
+    ("remove", "Remove (Manual)", Kind::Bool),
+    ("redEye", "Red Eye", Kind::Bool),
+    ("pointColor", "Has Point Color", Kind::Bool),
+    ("profile", "Profile", Kind::Text),
+    ("historySteps", "Edit Count", Kind::Number),
+    ("longEdge", "Long Edge (uncropped)", Kind::Number),
+    ("shortEdge", "Short Edge (uncropped)", Kind::Number),
+    ("width", "Width", Kind::Number),
+    ("height", "Height", Kind::Number),
+    ("aspect", "Aspect Ratio", Kind::Choice(&["portrait", "landscape", "square"])),
+    ("fileSize", "File Size (MB)", Kind::Number),
+    ("stacked", "In a Stack", Kind::Bool),
+    ("merged", "Photo Merge", Kind::Choice(&["hdr", "panorama", "hdrPanorama", "none"])),
 ];
+
+/// The kinds of the masks on a photo (`brush`, `radial`, `subject`…), once each.
+fn mask_kinds(p: &Photo) -> Vec<&'static str> {
+    use lightcraft_develop::MaskShape as S;
+    let mut v: Vec<&'static str> = p
+        .develop
+        .masks
+        .iter()
+        .flat_map(|m| m.components.iter())
+        .map(|c| match &c.shape {
+            S::Brush { .. } => "brush",
+            S::Linear { .. } => "linear",
+            S::Radial { .. } => "radial",
+            S::ColorRange { .. } => "color",
+            S::LuminanceRange { .. } => "luminance",
+            S::DepthRange { .. } => "depth",
+            S::Subject => "subject",
+            S::Sky => "sky",
+            S::Background => "background",
+            S::Object { .. } | S::Prompt { .. } => "object",
+            S::People { .. } => "people",
+            S::Landscape { .. } => "landscape",
+        })
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// `1/250`, `0.5`, `2"`, `30s` → seconds.
+fn shutter_secs(s: &str) -> Option<f64> {
+    let t = s.trim().trim_end_matches(['s', '"']).trim();
+    match t.split_once('/') {
+        Some((a, b)) => {
+            let (a, b): (f64, f64) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
+            (b != 0.0).then(|| a / b)
+        }
+        None => t.parse().ok(),
+    }
+    .filter(|v: &f64| v.is_finite())
+}
 
 /// The operators for a field kind: (id, label).
 pub fn ops_for(kind: Kind) -> &'static [(&'static str, &'static str)] {
@@ -343,6 +438,77 @@ impl Rule {
             "album" => {
                 let id = number(value).map(|v| crate::AlbumId(v as u64));
                 id.is_some_and(|a| cat.album(a).is_some_and(|al| !al.is_smart()) && cat.album_contains(a, p)) == (op == "is")
+            }
+            "labelText" => text(&p.label.map(|l| cat.label_name(l)).unwrap_or_default()),
+            "copyName" => text(p.copy_name.as_deref().unwrap_or("")),
+            "folder" => text(&match &p.source {
+                Source::File { path } => std::path::Path::new(path).parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default(),
+                Source::Demo { .. } => String::new(),
+            }),
+            "sublocation" => text(&m.location),
+            "city" => text(&m.city),
+            "state" => text(&m.state),
+            "country" => text(&m.country),
+            "gps" => (m.gps.is_some() == (want != "none")) == (op == "is"),
+            "altText" => text(&m.alt_text),
+            "extendedDescription" => text(&m.extended_description),
+            "usageTerms" => text(&m.usage_terms),
+            "person" => {
+                let names: Vec<&str> = m.regions.iter().filter_map(|r| r.name.as_deref()).collect();
+                match op {
+                    "isEmpty" => names.is_empty(),
+                    "isNotEmpty" => !names.is_empty(),
+                    "notContains" => !names.iter().any(|n| text_op("contains", n, &want)),
+                    _ => names.iter().any(|n| text_op(op, n, &want)),
+                }
+            }
+            "hasFaces" => m.regions.iter().any(|r| r.kind == lightcraft_meta::RegionKind::Face) == value.as_bool().unwrap_or(true),
+            "shutter" => num_op(op, shutter_secs(&m.shutter), value),
+            "hasSnapshots" => p.versions.iter().any(|v| !v.auto) == value.as_bool().unwrap_or(true),
+            "hasAdjustments" => p.is_edited() == value.as_bool().unwrap_or(true),
+            "cropped" => {
+                let g = &p.develop.crop.geometry;
+                let r = &g.rect;
+                let cropped = g.angle.abs() > 1e-6 || r.x0 > 1e-6 || r.y0 > 1e-6 || r.x1 < 1.0 - 1e-6 || r.y1 < 1.0 - 1e-6;
+                cropped == value.as_bool().unwrap_or(true)
+            }
+            "treatment" => {
+                let bw = p.develop.treatment == lightcraft_develop::Treatment::Bw;
+                (bw == (want == "bw" || want == "b&w" || want == "blackandwhite")) == (op == "is")
+            }
+            "lensCorrections" => p.develop.optics.lens_profile == value.as_bool().unwrap_or(true),
+            "removeCA" => p.develop.optics.remove_ca == value.as_bool().unwrap_or(true),
+            "masking" => {
+                let kinds = mask_kinds(p);
+                let hit = match want.as_str() {
+                    "any" => !kinds.is_empty(),
+                    "none" => kinds.is_empty(),
+                    k => kinds.contains(&k),
+                };
+                hit == (op == "is")
+            }
+            "remove" => !p.develop.spots.is_empty() == value.as_bool().unwrap_or(true),
+            "redEye" => !p.develop.red_eye.is_empty() == value.as_bool().unwrap_or(true),
+            "pointColor" => !p.develop.point_colors.is_empty() == value.as_bool().unwrap_or(true),
+            "profile" => text(&p.develop.profile.id),
+            "historySteps" => num_op(op, Some(p.history.len() as f64), value),
+            "longEdge" => num_op(op, Some(p.width.max(p.height) as f64), value),
+            "shortEdge" => num_op(op, Some(p.width.min(p.height) as f64), value),
+            "width" => num_op(op, Some(p.width as f64), value),
+            "height" => num_op(op, Some(p.height as f64), value),
+            "aspect" => {
+                let a = match p.width.cmp(&p.height) {
+                    std::cmp::Ordering::Greater => "landscape",
+                    std::cmp::Ordering::Less => "portrait",
+                    std::cmp::Ordering::Equal => "square",
+                };
+                (a == want) == (op == "is")
+            }
+            "fileSize" => num_op(op, Some(p.file_size as f64 / 1_048_576.0), value),
+            "stacked" => cat.stack_of(p.id).is_some() == value.as_bool().unwrap_or(true),
+            "merged" => {
+                let k = crate::query::merged_kind(&p.file_name).unwrap_or("none");
+                (k.eq_ignore_ascii_case(&want)) == (op == "is")
             }
             _ => false,
         }

@@ -53,9 +53,80 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(list(s))
 }
 
+/// The metadata column browser (L07): each column's values with counts over the photos the view
+/// shows when only the columns to its left narrow it (Lightroom's behaviour).
+fn column_browser(s: &mut Session, p: &Value) -> Result<Value> {
+    use lightcraft_catalog::columns::{COLUMNS, ColumnPick, DEFAULT_COLUMNS, counts};
+    let cols: Vec<String> = match p.get("columns").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        None => DEFAULT_COLUMNS.iter().map(|c| c.to_string()).collect(),
+    };
+    if let Some(bad_col) = cols.iter().find(|c| !COLUMNS.iter().any(|(id, _)| id == c)) {
+        return Err(bad(
+            "library.columnBrowser",
+            format!("unknown column `{bad_col}` ({})", COLUMNS.iter().map(|c| c.0).collect::<Vec<_>>().join("|")),
+        ));
+    }
+    let saved = s.filter.clone();
+    let picks = saved.columns.clone();
+    let mut out = Vec::new();
+    for (i, c) in cols.iter().enumerate() {
+        let left: Vec<ColumnPick> = cols[..i].iter().filter_map(|lc| picks.iter().find(|p| &p.column == lc).cloned()).collect();
+        // picks in columns not shown still narrow every column
+        let hidden = picks.iter().filter(|p| !cols.contains(&p.column)).cloned();
+        s.filter.columns = left.into_iter().chain(hidden).collect();
+        let ids = s.visible_cloned();
+        let values = counts(ids.iter().filter_map(|id| s.catalog.photo(*id)).map(|a| &**a), &s.catalog, c);
+        let label = COLUMNS.iter().find(|(id, _)| id == c).map(|x| x.1).unwrap_or("");
+        let picked = picks.iter().find(|p| &p.column == c).map(|p| p.values.clone()).unwrap_or_default();
+        out.push(json!({
+            "column": c,
+            "label": label,
+            "total": ids.len(),
+            "values": values.iter().map(|(v, n)| json!({"value": v, "count": n})).collect::<Vec<_>>(),
+            "picked": picked,
+        }));
+    }
+    s.filter = saved;
+    Ok(json!({"columns": out, "available": COLUMNS.iter().map(|(id, l)| json!({"id": id, "label": l})).collect::<Vec<_>>()}))
+}
+
+fn column_pick(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "library.columnPick";
+    let column = str_param(p, "column").ok_or_else(|| bad(C, "missing `column`"))?.to_string();
+    if !lightcraft_catalog::columns::COLUMNS.iter().any(|(id, _)| *id == column) {
+        return Err(bad(C, format!("unknown column `{column}`")));
+    }
+    let values: Vec<String> =
+        p.get("values").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+    s.filter.columns.retain(|c| c.column != column);
+    if !values.is_empty() {
+        s.filter.columns.push(lightcraft_catalog::columns::ColumnPick { column, values });
+    }
+    Ok(json!({"count": s.visible().len()}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "filter.presets", "Filter Presets", [], None, "{} → [{name, filter}]", always, |s, _| Ok(list(s))),
+        cmd!(
+            query "library.columnBrowser",
+            "Metadata Columns",
+            [],
+            None,
+            "{columns?: [date|year|camera|lens|label|keyword|fileType|flag|rating|iso|focalLength|aperture|shutter|country|city|location|creator|treatment|aspect|copies|folder] (default date, camera, lens, label)} — the Library Filter's metadata columns: each column's values with photo counts, narrowed by the picks in the columns to its left → {columns: [{column, label, total, values: [{value (\"\" = unknown), count}], picked}], available: [{id, label}]}",
+            always,
+            column_browser
+        ),
+        cmd!(
+            "library.columnPick",
+            "Pick Metadata Values",
+            [],
+            None,
+            "{column, values: [..] (empty = all)} — shows only photos with one of these values in that column (several columns: all of them) → {count}",
+            always,
+            column_pick
+        ),
         cmd!(
             "filter.savePreset",
             "Save Filter Preset",

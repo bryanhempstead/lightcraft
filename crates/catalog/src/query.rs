@@ -32,6 +32,18 @@ pub struct Filter {
     pub labels: Vec<ColorLabel>,
     pub kind: Option<MediaKind>,
     pub edited: Option<bool>,
+    /// Photos without a colour label (with `labels`: those labels or none — Lightroom's No Label).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_label: bool,
+    /// `true`: virtual copies only, `false`: originals only (Lightroom's Kind filter).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub virtual_copy: Option<bool>,
+    /// `true`: photos in a stack, `false`: photos in none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stacked: Option<bool>,
+    /// The metadata column browser's picks ([`crate::columns`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<crate::columns::ColumnPick>,
     pub album: Option<AlbumId>,
     /// Show "Recently Deleted" instead of the library.
     pub deleted: bool,
@@ -179,8 +191,25 @@ impl Filter {
         if let Some(l) = self.label {
             v.push(format!("label {}", format!("{l:?}").to_lowercase()));
         }
-        if !self.labels.is_empty() {
-            v.push(format!("label {}", self.labels.iter().map(|l| format!("{l:?}").to_lowercase()).collect::<Vec<_>>().join(" or ")));
+        if !self.labels.is_empty() || self.no_label {
+            let mut names: Vec<String> = self.labels.iter().map(|l| format!("{l:?}").to_lowercase()).collect();
+            if self.no_label {
+                names.push("none".into());
+            }
+            v.push(format!("label {}", names.join(" or ")));
+        }
+        if let Some(c) = self.virtual_copy {
+            v.push(if c { "virtual copies".into() } else { "originals".into() });
+        }
+        if let Some(st) = self.stacked {
+            v.push(if st { "stacked".into() } else { "not stacked".into() });
+        }
+        for c in self.columns.iter().filter(|c| !c.values.is_empty()) {
+            v.push(format!(
+                "{} {}",
+                c.column,
+                c.values.iter().map(|x| if x.is_empty() { "unknown" } else { x.as_str() }).collect::<Vec<_>>().join(" or ")
+            ));
         }
         if let Some(k) = self.kind {
             v.push(format!("kind {}", format!("{k:?}").to_lowercase()));
@@ -270,7 +299,17 @@ impl Filter {
         {
             return false;
         }
-        if !self.labels.is_empty() && !p.label.is_some_and(|l| self.labels.contains(&l)) {
+        if (!self.labels.is_empty() || self.no_label) && !(p.label.is_some_and(|l| self.labels.contains(&l)) || (self.no_label && p.label.is_none()))
+        {
+            return false;
+        }
+        if self.virtual_copy.is_some_and(|c| c != p.copy_of.is_some()) {
+            return false;
+        }
+        if self.stacked.is_some_and(|st| st != cat.stack_of(p.id).is_some()) {
+            return false;
+        }
+        if !self.columns.is_empty() && !crate::columns::matches(&self.columns, p, cat) {
             return false;
         }
         if !self.only.is_empty() && !self.only.contains(&p.id) {

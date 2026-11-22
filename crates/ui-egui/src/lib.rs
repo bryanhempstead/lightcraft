@@ -31,6 +31,8 @@ pub mod theme;
 pub mod widgets;
 
 #[cfg(test)]
+mod tests_backup_delete;
+#[cfg(test)]
 mod tests_classic;
 #[cfg(test)]
 mod tests_curve;
@@ -164,6 +166,10 @@ pub struct LightcraftApp {
     pub quit_prompt: Option<String>,
     /// Quit Anyway was chosen: the window may close with unsaved changes.
     pub quit_confirmed: bool,
+    /// The catalog backup is due: "Back up the catalog before quitting?" is shown.
+    pub backup_prompt: bool,
+    /// That question was answered (backed up or skipped): quitting goes on.
+    pub backup_answered: bool,
     control_rx: Option<Receiver<ControlRequest>>,
     pending_screenshots: Vec<PendingShot>,
     screenshot_token: u64,
@@ -248,6 +254,8 @@ impl LightcraftApp {
             notices: vec![],
             quit_prompt: None,
             quit_confirmed: false,
+            backup_prompt: false,
+            backup_answered: false,
             control_rx: None,
             pending_screenshots: vec![],
             screenshot_token: 0,

@@ -107,7 +107,7 @@ fn offline_originals_never_block_a_frame() {
 
     // the Rename dialog's preview (it checks which names are taken on disk)
     h.app.session.execute("library.select", &json!({"ids": [1, 2, 3]})).unwrap();
-    h.app.ui.dialog = Some(crate::state::Dialog::Rename { template: "Trip-{seq:3}".into(), start: 1 });
+    h.app.ui.dialog = Some(crate::state::Dialog::Rename { template: "Trip-{seq:3}".into(), start: 1, text: String::new() });
     let worst = max_frame(&mut h, 20);
     assert!(worst < FRAME_LIMIT, "Rename dialog frame took {worst:?}");
 

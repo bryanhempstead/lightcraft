@@ -93,7 +93,8 @@ fn raw_and_other_defaults_are_applied_on_import() {
     s2.execute("library.import", &json!({"paths": [src.join("canon.dng").to_string_lossy()]})).unwrap();
     let c = s2.catalog.photos().next().unwrap();
     assert_eq!(c.develop.light.contrast, 0.0, "per-camera defaults are off unless enabled");
-    assert!(c.import_look.is_none());
+    // only the raw defaults (lens corrections, Remove CA) come with the import, no preset look
+    assert!(c.import_look.as_ref().is_none_or(|l| l.light == lightcraft_develop::DevelopSettings::default().light));
     let _ = std::fs::remove_dir_all(&src);
 }
 

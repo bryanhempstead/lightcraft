@@ -304,6 +304,28 @@ fn run_fired(app: &mut LightcraftApp, ctx: &egui::Context, f: String) {
     } else if compare::culling(app) && (f == "library.next" || f == "library.previous") {
         let d = if f == "library.next" { 1 } else { -1 };
         let _ = if app.ui.view == crate::state::ViewMode::Compare { compare::compare_step(app, d) } else { compare::survey_step(app, d) };
+    } else if matches!(f.as_str(), "brush.smaller" | "brush.larger")
+        && !matches!(app.ui.right, crate::state::RightPanel::Masking | crate::state::RightPanel::Remove)
+    {
+        // Lightroom: [ / ] size the brush while brushing, step the rating everywhere else
+        let id = if f == "brush.larger" { "photo.increaseRating" } else { "photo.decreaseRating" };
+        cull(app, id, json!({}), false);
+        let stars = app.session.active().and_then(|a| app.session.catalog.photo(a)).map_or(0, |p| p.rating);
+        let label =
+            if stars == 0 { crate::i18n::tr("Rating cleared").to_string() } else { crate::i18n::tr_format!("Rated {}", "★".repeat(stars.into())) };
+        app.toast(ctx, label);
+    } else if matches!(f.as_str(), "photo.toggleFlag" | "photo.increaseFlag" | "photo.decreaseFlag") && app.ui.right != crate::state::RightPanel::Crop
+    {
+        cull(app, &f, json!({}), false);
+        let flag = app.session.active().and_then(|a| app.session.catalog.photo(a)).map(|p| p.flag);
+        app.toast(
+            ctx,
+            match flag {
+                Some(lightcraft_engine::catalog::Flag::Pick) => crate::i18n::tr("Flagged as Pick"),
+                Some(lightcraft_engine::catalog::Flag::Reject) => crate::i18n::tr("Flagged as Reject"),
+                _ => crate::i18n::tr("Unflagged"),
+            },
+        );
     } else if matches!(f.as_str(), "photo.pick" | "photo.reject" | "photo.unflag") && app.ui.right != crate::state::RightPanel::Crop {
         cull(app, &f, json!({}), false);
         match f.as_str() {

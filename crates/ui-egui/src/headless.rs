@@ -1884,6 +1884,10 @@ mod tests {
             assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::Settings { tab: tab.into() }));
         }
         // General: confirm before delete, startup view
+        // ⌫ asks Lightroom's question by default; off, Recently Deleted (optionally confirmed)
+        h.request("ui.clickWidget", json!({"id": "check:settings.trashDelete"}), t);
+        assert!(!h.app.ui.settings.trash_delete);
+        h.step();
         h.request("ui.clickWidget", json!({"id": "check:settings.confirmDelete"}), t);
         assert!(h.app.ui.settings.confirm_delete);
         h.request("ui.clickWidget", json!({"id": "button:settingsStartup-2"}), t);
@@ -1917,6 +1921,12 @@ mod tests {
         h.request("ui.key", json!({"key": "escape"}), t);
         assert_eq!(h.app.ui.dialog, None);
         let active = h.app.session.active().unwrap();
+        // the Lightroom question by default (Delete from Disk / Remove), Recently Deleted when off
+        h.app.ui.settings.trash_delete = true;
+        h.request("ui.key", json!({"key": "delete"}), t);
+        assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::DeletePhotos { count: 1, copies: 0, rejected: false }));
+        h.request("ui.key", json!({"key": "escape"}), t);
+        h.app.ui.settings.trash_delete = false;
         h.request("ui.key", json!({"key": "delete"}), t);
         assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::ConfirmDelete { count: 1 }));
         assert!(!h.app.session.catalog.photo(active).unwrap().deleted);

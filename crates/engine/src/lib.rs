@@ -12,6 +12,7 @@
 
 pub mod adobe;
 pub mod availability;
+pub mod backup;
 mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -44,6 +45,7 @@ pub mod rename;
 pub mod segment;
 pub mod sidecar;
 pub mod smart;
+pub mod trash;
 mod view;
 
 use std::sync::Arc;
@@ -180,6 +182,18 @@ pub struct Session {
     pub library_folder_subfolders: Option<bool>,
     /// Library ▸ Shoots: pinned and removed shoots, names of their own, the sort (prefs.json).
     pub shoot_prefs: cmd::shoots::ShootPrefs,
+    /// Catalog backup settings (prefs.json; see [`backup`]).
+    pub backup: backup::BackupPrefs,
+    /// The user's file-name templates (Lightroom's Filename Template presets; prefs.json).
+    pub naming_templates: Vec<rename::NamingTemplate>,
+    /// Import # / Image # counters (imports made, photos imported; prefs.json).
+    pub naming_counters: cmd::naming::Counters,
+    /// Keep an automatic version when leaving an edited photo ([`Session::auto_version`]; off by
+    /// default, like Lightroom, which never snapshots by itself; prefs.json).
+    pub auto_versions: bool,
+    /// Delete from Disk moves files into this folder instead of the system Trash (tests, scripts;
+    /// also `LIGHTCRAFT_TRASH_DIR`).
+    pub trash_dir: Option<std::path::PathBuf>,
     /// Copied metadata (`photo.copyMetadata`): photo.setMeta params.
     pub meta_clipboard: Option<Value>,
     /// The photo that was active before the current one (Paste Settings from Previous).
@@ -286,6 +300,11 @@ impl Session {
             folder_parents: Vec::new(),
             library_folder_subfolders: None,
             shoot_prefs: Default::default(),
+            backup: Default::default(),
+            naming_templates: Vec::new(),
+            naming_counters: Default::default(),
+            auto_versions: false,
+            trash_dir: None,
             previous_active: None,
             copy_groups: lightcraft_develop::SettingsGroup::default_copy(),
             presets: presets::builtin(),
@@ -425,6 +444,9 @@ impl Session {
     /// differ from its latest version; at most [`AUTO_VERSIONS`] auto versions, oldest dropped).
     /// Saved with the library but not an undo step.
     pub fn auto_version(&mut self, id: PhotoId) {
+        if !self.auto_versions {
+            return;
+        }
         let Some(p) = self.catalog.photo(id) else { return };
         if !p.is_edited() || p.versions.last().is_some_and(|v| *v.settings == *p.develop) || self.interaction.is_some() {
             return;
@@ -809,7 +831,11 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_backup;
+#[cfg(test)]
 mod tests_color;
+#[cfg(test)]
+mod tests_delete;
 #[cfg(test)]
 mod tests_export;
 #[cfg(test)]
@@ -827,11 +853,15 @@ mod tests_library;
 #[cfg(test)]
 mod tests_merge;
 #[cfg(test)]
+mod tests_naming;
+#[cfg(test)]
 mod tests_organize;
 #[cfg(test)]
 mod tests_persist;
 #[cfg(test)]
 mod tests_prefs;
+#[cfg(test)]
+mod tests_rating_keys;
 #[cfg(test)]
 mod tests_segment;
 #[cfg(test)]

@@ -46,12 +46,19 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let (p, c) = (progress.clone(), cancel.clone());
     let work = move || {
         let mut w = |path: &str, bytes: &[u8]| write(path, bytes);
-        let r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
+        let mut r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
             if let Ok(mut g) = p.lock() {
                 *g = (done, name.to_string());
             }
             !c.load(Ordering::Relaxed)
         });
+        // Post-Processing (Show in Finder, open in an app, an Export Action), not after a cancel
+        if let Ok(files) = &mut r
+            && !c.load(Ordering::Relaxed)
+            && let Some(after) = lightcraft_engine::export::post_process(&opts, files)
+        {
+            files.push(json!({"postProcessing": after}));
+        }
         let _ = tx.send(r);
     };
     #[cfg(not(target_arch = "wasm32"))]

@@ -18,7 +18,7 @@ pub fn logic(app: &mut LightcraftApp) {
 /// couldn't be written are retried first — the log, then a snapshot of everything in memory.
 pub fn may_close(app: &mut LightcraftApp) -> bool {
     if app.quit_confirmed || app.session.unsaved().is_none() {
-        return true;
+        return backup_answered(app);
     }
     let _ = app.session.persist();
     if app.session.unsaved().is_some()
@@ -27,7 +27,7 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
         log::error!("quit: library not saved: {e}");
     }
     match app.session.unsaved() {
-        None => true,
+        None => backup_answered(app),
         Some((n, e)) => {
             app.quit_prompt = Some(crate::i18n::tr_format!(
                 "{n} change{} couldn't be written to disk: {e}\nIf you quit now, {} lost.",
@@ -41,11 +41,23 @@ pub fn may_close(app: &mut LightcraftApp) -> bool {
     }
 }
 
+/// The catalog backup is due by its schedule (L02): ask once before quitting (Lightroom's Back Up
+/// Catalog question). True when there is nothing to ask.
+fn backup_answered(app: &mut LightcraftApp) -> bool {
+    if app.backup_answered || app.headless_host || !app.session.backup_due() {
+        return true;
+    }
+    app.backup_prompt = true;
+    false
+}
+
 enum Choice {
     Retry,
     QuitAnyway,
     Cancel,
     Ok,
+    BackUp,
+    Skip,
 }
 
 fn window(ctx: &egui::Context, id: &str, title: &str, text: &str, buttons: &[(&str, &str, Choice)]) -> Option<usize> {
@@ -104,7 +116,38 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 app.quit_confirmed = true;
                 app.ui.quit = true;
             }
-            Choice::Cancel | Choice::Ok => app.quit_prompt = None,
+            Choice::Cancel | Choice::Ok | Choice::BackUp | Choice::Skip => app.quit_prompt = None,
+        }
+        return;
+    }
+    if app.backup_prompt {
+        let last = match &app.session.backup.last {
+            Some(l) => lightcraft_engine::catalog::dates::display_time(l),
+            None => crate::i18n::tr("never").to_string(),
+        };
+        let dir = app.session.backup_root().map(|d| d.display().to_string()).unwrap_or_default();
+        let text = format!(
+            "Back up the catalog before quitting? Last backup: {last}.\nBackups go to {dir}. It takes a few seconds; the photos themselves aren't copied.",
+            last = last,
+            dir = dir
+        );
+        let buttons = [("backupNow", "back.up.", Choice::BackUp), ("backupSkip", "skip.", Choice::Skip), ("quitCancel", "Cancel", Choice::Cancel)];
+        let Some(i) = window(ctx, "quit-backup", "Back Up Catalog", &text, &buttons) else { return };
+        app.backup_prompt = false;
+        match buttons[i].2 {
+            Choice::BackUp => {
+                app.backup_answered = true;
+                match app.session.execute("library.backup", &serde_json::json!({})) {
+                    Ok(_) => app.ui.quit = true,
+                    // say why; quitting again doesn't ask
+                    Err(e) => app.notices.push(format!("The catalog backup failed: {e}", e = e)),
+                }
+            }
+            Choice::Skip => {
+                app.backup_answered = true;
+                app.ui.quit = true;
+            }
+            _ => {}
         }
         return;
     }
