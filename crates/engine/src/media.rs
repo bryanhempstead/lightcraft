@@ -624,6 +624,18 @@ impl RenderJob {
         self
     }
 
+    /// The scene-linear retouch stage of this job's request (no tone, no noise reduction) and the white-balance
+    /// matrix in it: what Generative Remove looks at ([`lightcraft_pipeline::linear_stage`]).
+    pub fn linear(self) -> Result<(Rgb32f, Option<[[f32; 3]; 3]>), String> {
+        let source = self.source.load_source()?;
+        let mut info = source.info_or(self.info);
+        if let Some(lens) = self.lens_facts.and_then(|f| f.chosen(&self.settings)) {
+            info.lens = Some(lens);
+        }
+        crate::genremove::install_loader();
+        Ok(lightcraft_pipeline::linear_stage(&source.image, &info, &self.settings, &self.request))
+    }
+
     pub fn run(self) -> RenderResult {
         if let Some((cache, key)) = &self.cache
             && let Some(img) = cache.get_at(self.cache_generation, *key)
@@ -859,6 +871,8 @@ impl crate::Session {
         let content = source_key.0 as u64;
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
+        // Generative Remove pixels arriving (or going) render the photo afresh
+        let settings_hash = settings_hash ^ crate::genremove::render_key(&settings);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -901,6 +915,19 @@ impl crate::Session {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         job.settings = Arc::new(settings.clone());
         job.key = settings.hash64() ^ ((max_w as u64) << 40) ^ ((max_h as u64) << 20) ^ (apply_crop as u64) ^ (job.level as u64) << 60;
+        Some(job)
+    }
+
+    /// [`Self::preview_job`] for `settings` with a crop of their own (Generative Remove's view around a spot): the
+    /// source is decoded large enough for *that* crop at `max_w × max_h`.
+    pub fn crop_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, settings: &DevelopSettings) -> Option<RenderJob> {
+        let mut job = self.preview_job(id, max_w, max_h, true, settings)?;
+        let p = self.catalog.photo(id)?.clone();
+        let level = SourceLevel::for_size(source_edge_needed(&p, settings, max_w.max(max_h), true));
+        if level != job.level {
+            job.source = self.media.source_ref(&p, level);
+            job.level = level;
+        }
         Some(job)
     }
 

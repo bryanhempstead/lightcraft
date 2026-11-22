@@ -31,6 +31,7 @@ pub mod export;
 pub mod faces;
 pub mod files;
 pub mod fonts;
+pub mod genremove;
 pub mod guard;
 pub mod import;
 mod import_move;
@@ -51,6 +52,7 @@ pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
 pub mod publish;
+pub mod remove_detect;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
@@ -243,6 +245,10 @@ pub struct Session {
     pub segmenter: segment::Segmenter,
     /// Photo ▸ Enhance: its models and their downloads.
     pub enhancer: enhance::Enhancer,
+    /// Generative Remove: its worker and what it is making.
+    pub genremove: genremove::GenRemover,
+    /// Remove ▸ Detect: what was found in the active photo, to pick from.
+    pub remove_found: remove_detect::Found,
     /// Selected spot (Remove panel), by index into the active photo's spots.
     pub active_spot: Option<usize>,
     /// The persistent library this session writes to (`None` = in-memory only).
@@ -361,6 +367,8 @@ impl Session {
             active_mask: None,
             segmenter: segment::Segmenter::default(),
             enhancer: enhance::Enhancer::default(),
+            genremove: genremove::GenRemover::default(),
+            remove_found: remove_detect::Found::default(),
             active_spot: None,
             library: None,
             xmp: sidecar::XmpPrefs::default(),
@@ -965,6 +973,8 @@ mod tests_export_formats;
 mod tests_export_icc;
 #[cfg(test)]
 mod tests_folders;
+#[cfg(test)]
+mod tests_genremove;
 #[cfg(test)]
 mod tests_forget_local;
 #[cfg(test)]

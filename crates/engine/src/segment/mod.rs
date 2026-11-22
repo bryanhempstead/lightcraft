@@ -96,7 +96,7 @@ pub(crate) enum Tag {
     /// How much of the photo each Landscape class covers.
     Coverage { photo: PhotoId, basis: String },
     /// Objects detected for Remove (people, wires): they become content-aware Remove spots.
-    Remove { photo: PhotoId },
+    Remove { photo: PhotoId, list: bool },
 }
 
 /// The model input: 8-bit RGB.
@@ -523,6 +523,7 @@ pub fn spots_covering(seg: &SegMask, aspect: f64) -> Vec<lightcraft_develop::Spo
                 feather: 30.0,
                 opacity: 100.0,
                 source_offset: None,
+                generative: None,
             });
         }
         y += step;
@@ -1043,13 +1044,17 @@ impl Session {
     /// SAM 3) in photo `id` and cover each with content-aware Remove spots. In background mode
     /// the searches are queued (`Ok(None)`) and the spots added as each finishes; otherwise
     /// `Ok(Some(objects))`.
-    pub fn detect_remove(&mut self, id: PhotoId, people: bool, wires: bool) -> Result<Option<usize>, String> {
+    pub fn detect_remove(&mut self, id: PhotoId, people: bool, wires: bool, list: bool) -> Result<Option<usize>, String> {
         #[cfg(feature = "sam")]
         {
             let mut segs: Vec<SegMask> = Vec::new();
             let mut queued = false;
             if people {
-                match self.auto_run(id, auto::Auto::People, Tag::Remove { photo: id })? {
+                match self.auto_run(id, auto::Auto::People, Tag::Remove { photo: id, list })? {
+                    Some(auto::AutoOut::People(v)) if list => {
+                        let v: Vec<SegMask> = v.into_iter().map(|p| p.seg).collect();
+                        self.remove_found_add(id, crate::remove_detect::Kind::Person, &v);
+                    }
                     Some(auto::AutoOut::People(v)) => segs.extend(v.into_iter().map(|p| p.seg)),
                     Some(_) => {}
                     None => queued = true,
@@ -1061,11 +1066,18 @@ impl Session {
                 }
                 let kind = worker::Kind::Text("power lines, cables, wires".into());
                 if self.segmenter.background {
-                    self.segment_queue(id, kind, Tag::Remove { photo: id }, None)?;
+                    self.segment_queue(id, kind, Tag::Remove { photo: id, list }, None)?;
                     self.segmenter.auto_pending += 1;
                     queued = true;
+                    if list {
+                        self.remove_found.pending += 1;
+                    }
                 } else if let Some(s) = self.segment_wait(id, kind, None)? {
-                    segs.push(s);
+                    if list {
+                        self.remove_found_add(id, crate::remove_detect::Kind::Wires, &[s]);
+                    } else {
+                        segs.push(s);
+                    }
                 }
             }
             if queued {
@@ -1075,7 +1087,7 @@ impl Session {
         }
         #[cfg(not(feature = "sam"))]
         {
-            let _ = (id, people, wires);
+            let _ = (id, people, wires, list);
             Err("AI masks are not available in this build".into())
         }
     }
@@ -1304,13 +1316,26 @@ impl Session {
                 }
                 _ => {}
             },
-            Tag::Remove { photo } => {
-                let segs: Vec<SegMask> = match (o.result, o.auto) {
+            Tag::Remove { photo, list } => {
+                if list {
+                    self.remove_found.pending = self.remove_found.pending.saturating_sub(1);
+                }
+                let (kind, segs): (crate::remove_detect::Kind, Vec<SegMask>) = match (o.result, o.auto) {
                     (Err(e), _) => return polled.messages.push(e),
-                    (Ok(_), Some(auto::AutoOut::People(v))) => v.into_iter().map(|p| p.seg).collect(),
-                    (Ok(Some(seg)), None) => vec![seg],
-                    _ => vec![],
+                    (Ok(_), Some(auto::AutoOut::People(v))) => (crate::remove_detect::Kind::Person, v.into_iter().map(|p| p.seg).collect()),
+                    (Ok(Some(seg)), None) => (crate::remove_detect::Kind::Wires, vec![seg]),
+                    _ => (crate::remove_detect::Kind::Wires, vec![]),
                 };
+                if list {
+                    if self.remove_found.photo == Some(photo) {
+                        self.remove_found_add(photo, kind, &segs);
+                        polled.changed = true;
+                        if self.remove_found.pending == 0 && self.remove_found.items.is_empty() {
+                            polled.messages.push("Nothing to remove was found.".into());
+                        }
+                    }
+                    return;
+                }
                 match self.add_remove_spots(photo, &segs) {
                     Ok(0) => polled.messages.push("Nothing to remove was found.".into()),
                     Ok(_) => polled.changed = true,

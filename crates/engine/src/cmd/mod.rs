@@ -29,6 +29,7 @@ pub mod map;
 pub mod mask_effect_files;
 pub mod mask_effects;
 mod masks;
+pub(crate) use masks::spot_source;
 mod merge;
 pub mod metadata;
 pub mod missing;

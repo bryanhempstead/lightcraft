@@ -437,6 +437,151 @@ pub(crate) fn transform(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &lightcra
     }
 }
 
+/// Remove ▸ Detect (⌥⇧O, `det.`): what was found, as chips to pick (click, ⌘-click, ⇧-click, `all.` / `none.`),
+/// hovered ones highlighted on the photo; `rem.` removes the picked ones (generatively when the model is there).
+fn detect_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    app.ui.remove_hover_chip = None;
+    let t = Tokens::get(ui.ctx());
+    let mine = app.session.remove_found.photo == Some(id);
+    let pending = if mine { app.session.remove_found.pending } else { 0 };
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+        let r = text_button(ui, "removeDetect", "det.", false)
+            .on_hover_text(crate::i18n::tr("Detect objects to remove: people, wires and cables, sensor dust (⌥⇧O)"));
+        if r.clicked() {
+            app.ui.remove_picked.clear();
+            app.ui.remove_pick_anchor = None;
+            match app.run("remove.detect", json!({})) {
+                Ok(v) => {
+                    if let Some(e) = v["errors"][0].as_str() {
+                        app.toast(ui.ctx(), e.to_string());
+                    } else if v["candidates"].as_array().is_some_and(|a| a.is_empty()) && v["pending"].as_u64().unwrap_or(0) == 0 {
+                        app.toast(ui.ctx(), crate::i18n::tr("Nothing to remove was found."));
+                    }
+                }
+                Err(e) => app.toast(ui.ctx(), e.to_string()),
+            }
+        }
+        if pending > 0 {
+            ui.label(egui::RichText::new(crate::i18n::tr("finding…")).size(12.0).color(t.text_dim));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    });
+    if !mine || app.session.remove_found.items.is_empty() {
+        return;
+    }
+    let labels: Vec<String> = app.session.remove_found.items.iter().map(|c| c.label.clone()).collect();
+    let n = labels.len();
+    app.ui.remove_picked.retain(|p| *p < n);
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+        for (i, label) in labels.iter().enumerate() {
+            let on = app.ui.remove_picked.contains(&i);
+            let r = text_button(ui, &format!("removeCandidate-{i}"), label, on);
+            if r.hovered() {
+                app.ui.remove_hover_chip = Some(i);
+            }
+            if r.clicked() {
+                let m = ui.input(|i| i.modifiers);
+                super::detail::pick_candidate(app, i, n, m.command, m.shift);
+            }
+        }
+    });
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+        if text_button(ui, "removePickAll", "all.", false).clicked() {
+            app.ui.remove_picked = (0..n).collect();
+        }
+        if text_button(ui, "removePickNone", "none.", false).clicked() {
+            app.ui.remove_picked.clear();
+        }
+        let k = app.ui.remove_picked.len();
+        let r = text_button(ui, "removeApply", &format!("rem.{k}"), false)
+            .on_hover_text(crate::i18n::tr("Remove the picked objects (generatively when the model is installed)"));
+        if r.clicked() && k > 0 {
+            let picked = std::mem::take(&mut app.ui.remove_picked);
+            if let Err(e) = app.run("remove.apply", json!({"indices": picked})) {
+                app.toast(ui.ctx(), e.to_string());
+            }
+        }
+        if text_button(ui, "removeClearFound", "clr.", false).on_hover_text(crate::i18n::tr("Forget what was detected")).clicked() {
+            app.ui.remove_picked.clear();
+            let _ = app.run("remove.clearCandidates", json!({}));
+        }
+    });
+}
+
+/// Remove ▸ Use Generative AI (`gen.ai.`): new Remove / Fill strokes are filled by LaMa; the model's download
+/// row while it is missing.
+fn generative_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let models = app.session.enhancer.models_status();
+    let installed = models["models"].as_array().and_then(|a| a.iter().find(|m| m["model"] == "inpaint")).is_some_and(|m| m["installed"] == true);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+        let on = app.ui.remove_generative;
+        let r = text_button(ui, "removeGenerative", "gen.ai.", on).on_hover_text(crate::i18n::tr(
+            "Use Generative AI: Remove and Fill strokes are filled by an inpainting model (LaMa), with three variations to pick from (< / >)",
+        ));
+        if r.clicked() {
+            app.ui.remove_generative = !on;
+        }
+        let busy = app.session.genremove.busy();
+        if busy > 0 {
+            ui.label(egui::RichText::new(crate::i18n::tr("making…")).size(12.0).color(Tokens::get(ui.ctx()).text_dim));
+        }
+    });
+    if app.ui.remove_generative && !installed {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(crate::i18n::tr("Filled content-aware until the model is there:")).size(12.0).color(Tokens::get(ui.ctx()).text_dim),
+        );
+        crate::enhance::model_row(app, ui, "inpaint", &models);
+    }
+}
+
+/// The selected generative spot: which variation shows (`<` `>`), `more.` variations, and whether they are made.
+fn variations_row(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, g: &lightcraft_develop::Generative) {
+    let made = app.session.active().map(|id| app.session.gen_status(id)).and_then(|s| {
+        s["spots"].as_array().and_then(|a| a.iter().find(|x| x["index"] == i).cloned())
+    });
+    let shown = made.as_ref().and_then(|m| m["made"].get(g.variation as usize)).is_some_and(|v| v == true);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+        if text_button(ui, "genPrev", "<", false).on_hover_text(crate::i18n::tr("Previous variation (<)")).clicked() {
+            let _ = app.run("spot.variation", json!({"delta": -1}));
+        }
+        ui.label(format!("{} of {}", g.variation + 1, g.count));
+        if text_button(ui, "genNext", ">", false).on_hover_text(crate::i18n::tr("Next variation (>)")).clicked() {
+            let _ = app.run("spot.variation", json!({"delta": 1}));
+        }
+        if g.count < lightcraft_develop::Generative::MAX
+            && text_button(ui, "genMore", "more.", false).on_hover_text(crate::i18n::tr("Three more variations")).clicked()
+        {
+            let _ = app.run("spot.moreVariations", json!({}));
+        }
+        if text_button(ui, "genDelete", "del.", false).on_hover_text(crate::i18n::tr("Delete the spot (⌫)")).clicked() {
+            let _ = app.run("spot.delete", json!({}));
+        }
+    });
+    if !shown {
+        let busy = app.session.genremove.busy() > 0;
+        let text = if busy { crate::i18n::tr("Making this variation… (content-aware until then)") } else { crate::i18n::tr("Not made yet: content-aware for now") };
+        ui.label(egui::RichText::new(text).size(12.0).color(Tokens::get(ui.ctx()).text_dim));
+        if !busy && text_button(ui, "genMake", "make.", false).on_hover_text(crate::i18n::tr("Make the missing variations")).clicked() {
+            match app.run("remove.generate", json!({})) {
+                Ok(r) => {
+                    if let Some(e) = r["errors"][0].as_str() {
+                        app.toast(ui.ctx(), e.to_string());
+                    }
+                }
+                Err(e) => app.toast(ui.ctx(), e.to_string()),
+            }
+        }
+    }
+}
+
 fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Remove");
@@ -448,6 +593,10 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
             }
         });
+        ui.add_space(8.0);
+        generative_row(app, ui);
+        ui.add_space(8.0);
+        detect_rows(app, ui, id);
         ui.add_space(8.0);
         ui.label(crate::i18n::tr_format!("{} spot(s) on this photo", d.spots.len()));
         ui.add_space(4.0);
@@ -517,7 +666,13 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             super::edit::apply_slider_out(app, &spec, out, |app, v| app.run("spot.update", json!({key: v / scale})));
         }
     }
-    if sel.is_some() {
+    if let Some((i, sp)) = &sel
+        && let Some(g) = &sp.generative
+    {
+        let (i, g) = (*i, g.clone());
+        padded(ui, |ui| variations_row(app, ui, i, &g));
+    }
+    if sel.as_ref().is_some_and(|(_, sp)| sp.generative.is_none()) {
         padded(ui, |ui| {
             ui.horizontal(|ui| {
                 if text_button(ui, "spotRefresh", crate::i18n::tr("Refresh Source (/)"), false).clicked() {

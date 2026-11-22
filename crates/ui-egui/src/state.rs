@@ -646,6 +646,13 @@ pub struct UiState {
     pub remove_size: f32,
     pub remove_feather: f32,
     pub remove_opacity: f32,
+    /// Remove tool ▸ Use Generative AI: new Remove / Fill spots are filled by the inpainting model.
+    pub remove_generative: bool,
+    /// Remove ▸ Detect: the picked candidates, the last one clicked (⇧-click runs from it) and the one whose
+    /// chip the pointer is over (highlighted on the photo).
+    pub remove_picked: Vec<usize>,
+    pub remove_pick_anchor: Option<usize>,
+    pub remove_hover_chip: Option<usize>,
     /// Selected Point Color sample.
     pub point_color: usize,
     /// Point Color "Visualize range": the selected sample's range in colour, the rest grey.
@@ -1086,6 +1093,10 @@ impl Default for UiState {
             remove_size: 0.02,
             remove_feather: 50.0,
             remove_opacity: 100.0,
+            remove_generative: false,
+            remove_picked: Vec::new(),
+            remove_pick_anchor: None,
+            remove_hover_chip: None,
             point_color: 0,
             point_color_visualize: false,
             hdr_visualize: false,

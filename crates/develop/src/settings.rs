@@ -987,11 +987,38 @@ pub struct Spot {
     pub opacity: f64,
     /// Source offset (normalized) from the target; None = auto (content-aware remove).
     pub source_offset: Option<Point>,
+    /// Generative Remove (Lightroom's "Use Generative AI"): a Fill spot whose pixels an inpainting model made.
+    /// Omitted for every other spot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generative: Option<Generative>,
 }
 
 impl Default for Spot {
     fn default() -> Self {
-        Self { mode: SpotMode::Remove, points: Vec::new(), size: 0.02, feather: 50.0, opacity: 100.0, source_offset: None }
+        Self { mode: SpotMode::Remove, points: Vec::new(), size: 0.02, feather: 50.0, opacity: 100.0, source_offset: None, generative: None }
+    }
+}
+
+/// The generated fill of a Generative Remove spot. The pixels themselves live outside the catalog (the engine's
+/// cache, remade from the photo when missing: the model is deterministic); the spot only names them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Generative {
+    /// The variation shown, 0-based (Lightroom offers three; `<` / `>` cycles them).
+    pub variation: u8,
+    /// How many variations there are.
+    pub count: u8,
+    /// Names the generated pixels (hex): what the photo looked like under the spot when they were made.
+    pub key: String,
+}
+
+impl Generative {
+    /// Most variations a spot keeps.
+    pub const MAX: u8 = 8;
+
+    /// The cache name of the shown variation.
+    pub fn name(&self) -> String {
+        format!("{}-{}", self.key, self.variation.min(Self::MAX))
     }
 }
 

@@ -143,7 +143,7 @@ fn landscape_and_people_masks_with_the_installed_models() {
     assert_eq!(u["updated"].as_u64(), Some(d.masks.len() as u64));
     // Remove ▸ Detect: each person becomes content-aware Remove spots
     let before = s.develop_of(id).unwrap().spots.len();
-    let r = s.execute("remove.detect", &json!({"dust": false})).unwrap();
+    let r = s.execute("remove.detect", &json!({"dust": false, "add": true})).unwrap();
     eprintln!("remove.detect: {r}");
     assert_eq!(r["objects"].as_u64(), Some(n as u64));
     assert!(n == 0 || s.develop_of(id).unwrap().spots.len() > before);

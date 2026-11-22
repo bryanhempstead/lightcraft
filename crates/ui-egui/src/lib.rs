@@ -281,6 +281,8 @@ impl LightcraftApp {
     pub fn new(mut session: Session, services: Services) -> Self {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
+        // Generative Remove makes its pixels on its own worker too
+        session.genremove.background = true;
         Self {
             session,
             ui: UiState::default(),
@@ -477,6 +479,21 @@ impl LightcraftApp {
     pub fn toast_for(&mut self, ctx: &egui::Context, text: impl Into<String>, secs: f64) {
         let t = ctx.input(|i| i.time);
         self.ui.toast = Some((text.into(), t + secs, None));
+    }
+
+    /// Generative Remove: pick up pixels the worker made (the photo renders again by itself: its render key
+    /// follows them) and say what failed.
+    fn generative_remove(&mut self, ctx: &egui::Context) {
+        let (photos, errors) = self.session.gen_poll();
+        if !photos.is_empty() {
+            ctx.request_repaint();
+        }
+        if let Some(e) = errors.into_iter().last() {
+            self.toast_error(ctx, format!("Generative Remove: {e}"));
+        }
+        if self.session.genremove.busy() > 0 {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
     }
 
     /// AI masks: apply finished background requests (clicks, descriptions, detail passes) and
@@ -910,6 +927,7 @@ impl LightcraftApp {
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
         self.ai_mask_detail(&ctx);
+        self.generative_remove(&ctx);
         if self.ui.fullscreen {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(egui::Color32::BLACK)).show(ui, |ui| panels::detail::show(self, ui));

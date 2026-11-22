@@ -460,6 +460,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         src_long,
         lens_blur::key(s),
+        spots::gen_state(&s.spots),
     ));
     Plan { settings, frame, w, h, px_per_long, src_long, geo, lin_key, eyes }
 }
@@ -477,9 +478,21 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let s = &*p.settings;
     local::white_balance(img, info, s);
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
-    spots::apply(img, &s.spots, &p.frame, p.px_per_long);
+    spots::apply_with_wb(img, &s.spots, &p.frame, p.px_per_long, local::wb_matrix_for(info, s));
     redeye::apply(img, &p.eyes);
     lens_blur::apply(img, s, &p.frame, p.px_per_long);
+}
+
+/// The scene-linear image of `s`'s (cropped) frame fitting `req` as the retouch stage sees it — white balance,
+/// defringe, spots, red eye, lens blur; no noise reduction or tone — and the white-balance matrix applied (`None`:
+/// the as-shot white). Generative Remove looks at this (with a crop around the spot and the spots before it).
+pub fn linear_stage(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> (Rgb32f, Option<[[f32; 3]; 3]>) {
+    let effective = s.effective();
+    let p = plan(src, info, &effective, req);
+    let mut img = p.frame.sample(src, p.w, p.h);
+    lin_cpu(&mut img, info, &p);
+    let wb = local::wb_matrix_for(info, &p.settings);
+    (img, wb)
 }
 
 /// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]
