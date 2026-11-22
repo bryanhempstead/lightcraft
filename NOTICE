@@ -66,6 +66,11 @@ crates/enhance/src/dinov2.rs and depth_anything_v2.rs are taken from Hugging Fac
 (https://github.com/huggingface/candle), licensed under the MIT License or the Apache License 2.0, at your option;
 modified by the LightCraft contributors (2026): the DINOv2 classifier head is optional.
 
+crates/enhance/src/lama.rs implements the LaMa big-lama generator (Fast Fourier Convolution ResNet) after
+saicinpainting/training/modules/ffc.py of https://github.com/advimman/lama, Copyright (c) 2021 Samsung Research,
+licensed under the Apache License 2.0; rewritten in Rust on candle by the LightCraft contributors (2026), with the
+FFT done as matrix products.
+
 crates/rcd (lightcraft-rcd) ports Ratio Corrected Demosaicing, Copyright (c) 2017-2020 Luis Sanz Rodriguez and
 Ingo Weyrich, from RawTherapee (rtengine/rcd_demosaic.cc; original https://github.com/LuisSR/RCD-Demosaicing),
 licensed under the GNU General Public License version 3 or later; translated to Rust and modified by the LightCraft
@@ -74,8 +79,8 @@ this fork: lightcraft-raw uses it for Raw Details) is distributed under the GPL-
 
 The Enhance models are not part of LightCraft and are never distributed with it. A user downloads each one only
 when they choose to, under its own licence: RawNIND UtNet2 as published by darktable-ai (GPL-3.0), Real-ESRGAN
-general x4v3 (BSD-3-Clause, Xintao Wang et al.), Depth Anything V2 Small (Apache-2.0, Lihe Yang et al.). See
-docs/enhance.md.
+general x4v3 (BSD-3-Clause, Xintao Wang et al.), Depth Anything V2 Small (Apache-2.0, Lihe Yang et al.), LaMa
+big-lama (Apache-2.0, Samsung Research; for Generative Remove). See docs/enhance.md and docs/remove.md.
 
 The SAM 3 weights are not part of LightCraft and are never distributed with it. A user downloads
 the facebook/sam3 checkpoint only when they choose to (in the app, or by hand), under Meta's SAM

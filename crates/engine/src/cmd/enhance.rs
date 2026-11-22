@@ -296,7 +296,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Enhance Models",
             [],
             None,
-            "{} — the Enhance models (raw-denoise, super-resolution, depth): licence, size, installed, download progress",
+            "{} — the Enhance and Generative Remove models (raw-denoise, super-resolution, depth, inpaint): licence, size, installed, download progress",
             always,
             |s, _| Ok(s.enhancer.models_status())
         ),
@@ -305,11 +305,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Download Enhance Model",
             [],
             None,
-            "{model: raw-denoise|super-resolution|depth, acknowledged: true} — download that model in the background (only after the user agreed to its licence and size; see enhance.models); watch enhance.models → {started}",
+            "{model: raw-denoise|super-resolution|depth|inpaint, acknowledged: true} — download that model in the background (only after the user agreed to its licence and size; see enhance.models); watch enhance.models → {started}",
             always,
             |s, p| {
                 let c = "enhance.model.download";
-                let key = str_param(p, "model").ok_or_else(|| bad(c, "model: raw-denoise, super-resolution or depth"))?;
+                let key = str_param(p, "model").ok_or_else(|| bad(c, "model: raw-denoise, super-resolution, depth or inpaint"))?;
                 let id = lightcraft_enhance::models::by_key(key).ok_or_else(|| bad(c, format!("unknown model `{key}`")))?;
                 let m = lightcraft_enhance::models::info(id);
                 if p.get("acknowledged").and_then(Value::as_bool) != Some(true) {

@@ -641,7 +641,7 @@ pub fn warm_up_in_background(models_root: &Path) {
 pub struct Enhancer {
     pub models_root: PathBuf,
     #[cfg(feature = "enhance")]
-    downloads: [Arc<download::Shared>; 3],
+    downloads: [Arc<download::Shared>; 4],
 }
 
 impl Default for Enhancer {
@@ -681,7 +681,7 @@ impl Enhancer {
 
     /// Start downloading a model (background thread). `Ok(false)` when installed or already downloading.
     pub fn start_download(&self, key: &str) -> std::result::Result<bool, String> {
-        let id = lightcraft_enhance::models::by_key(key).ok_or_else(|| format!("unknown model `{key}` (raw-denoise, super-resolution, depth)"))?;
+        let id = lightcraft_enhance::models::by_key(key).ok_or_else(|| format!("unknown model `{key}` (raw-denoise, super-resolution, depth, inpaint)"))?;
         if lightcraft_enhance::models::installed(&self.models_root, id).is_some() {
             return Ok(false);
         }
