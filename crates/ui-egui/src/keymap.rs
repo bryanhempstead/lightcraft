@@ -50,8 +50,7 @@ pub const CLASSIC: &[(&str, &str, &str)] = &[
     // library
     ("B", "album.toggleTarget", "{}"),
     ("`", "photo.toggleFlag", "{}"),
-    ("Cmd+Up", "photo.increaseFlag", "{}"),
-    ("Cmd+Down", "photo.decreaseFlag", "{}"),
+    // (Lightroom puts Increase / Decrease Flag on ⌘↑ / ⌘↓; Bryan's window manager owns ⌘-arrows — left unbound)
     ("Cmd+K", "panel.keywords", "{}"),
     ("Cmd+Shift+V", "develop.paste", "{}"),
     ("Cmd+Shift+S", "dialog.syncSettings", "{}"),

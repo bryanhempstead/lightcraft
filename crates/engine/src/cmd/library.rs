@@ -729,7 +729,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "photo.increaseFlag",
             "Increase Flag Status",
             ["Photo", "Set Flag"],
-            Some("Cmd+Up"),
+            None, // Lightroom: ⌘↑ — Bryan's window manager (Magnet) owns ⌘-arrows
             "{ids?, advance?: bool} — rejected → unflagged → flagged (stops at flagged)",
             has_selection,
             |s, p| step_flag(s, p, "Increase Flag Status", |f| if f == Flag::Reject { Flag::None } else { Flag::Pick })
@@ -738,7 +738,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "photo.decreaseFlag",
             "Decrease Flag Status",
             ["Photo", "Set Flag"],
-            Some("Cmd+Down"),
+            None, // Lightroom: ⌘↓ — left to the window manager
             "{ids?, advance?: bool} — flagged → unflagged → rejected (stops at rejected)",
             has_selection,
             |s, p| step_flag(s, p, "Decrease Flag Status", |f| if f == Flag::Pick { Flag::None } else { Flag::Reject })

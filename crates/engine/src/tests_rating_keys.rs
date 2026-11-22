@@ -58,7 +58,8 @@ fn flag_toggle_and_steps() {
     let shortcut = |id: &str| crate::cmd::find_command(id).and_then(|c| c.shortcut);
     assert_eq!(
         (shortcut("photo.toggleFlag"), shortcut("photo.increaseFlag"), shortcut("photo.decreaseFlag")),
-        (Some("`"), Some("Cmd+Up"), Some("Cmd+Down"))
+        // ⌘↑ / ⌘↓ stay with Bryan's window manager (Magnet), so the flag steps have no shortcut
+        (Some("`"), None, None)
     );
 }
 

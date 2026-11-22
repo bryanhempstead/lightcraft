@@ -12,8 +12,8 @@
 
 pub mod adobe;
 pub mod availability;
-pub mod camera_match;
 pub mod backup;
+pub mod camera_match;
 mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -897,8 +897,9 @@ mod tests_persist;
 #[cfg(test)]
 mod tests_prefs;
 #[cfg(test)]
-mod tests_recheck;
 mod tests_rating_keys;
+#[cfg(test)]
+mod tests_recheck;
 #[cfg(test)]
 mod tests_segment;
 #[cfg(test)]
