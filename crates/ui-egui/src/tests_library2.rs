@@ -230,3 +230,40 @@ fn export_dialog_profile_popup() {
     assert!(w.contains("combo:exportIccProfile"), "{w}");
     shot(&mut h, "e08-export-profile.png");
 }
+
+/// I03: the Import window's Embedded & Sidecar previews (grid thumbnails first) and Assisted
+/// Culling at import.
+#[test]
+fn import_previews_and_culling() {
+    let dir = temp("i03");
+    let src = dir.0.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    for i in 0..3u8 {
+        let img = lightcraft_raster::Rgba8 {
+            width: 32,
+            height: 24,
+            data: (0..32 * 24).map(|k| [(k % 32 * 7) as u8, i * 60, (k / 32 * 9) as u8, 255]).collect(),
+        };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(src.join(format!("p{i}.png")), png).unwrap();
+    }
+    let mut s = lightcraft_engine::Session::new().with_fs();
+    s.open_library(dir.0.join("lib"), false).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let ids: Vec<u64> = r["imported"].as_array().unwrap().iter().filter_map(|v| v.as_u64()).collect();
+    let mut h = headless(s);
+    h.app.session.execute("library.select", &json!({"ids": ids})).unwrap();
+    let prefs = crate::import::ImportPrefs { previews: "embedded".into(), cull: true, ..Default::default() };
+    crate::import_window::after_window_import(&mut h.app, &prefs, ids.len(), &[]);
+    settle(&mut h);
+    for id in &ids {
+        assert!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(*id)).unwrap().analysis.is_some(), "scored at import");
+    }
+    let b = h.app.session.preview_build.clone().expect("a thumbnail build started");
+    assert_eq!(b.total, ids.len());
+    assert!(h.app.session.execute("library.buildPreviews", &json!({"size": "huge"})).is_err());
+    // the option in the Import window
+    h.app.run("file.addPhotos", json!({"source": src.to_string_lossy()})).unwrap();
+    settle(&mut h);
+    shot(&mut h, "i03-import-window.png");
+}

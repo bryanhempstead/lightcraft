@@ -47,10 +47,10 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 17 | 4 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 65 | 13 | 39 | 9 | — | 34/35 (97%) |
-| **Total** | 425 | 38 | 86 | 36 | 193/200 (97%) | 155/164 (95%) |
+| Lightroom Classic extras | 65 | 14 | 39 | 9 | — | 34/35 (97%) |
+| **Total** | 425 | 39 | 86 | 36 | 193/200 (97%) | 155/164 (95%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.9%** of 549 in-scope rows — P0 98.2% of 200 · P1 96.3% of 164 · P2 48.4% of 184.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.8%** of 550 in-scope rows — P0 98.2% of 200 · P1 96.3% of 164 · P2 48.4% of 185.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -781,6 +781,7 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 | LRC-LIB-QUICKDEV-EXTRAS | Quick Develop: Crop Ratio, Treatment, Texture | P2 | ✅ | `cmd:crop.aspect`, `cmd:develop.treatment`, `crates/ui-egui/src/panels/library_right.rs` (`QUICK_CROPS`) | Library ▸ Quick Develop: Crop Ratio (Original, 1×1, 4×5, 8.5×11, 5×7, 2×3, 16×9, 4×3) and Treatment (Color / Black & White) on every selected photo, Texture nudges with the other tone rows. Not: Sharpening / Saturation rows (Lightroom's expanded Quick Develop) |
 | LRC-LIB-SORTEXTRAS | More sort orders | P2 | ✅ | `cmd:library.sort` (`pick`, `labelColor`, `labelText`, `editCount`, `aspectRatio`, `fileType`, `extension`, `pixelCount`) | View ▸ Sort and the toolbar's sort menu: Pick, Label Color, Label Text, Edit Count, Aspect Ratio, File Type, File Extension, Pixel Dimensions besides the date / name / rating / size / random orders. Not: Custom Order (drag to reorder) |
 | LR-EXP-PRESETDELETE | Delete an export preset in the dialog | P2 | ✅ | `cmd:export.deletePreset`, `crates/ui-egui/src/panels/dialogs.rs` | Export dialog ▸ Preset: each saved preset has del. beside it. Not: pausing on a full disk (the photo fails with the error, the rest go on) |
+| LRC-IMP-PREVIEWCULL | Import: Embedded & Sidecar previews, Assisted Culling at import (I03) | P2 | 🟡 | `cmd:library.buildPreviews` (`size: thumbs`), `cmd:photo.analyze`, `crates/ui-egui/src/import_window.rs` (`after_window_import`) | Import window ▸ File Handling ▸ Build Previews ▸ Embedded & Sidecar builds the grid thumbnails of what came in first (the loupe previews when they are needed); Assisted Culling (checkbox) scores focus and clipping and groups look-alike shots of the new photos right after the import (no flags set). Not done: the thumbnails are rendered by LightCraft, not taken from the camera's embedded JPEG; AI culling criteria (eyes, subject focus) — see L09 |
 | LRC-IMP-PRESETS | Import presets | P2 | ✅ | `cmd:import.presets`, `cmd:import.savePreset`, `cmd:import.applyPreset`, `cmd:import.deletePreset`, `crates/ui-egui/src/import.rs` (`ImportPreset`), `crates/ui-egui/src/import_window.rs` (`import_presets`) | Import window ▸ Import Preset: pick one (the mode, destination, renaming, presets, keywords… follow; the source stays), save the current choices under a name, del.; kept with the app's settings |
 | LRC-LIB-COLLEXTRAS | Collection extras | P2 | ✅ | `cmd:album.duplicate`, `cmd:album.fromFolder`, `cmd:album.saveQuick`, `cmd:photo.albums`, `crates/ui-egui/src/panels/left.rs` (`folder_menu`, `folder_menu_for_library`) | right-click an album ▸ Duplicate Album (rules kept for smart albums); Folders ▸ right-click ▸ Create Album from Folder; Quick Collection ▸ Save Quick Collection… (⌘⌥B; then emptied); `photo.albums` lists a photo's albums (Go to Collection). Not: new-album options "make new virtual copies" |
 | LR-EXP-SAMEFOLDER | Export to the original's folder | P1 | ✅ | `cmd:app.export` (`sameFolder`), `crates/engine/src/export.rs` (`PreparedExport::source_dir`) | Export dialog ▸ Export to: chosen.folder. / same.folder. (each file next to its original, plus the subfolder if set; originals are never written over — the conflict policy names the copy). Not: Choose folder later, the standard folders list |

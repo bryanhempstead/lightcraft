@@ -125,6 +125,9 @@ pub struct ImportPrefs {
     /// Build Previews: `minimal`, `embedded`, `standard` or `full` (1:1).
     pub previews: String,
     pub smart_previews: bool,
+    /// I03: Assisted Culling at import (focus / clipping scores, look-alike groups).
+    #[serde(default)]
+    pub cull: bool,
     /// Make a Second Copy To this folder ("" = off).
     pub second_copy: String,
     /// File Renaming template ("" = keep the names).
@@ -150,6 +153,7 @@ impl Default for ImportPrefs {
             date_format: 0,
             previews: "minimal".into(),
             smart_previews: false,
+            cull: false,
             second_copy: String::new(),
             rename: String::new(),
             preset: String::new(),
