@@ -177,6 +177,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "File"),
     ("dialog.deleteRejected", "Delete Rejected Photos…", Some("Cmd+Delete"), "Photo"),
+    // the Import window's Import Preset popup ({name})
+    ("import.presets", "Import Presets", None, ""),
+    ("import.savePreset", "Save Import Preset", None, ""),
+    ("import.applyPreset", "Apply Import Preset", None, ""),
+    ("import.deletePreset", "Delete Import Preset", None, ""),
     ("file.backupLibrary", "Back Up Library…", None, "File"),
     ("file.restoreLibrary", "Restore Library from Backup…", None, "File"),
     ("photo.locate", "Locate Missing File…", None, ""),
@@ -689,6 +694,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "app.openLibrary" => crate::panels::settings::open_library(app, p),
         "dialog.deleteRejected" => delete_rejected(app),
+        "import.presets" | "import.savePreset" | "import.applyPreset" | "import.deletePreset" => crate::import::preset_command(app, id, p),
         "file.backupLibrary" | "file.restoreLibrary" => {
             let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
             match action {

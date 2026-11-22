@@ -303,6 +303,8 @@ pub struct UiState {
     pub preset_groups_open: Vec<String>,
     /// The Import window's last choices (source, mode, destination, options).
     pub import_prefs: crate::import::ImportPrefs,
+    /// Named Import window choices (Import Presets).
+    pub import_presets: Vec<crate::import::ImportPreset>,
     /// Sync Settings: what was checked last time (kept between runs and restarts).
     pub sync_prefs: SyncPrefs,
     pub right: RightPanel,
@@ -690,6 +692,7 @@ impl Default for UiState {
             develop_left_sections: vec!["navigator".into(), "presets".into(), "history".into()],
             solo_left: false,
             import_prefs: Default::default(),
+            import_presets: Vec::new(),
             sync_prefs: Default::default(),
             preset_groups_open: Vec::new(),
             left_width: LEFT_WIDTH.default,

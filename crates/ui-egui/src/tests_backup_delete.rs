@@ -193,3 +193,31 @@ fn column_browser_narrows_the_grid() {
     assert!(h.app.widgets.iter().any(|(w, _)| w == "filter:label-none"));
     assert!(h.app.widgets.iter().any(|(w, _)| w.contains("copies")), "Copy Status picker");
 }
+
+/// I01: import presets save the Import window's choices and apply them (the source stays).
+#[test]
+fn import_presets_save_and_apply() {
+    let mut h = headless(lightcraft_engine::Session::with_demo());
+    h.app.ui.import_prefs.mode = "copy".into();
+    h.app.ui.import_prefs.rename = "{date}-{seq:3}".into();
+    h.app.ui.import_prefs.source = "/Volumes/CARD".into();
+    h.app.run("import.savePreset", json!({"name": "Wedding card"})).unwrap();
+    h.app.ui.import_prefs.mode = "add".into();
+    h.app.ui.import_prefs.rename.clear();
+    h.app.ui.import_prefs.source = "/Volumes/OTHER".into();
+    h.app.run("import.applyPreset", json!({"name": "wedding card"})).unwrap();
+    assert_eq!((h.app.ui.import_prefs.mode.as_str(), h.app.ui.import_prefs.rename.as_str()), ("copy", "{date}-{seq:3}"));
+    assert_eq!(h.app.ui.import_prefs.source, "/Volumes/OTHER", "the source stays");
+    assert_eq!(h.app.run("import.presets", json!({})).unwrap(), json!(["Wedding card"]));
+    assert!(h.app.run("import.savePreset", json!({"name": " "})).is_err());
+    h.app.run("import.deletePreset", json!({"name": "Wedding card"})).unwrap();
+    assert!(h.app.run("import.applyPreset", json!({"name": "Wedding card"})).is_err());
+    // the Import window shows the Import Preset popup in its bottom bar
+    h.app.run("file.addPhotos", json!({})).ok();
+    for _ in 0..4 {
+        h.step();
+    }
+    if crate::import_window::has_window() {
+        assert!(h.app.widgets.iter().any(|(w, _)| w == "button:importPresets"));
+    }
+}

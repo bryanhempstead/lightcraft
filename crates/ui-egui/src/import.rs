@@ -157,6 +157,64 @@ impl Default for ImportPrefs {
     }
 }
 
+/// A named set of Import window choices (Lightroom's Import Presets): everything but the source.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ImportPreset {
+    pub name: String,
+    pub prefs: ImportPrefs,
+}
+
+/// `import.presets` / `import.savePreset {name}` / `import.applyPreset {name}` /
+/// `import.deletePreset {name}` (I01). Saving takes the open Import window's choices (else the
+/// remembered ones); applying keeps the source and Include Subfolders.
+pub fn preset_command(app: &mut crate::LightcraftApp, id: &str, p: &serde_json::Value) -> Result<serde_json::Value, String> {
+    use crate::state::Dialog;
+    let name = p.get("name").and_then(serde_json::Value::as_str).map(str::trim).unwrap_or("").to_string();
+    let open = match app.ui.dialog.as_ref() {
+        Some(Dialog::Import { opts }) => Some(opts.prefs.clone()),
+        _ => None,
+    };
+    match id {
+        "import.presets" => Ok(serde_json::json!(app.ui.import_presets.iter().map(|x| x.name.clone()).collect::<Vec<_>>())),
+        "import.savePreset" => {
+            if name.is_empty() || name.chars().count() > 80 {
+                return Err("give the preset a name (up to 80 characters)".into());
+            }
+            let prefs = open.unwrap_or_else(|| app.ui.import_prefs.clone());
+            match app.ui.import_presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
+                Some(x) => x.prefs = prefs,
+                None => app.ui.import_presets.push(ImportPreset { name: name.clone(), prefs }),
+            }
+            Ok(serde_json::json!({"saved": name}))
+        }
+        "import.applyPreset" => {
+            let preset = app
+                .ui
+                .import_presets
+                .iter()
+                .find(|x| x.name.eq_ignore_ascii_case(&name))
+                .cloned()
+                .ok_or_else(|| format!("no import preset `{name}`"))?;
+            let apply = |cur: &ImportPrefs| ImportPrefs { source: cur.source.clone(), subfolders: cur.subfolders, ..preset.prefs.clone() };
+            if let Some(Dialog::Import { opts }) = app.ui.dialog.as_mut() {
+                opts.prefs = apply(&opts.prefs);
+            }
+            app.ui.import_prefs = apply(&app.ui.import_prefs);
+            Ok(serde_json::json!({"applied": preset.name}))
+        }
+        "import.deletePreset" => {
+            let n = app.ui.import_presets.len();
+            app.ui.import_presets.retain(|x| !x.name.eq_ignore_ascii_case(&name));
+            if app.ui.import_presets.len() == n {
+                return Err(format!("no import preset `{name}`"));
+            }
+            Ok(serde_json::json!({"deleted": name}))
+        }
+        _ => Err(format!("unknown command {id}")),
+    }
+}
+
 /// A typed folder name made safe as one folder level of a template: no separators, no template
 /// braces, no leading / trailing dots or spaces.
 pub fn folder_name(name: &str) -> String {
