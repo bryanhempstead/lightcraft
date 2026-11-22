@@ -94,3 +94,35 @@ fn keyword_list_edit_tag_and_purge() {
     assert!(h.app.session.execute("keyword.info", &json!({"keyword": "Unused"})).is_err(), "purged");
     shot(&mut h, "l11-keyword-list.png");
 }
+
+/// L24: folder / collection labels and favourites in the sidebar; the collections filter field,
+/// name. / kind. sort and fav. chip.
+#[test]
+fn folder_and_collection_marks_in_the_sidebar() {
+    let dir = temp("marks");
+    let src = dir.0.join("Trip");
+    std::fs::create_dir_all(&src).unwrap();
+    let mut s = lightcraft_engine::Session::with_demo();
+    let path = src.to_string_lossy().to_string();
+    // a photo in a real folder so Folders lists it
+    let (w, hh) = (16usize, 12usize);
+    let img = lightcraft_raster::Rgba8 { width: w, height: hh, data: vec![[90, 120, 150, 255]; w * hh] };
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(src.join("a.png"), png).unwrap();
+    s.execute("library.import", &json!({"paths": [path.clone()]})).unwrap();
+    s.execute("folder.label", &json!({"path": path, "label": "green"})).unwrap();
+    s.execute("folder.favorite", &json!({"path": path})).unwrap();
+    let ids: Vec<u64> = s.catalog.albums().filter(|a| !a.folder && !a.quick).map(|a| a.id.0).collect();
+    s.execute("album.favorite", &json!({"id": ids[1]})).unwrap();
+    s.execute("album.label", &json!({"id": ids[0], "label": "purple"})).unwrap();
+    let mut h = headless(s);
+    h.app.ui.collapsed_sidebar = vec!["navigator".into(), "catalog".into(), "shoots".into()];
+    settle(&mut h);
+    shot(&mut h, "l24-sidebar.png");
+    click(&mut h, "button:collectionsFavorites");
+    let widgets = request(&mut h, "ui.widgets", json!({}));
+    let text = widgets.to_string();
+    assert!(text.contains(&format!("album:{}\"", ids[1])), "the favourite stays: {text}");
+    assert!(!text.contains(&format!("album:{}\"", ids[0])), "the others go");
+    shot(&mut h, "l24-favorites.png");
+}

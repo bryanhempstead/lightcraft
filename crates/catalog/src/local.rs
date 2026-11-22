@@ -299,7 +299,9 @@ impl Op {
             | Op::RemoveStack { .. }
             | Op::SetLabelName { .. }
             | Op::SetBrowsed { .. }
-            | Op::SetKeyword { .. } => {}
+            | Op::SetKeyword { .. }
+            | Op::SetFolderRecord { .. }
+            | Op::SetAlbumMarks { .. } => {}
         }
     }
 }

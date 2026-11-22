@@ -180,8 +180,9 @@ fn op_variants_are_versioned() {
             | Op::Batch { .. } => 1,
             Op::SetBrowsed { .. } => 2,
             Op::SetKeyword { .. } => 3,
+            Op::SetFolderRecord { .. } | Op::SetAlbumMarks { .. } => 4,
         }
     }
-    let newest = since(&Op::SetKeyword { path: String::new(), info: None });
+    let newest = since(&Op::SetFolderRecord { folder: String::new(), record: None });
     assert_eq!(newest, VERSION, "the newest op's version must be the current format version");
 }

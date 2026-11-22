@@ -305,6 +305,9 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
         })
         .collect();
     let n = ops.len();
+    // the folder's label / favourite (and those of folders inside it) go with it
+    let mut ops = ops;
+    ops.extend(s.catalog.folder_records_follow_ops(from, to));
     let name = Path::new(to).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let renamed = src.parent() == dst.parent();
     let label = if renamed { format!("Rename Folder to “{name}”") } else { format!("Move Folder “{name}”") };

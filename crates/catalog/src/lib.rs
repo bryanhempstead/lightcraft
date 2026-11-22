@@ -227,6 +227,18 @@ pub enum Op {
         path: String,
         info: Option<keywords::KeywordInfo>,
     },
+    /// What the library keeps about one of its folders (label, favourite; see
+    /// [`folders::FolderRecord`]), under the folder's path; `None` forgets it. Format version 4.
+    SetFolderRecord {
+        folder: String,
+        record: Option<folders::FolderRecord>,
+    },
+    /// An album's (collection's or set's) colour label and favourite mark. Format version 4.
+    SetAlbumMarks {
+        id: AlbumId,
+        label: Option<ColorLabel>,
+        favorite: bool,
+    },
     /// Several ops as one step (undo applies the inverses in reverse).
     Batch {
         ops: Vec<Op>,
@@ -252,6 +264,9 @@ pub struct Catalog {
     /// Keywords listed on their own or given attributes, by lower-case path (see [`keywords`]).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     keyword_list: BTreeMap<String, keywords::ListedKeyword>,
+    /// What the library keeps about its folders (folder key → record), see [`folders`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    folder_records: BTreeMap<String, folders::FolderRecord>,
     /// Increments on every applied op.
     #[serde(skip)]
     pub revision: u64,
@@ -602,6 +617,21 @@ impl Catalog {
                     None => self.label_names.remove(&label),
                 };
                 Op::SetLabelName { label, name: old }
+            }
+            Op::SetFolderRecord { folder, record } => {
+                let key = folders::record_key(&folder).ok_or_else(|| CatalogError::Invalid(format!("not a folder: {folder}")))?;
+                let old = match record.filter(|r| !r.is_empty()) {
+                    Some(r) => self.folder_records.insert(key.clone(), r),
+                    None => self.folder_records.remove(&key),
+                };
+                Op::SetFolderRecord { folder: key, record: old }
+            }
+            Op::SetAlbumMarks { id, label, favorite } => {
+                let a = self.album_mut(id)?;
+                let old = Op::SetAlbumMarks { id, label: a.label, favorite: a.favorite };
+                a.label = label;
+                a.favorite = favorite;
+                old
             }
             Op::SetKeyword { path, info } => {
                 let path = keywords::clean(&path);

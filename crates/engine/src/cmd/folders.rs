@@ -207,8 +207,106 @@ fn promote(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"path": folder}))
 }
 
+/// A label parameter: a colour (or the library's name for it), or null / "none" for no label.
+fn label_param(s: &Session, c: &str, p: &Value) -> Result<Option<lightcraft_catalog::ColorLabel>> {
+    match p.get("label") {
+        None => Err(bad(c, "missing `label` (red|yellow|green|blue|purple, or null for none)")),
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(x)) if x.trim().is_empty() || x.eq_ignore_ascii_case("none") => Ok(None),
+        Some(Value::String(x)) => s
+            .catalog
+            .label_from_name(x)
+            .or_else(|| lightcraft_catalog::ColorLabel::parse(x.trim()))
+            .map(Some)
+            .ok_or_else(|| bad(c, format!("unknown label `{x}`"))),
+        Some(_) => Err(bad(c, "`label` is a colour name or null")),
+    }
+}
+
+/// Folder ▸ Label / Favourite (L24): change the folder's record (one undo step).
+fn set_folder_mark(
+    s: &mut Session,
+    p: &Value,
+    c: &str,
+    f: impl FnOnce(&mut lightcraft_catalog::folders::FolderRecord, &Value) -> Result<()>,
+) -> Result<Value> {
+    let folder = folder_param(c, p, "path")?.to_string();
+    let mut r = s.catalog.folder_record(&folder).cloned().unwrap_or_default();
+    f(&mut r, p)?;
+    let label = if c == "folder.label" { "Folder Label" } else { "Favorite Folder" };
+    s.commit(label, Op::SetFolderRecord { folder: folder.clone(), record: Some(r.clone()) }).map_err(|e| bad(c, e.to_string()))?;
+    Ok(json!({"path": folder, "label": r.label, "favorite": r.favorite}))
+}
+
+/// Collection ▸ Label / Favourite (L24).
+fn set_album_mark(
+    s: &mut Session,
+    p: &Value,
+    c: &str,
+    label: Option<Option<lightcraft_catalog::ColorLabel>>,
+    favorite: Option<bool>,
+) -> Result<Value> {
+    let id = lightcraft_catalog::AlbumId(p.get("id").and_then(Value::as_u64).ok_or_else(|| bad(c, "missing album `id`"))?);
+    let a = s.catalog.album(id).ok_or_else(|| bad(c, format!("no album {}", id.0)))?;
+    let (l, fav) = (label.unwrap_or(a.label), favorite.unwrap_or(!a.favorite));
+    let what = if label.is_some() { "Collection Label" } else { "Favorite Collection" };
+    s.commit(what, Op::SetAlbumMarks { id, label: l, favorite: fav }).map_err(|e| bad(c, e.to_string()))?;
+    Ok(json!({"id": id.0, "label": l, "favorite": fav}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(
+            "folder.label",
+            "Folder Label",
+            [],
+            None,
+            "{path, label: red|yellow|green|blue|purple|null} — the folder's colour label in Folders",
+            always,
+            |s, p| {
+                let l = label_param(s, "folder.label", p)?;
+                set_folder_mark(s, p, "folder.label", |r, _| {
+                    r.label = l;
+                    Ok(())
+                })
+            }
+        ),
+        cmd!(
+            "folder.favorite",
+            "Mark Folder as Favorite",
+            [],
+            None,
+            "{path, on?: bool (default: toggle)} — favourite folders show a star and stay in the favourites view",
+            always,
+            |s, p| {
+                set_folder_mark(s, p, "folder.favorite", |r, p| {
+                    r.favorite = match p.get("on") {
+                        None | Some(Value::Null) => !r.favorite,
+                        Some(Value::Bool(b)) => *b,
+                        Some(_) => return Err(bad("folder.favorite", "`on` is true or false")),
+                    };
+                    Ok(())
+                })
+            }
+        ),
+        cmd!("album.label", "Collection Label", [], None, "{id, label: red|yellow|green|blue|purple|null}", always, |s, p| {
+            let l = label_param(s, "album.label", p)?;
+            set_album_mark(
+                s,
+                p,
+                "album.label",
+                Some(l),
+                s.catalog.album(lightcraft_catalog::AlbumId(p.get("id").and_then(Value::as_u64).unwrap_or(0))).map(|a| a.favorite),
+            )
+        }),
+        cmd!("album.favorite", "Mark Collection as Favorite", [], None, "{id, on?: bool (default: toggle)}", always, |s, p| {
+            let on = match p.get("on") {
+                None | Some(Value::Null) => None,
+                Some(Value::Bool(b)) => Some(*b),
+                Some(_) => return Err(bad("album.favorite", "`on` is true or false")),
+            };
+            set_album_mark(s, p, "album.favorite", None, on)
+        }),
         cmd!(
             "library.showSubfolders",
             "Show Photos in Subfolders",

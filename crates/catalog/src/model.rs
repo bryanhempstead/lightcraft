@@ -431,12 +431,29 @@ pub struct Album {
     /// The Quick Collection: a regular album that B adds to (one per library).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quick: bool,
+    /// A colour label on the collection (L24).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<crate::ColorLabel>,
+    /// Marked as a favourite (L24): favourites list first and the favourites filter keeps them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub favorite: bool,
 }
 
 impl Album {
     /// A regular (manual) album.
     pub fn new(id: AlbumId, name: impl Into<String>) -> Album {
-        Album { id, name: name.into(), parent: None, folder: false, photos: Vec::new(), cover: None, smart: None, quick: false }
+        Album {
+            id,
+            name: name.into(),
+            parent: None,
+            folder: false,
+            photos: Vec::new(),
+            cover: None,
+            smart: None,
+            quick: false,
+            label: None,
+            favorite: false,
+        }
     }
     pub fn is_smart(&self) -> bool {
         self.smart.is_some()
