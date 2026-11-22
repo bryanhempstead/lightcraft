@@ -1,4 +1,4 @@
-//! The Settings dialog (⌘,): General, Import, Performance, Interface.
+//! The Settings dialog (⌘,): General, Import, Performance, Interface, identity. (the identity plate), …
 //!
 //! Changes apply immediately (no OK/Cancel). Where they are stored:
 //! - **app settings** ([`crate::state::AppSettings`]: startup view, delete confirmation, GPU,
@@ -23,6 +23,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("performance", "Performance"),
     ("backup", "bkup."),
     ("interface", "Interface"),
+    ("identity", "identity."),
     ("develop", "dev.view."),
     ("shortcuts", "shrt."),
     ("controllers", "ctrl."),
@@ -54,6 +55,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         "performance" => performance_tab(app, ui, &t),
         "backup" => backup_tab(app, ui, &t),
         "interface" => interface_tab(app, ui, &t),
+        "identity" => identity_tab(app, ui, &t),
         "develop" => develop_tab(app, ui, &t),
         "shortcuts" => shortcuts_tab(app, ui, &t),
         "controllers" => controllers_tab(app, ui, &t),
@@ -715,6 +717,207 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         t,
         "Show briefly: the info overlay appears for a moment when the loupe changes photo while it is off. Develop's loupe has its own (dev.view.).",
     );
+}
+
+// ------------------------------------------------------------------------------------- identity.
+
+/// LRC-UI-IDENTITYPLATE: Lightroom Classic's Identity Plate Setup, made better — an image or a
+/// text plate, placed in the top bar, a window corner or a photo-area corner, with size, opacity,
+/// margin, modules, a tint from a color wheel and a live preview.
+fn identity_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use crate::identity::{Place, PlateKind};
+    let before = app.ui.settings.identity_plate.clone();
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 20.0;
+        ui.vertical(|ui| {
+            ui.set_width(400.0);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            let p = &mut app.ui.settings.identity_plate;
+            check(ui, "identityOn", &mut p.on, "Show an identity plate");
+            row(ui, t, "Plate", |ui| {
+                choices(ui, "identityKind", &[(PlateKind::Image, "img."), (PlateKind::Text, "txt.")], &mut p.kind);
+            });
+            let mut pick = false;
+            let mut clear = false;
+            if p.kind == PlateKind::Image {
+                row(ui, t, "Image", |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let name = std::path::Path::new(&p.image).file_name().map(|n| n.to_string_lossy().to_string());
+                    let shown = name.unwrap_or_else(|| crate::i18n::tr("none yet").to_string());
+                    ui.allocate_ui_with_layout(egui::vec2(130.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.set_min_width(130.0);
+                        ui.add(egui::Label::new(RichText::new(shown).color(t.text)).truncate()).on_hover_text(p.image.clone());
+                    });
+                    pick = crate::widgets::text_button(ui, "identityPick", "pick.", false)
+                        .on_hover_text(crate::i18n::tr("Choose an image: PNG, SVG, WebP or JPEG (a transparent PNG or SVG works best)"))
+                        .clicked();
+                    clear = !p.image.is_empty() && crate::widgets::text_button(ui, "identityImageNone", "none.", false).clicked();
+                });
+            } else {
+                row(ui, t, "Text", |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let r = ui.add_sized([170.0, 24.0], egui::TextEdit::singleline(&mut p.text).hint_text(crate::i18n::tr("your name or studio")));
+                    register(ui.ctx(), "field:identityText", r.rect);
+                    if crate::widgets::text_button(ui, "identityBold", "bold.", p.bold).clicked() {
+                        p.bold = !p.bold;
+                    }
+                });
+            }
+            row(ui, t, "Window", |ui| {
+                choices(
+                    ui,
+                    "identityPlace",
+                    &[(Place::Bar, "bar."), (Place::Tl, "tl."), (Place::Tr, "tr."), (Place::Bl, "bl."), (Place::Br, "br.")],
+                    &mut p.place,
+                );
+            });
+            row(ui, t, "Photo area", |ui| {
+                choices(
+                    ui,
+                    "identityCanvas",
+                    &[(Place::CanvasTl, "tl."), (Place::CanvasTr, "tr."), (Place::CanvasBl, "bl."), (Place::CanvasBr, "br.")],
+                    &mut p.place,
+                );
+            });
+            row(ui, t, "Size", |ui| {
+                let r = ui.add(egui::Slider::new(&mut p.size, crate::identity::SIZE_RANGE).suffix(" pt").step_by(1.0));
+                register(ui.ctx(), "slider:identitySize", r.rect);
+            });
+            row(ui, t, "Opacity", |ui| {
+                let mut pct = p.opacity * 100.0;
+                let r = ui.add(egui::Slider::new(&mut pct, 5.0..=100.0).suffix(" %").step_by(1.0));
+                register(ui.ctx(), "slider:identityOpacity", r.rect);
+                if r.changed() {
+                    p.opacity = pct / 100.0;
+                }
+            });
+            row(ui, t, "Margin", |ui| {
+                let r = ui.add(egui::Slider::new(&mut p.margin, crate::identity::MARGIN_RANGE).suffix(" pt").step_by(1.0));
+                register(ui.ctx(), "slider:identityMargin", r.rect);
+            });
+            row(ui, t, "Show in", |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for (id, label, on) in
+                    [("identityLibrary", "lib.", &mut p.library), ("identityDevelop", "dev.", &mut p.develop), ("identityMap", "map.", &mut p.map)]
+                {
+                    if crate::widgets::text_button(ui, id, label, *on).clicked() {
+                        *on = !*on;
+                    }
+                }
+                ui.add_space(8.0);
+                if crate::widgets::text_button(ui, "identityAll", "all.", p.library && p.develop && p.map).clicked() {
+                    (p.library, p.develop, p.map) = (true, true, true);
+                }
+            });
+            hint(ui, t, "Decoration only: clicks go through it, it moves off buttons and fades while the pointer is over it.");
+            if let Some(e) = app.identity.error.clone() {
+                ui.label(RichText::new(format!("⚠ {e}")).color(t.caution));
+            }
+            if clear {
+                let _ = app.run("app.identityPlate", json!({"image": ""}));
+            }
+            if pick {
+                let picker = if app.services.pick_image.is_some() { app.services.pick_image.as_mut() } else { app.services.pick_files.as_mut() };
+                if let Some(f) = picker.and_then(|pick| pick().into_iter().next())
+                    && let Err(e) = app.run("app.identityPlate", json!({"image": f, "on": true}))
+                {
+                    app.toast_error(ui.ctx(), e);
+                }
+            }
+        });
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            crate::identity::preview(app, ui, egui::vec2(240.0, 150.0));
+            tint_picker(app, ui, t);
+        });
+    });
+    if app.ui.settings.identity_plate != before {
+        app.ui.settings.identity_plate.sanitize();
+    }
+}
+
+/// The plate's tint: a hue / saturation wheel, brightness, a hex field, swatches and none.
+fn tint_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let p = &mut app.ui.settings.identity_plate;
+    let cur = p.tint_rgb();
+    let [h, s, v] = cur.map_or([0.0, 0.0, 1.0], |c| {
+        lightcraft_color::perceptual::rgb_to_hsv([f32::from(c[0]) / 255.0, f32::from(c[1]) / 255.0, f32::from(c[2]) / 255.0])
+    });
+    let set = |p: &mut crate::identity::IdentityPlate, h: f32, s: f32, v: f32| {
+        let c = lightcraft_color::perceptual::hsv_to_rgb(h, s.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+        let b = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+        p.tint = Some(crate::identity::to_hex([b(c[0]), b(c[1]), b(c[2])]));
+    };
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.label(RichText::new(crate::i18n::tr("Color")).color(t.text_label));
+        if crate::widgets::text_button(ui, "identityTintNone", "none.", cur.is_none())
+            .on_hover_text(crate::i18n::tr("The image's own colors"))
+            .clicked()
+        {
+            p.tint = None;
+        }
+    });
+    let rad = 52.0;
+    let (area, _) = ui.allocate_exact_size(egui::vec2(240.0, rad * 2.0 + 4.0), egui::Sense::hover());
+    let c = egui::pos2(area.left() + rad + 2.0, area.center().y);
+    let wheel = egui::Rect::from_center_size(c, egui::vec2(rad * 2.0, rad * 2.0));
+    let resp = ui.interact(wheel, egui::Id::new("identity-tint-wheel"), egui::Sense::click_and_drag());
+    register(ui.ctx(), "wheel:identityTint", wheel);
+    let gray = (v * 255.0).round() as u8;
+    super::edit::paint_hue_wheel(ui.painter(), c, rad, egui::Color32::from_gray(gray), 1.0, v.max(0.05));
+    if cur.is_some() {
+        let a = h.to_radians();
+        let dot = c + egui::vec2(a.cos(), -a.sin()) * rad * s;
+        ui.painter().circle_filled(dot, 5.0, egui::Color32::WHITE);
+        ui.painter().circle_stroke(dot, 5.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+    }
+    if (resp.dragged() || resp.clicked())
+        && let Some(q) = resp.interact_pointer_pos()
+    {
+        let d = q - c;
+        let hue = ((-d.y).atan2(d.x).to_degrees() + 360.0) % 360.0;
+        set(p, hue, (d.length() / rad).min(1.0), if cur.is_some() { v } else { 1.0 });
+    }
+    // right of the wheel: brightness, the hex value, swatches
+    let col = egui::Rect::from_min_max(egui::pos2(wheel.right() + 14.0, area.top() + 4.0), area.max);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(col).layout(egui::Layout::top_down(egui::Align::Min)));
+    child.spacing_mut().item_spacing.y = 10.0;
+    child.spacing_mut().slider_width = col.width() - 8.0;
+    let mut bright = v * 100.0;
+    let r = child.add(egui::Slider::new(&mut bright, 0.0..=100.0).show_value(false));
+    register(child.ctx(), "slider:identityBrightness", r.rect);
+    let r = r.on_hover_text(crate::i18n::tr("Brightness"));
+    if r.changed() {
+        set(p, h, if cur.is_some() { s } else { 0.0 }, bright / 100.0);
+    }
+    let mut hex = p.tint.clone().unwrap_or_default();
+    let r = child.add_sized([col.width() - 8.0, 24.0], egui::TextEdit::singleline(&mut hex).hint_text("#rrggbb"));
+    register(child.ctx(), "field:identityTint", r.rect);
+    if r.changed()
+        && let Some(c) = crate::identity::parse_hex(&hex)
+    {
+        p.tint = Some(crate::identity::to_hex(c));
+    }
+    child.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for (name, hex) in crate::identity::SWATCHES {
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+            register(ui.ctx(), format!("swatch:identity-{name}"), r);
+            let c = crate::identity::parse_hex(hex).map_or(egui::Color32::WHITE, |[r, g, b]| egui::Color32::from_rgb(r, g, b));
+            ui.painter().rect_filled(r, 3.0, c);
+            let on = p.tint.as_deref() == Some(hex);
+            ui.painter().rect_stroke(
+                r,
+                3.0,
+                egui::Stroke::new(if on { 2.0 } else { 1.0 }, if on { t.accent } else { t.field_border }),
+                egui::StrokeKind::Outside,
+            );
+            if resp.on_hover_text(name).clicked() {
+                p.tint = Some(hex.to_string());
+            }
+        }
+    });
 }
 
 /// Loupe Info 1 / 2 (three lines each), Show Briefly and defaults. for one module's loupe

@@ -93,6 +93,8 @@ egui_kittest = "0.36"
 rfd = "0.17"
 muda = { version = "0.21", default-features = false } # native menu bar (macOS: objc2/AppKit, pure Rust; no GTK)
 web-time = "1"
+# identity-plate SVGs (crates/ui-egui/src/identity.rs): rasterised, no text or embedded rasters
+resvg = { version = "0.45", default-features = false }
 
 # web (apps/lightcraft-web)
 wasm-bindgen = "0.2.129"

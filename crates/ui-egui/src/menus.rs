@@ -100,6 +100,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.cropOverlaysToCycle", "Choose Crop Overlays to Cycle", None, ""),
     ("view.beforeAfterCycle", "Cycle Before/After Layouts", None, "View"),
     ("app.viewSpace", "Photo Color Space", None, ""),
+    ("app.identityPlate", "Identity Plate", None, ""),
+    ("app.identityPlateSetup", "Identity Plate Setup…", None, "Edit"),
     ("curve.snapToGrid", "Snap to Grid", None, ""),
     ("curve.showAll", "Show All Curves", None, ""),
     ("curve.copyChannel", "Copy Point Curve Channel", None, ""),
@@ -842,7 +844,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let tab = p.get("tab").and_then(Value::as_str).unwrap_or("general");
             if !crate::panels::settings::TABS.iter().any(|(id, _)| *id == tab) {
                 return Some(Err(format!(
-                    "unknown settings tab `{tab}` (general|import|performance|backup|interface|develop|shortcuts|controllers|cameras)"
+                    "unknown settings tab `{tab}` (general|import|performance|backup|interface|identity|develop|shortcuts|controllers|cameras)"
                 )));
             }
             app.ui.dialog = Some(Dialog::Settings { tab: tab.into() });
@@ -1134,6 +1136,12 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     None => Err("curve.pasteChannel: no point curve copied".into()),
                 }
             }
+        }
+        "app.identityPlate" => crate::identity::command(app, p),
+        "app.identityPlateSetup" => {
+            // Lightroom Classic's Edit ▸ Identity Plate Setup…: Settings ▸ identity.
+            app.ui.dialog = Some(Dialog::Settings { tab: "identity".into() });
+            Ok(Value::Null)
         }
         "app.viewSpace" => {
             // {space?: auto|displayP3|srgb} — the colour space photos are shown in

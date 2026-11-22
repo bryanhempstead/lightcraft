@@ -392,6 +392,8 @@ pub struct AppSettings {
     pub loading_message: bool,
     /// LRC-DEV-VIEWOPTIONS: Develop's own View Options (⌘J in Develop).
     pub develop_view: DevelopView,
+    /// LRC-UI-IDENTITYPLATE: the identity plate (Settings ▸ identity., `app.identityPlate`).
+    pub identity_plate: crate::identity::IdentityPlate,
 }
 
 /// Develop View Options (LRC-DEV-VIEWOPTIONS): Develop's loupe has its own Info 1 / Info 2 lines,
@@ -439,6 +441,7 @@ impl Default for AppSettings {
             grid_tooltips: false,
             loading_message: true,
             develop_view: DevelopView::default(),
+            identity_plate: crate::identity::IdentityPlate::default(),
         }
     }
 }
