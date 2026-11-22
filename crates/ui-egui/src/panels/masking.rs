@@ -49,9 +49,9 @@ fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
         MaskShape::ColorRange { .. } => ("Color Range", Icon::Picker),
         MaskShape::LuminanceRange { .. } => ("Luminance Range", Icon::Sliders),
         MaskShape::DepthRange { .. } => ("Depth Range", Icon::Sliders),
-        MaskShape::Subject => ("Subject", Icon::Subject),
-        MaskShape::Sky => ("Sky", Icon::Sky),
-        MaskShape::Background => ("Background", Icon::Subject),
+        MaskShape::Subject { .. } => ("Subject", Icon::Subject),
+        MaskShape::Sky { .. } => ("Sky", Icon::Sky),
+        MaskShape::Background { .. } => ("Background", Icon::Subject),
         MaskShape::Object { .. } => ("Object", Icon::Subject),
         MaskShape::Prompt { .. } => ("Describe", Icon::Subject),
         MaskShape::People { .. } => ("People", Icon::Subject),
@@ -76,17 +76,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
         ui.add_space(6.0);
-        let tiles: [(&str, &str, Icon); 10] = [
-            ("object", "Object", Icon::Subject),
-            ("prompt", "Describe", Icon::Subject),
-            ("subject", "Subject", Icon::Subject),
-            ("sky", "Sky", Icon::Sky),
-            ("background", "Background", Icon::Subject),
-            ("brush", "Brush", Icon::Brush),
-            ("linear", "Linear", Icon::Linear),
-            ("radial", "Radial", Icon::Radial),
-            ("luminanceRange", "Luminance", Icon::Sliders),
-            ("colorRange", "Color", Icon::Picker),
+        // (Bryan's labels: short, lowercase, with a period)
+        let tiles: [(&str, &str, Icon); 12] = [
+            ("subject", "subj.", Icon::Subject),
+            ("sky", "sky.", Icon::Sky),
+            ("background", "bg.", Icon::Subject),
+            ("object", "obj.", Icon::Subject),
+            ("people", "ppl.", Icon::Subject),
+            ("landscape", "land.", Icon::Sky),
+            ("prompt", "desc.", Icon::Subject),
+            ("brush", "brush.", Icon::Brush),
+            ("linear", "lin.", Icon::Linear),
+            ("radial", "rad.", Icon::Radial),
+            ("luminanceRange", "lum.", Icon::Sliders),
+            ("colorRange", "clr.", Icon::Picker),
         ];
         // four 52 pt tiles a row when they fit, else as many as fit (at least three, shrunk)
         let (cols, tile) = tile_layout(ui.available_width());
@@ -107,6 +110,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         }
                         "object" => start_object(app, ui.ctx(), "new"),
                         "prompt" => start_describe(app, "new"),
+                        "people" | "landscape" => open_picker(app, ui.ctx(), id, kind),
+                        "sky" | "subject" | "background" => {
+                            if let Err(e) = app.run("mask.add", json!({"kind": kind})) {
+                                app.toast_error(ui.ctx(), e);
+                            }
+                        }
                         "brush" | "linear" | "radial" => {
                             app.ui.tool = kind.to_string();
                             if *kind != "brush" {
@@ -124,9 +133,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
         describe_field(app, ui, true);
+        picker(app, ui, id);
+        models_row(app, ui);
         let seg = &app.session.segmenter;
         let status = if seg.analyzing() {
             Some("Analyzing the photo for AI masks…")
+        } else if seg.auto_busy() {
+            Some("Finding it in the photo…")
         } else if seg.busy() {
             Some("Selecting…")
         } else if seg.detail_busy() || app.ui.detail_due.is_some() {
@@ -171,6 +184,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.label(egui::RichText::new(crate::i18n::tr("No masks yet. Choose a mask type above.")).color(t.text_dim));
         }
         let count = d.masks.len();
+        let stale = lightcraft_develop::ai::stale_components(&d);
+        if !stale.is_empty() {
+            // Lightroom's warning, for every AI mask at once (Photo ▸ Update AI Settings)
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(egui::RichText::new(crate::i18n::tr("AI masks need an update")).color(t.text_dim));
+                if text_button(ui, "maskUpdateAll", "upd. all.", false).clicked() {
+                    let _ = app.run("mask.updateAI", json!({}));
+                }
+            });
+            ui.add_space(4.0);
+        }
         for (index, m) in d.masks.iter().enumerate() {
             let sel = app.session.active_mask == Some(m.id);
             if let Some((rid, name)) = app.ui.renaming_mask.as_mut().filter(|(rid, _)| *rid == m.id) {
@@ -214,6 +240,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 t.font(13.0),
                 if m.visible { t.text } else { t.text_disabled },
             );
+            // an AI mask made before the photo changed (lens / geometry corrections, spots,
+            // Enhance): Lightroom's update warning; the chip recomputes it
+            if stale.iter().any(|(sid, _)| *sid == m.id) {
+                let cr = Rect::from_min_size(pos2(r.right() - 35.0 - 50.0, r.center().y - 10.0), vec2(50.0, 20.0));
+                register(ui.ctx(), format!("maskUpdate:{}", m.id), cr);
+                let c = ui.interact(cr, egui::Id::new(("maskUpdate", m.id)), Sense::click());
+                ui.painter().rect_filled(cr, 4.0, if c.hovered() { t.hover } else { t.inset });
+                ui.painter().text(cr.center(), Align2::CENTER_CENTER, "⚠ upd.", t.font(10.5), t.text);
+                if c.clicked() {
+                    let _ = app.run("mask.updateAI", json!({"id": m.id}));
+                }
+                c.on_hover_text(crate::i18n::tr("Made before the photo changed: update this AI mask"));
+            }
             // show / hide on hover (and always while hidden)
             // (the pointer test, not `hovered`: over the eye, the row itself no longer counts as hovered)
             if ui.rect_contains_pointer(r) || !m.visible {
@@ -263,6 +302,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let (kind, icon) = kind_label(&c.shape);
             let label = c.name.clone().unwrap_or_else(|| match &c.shape {
                 MaskShape::Prompt { text, .. } => format!("“{text}”"),
+                MaskShape::Landscape { class, .. } => {
+                    class.split(',').map(|c| lightcraft_develop::ai::landscape_label(c.trim()).unwrap_or(c)).collect::<Vec<_>>().join(" + ")
+                }
+                MaskShape::People { person, parts, .. } => format!(
+                    "Person {}: {}",
+                    person + 1,
+                    parts.iter().map(|x| lightcraft_develop::ai::part_label(x).unwrap_or(x)).collect::<Vec<_>>().join(", ")
+                ),
                 _ => kind.to_string(),
             });
             ui.horizontal(|ui| {
@@ -637,6 +684,238 @@ fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: 
     }
 }
 
+/// Short labels for the People parts and Landscape classes (Bryan's chip style), in
+/// `lightcraft_develop::ai` order.
+const PART_CHIPS: [&str; 10] = ["pers.", "face.", "body.", "brows.", "sclera.", "iris.", "lips.", "teeth.", "hair.", "clothes."];
+const CLASS_CHIPS: [&str; 7] = ["sky.", "water.", "veg.", "mtn.", "arch.", "nat.gnd.", "art.gnd."];
+
+/// One click in a pickable list of `n`: click = just this one, ⌘-click adds or removes it,
+/// ⇧-click the run from the last click (`anchor`).
+pub(crate) fn pick(sel: &mut Vec<usize>, anchor: &mut Option<usize>, i: usize, m: egui::Modifiers) {
+    if m.shift
+        && let Some(a) = *anchor
+    {
+        let (lo, hi) = (a.min(i), a.max(i));
+        for k in lo..=hi {
+            if !sel.contains(&k) {
+                sel.push(k);
+            }
+        }
+    } else if m.command {
+        if let Some(p) = sel.iter().position(|k| *k == i) {
+            sel.remove(p);
+        } else {
+            sel.push(i);
+        }
+        *anchor = Some(i);
+    } else {
+        *sel = vec![i];
+        *anchor = Some(i);
+    }
+    sel.sort_unstable();
+}
+
+/// Open the People or Landscape picker and find what the photo has (in the background).
+pub(crate) fn open_picker(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId, kind: &str) {
+    let mut p = crate::state::AiPick { kind: kind.to_string(), separate: false, ..Default::default() };
+    if kind == "people" {
+        p.parts = vec![0];
+        p.people = vec![0];
+    }
+    app.ui.ai_pick = Some(p);
+    let found = if kind == "people" { app.session.people_found(id).is_some() } else { app.session.coverage_found(id).is_some() };
+    if !found {
+        let cmd = if kind == "people" { "segment.detectPeople" } else { "segment.detectLandscape" };
+        if let Err(e) = app.run(cmd, json!({})) {
+            // (no model: the panel's get. row says what to download)
+            app.ui.ai_pick = None;
+            app.toast_error(ctx, e);
+        }
+    }
+}
+
+/// While nothing is being computed but nothing was found yet (the search failed, or the photo
+/// changed): retry. runs `cmd` again.
+fn retry_row(app: &mut LightcraftApp, ui: &mut egui::Ui, cmd: &str) {
+    if app.session.segmenter.auto_busy() || app.session.segmenter.busy() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    }
+    ui.add_space(8.0);
+    if text_button(ui, "aiPickRetry", "retry.", false).clicked()
+        && let Err(e) = app.run(cmd, json!({}))
+    {
+        app.toast_error(ui.ctx(), e);
+    }
+}
+
+/// A row of chips for a pickable list, with all. / none.; true when the picks changed.
+fn chip_row(ui: &mut egui::Ui, key: &str, labels: &[String], sel: &mut Vec<usize>, anchor: &mut Option<usize>) -> bool {
+    let before = sel.clone();
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(8.0, 10.0);
+        for (i, l) in labels.iter().enumerate() {
+            let r = text_button(ui, &format!("{key}:{i}"), l, sel.contains(&i));
+            if r.clicked() {
+                let m = ui.input(|inp| inp.modifiers);
+                pick(sel, anchor, i, m);
+            }
+        }
+        if text_button(ui, &format!("{key}:all"), "all.", false).clicked() {
+            *sel = (0..labels.len()).collect();
+        }
+        if text_button(ui, &format!("{key}:none"), "none.", false).clicked() {
+            sel.clear();
+        }
+    });
+    *sel != before
+}
+
+/// Lightroom's People and Landscape panes: what the photo has, what to select, and make.
+fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    let Some(mut p) = app.ui.ai_pick.clone() else { return };
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(12.0);
+    let people = p.kind == "people";
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(crate::i18n::tr(if people { "People" } else { "Landscape" })).font(t.semibold(13.0)).color(t.text_label));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if text_button(ui, "aiPickClose", "close.", false).clicked() {
+                app.ui.ai_pick = None;
+            }
+        });
+    });
+    if app.ui.ai_pick.is_none() {
+        return;
+    }
+    ui.add_space(8.0);
+    if people {
+        match app.session.people_found(id).map(<[_]>::len) {
+            None => {
+                ui.label(egui::RichText::new(crate::i18n::tr("Finding the people in this photo…")).color(t.text_dim));
+                retry_row(app, ui, "segment.detectPeople");
+            }
+            Some(0) => {
+                ui.label(egui::RichText::new(crate::i18n::tr("No people were found in this photo.")).color(t.text_dim));
+            }
+            Some(n) => {
+                let labels: Vec<String> = (1..=n).map(|k| format!("{k}.")).collect();
+                p.people.retain(|k| *k < n);
+                let [a0, a1, a2] = &mut p.anchors;
+                chip_row(ui, "aiPerson", &labels, &mut p.people, a0);
+                ui.add_space(10.0);
+                let parts: Vec<String> = PART_CHIPS.iter().map(|s| s.to_string()).collect();
+                chip_row(ui, "aiPart", &parts, &mut p.parts, a1);
+                let _ = a2;
+            }
+        }
+    } else {
+        match app.session.coverage_found(id).map(<[_]>::to_vec) {
+            None => {
+                ui.label(egui::RichText::new(crate::i18n::tr("Looking at the photo…")).color(t.text_dim));
+                retry_row(app, ui, "segment.detectLandscape");
+            }
+            Some(cov) => {
+                // every class, with how much of the photo it covers (a quiet 0 when none)
+                let labels: Vec<String> = CLASS_CHIPS
+                    .iter()
+                    .zip(lightcraft_develop::ai::LANDSCAPE_CLASSES)
+                    .map(|(chip, (cid, _))| {
+                        let c = cov.iter().find(|x| x.0 == *cid).map_or(0.0, |x| x.1);
+                        if c >= 0.005 { format!("{chip} {:.0}%", c * 100.0) } else { format!("{chip} 0") }
+                    })
+                    .collect();
+                let [_, _, a2] = &mut p.anchors;
+                chip_row(ui, "aiClass", &labels, &mut p.classes, a2);
+            }
+        }
+    }
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if text_button(ui, "aiPickSeparate", "sep.", p.separate).on_hover_text(crate::i18n::tr("Create separate masks")).clicked() {
+            p.separate = !p.separate;
+        }
+        let ready = if people { !p.people.is_empty() && !p.parts.is_empty() } else { !p.classes.is_empty() };
+        if text_button(ui, "aiPickMake", "make.", false).on_hover_text(crate::i18n::tr("Create the mask")).clicked() {
+            if !ready {
+                app.toast(ui.ctx(), crate::i18n::tr(if people { "Pick a person and a part" } else { "Pick a class" }));
+            } else {
+                let mut errors = Vec::new();
+                if people {
+                    let parts: Vec<&str> = p.parts.iter().filter_map(|k| lightcraft_develop::ai::PEOPLE_PARTS.get(*k).map(|x| x.0)).collect();
+                    for person in &p.people {
+                        let name = format!("Person {}", person + 1);
+                        if let Err(e) =
+                            app.run("mask.add", json!({"kind": "people", "person": person, "parts": parts, "separate": p.separate, "name": name}))
+                        {
+                            errors.push(e);
+                        }
+                    }
+                } else {
+                    let classes: Vec<&str> =
+                        p.classes.iter().filter_map(|k| lightcraft_develop::ai::LANDSCAPE_CLASSES.get(*k).map(|x| x.0)).collect();
+                    if let Err(e) = app.run("mask.add", json!({"kind": "landscape", "classes": classes, "separate": p.separate})) {
+                        errors.push(e);
+                    }
+                }
+                match errors.into_iter().next() {
+                    Some(e) => app.toast_error(ui.ctx(), e),
+                    None => app.ui.ai_pick = None,
+                }
+            }
+        }
+    });
+    if app.ui.ai_pick.is_some() {
+        app.ui.ai_pick = Some(p);
+    }
+}
+
+/// The Sky / Landscape / People models, when they aren't installed: what they are (size,
+/// licences) and get. to download them (the row says what the click agrees to).
+fn models_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let seg = &app.session.segmenter;
+    if !lightcraft_engine::segment::Segmenter::AVAILABLE || seg.models.is_none() || seg.parsers_installed() {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let d = seg.parsers_download_status();
+    ui.add_space(12.0);
+    if d.running {
+        let pct = if d.total > 0 { d.done as f64 / d.total as f64 } else { 0.0 };
+        let r =
+            ui.add(egui::ProgressBar::new(pct as f32).desired_width(ui.available_width()).text(format!("AI models: {} %", (pct * 100.0).floor())));
+        register(ui.ctx(), "maskModelsProgress", r.rect);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    }
+    let bytes: u64 = seg.parsers().iter().filter(|p| !p.installed).map(|p| p.bytes).sum();
+    ui.label(
+        egui::RichText::new(format!(
+            "{} ({:.0} MB, once). {}",
+            crate::i18n::tr("Sky, Landscape and People masks are sharper with the AI models"),
+            bytes as f64 / 1e6,
+            crate::i18n::tr("Their terms: NVIDIA SegFormer licence and CelebAMask-HQ (non-commercial use), MIT.")
+        ))
+        .color(t.text_dim),
+    );
+    if let Some(e) = &d.error {
+        ui.label(egui::RichText::new(format!("{} {e}", crate::i18n::tr("The download didn't work:"))).color(egui::Color32::from_rgb(230, 90, 80)));
+    }
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if text_button(ui, "maskModelsGet", "get.", false).on_hover_text(crate::i18n::tr("Download the models (agreeing to their terms)")).clicked()
+            && let Err(e) = app.run("segment.parsers.download", json!({"acknowledged": true}))
+        {
+            app.toast_error(ui.ctx(), e);
+        }
+        if text_button(ui, "maskModelsTerms", "terms.", false).clicked() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab("https://github.com/NVlabs/SegFormer/blob/master/LICENSE"));
+        }
+    });
+}
+
 /// Whether the SAM 3 model is missing in a build that could use it: then the download is
 /// offered (with `then` to start afterwards) instead of starting an AI mask.
 fn needs_model(app: &mut LightcraftApp, kind: &str, op: &str) -> bool {
@@ -761,6 +1040,7 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
         ("radial", "Radial Gradient"),
         ("sky", "Sky"),
         ("subject", "Subject"),
+        ("background", "Background"),
         ("luminanceRange", "Luminance Range"),
     ] {
         // painting only adds or erases
@@ -813,5 +1093,32 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 _ => app.ui.brush_flow = v as f32,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::pick;
+
+    /// People / Landscape chips pick like every list: click = just this one, ⌘-click adds or
+    /// removes one, ⇧-click the run from the last click.
+    #[test]
+    fn chips_pick_with_click_command_and_shift() {
+        let (mut sel, mut anchor) = (Vec::new(), None);
+        let none = egui::Modifiers::NONE;
+        pick(&mut sel, &mut anchor, 2, none);
+        assert_eq!(sel, [2]);
+        pick(&mut sel, &mut anchor, 5, egui::Modifiers::COMMAND);
+        assert_eq!(sel, [2, 5]);
+        pick(&mut sel, &mut anchor, 2, egui::Modifiers::COMMAND);
+        assert_eq!(sel, [5]);
+        pick(&mut sel, &mut anchor, 8, egui::Modifiers::SHIFT);
+        assert_eq!(sel, [2, 3, 4, 5, 6, 7, 8], "the run from the last click (2)");
+        pick(&mut sel, &mut anchor, 1, none);
+        assert_eq!(sel, [1]);
+        // ⇧ with nothing clicked yet: just that one
+        let (mut sel, mut anchor) = (Vec::new(), None);
+        pick(&mut sel, &mut anchor, 3, egui::Modifiers::SHIFT);
+        assert_eq!(sel, [3]);
     }
 }

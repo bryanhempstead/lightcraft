@@ -6,6 +6,16 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (AI masks agent, 2026-11-22, branch worktree-agent-af352bb019bacca9d, not merged) **AI masks — parity K + REM rows**
+  Done: 08552d289 SAM 3 downloads work (5 ungated HF copies, every file hash-pinned; DEFAULT_MIRRORS was empty);
+  365717b7c SegFormer in pure Rust (crates/segment/src/segformer.rs, ported from candle-transformers) + three
+  public parsers (scene ADE20K B5, body human-parsing B3, face CelebAMask B5) + upstream's SAM 3 subject/semantic;
+  a031421cf JPEG downscale overflow crash; 8ac063f51 Sky / Landscape / People parts / Subject / Background with
+  stored segmentations, Update AI Settings (Photo menu, `⚠ upd.` chips: basis hash), Remove ▸ Detect (⌥⇧O),
+  ppl. / land. pickers, get. row for the parsers, `lightcraft-cli --features sam`. Verified with real models on
+  public-domain photos (scratchpad only; env-gated test `tests_ai_masks`). **Left:** SAM 3 paths unrun (needs.you
+  #153: Bryan's yes to the SAM License), camera focus point for Subject, Remove ▸ Detect picks every object (not one
+  at a time) and fills with PatchMatch, no person thumbnails in the picker, facial hair not split from hair.
 - [ ] (detail agent, 2026-11-21 night, branch worktree-agent-af436a1c05b9b1fde, not merged) **Detail / Effects / Looks rows
   R03 R06 R07 R13 R15 R24 R25** measured with the Camera Raw oracle (`oracle/make_detail.py`, `grain_ana.py`,
   `sharp_ana.py`, `sharpfit.py`, `make_ca.py`, `make_nr_real.py`; docs/lr-match.md → Round 9): Look LUT profiles on the

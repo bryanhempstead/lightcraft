@@ -925,6 +925,9 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         None if files.is_empty() => Session::with_demo().with_fs(),
         None => Session::new().with_fs(),
     };
+    // AI mask models, when this build has them (`--features sam`) and they are installed
+    session.segmenter.dir = std::env::var_os("LIGHTCRAFT_SAM3_DIR").map(std::path::PathBuf::from);
+    session.segmenter.models = std::env::var_os("LIGHTCRAFT_MODELS_DIR").map(std::path::PathBuf::from);
     if !files.is_empty() {
         let ti = Instant::now();
         let r = session.execute("library.import", &json!({"paths": expand_paths(&files)})).map_err(|e| e.to_string())?;

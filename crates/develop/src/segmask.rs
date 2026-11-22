@@ -22,6 +22,11 @@ pub struct SegMask {
     /// resolution than a pass over the whole photo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rect: Option<[f64; 4]>,
+    /// What the photo looked like to the model ([`crate::ai::basis`] of the settings that move or
+    /// change its pixels: orientation, lens and geometry corrections, spots, Enhance). When the
+    /// photo's current basis differs, the mask is out of date (Lightroom's "update" warning).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basis: Option<String>,
 }
 
 impl SegMask {
@@ -29,7 +34,7 @@ impl SegMask {
     pub fn from_logits(side: usize, logits: &[f32]) -> SegMask {
         let q: Vec<u8> = logits.iter().take(side * side).map(|l| ((l * SCALE).round().clamp(-127.0, 127.0) as i8) as u8).collect();
         let z = miniz_oxide::deflate::compress_to_vec(&q, 8);
-        SegMask { side: side as u32, data: base64_encode(&z), rect: None }
+        SegMask { side: side as u32, data: base64_encode(&z), rect: None, basis: None }
     }
 
     /// From `side × side` logits over the part `rect` of the image.
@@ -177,7 +182,7 @@ mod tests {
         assert!(m.logits().is_none(), "size mismatch");
         m.side = 100_000;
         assert!(m.logits().is_none(), "absurd size");
-        assert!(SegMask { side: 8, data: "not base64 !".into(), rect: None }.logits().is_none());
+        assert!(SegMask { side: 8, data: "not base64 !".into(), rect: None, basis: None }.logits().is_none());
         assert!(SegMask { rect: Some([0.5, 0.0, 0.2, 1.0]), ..SegMask::from_logits(2, &[0.0; 4]) }.bounds().is_none());
     }
 }

@@ -1,14 +1,66 @@
-# AI masks (Object and Describe)
+# AI masks
 
 LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
 pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
-through Metal on macOS, on the CPU elsewhere (for now).
+through Metal on macOS, on the CPU elsewhere (for now). Lightroom's automatic masks — Subject,
+Sky, Background, **Landscape** classes and **People** with their parts — also use three public
+**SegFormer** checkpoints (the "parsers", same crate, same pure-Rust inference).
 
-**The model is optional.** It is not part of LightCraft, and nothing requires it: without it,
-Object and Describe offer to download it, every other feature (and every existing mask, see
-below) works, and no render, export or command ever waits for it.
+**Every model is optional.** None is part of LightCraft, and nothing requires them: without
+them, Object and Describe offer to download SAM 3, Subject / Sky / Background fall back to
+classical heuristics, Landscape and People say what to download, every existing mask still
+renders (segmentations are stored with the mask), and no render, export or command ever waits.
 
-## Using them
+## Subject, Sky, Background, Landscape, People (Lightroom's automatic masks)
+
+The Masking panel's tiles (`subj.`, `sky.`, `bg.`, `ppl.`, `land.`) and `mask.add`:
+
+| Mask | Model used (first installed wins) | Stored |
+|---|---|---|
+| Subject (`subject`) | SAM 3: the most prominent people and animals (else what it selects at the centre); else the Scene parser's people and animals | 288² (SAM 3) / 256² logits |
+| Background (`background`) | the subject, inverted | the subject's segmentation |
+| Sky (`sky`) | the Scene parser's ADE20K `sky`; else SAM 3 “sky” | 256² logits |
+| Landscape (`landscape`, `classes`) | Scene parser: Sky, Water, Vegetation, Mountains, Architecture, Natural Ground, Artificial Ground (ADE20K classes grouped like Lightroom's, `crates/segment/src/parsers.rs`); else SAM 3 descriptions | 256² logits; several classes = one selection (their union), or `separate: true` = one mask each |
+| People (`people`, `person`, `parts`) | the person: SAM 3's person instances, else the Scene parser's people (touching people merge); the parts: Body parser on a 2016 px render of the person, Faces parser on their face | the person's outline (Entire Person) + 256² patches over the person and their face |
+
+People parts are Lightroom's: Entire Person, Face Skin, Body Skin, Eyebrows, Eye Sclera, Iris and
+Pupil, Lips, Teeth, Hair, Clothes. The face model labels eyes and the open mouth; LightCraft
+splits the eyes into sclera and iris/pupil by brightness and finds the teeth as the mouth's
+bright, unsaturated pixels (no public model labels those).
+
+In the panel, `ppl.` lists the people found (`1.` `2.` …) and the parts, `land.` the classes with
+how much of the photo each covers (a quiet `0` when none); both lists pick like everywhere
+(click, ⌘-click, ⇧-click, `all.` / `none.`); `sep.` makes one mask per part / class; `make.`
+creates them. Computing runs on the AI worker thread (the panel says “Finding it in the
+photo…”); the mask appears when it is done.
+
+**Update AI Settings** (Photo menu, `mask.updateAI`, Lightroom's update warning): every AI
+segmentation records the *basis* it was made on — a hash of what moves or changes the pixels
+under it (orientation and flips, lens and geometry corrections, spots, red eye, Enhance; not
+tone or the crop, since masks cover the uncropped photo). When the photo's basis changes, the
+mask shows `⚠ upd.` in the Masks list (and `upd. all.` above it); the chip, the menu or the
+command recomputes them from what defines them (class, person, parts, clicks, description).
+
+**Remove ▸ Detect** (⌥⇧O, `remove.detect`): finds people (SAM 3 or the Scene parser), wires and
+cables (SAM 3 “power lines, cables, wires”) and sensor dust (`spot.findDust`) and covers each
+object with content-aware Remove spots (brushed rows across it), one undo step per kind.
+
+### The parsers
+
+| Parser (folder under `models/`) | Checkpoint | Size | Terms |
+|---|---|---|---|
+| Scene (`scene-segformer-b5-ade`) | `nvidia/segformer-b5-finetuned-ade-640-640` (safetensors revision `f4c8e8f`) | 339 MB | NVIDIA Source Code License for SegFormer (non-commercial) |
+| People (`body-segformer-b3-clothes`) | `sayeed99/segformer_b3_clothes` (`6c12f0e`) | 189 MB | MIT |
+| Faces (`face-segformer-b5-celebamask`) | `jonathandinu/face-parsing` (`a99b265`) | 339 MB | CelebAMask-HQ (non-commercial research) |
+
+Each is `model.safetensors` + `config.json`, both pinned to size and SHA-256, downloaded from its
+Hugging Face repository (ungated) only when the user asks: `get.` under the mask tiles (the row
+names the size and the terms) or `segment.parsers.download {"acknowledged": true}`. They live in
+`<settings folder>/models/<folder>/` (or `LIGHTCRAFT_MODELS_DIR`). Measured on an Apple M4 Pro
+(Metal): Scene 1024 px ~4 s, Body 768 px ~1.5 s, Faces 512 px ~1.3 s per run (the first run
+after launch also compiles GPU kernels).
+
+## Object and Describe
 
 In the Masking panel (M):
 
@@ -77,14 +129,17 @@ The model is fetched from an ordered list of mirrors: base URLs where `<base>/mo
    (Windows), `~/.config/lightcraft/` (Linux);
 3. the built-in list, `DEFAULT_MIRRORS` in `crates/segment/src/fetch/mod.rs`.
 
-> **Maintainers:** the built-in list is **empty** until LightCraft's own CDN locations exist
-> (see the `TODO(maintainer)` there): add them in order of preference, host the three files
-> unchanged, and pin `vocab.json` / `merges.txt` (size + SHA-256) in `SAM3_FILES` at the same
-> time. Until then the in-app download needs a user-configured mirror, and the dialog says so.
+The built-in list is five public, ungated copies of `facebook/sam3` on Hugging Face
+(`jetjodh/sam3`, `bodhicitta/sam3`, `MIUProject/sam3`, `JobHarvest/sam3`, `DiffusionWave/sam3`),
+each pinned to a commit. Every file — the weights and both tokenizer files — is pinned to Meta's
+size and SHA-256 in `SAM3_FILES`, so a copy can only ever deliver Meta's own files: one that
+changed fails its check, is deleted, and the next copy is tried. They were checked reachable on
+2026-11-22 with `cargo test -p lightcraft-segment --lib -- --ignored mirrors_are_reachable`
+(downloads the tokenizer files from each through LightCraft's own HTTPS client).
 
-Hugging Face's `facebook/sam3` can't be a default: it is **gated** (each person must accept the
-licence there, wait for approval and download with their own token). Someone with access can
-use it as their mirror:
+Hugging Face's own `facebook/sam3` is **gated** (each person must accept the licence there,
+wait for approval and download with their own token), so it isn't a default. Someone with
+access can put it first:
 
 ```sh
 LIGHTCRAFT_SAM3_MIRRORS=https://huggingface.co/facebook/sam3/resolve/main \
@@ -151,6 +206,16 @@ Therefore:
 | `segment.model.status` | `{}` | `{available, installed, dir, loaded, busy, analyzing, sizeBytes, license, licenseUrl, mirrors, download}` |
 | `segment.model.download` | `{acknowledged: true}` | start the download in the background → `{started}` |
 | `segment.model.cancel` | `{}` | stop it (it resumes next time) → `{cancelled}` |
+| `mask.add` | `{kind: "subject"\|"sky"\|"background", seg?}` | Lightroom's automatic masks (heuristic without any model) |
+| `mask.add` | `{kind: "landscape", class? \| classes: [...], separate?}` | Landscape classes |
+| `mask.add` | `{kind: "people", person: index \| rect, parts: [...], separate?}` | a person's parts |
+| `mask.add` / `mask.addComponent` | `{shape: MaskShape}` | a whole stored shape (no model needed) |
+| `segment.detectPeople` | `{}` | → `{people: [{index, rect, score}]}` |
+| `segment.detectLandscape` | `{}` | → `{classes: [{id, label, coverage}]}` |
+| `segment.found` | `{}` | what was detected + `stale: [{mask, component}]` |
+| `segment.parsers.status` / `segment.parsers.download` | `{}` / `{acknowledged: true}` | the parsers |
+| `mask.updateAI` | `{id?}` | Update AI Settings → `{updated, errors}` |
+| `remove.detect` | `{people?, wires?, dust?}` | ⌥⇧O → `{objects, dust}` |
 
 Coordinates are normalized to the uncropped, oriented photo, like every mask shape. `seg` passes
 a stored segmentation (as `mask.list` / the develop settings hold it): the mask is made without

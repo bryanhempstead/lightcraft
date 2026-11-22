@@ -29,9 +29,9 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | F. Edit panel — global adjustments (EDIT) | 41 | 4 | 5 | 1 | 26/28 (93%) | 13/15 (87%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
-| I. Remove / healing (REM) | 9 | 0 | 2 | 2 | 4/4 (100%) | 3/3 (100%) |
+| I. Remove / healing (REM) | 9 | 1 | 1 | 2 | 4/4 (100%) | 3/3 (100%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
-| K. Masking (MASK) | 15 | 4 | 5 | 0 | 8/8 (100%) | 6/6 (100%) |
+| K. Masking (MASK) | 20 | 2 | 2 | 0 | 8/8 (100%) | 6/6 (100%) |
 | L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 8 | 0 | 0 | 0 | 3/3 (100%) | 4/4 (100%) |
@@ -43,14 +43,14 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
 | V. Preferences (PREF) | 5 | 0 | 3 | 3 | 1/1 (100%) | 4/4 (100%) |
-| W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
+| W. Cloud & AI infrastructure (CLOUD / AI) | 2 | 0 | 0 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 17 | 4 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
-| Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
-| Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
+| Y. Menus | 82 | 0 | 3 | 8 | 47/47 (100%) | 23/23 (100%) |
+| Z. Keyboard shortcuts (desktop) | 76 | 3 | 2 | 1 | 49/52 (94%) | 23/24 (96%) |
 | Lightroom Classic extras | 65 | 18 | 38 | 9 | — | 34/35 (97%) |
-| **Total** | 430 | 46 | 85 | 36 | 191/201 (95%) | 160/169 (95%) |
+| **Total** | 438 | 45 | 78 | 36 | 191/201 (95%) | 160/169 (95%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.7%** of 561 in-scope rows — P0 97.5% of 201 · P1 96.4% of 169 · P2 49.2% of 190.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **82.1%** of 561 in-scope rows — P0 97.5% of 201 · P1 96.4% of 169 · P2 53.2% of 190.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -69,11 +69,12 @@ Take the first one nobody is working on.
    then tune tone, highlights, texture/clarity/dehaze, NR and sharpening against it.
 5. **LR-EDIT-OPTICS-PROFILE** (P1): a lens-profile database of our own (corrections embedded in DNG files and the
    distortion correction Panasonic / Leica cameras record in RW2 / RWL files work today; issue #256).
-6. **AI masks and Enhance** (LR-MASK-SUBJECT / SKY / PEOPLE / OBJECTS, LR-EDIT-DETAIL-DENOISE, SUPERRES, LENSBLUR):
-   Object and Describe masks run SAM 3 in pure Rust (`crates/segment`); the weights (SAM License) are never bundled:
-   the app offers a consented, verified download, but **LightCraft's CDN mirrors are not configured yet** (the
-   built-in list is empty, so today users need their own mirror or a manual install). Subject / Sky / People could
-   use the same model with fixed prompts; denoise / super-resolution models remain a maintainer decision.
+6. **AI masks and Enhance** (LR-MASK-SUBJECT, LR-REM-DETECT, LR-EDIT-DETAIL-DENOISE, SUPERRES, LENSBLUR):
+   Sky, Landscape and People (with their parts) run public SegFormer checkpoints in pure Rust, Object / Describe /
+   Subject SAM 3 (`crates/segment`); every model is an optional, consented, hash-pinned download (SAM 3 from
+   ungated Hugging Face copies). Left: the SAM 3 subject path verified on real photos, the camera's focus point for
+   Subject, Remove ▸ Detect picking one object at a time with a generative fill; denoise / super-resolution models
+   remain a maintainer decision.
 7. **HDR** (Q. HDR, LR-EXP-HDR), **video** (R. Video), **Classic output modules** (Map view, Book, Slideshow module,
    Print, publish): large, well understood, lower priority than 1–5.
 8. **LR-VIEW-ZOOM** (P0): pinch zoom and two-finger pan now work, with stable image cursors between gesture events.
@@ -321,7 +322,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-REM-HEAL | Heal | P0 | ✅ | `cmd:spot.add` (`mode: heal`) | |
 | LR-REM-CLONE | Clone | P0 | ✅ | `cmd:spot.add` (`mode: clone`) | |
 | LR-REM-GEN | Generative remove | OOS | 🚫 | | |
-| LR-REM-DETECT | Object detection for remove | P2 | ⬜ | | |
+| LR-REM-DETECT | Object detection for remove | P2 | 🟡 | `cmd:remove.detect`, `crates/engine/src/segment/mod.rs` (`spots_covering`) | finds people (SAM 3 or the Scene parser), wires and cables (SAM 3) and sensor dust (`cmd:spot.findDust`) and covers each object with content-aware (Fill) Remove spots, brushed along its rows, one undo step; Lightroom lets you pick which detected object to remove first (here every one is added: delete spots you want back) and fills generatively 
 | LR-REM-BRUSH-PARAMS | Brush size / feather / opacity | P0 | ✅ | `cmd:spot.add` (`size`, `feather`, `opacity`), `cmd:brush.smaller`, `cmd:brush.larger`, `cmd:brush.featherLess`, `cmd:brush.featherMore`, `crates/ui-egui/src/panels/right.rs` | Size / Feather / Opacity sliders (for new spots and the selected one); `[` `]` size, ⇧`[` ⇧`]` feather (also the Masking brush) |
 | LR-REM-SPOT-EDIT | Edit existing spots | P0 | ✅ | `cmd:spot.select`, `cmd:spot.update`, `cmd:spot.refreshSource`, `cmd:spot.delete` | click a pin to select, drag target or source, ⌫ deletes the selected spot, `/` picks another source; automatic sources are resolved when the spot is added |
 | LR-REM-MARQUEE | Delete spots by rectangle | P2 | ✅ | `cmd:spot.deleteInRect`, `crates/ui-egui/src/panels/detail.rs` (`remove_overlay`) | ⌥-drag a marquee in the Remove tool: the spots whose targets lie inside go, one undo step |
@@ -343,12 +344,12 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-MASK-PANEL | Masks panel | P0 | ✅ | `cmd:panel.masking`, `cmd:mask.add`, `cmd:mask.select`, `cmd:mask.rename`, `cmd:mask.duplicate` (`invert`), `cmd:mask.move`, `cmd:mask.visible`, `cmd:mask.delete`, `crates/ui-egui/src/panels/masking.rs` | list with per-mask show/hide eye, double-click rename, right-click menu (duplicate, duplicate and invert, invert, hide, move up/down, rename, delete); fits any panel width (create tiles go to three columns, mask actions wrap, long component names are cut short); no drag-to-reorder |
-| LR-MASK-SUBJECT | Select subject | P2 | 🟡 | `cmd:mask.add` (`subject`), `crates/pipeline/src/masks.rs` | saliency heuristic, no segmentation model |
-| LR-MASK-SKY | Select sky | P2 | 🟡 | `cmd:mask.add` (`sky`) | heuristic |
-| LR-MASK-BACKGROUND | Select background | P2 | 🟡 | `cmd:mask.add` (`background`) | inverse of the subject heuristic |
-| LR-MASK-OBJECTS | Object selection | P2 | 🟡 | `cmd:mask.add` (`object`, `prompt`), `cmd:mask.objectPoint`, `cmd:mask.refineDetail`, `cmd:segment.prepare`, `cmd:segment.model.status`, `cmd:segment.model.download`, `cmd:segment.model.cancel`, `crates/segment`, `crates/engine/src/segment/mod.rs` | SAM 3 in pure Rust (candle; Metal on macOS, CPU elsewhere): Object tile → click to include, ⌥-click to leave out; Describe tile → a text prompt selects every instance ("sky", "the red car"); both also as Add/Subtract/Intersect components; + / − under the selected mask; comma lists (`car, road`); a zoomed-in detail pass for 5–10× finer edges on small objects; per-selection Edge (hard ↔ soft). The model runs on its own worker thread (the UI never waits; panics become errors), is unloaded after 10 min idle, and is optional: the segmentation is stored with the mask (288² logits), so renders and exports never need it. Weights are never bundled (SAM License): without them the app offers a consented background download (mirrors, resume, timeouts, SHA-256) — **but no default download location is configured yet** (users set `LIGHTCRAFT_SAM3_MIRRORS` or install by hand; see docs/ai-masks.md). Not verified against Lightroom's Select Object; no brush/box object mode; the first click on a photo waits for its analysis (~4 s on an M4 Pro, much longer on CPU) |
-| LR-MASK-PEOPLE | People parts | P2 | ⬜ | | |
-| LR-MASK-LANDSCAPE | Landscape classes | P2 | ⬜ | | shape exists, evaluates empty |
+| LR-MASK-SUBJECT | Select subject | P2 | 🟡 | `cmd:mask.add` (`subject`), `crates/engine/src/segment/auto.rs`, `crates/segment/src/detector.rs` | SAM 3's most prominent people and animals (upstream's `segment_subject`; else what SAM 3 selects at the centre), else the Scene parser's people and animals; stored with the mask (basis-stamped). The SAM 3 path is not run here yet (its weights need Bryan's yes to the SAM License, needs.you); the Scene fallback is checked on a public-domain group portrait. Without any model the old saliency heuristic. No camera focus point used yet |
+| LR-MASK-SKY | Select sky | P2 | ✅ | `cmd:mask.add` (`sky`), `cmd:segment.parsers.download`, `crates/segment/src/segformer.rs`, `crates/segment/src/parsers.rs` | Scene parser (SegFormer-B5 ADE20K, pure Rust on Metal, ~4 s at 1024 px) `sky` class, 256² logits stored with the mask; else SAM 3 “sky”; else the heuristic. Checked on a public-domain Teton photo (sky vs fog / mountains right). Edges at 1/4 of a 1024 px parse: Refine Edges sharpens them; not compared with Lightroom's |
+| LR-MASK-BACKGROUND | Select background | P2 | ✅ | `cmd:mask.add` (`background`) | the subject's segmentation, inverted (heuristic without a model) |
+| LR-MASK-OBJECTS | Object selection | P2 | 🟡 | `cmd:mask.add` (`object`, `prompt`), `cmd:mask.objectPoint`, `cmd:mask.refineDetail`, `cmd:segment.prepare`, `cmd:segment.model.status`, `cmd:segment.model.download`, `cmd:segment.model.cancel`, `crates/segment`, `crates/engine/src/segment/mod.rs` | SAM 3 in pure Rust (candle; Metal on macOS, CPU elsewhere): Object tile → click to include, ⌥-click to leave out; Describe tile → a text prompt selects every instance ("sky", "the red car"); both also as Add/Subtract/Intersect components; + / − under the selected mask; comma lists (`car, road`); a zoomed-in detail pass for 5–10× finer edges on small objects; per-selection Edge (hard ↔ soft). The model runs on its own worker thread (the UI never waits; panics become errors), is unloaded after 10 min idle, and is optional: the segmentation is stored with the mask (288² logits), so renders and exports never need it. Weights are never bundled (SAM License): without them the app offers a consented background download (mirrors, resume, timeouts, SHA-256) from five ungated Hugging Face copies of `facebook/sam3`, commit-pinned, every file checked against Meta's size + SHA-256 (`crates/segment/src/fetch/mod.rs`; reachable 2026-11-22). Not verified against Lightroom's Select Object; no brush/box object mode; the first click on a photo waits for its analysis (~4 s on an M4 Pro, much longer on CPU) |
+| LR-MASK-PEOPLE | People parts | P2 | ✅ | `cmd:mask.add` (`people`), `cmd:segment.detectPeople`, `cmd:segment.found`, `crates/engine/src/segment/auto.rs`, `crates/ui-egui/src/panels/masking.rs` (`picker`) | `ppl.` tile lists the people found (SAM 3 person instances; without SAM 3 the Scene parser's people, split by the faces the Body parser finds) and the ten Lightroom parts (Entire Person, Face Skin, Body Skin, Eyebrows, Eye Sclera, Iris and Pupil, Lips, Teeth, Hair, Clothes) as chips with click / ⌘ / ⇧ / `all.` / `none.`, `sep.` = one mask per part, `make.`. Parts: Body parser (SegFormer-B3 human parsing, MIT) on a 2016 px render of the person, Faces parser (SegFormer-B5 CelebAMask-HQ) on their face; sclera vs iris split by the eye's dark disc, teeth = the open mouth's bright unsaturated pixels; stored as 256² patches over the person and face. Checked on a public-domain group portrait (~3.5 s a part on an M4 Pro). Facial hair not split from hair; no thumbnails of the people (numbered chips) |
+| LR-MASK-LANDSCAPE | Landscape classes | P2 | ✅ | `cmd:mask.add` (`landscape`), `cmd:segment.detectLandscape`, `crates/segment/src/parsers.rs` (`LANDSCAPE`) | `land.` tile: the seven classes (Sky, Water, Vegetation, Mountains, Architecture, Natural Ground, Artificial Ground = ADE20K classes grouped) with how much of the photo each covers (quiet 0 when none), pick several (one selection, or `sep.` one mask each), `make.`; Scene parser, else SAM 3 descriptions; Landscape ▸ Sky without models = the sky heuristic |
 | LR-MASK-BRUSH | Brush mask | P0 | ✅ | `cmd:tool.brush`, `cmd:mask.brushStroke` (`autoMask`), `crates/pipeline/src/masks.rs` | size/feather/flow/density/erase; Auto Mask: dabs weighted by similarity to the colour under the dab centre, refined by a guided filter on luminance (CPU + GPU); no A/B brushes, no pressure |
 | LR-MASK-LINEAR | Linear gradient | P0 | ✅ | `cmd:tool.linear`, `cmd:mask.update` | |
 | LR-MASK-RADIAL | Radial gradient | P0 | ✅ | `cmd:tool.radial`, `cmd:mask.update` | |
@@ -363,7 +364,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-MASK-EFFECTS | Local adjustment ("Effect") presets | P1 | ✅ | `cmd:mask.effects`, `cmd:mask.applyEffect`, `cmd:mask.saveEffect`, `cmd:mask.deleteEffect`, `cmd:mask.importEffects`, `cmd:mask.exportEffects`, `crates/ui-egui/src/panels/mask_effects.rs` | Masking ▸ Effect menu (groups, natural order), save. / del. / import.; `mask.importEffects {lightroom: true}` reads the `.lrtemplate` / Camera Raw local presets Lightroom keeps on this Mac in place (Burn, Dodge, Soften Skin…; never copied into the repo); a new mask starts with the effect last applied to one of its kind. Ported from upstream (no rename / group / favourite UI yet: commands only) |
 | LR-MASK-OVERLAY | Mask overlay | P0 | ✅ | `cmd:view.maskOverlay`, `cmd:view.maskOverlayMode`, `cmd:view.maskOverlayColor`, `crates/pipeline/src/visualize.rs` | rendered alpha of the selected mask (CPU + GPU): colour, colour on B&W, image on black/white, white on black; ⇧O cycles while masking; no auto-show on hover |
 | LR-MASK-PINS | Pins | P1 | ✅ | `cmd:view.maskPins`, `crates/ui-egui/src/panels/detail.rs` | a pin per radial/linear/brush component: click selects its mask, drag moves it; no pins for range/AI components, no Auto mode |
-| LR-MASK-UPDATE | Recompute AI masks | P2 | ⬜ | | |
+| LR-MASK-UPDATE | Recompute AI masks | P2 | ✅ | `cmd:mask.updateAI` | recomputes every AI component (Subject, Sky, Background, Landscape, People, Object clicks, Describe text) from what defines it, on the photo as it is now; one undo step (in the app each as it finishes); keeps Edge |
 | LR-MASK-SYNC | Copy masks to other photos | P1 | ✅ | `cmd:develop.copy` (`groups`) | |
 | LR-MASK-ADAPTIVE | Adaptive presets | P2 | ⬜ | | |
 
@@ -505,7 +506,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 |---|---|---|---|---|---|
 | LR-CLOUD-SYNC | Cloud sync | OOS | 🚫 | | |
 | LR-CLOUD-SMARTPREVIEW | Editable proxies | P2 | ✅ | `cmd:library.smartPreviews`, `cmd:library.smartPreviewsLocation`, `cmd:photo.smartPreview`, `crates/engine/src/smart.rs`, `crates/ui-egui/src/panels/settings.rs` | File ▸ Previews ▸ Build / Discard Smart Previews (on a worker thread, progress and Stop like Build Previews): ~1 MB proxies in the library; with the original offline the photo renders, edits and exports (at proxy size) from its proxy; Info shows the status; the proxy folder is chosen per library (Settings → Performance → Smart previews, saved in the library): the effective path, count and size are shown, changing it needs a choice for the proxies already built (move / leave / delete), and an unavailable or unwritable folder is an error, never a fallback to the library drive; proxies are written atomically and a damaged one (cut short by a crash or a full drive) doesn't count as built, is rebuilt (`repaired`) and is never moved over a good one (issue #106). The thumbnail cache stays in the library |
-| LR-AI-UPDATE-INDICATOR | AI-settings update indicator | P2 | ⬜ | | |
+| LR-AI-UPDATE-INDICATOR | AI-settings update indicator | P2 | ✅ | `cmd:segment.found` (`stale`), `crates/develop/src/ai.rs` (`basis`), `crates/ui-egui/src/panels/masking.rs` | every AI segmentation records the basis it was made on (orientation, flips, lens / geometry corrections, spots, red eye, Enhance); when the photo changes, the mask shows `⚠ upd.` in the Masks list and `upd. all.` above it |
 | LR-AI-CREDITS | Generative credits | OOS | 🚫 | | |
 
 ## X. Cross-cutting behaviours (BEHAV)
@@ -613,7 +614,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-PHOTO-AUTO | Auto settings | P0 | ✅ | `cmd:develop.auto` | |
 | MENU-PHOTO-BW | Convert to B&W | P0 | ✅ | `cmd:develop.treatment` | |
 | MENU-PHOTO-RESET | Reset edits / crop | P0 | ✅ | `cmd:develop.reset`, `cmd:crop.reset` | |
-| MENU-PHOTO-UPDATEAI | Update AI settings | P2 | ⬜ | | |
+| MENU-PHOTO-UPDATEAI | Update AI settings | P2 | ✅ | `cmd:mask.updateAI` | Photo ▸ Update AI Settings |
 | MENU-PHOTO-RENAME | Rename N photos… | P1 | ✅ | `cmd:dialog.rename` | live “Rename N Photos…” label |
 | MENU-PHOTO-CAPTURETIME | Edit capture time… | P1 | ✅ | `cmd:dialog.captureTime` | |
 | MENU-PHOTO-COVER | Set as album cover | P2 | ✅ | `cmd:album.setCover` | |
@@ -710,7 +711,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-CHOOSECOPY | Choose settings to copy — ⇧⌘C | P0 | ✅ | `cmd:dialog.copySettings` | |
 | KEY-RESETALL | Reset all — ⇧⌘R | P0 | ✅ | `cmd:develop.reset` | |
 | KEY-GENAI | Generative toggles / variations — ⌥⇧G, ⌥←/→ | OOS | 🚫 | | |
-| KEY-DETECT | Detect objects — ⌥⇧O | P2 | ⬜ | | |
+| KEY-DETECT | Detect objects — ⌥⇧O | P2 | ✅ | `cmd:remove.detect` | |
 | KEY-CROP-CONSTRAIN | Lock crop aspect — A | P1 | ✅ | `cmd:crop.aspect` (`toggle`, `current`) | A while cropping locks the current shape / unlocks |
 | KEY-CROP-SWAP | Swap crop orientation — X | P0 | ✅ | `cmd:crop.rotateAspect` | |
 | KEY-CROP-OVERLAYORIENT | Crop overlay orientation — ⇧O | P1 | ✅ | `cmd:view.cropOverlayOrientation` | while cropping: O cycles the overlay, ⇧O its orientation |

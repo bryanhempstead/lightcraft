@@ -481,6 +481,8 @@ ENVIRONMENT:
   LIGHTCRAFT_SAM3_DIR=DIR   the SAM 3 model for Object / Describe masks (default: <settings folder>/models/sam3;
                    optional: LightCraft offers to download it when first needed)
   LIGHTCRAFT_SAM3_MIRRORS=URL,…   where to download the SAM 3 model from (base URLs, tried in order)
+  LIGHTCRAFT_MODELS_DIR=DIR   the Sky / Landscape / People models, one folder each (default: <settings
+                   folder>/models; optional: LightCraft offers to download them when first needed)
   LIGHTCRAFT_LOG=info|debug   more log detail from LightCraft itself (default: info from LightCraft, warnings
                    from other crates); else RUST_LOG=<env_logger directives>. Records go to stderr and to
                    <settings folder>/logs/lightcraft.log (previous runs: lightcraft.1.log, lightcraft.2.log)
@@ -595,6 +597,9 @@ fn main() -> eframe::Result {
                 std::env::var_os("LIGHTCRAFT_SAM3_DIR").map(std::path::PathBuf::from).or_else(|| config_dir().map(|d| d.join("models").join("sam3")));
             // the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
             session.segmenter.mirrors_file = config_dir().map(|d| d.join("models").join("sam3-mirrors.txt"));
+            // Sky / Landscape / People models (SegFormer parsers) in <config>/models/<id>, or LIGHTCRAFT_MODELS_DIR
+            session.segmenter.models =
+                std::env::var_os("LIGHTCRAFT_MODELS_DIR").map(std::path::PathBuf::from).or_else(|| config_dir().map(|d| d.join("models")));
             let mut app = LightcraftApp::new(session, services());
             // shortcuts, mouse buttons and MIDI mappings (Settings ▸ shrt. / ctrl.): <config>/keymap.json,
             // or LIGHTCRAFT_KEYMAP; LIGHTCRAFT_NO_PREFS alone keeps them in memory (tests, scripts)

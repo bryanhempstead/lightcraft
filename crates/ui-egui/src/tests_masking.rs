@@ -640,6 +640,7 @@ fn ai_masks_without_the_model_offer_the_download() {
     let dir = std::env::temp_dir().join(format!("lc-ui-no-sam3-{}", std::process::id()));
     h.app.session.segmenter.dir = Some(dir.clone());
     h.app.session.segmenter.mirrors_file = Some(dir.join("none.txt"));
+    h.app.session.segmenter.default_mirrors = false;
     let t = std::time::Instant::now();
     let r = h.request("ui.clickWidget", json!({"id": "maskNew:object"}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -682,4 +683,34 @@ fn ai_masks_without_the_model_offer_the_download() {
     assert!(e.starts_with(lightcraft_engine::segment::NOT_INSTALLED), "{e}");
     assert!(develop(&h).masks.is_empty());
     assert!(t.elapsed() < SETTLE, "{:?}", t.elapsed());
+}
+
+/// Lightroom's automatic masks without any model: sky. / subj. / bg. still make (heuristic)
+/// masks, ppl. / land. say what's missing and leave nothing open or half-made, and the models row
+/// offers the download only on a click.
+#[test]
+fn automatic_masks_without_models() {
+    let mut h = detail("panel.masking");
+    let dir = std::env::temp_dir().join(format!("lc-ui-no-models-{}", std::process::id()));
+    h.app.session.segmenter.models = Some(dir.clone());
+    h.app.session.segmenter.dir = Some(dir.join("sam3"));
+    h.app.session.segmenter.default_mirrors = false;
+    for (tile, n) in [("maskNew:sky", 1), ("maskNew:subject", 2), ("maskNew:background", 3)] {
+        let r = h.request("ui.clickWidget", json!({"id": tile}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(T);
+        assert_eq!(develop(&h).masks.len(), n, "{tile}");
+    }
+    for tile in ["maskNew:people", "maskNew:landscape"] {
+        let r = h.request("ui.clickWidget", json!({"id": tile}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(T);
+        assert_eq!(h.app.ui.ai_pick, None, "{tile}: closed again (nothing to find with)");
+        assert_eq!(develop(&h).masks.len(), 3);
+    }
+    if lightcraft_engine::segment::Segmenter::AVAILABLE {
+        assert!(h.app.session.segmenter.parsers().iter().all(|p| !p.installed));
+        assert!(!h.app.session.segmenter.parsers_download_status().running, "nothing downloads without a click");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -796,10 +796,21 @@ pub enum MaskShape {
         hi: f64,
         feather: f64,
     },
-    /// AI / automatic selections, evaluated by a segmenter.
-    Subject,
-    Sky,
-    Background,
+    /// AI / automatic selections. `seg` is the model's segmentation (SAM 3's subject, the scene
+    /// parser's sky); without one (no model installed, or a document from before them) a
+    /// classical heuristic stands in. Background is the subject's segmentation, inverted.
+    Subject {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+    },
+    Sky {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+    },
+    Background {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+    },
     /// One object picked by clicks (SAM 3 point prompts): `hint` holds the clicks that include,
     /// `exclude` the ones that exclude; `seg` the segmentation computed from them.
     Object {
@@ -828,13 +839,59 @@ pub enum MaskShape {
         #[serde(default, skip_serializing_if = "is_zero")]
         edge: f64,
     },
+    /// One detected person (`person`: the index among the photo's people when it was made, `rect`
+    /// their box, normalized) and the parts selected (`crate::ai::PEOPLE_PARTS` ids). `seg` covers
+    /// the whole photo (the person's outline); `detail` holds the parts at a higher resolution
+    /// over the person and their face.
     People {
         person: u32,
         parts: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rect: Option<[f64; 4]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
+        detail: Vec<crate::SegMask>,
     },
+    /// One of Lightroom's Landscape classes (`crate::ai::LANDSCAPE_CLASSES` ids: sky, water,
+    /// vegetation, mountains, architecture, naturalGround, artificialGround).
     Landscape {
         class: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
     },
+}
+
+impl MaskShape {
+    /// Whether a model computes this shape (Lightroom's AI masks: Update AI Settings recomputes
+    /// them; their segmentation records what the photo looked like then).
+    pub fn is_ai(&self) -> bool {
+        matches!(
+            self,
+            MaskShape::Subject { .. }
+                | MaskShape::Sky { .. }
+                | MaskShape::Background { .. }
+                | MaskShape::Object { .. }
+                | MaskShape::Prompt { .. }
+                | MaskShape::People { .. }
+                | MaskShape::Landscape { .. }
+        )
+    }
+
+    /// The model's segmentation over the whole photo, if computed.
+    pub fn seg(&self) -> Option<&crate::SegMask> {
+        match self {
+            MaskShape::Subject { seg }
+            | MaskShape::Sky { seg }
+            | MaskShape::Background { seg }
+            | MaskShape::Object { seg, .. }
+            | MaskShape::Prompt { seg, .. }
+            | MaskShape::Landscape { seg, .. } => seg.as_ref(),
+            // (parts without the whole person have only their zoomed-in patches)
+            MaskShape::People { seg, detail, .. } => seg.as_ref().or(detail.first()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
