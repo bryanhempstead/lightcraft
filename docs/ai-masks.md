@@ -77,14 +77,17 @@ The model is fetched from an ordered list of mirrors: base URLs where `<base>/mo
    (Windows), `~/.config/lightcraft/` (Linux);
 3. the built-in list, `DEFAULT_MIRRORS` in `crates/segment/src/fetch/mod.rs`.
 
-> **Maintainers:** the built-in list is **empty** until LightCraft's own CDN locations exist
-> (see the `TODO(maintainer)` there): add them in order of preference, host the three files
-> unchanged, and pin `vocab.json` / `merges.txt` (size + SHA-256) in `SAM3_FILES` at the same
-> time. Until then the in-app download needs a user-configured mirror, and the dialog says so.
+The built-in list is five public, ungated copies of `facebook/sam3` on Hugging Face
+(`jetjodh/sam3`, `bodhicitta/sam3`, `MIUProject/sam3`, `JobHarvest/sam3`, `DiffusionWave/sam3`),
+each pinned to a commit. Every file — the weights and both tokenizer files — is pinned to Meta's
+size and SHA-256 in `SAM3_FILES`, so a copy can only ever deliver Meta's own files: one that
+changed fails its check, is deleted, and the next copy is tried. They were checked reachable on
+2026-11-22 with `cargo test -p lightcraft-segment --lib -- --ignored mirrors_are_reachable`
+(downloads the tokenizer files from each through LightCraft's own HTTPS client).
 
-Hugging Face's `facebook/sam3` can't be a default: it is **gated** (each person must accept the
-licence there, wait for approval and download with their own token). Someone with access can
-use it as their mirror:
+Hugging Face's own `facebook/sam3` is **gated** (each person must accept the licence there,
+wait for approval and download with their own token), so it isn't a default. Someone with
+access can put it first:
 
 ```sh
 LIGHTCRAFT_SAM3_MIRRORS=https://huggingface.co/facebook/sam3/resolve/main \
