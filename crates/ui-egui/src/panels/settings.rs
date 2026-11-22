@@ -667,7 +667,7 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         use crate::state::InfoOverlay as I;
         choices(ui, "settingsInfo", &[(I::Off, "off."), (I::Basic, "info.1."), (I::Exposure, "info.2.")], &mut app.ui.info_overlay);
     });
-    row(ui, t, crate::i18n::tr("Photo colours"), |ui| {
+    row(ui, t, crate::i18n::tr("Photo color"), |ui| {
         use crate::display_p3::ViewSpace as V;
         choices(ui, "settingsViewSpace", &[(V::Auto, "Auto"), (V::DisplayP3, "Display P3"), (V::Srgb, "sRGB")], &mut app.ui.settings.view_space);
     });
@@ -1175,7 +1175,7 @@ fn cameras_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let ctx = ui.ctx().clone();
     let mut force = false;
     heading(ui, t, crate::i18n::tr("Cameras"));
-    hint(ui, t, "The cameras in this library, what decodes and colours each, and the lens profiles found for their lenses.");
+    hint(ui, t, "The cameras in this library, what decodes and colors each, and the lens profiles found for their lenses.");
     // add a camera: type (suggestions from Camera Raw's cameras on this Mac) or pick one
     let qkey = egui::Id::new("settingsCamerasQuery");
     let mut q: String = ctx.data(|d| d.get_temp(qkey)).unwrap_or_default();
@@ -1237,7 +1237,7 @@ fn cameras_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = cameras_list(app, &ctx, force);
     let cams: Vec<Value> = list["cameras"].as_array().cloned().unwrap_or_default();
     if list["adobe"] == false {
-        hint(ui, t, "Adobe's Camera Raw data or the DNG SDK isn't available here: every camera uses LightCraft's own colour.");
+        hint(ui, t, "Adobe's Camera Raw data or the DNG SDK isn't available here: every camera uses LightCraft's own color.");
     }
     let open_key = egui::Id::new("settingsCamerasOpen");
     let mut open: Vec<String> = ctx.data(|d| d.get_temp(open_key)).unwrap_or_default();

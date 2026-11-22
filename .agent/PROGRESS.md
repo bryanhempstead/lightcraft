@@ -21,7 +21,7 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   (ported), U04 mask Effect presets (ported; his 6 Lightroom local presets import in place via Masking ▸ Effect ▸
   import.), U05 crop extras (As Shot, Aspect Ratios / Center / Fifths, overlays to cycle, B&A button cycles layouts),
   R17 content-aware Fill spots (`crates/inpaint` from upstream; `heal_patchmatch` → Fill), R29 photos converted to
-  Display P3 on a Mac (Settings ▸ Interface ▸ Photo colours; needs.you #150: Bryan compares loupe vs export on the
+  Display P3 on a Mac (Settings ▸ Interface ▸ Photo color; needs.you #150: Bryan compares loupe vs export on the
   Studio Display), U10 point-curve extras, U11 ⌥-drag marquee deletes spots. Left: U14, U24, U12, U06, U09, U13, U07,
   U08, U17, U22, U16, U18–U21, U23 and the section-3 develop behaviours. Known load flake (passes alone):
   `ui-egui headless::tests::demo_grid_snapshot_has_ui_pixels`, `browse_a_local_folder`.
