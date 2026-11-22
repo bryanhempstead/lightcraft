@@ -404,3 +404,184 @@ TIFF exports still carry no Exif IFD (Make / Model only through XMP).
 with an Adobe Standard DCP renders as Adobe Standard + the Adobe Color look: pixel-identical to
 setting `adobe:Adobe Color` (R6 CR3 checked). The profile browser names it "Color", not "Adobe
 Color"; lens corrections start off unless the file has embedded ones.
+
+## Recipes, curves and the process version (R01–R23, 2026-11-21)
+
+### The acceptance set and its gate (R01)
+
+`lr_compare.py gate --work W --tag T [--base T0] [--split B]` reports every *recipe* — look ×
+camera × Lightroom process version — plus edited / default and PV5 / PV6, with mean / p95 ΔE,
+`dE128`, mean ΔL* and photos passing (ΔE ≤ 2 and p95 ≤ 5); with `--base` it exits 1 when a cell of
+≥ 3 photos gets worse by more than 0.15 ΔE, the overall mean by more than 0.03, or fewer photos
+pass. Every sampled photo now carries its process version, a fixed fit / held-out split (`A` / `B`,
+a hash of its catalog id), its top-level settings and point curves (`prepare` and the new
+`assemble`). `tools/lr-compare/acceptance.json` is the recipe spec for `prepare` (Summer Fields /
+Nautica / Adobe Color × M262 / R6 PV5 + PV6 / GR III / iPhone JPEG + ProRAW, plus Monochrome, Q2,
+X-T2, X100F). `lr_compare.py hues` breaks a run's colour error down by CIELAB hue (ΔL*, ΔC*, Δh°).
+
+On 2026-11-21 the catalog's `Previews.lrdata` was no longer next to the catalog, and most
+originals of the earlier sets live on the `HEMPSTEAD` drive (not mounted; its backup on `LOT48`
+holds most of them). `assemble` builds a work folder from earlier prepared sets (their stored
+Lightroom previews) and relocates originals (`--relocate OLD=NEW`): the acceptance set used below
+is w9 + r6d + fe + vg, the 183 photos whose original is readable (137 edited; Summer Fields 106,
+Adobe Color 72, Nautica 4; split A 91 / B 92). Only 7 of them are PV5, so PV5 vs PV6 is measured
+with the oracle instead (below).
+
+Baseline (main at ce413b5, CPU):
+
+| recipe | n | ΔE | p95 | pass |
+|---|---|---|---|---|
+| all | 183 | 4.01 | 10.9 | 23 |
+| edited / default | 137 / 46 | 4.59 / 2.29 | 12.4 / 6.3 | 5 / 18 |
+| Summer Fields · M262 | 64 | 4.45 | 12.9 | 0 |
+| Summer Fields · R6 | 20 | 5.82 | 13.7 | 0 |
+| Summer Fields · GR III | 6 | 3.95 | 9.7 | 0 |
+| Summer Fields · iPhone JPEG | 4 | 6.99 | 19.3 | 0 |
+| Adobe Color · R6 | 64 | 2.96 | 8.0 | 16 |
+| Adobe Color · M262 | 7 | 1.27 | 3.1 | 7 |
+| Nautica · R6 | 4 | 5.46 | 17.2 | 0 |
+
+### Process Version 5 vs 6 (R12)
+
+Bryan's catalog holds 6,384 photos at `ProcessVersion` 11.0 (Process Version 5) and 10,439 at 15.4
+(Version 6); LightCraft reads neither. The previews can't separate them (PV5 is nearly all older R6
+work: 7 of the 183 acceptance photos), so the oracle rendered the same synthetic DNGs under both
+(`oracle/make_pv.py`, `pvcmp.py`, `pvgrid.py`; colour grid + spatial scene; base, every Basic-tone
+slider, Clarity, Texture, Dehaze, Vibrance, Saturation and his whole Summer Fields recipe):
+
+- **Tone is identical**: on the neutral spatial scene PV6 vs PV5 is ΔE ≤ 0.01 for every slider,
+  Highlights / Shadows / Clarity / Texture / Dehaze included.
+- **Colour differs only for saturated, bright colours**: grid mean 0.27 (base) … 0.57 (recipe); by
+  grid saturation 0.00 (neutral) → 0.13 (0.35) → 0.84–1.13 (0.8–0.9), by level 0.01 (−9 EV) → 0.56
+  (0 EV); worst at violet-blue (hue 250–270°: PV6 up to +10 L*, less chroma — a highlight gamut
+  change).
+- LightCraft's base on the grid: 0.35 against PV5, 0.42 against PV6. Not worth a per-PV path; the
+  photos' PV is kept in the acceptance set's cells so a PV-dependent change can be gated.
+
+### Point curve (R09)
+
+Camera Raw's point curve, read off a neutral ramp and a dense colour grid rendered by the oracle
+(`oracle/make_curve.py`, `curvefit.py`, `curvecolor.py`; Bryan's curve 0,6 62,39 98,84 181,167
+255,211, a second custom curve, an S-curve, a steep two-point curve, red and blue channel curves):
+
+- **Interpolation**: the natural cubic spline through the points (C2, zero second derivative at the
+  ends — the DNG SDK's `dng_spline_solver`), flat outside the end points and **clamped to 0..1**
+  (the steep curve overshoots to 1.26 and below 0: Camera Raw clips). In sRGB-curve encoding of
+  ProPhoto values it matches Camera Raw to 0.01–0.02 of a level on all four curves; LightCraft's
+  monotone spline was 0.8–1.3 levels off on average (2.9 at worst on Bryan's), gamma 1.8 3–4.
+- **Colour**: the master curve is applied **hue-preserving** (largest and smallest channel through
+  the curve, the middle one interpolated — the DNG reference RGB tone), not per channel: on the
+  grid 0.13 vs 0.65 ΔE (Bryan's curve), 0.15 vs 0.74 (S-curve); the R / G / B curves are per
+  channel (0.00). The parametric curve comes first and joins the master curve (0.30 vs 0.92
+  levels for the other order; colour 0.19 vs 0.67).
+
+LightCraft now does exactly this (`spline::NaturalCurve`, `finish::Curves`, CPU and GPU; the
+curve editor draws the same spline). Oracle renders of LightCraft against Camera Raw: Bryan's
+curve on the grid 1.17 → 0.43 ΔE (the base itself is 0.42), with his parametric preset 1.26 →
+0.46, ramps 0.24 → 0.05. Acceptance set: 4.01 / 10.9 / 23 → 4.02 / 10.9 / **25** (gate passes;
+Summer Fields M262 4.45 → 4.45, X100F −0.2, R6 +0.06).
+
+### Calibration (R10)
+
+The oracle chart (`make_color.py`, 135 renders; `chartcmp.py` by hue): LightCraft's base is 1.58
+ΔE per patch, Bryan's Summer Fields calibration (Red Hue +3, Green Hue / Sat +44, Blue Hue −19 /
+Sat +38) 4.23: teals (180–210°) come out 18.5 C* too dull, blues (210–270°) 20° off in hue and
+4–7 L* dark. Real Summer Fields photos (`lr_compare hues`, acceptance set) show the same: greens
+to blues −3…−8.5° and −1…−4 C*, while Adobe Color photos are within ±1.5° everywhere. Fitting
+the best white-keeping primaries matrix *at LightCraft's position* (scene-linear, after the
+profile's hue/sat map) with LightCraft in the loop (`calfit_lc.py`) only reaches 3.27: a matrix
+there can't reproduce it. Camera Raw's calibration edits the camera profile, i.e. acts before the
+DCP hue/sat map and look table; moving it there (decode stage, `engine::adobe`) is the fix to try
+next.
+
+### Basic tone on edited photos (R02): what Camera Raw does, measured
+
+Single sliders on synthetic scenes, LightCraft against Camera Raw (`make_pv.py`, `lccmp.py`,
+`hsana.py`; R6 colour, ΔE2000): the global sliders are close (Exposure 0.56–0.65, Whites / Blacks
+0.16–0.63, Contrast 0.6–1.05), the local ones are not — Shadows +69 4.56 (grid) / 1.88 (spatial),
+Highlights −60 2.44 / 1.58, Texture +40 3.18 / 0.61, Clarity +40 1.55 / 1.69, Dehaze +30 0.89 /
+1.31 — and Bryan's whole tone + colour recipe is 3.69 (grid) / 3.19 (spatial).
+`make_hs.py` + `hsprobe.py` then took Highlights / Shadows apart (uniform fields, two-level fields
+whose dark share is 10 / 50 / 90 %, the same field 1–2 EV brighter / darker, a thin probe ramp
+across, and combinations with Exposure / Contrast / his tone sliders):
+
+- **A uniform image is never changed** (Shadows +100, Highlights −100 at −8…0 EV: 0.000);
+  LightCraft moves it by up to +0.76 / −0.41 EV.
+- **The size of the move depends on the whole image, not on the level alone.** Highlights −100
+  pulls a −1.5 EV region by −2.08 EV when it is 90 % of the frame, −3.86 at 50 %, −3.51 at 10 %,
+  and by −2.56 / −4.55 / −4.62 when the whole field is 1 EV brighter / 1 / 2 EV darker; it also
+  pulls the −6 EV half down (−1.07). Shadows +100 lifts a −6 EV region +0.94 / +0.74 / +0.61
+  (10 / 50 / 90 % of the frame) and the bright half by ≤ 0.05. LightCraft: Shadows 2–3× too strong
+  (+1.89 on the dark half, +0.26 on the bright one), Highlights −100 3–5× too weak (−0.83) and
+  lifting deep shadows (+1.5 EV) where Camera Raw darkens them; Highlights +30 / +50 lifts darks too
+  in Camera Raw (+0.34 / +0.57), not in LightCraft.
+- **Edges**: the moves stop sharply at a step edge (no spread, no halo) and fine detail keeps its
+  contrast to its surroundings (the probe ramp rides on its region's move) — an edge-aware,
+  multi-scale operator (consistent with the local Laplacian filters Adobe published for PV2012),
+  with a global, image-dependent part on top.
+- With his sliders (E −1.1, C −72, H +30, S +69, W −36, B +30) on the 50 % field Camera Raw gives
+  dark +1.18 / bright −0.20 EV, LightCraft +1.30 / −0.64; H / S's share: Camera Raw +0.82 / +1.03,
+  LightCraft +1.13 / +0.62.
+
+None of the tried closed forms (a function of level relative to the image's log-mean key, to its
+white, or "level minus its value at the key") fits all fields; LightCraft's per-slider tables
+(level relative to the key) cannot express it. Next: port an edge-aware local Laplacian operator
+(darktable's `local_laplacian`, GPL, allowed in the fork) and fit its remapping to these fields,
+then refit the Basic-tone tables with the exact point and parametric curves underneath.
+
+### Custom white balance (R05)
+
+Not resolved: the per-camera strength (`WB_STRENGTH`, k = 2, Leica 1) stays. All three cameras'
+Adobe Standard DCPs are dual-illuminant (17 / 21), so the Leica's k = 1 isn't a single-illuminant
+profile; the M262 and GR III are both DNGs, so it isn't the file format either.
+
+### Parametric curve (R08): measured, not switched on
+
+Camera Raw's parametric curve on the oracle ramp (`make_curve.py`, `parafit.py`, every region at
+±50 / ±100, Bryan's preset, two split settings): with the default splits each region is a fixed
+bump in sRGB-curve encoding (Shadows 0–128 peak ~48, Darks 0–255 peak ~100 (+55 levels at +100),
+Lights peak ~160 (+71), Highlights 128–255 peak ~208), not symmetric in the sign (clipping at 0 /
+255), and regions add: per-region tables interpolated in the slider value and summed reproduce
+Bryan's preset to 0.31 of a level (max 1.0) and every single-region stop exactly; moving the splits
+is only approximated by warping the input (2–6 levels). LightCraft's preview-fitted model
+(amount 0.11) is 10.5 levels off on average over the sweep (1.65 on his preset); the table
+(`gen_para.py` → a 4 × 4 × 65 table) brings LightCraft's ramps to ΔE 0.05–0.1 against Camera Raw.
+
+But on his photos the exact curve makes things worse: with it the acceptance set went 3.85 →
+4.04 (edited 4.62 → 4.89, Summer Fields M262 +0.6, ΔL* +1.4): Summer Fields photos carry
+Lights +48 / Darks +20, which Camera Raw applies at full strength, and LightCraft's Basic-tone
+tables (`tone::lr::ADOBE_*`, fitted on previews) had absorbed the weak old curve. The Camera Raw
+oracle shows those tables are what's wrong (below), so the table stays out until Basic tone is
+refitted on top of it; the generator and the measured data are in `tools/lr-compare/oracle`.
+
+### HSL / Saturation / Vibrance on rendered files (R11)
+
+The oracle-measured HSL / Saturation / Vibrance tables (`colortab.bin`, round 4) act on the
+finished colour, whatever the profile, but were used only on Adobe camera bases; JPEG / HEIC /
+ProRAW / embedded-profile photos kept the older OkLCh approximation. They now use the tables too
+(`ColorOps::with_measured` for every source). Summer Fields iPhone JPEGs in the acceptance set
+(4): 7.03 → 6.80 ΔE (per photo 10.03 → 9.80, 5.87 → 5.22, 6.72 → 6.65, 5.49 → 5.52); no other
+photo changes. Their remaining error is tone (ΔL* +4.3: rendered files' Basic tone, R02) and the
+look table.
+
+### Not done this round (R04, R16, R19–R23)
+
+With the catalog's previews gone no new ground truth could be sampled, and the acceptance set has
+only 4 Nautica, 1 Monochrome, 3 X-T2 and 7 X100F photos and none with Point Color or masks, so
+these stay measured only:
+
+- **Nautica (R04)**: R6 4 photos 5.45 ΔE / p95 17.3; iPhone Nautica not in the set.
+- **Radial / linear masks (R16)**: their local Exposure / Shadows run the same local operator as
+  R02, which is what's wrong; nothing to fit until R02 is.
+- **Point Color (R19)**, **Color Grading (R20)**: no oracle sweep yet (`make_color.py` is the
+  template); no acceptance photos.
+- **Texture / Clarity / Dehaze (R21)** against the oracle (single slider, R6 colour): Texture +40
+  3.18 ΔE on the grid / 0.61 on the spatial scene, Clarity +40 1.55 / 1.69, Dehaze +30 0.89 / 1.31
+  (base 0.42 / 0.55): Texture is far too strong on small detail.
+- **B&W / Monochrome (R22)**: 1 photo, 5.05 ΔE.
+- **Fujifilm (R23)**: Summer Fields X-T2 5.66 ΔE with ΔL* +2.9 (too bright), X100F 5.00 (PV5,
+  ΔL* −2.6) / 2.33 (PV6).
+
+Bryan runs: reopening the catalog in Lightroom Classic rebuilds `Previews.lrdata`; then
+`lr_compare.py prepare --spec tools/lr-compare/acceptance.json --seed 1122` gives the full recipe
+set (Nautica × iPhone, PV5 R6, Monochrome, X-T2) for the next round.

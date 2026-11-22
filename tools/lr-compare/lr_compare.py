@@ -12,6 +12,9 @@ Steps (all writes go to WORK; the catalog and previews are only read, from copie
       copy the catalog (+ -wal) and previews.db, pick the photos, copy their largest preview
       to W/previews/<id>.jpg and write W/sample.json + W/records.json (a migrate-lightroom
       records file holding only these photos)
+  lr_compare.py assemble --work W --sets W1,W2 [--relocate OLD=NEW]
+      one work folder from prepared ones (their stored previews), e.g. when the catalog's
+      previews are gone or originals moved to a backup drive
   lr_compare.py migrate  --work W --tag T     migrate the sample into W/lib-T (scratch library)
   lr_compare.py render   --work W --tag T     export each photo at its preview's size (W/renders/T)
   lr_compare.py calibrate --work W [--out DIR] [--looks "Adobe Color"] [--per-camera 40] [--exclude sample.json]
@@ -24,6 +27,11 @@ Steps (all writes go to WORK; the catalog and previews are only read, from copie
       mismatch, reported apart from colour); writes W/results-T.json and prints a table (with
       the change vs --base);
       --strip writes W/strips/<id>.jpg: Lightroom | base | T side by side.
+  lr_compare.py gate     --work W --tag T [--base T0] [--split B] [--tol 0.15]
+      per-recipe acceptance table (look × camera × process version; edited / default; PV5 / PV6):
+      mean / p95 ΔE, dE128, dL*, photos passing; with --base exit 1 when a cell regresses. The
+      acceptance set: `prepare --spec acceptance.json --seed 1122`; decide on its held-out half
+      (`--split B`), fit only on `--split A`
   lr_compare.py detail   --work W --tags T0,T1 [--min-px 1800]
       detail at the preview's full size (render with --max-size 0): ratios to Lightroom of fine
       texture in flat areas (grain, noise), mottling, edge sharpness, edge halos and chroma
@@ -121,6 +129,27 @@ QUARTER_TURNS = {"AB": 0, "BC": 1, "CD": 2, "DA": 3}
 LR_RENDERS = {"smallRender", "standard", "final", "full", "fullSize", "1to1"}
 
 
+def process_version(text):
+    """Lightroom's `ProcessVersion` ("11.0" = Process Version 5, "15.4" = Version 6), "" if unset."""
+    import re
+    m = re.search(r'^ProcessVersion = "([^"]*)"', text or "", re.M)
+    return m.group(1) if m else ""
+
+
+def curves_of(text):
+    """The point curves of a settings text: {"ToneCurvePV2012": [x0, y0, x1, y1, …], …Red/Green/Blue}."""
+    import re
+    return {m.group(1): [float(v) for v in m.group(2).replace(" ", "").replace("\n", "").split(",") if v.strip()]
+            for m in re.finditer(r"^(ToneCurvePV2012\w*) = \{([^}]*)\}", text or "", re.M)}
+
+
+def split_of(iid):
+    """Fixed fit / held-out split of a photo: "A" (may be fitted on) or "B" (held out), by a hash of
+    its catalog id so every set and every run agree."""
+    import hashlib
+    return "A" if hashlib.sha1(str(iid).encode()).digest()[0] < 128 else "B"
+
+
 def preview_info(pv, iid, settings_digest=None):
     """(largest level file or None, orientation, quality, colour profile, fresh) of an image's
     preview. `fresh`: the preview's digest is the photo's current develop-settings digest
@@ -179,6 +208,9 @@ def prepare(a):
         fs = [f for f in glob.glob(os.path.join(prev_dir, e[0][0], e[0][:4], f"{e[0]}-{e[1]}_*")) if f.rsplit("_", 1)[1].isdigit()]
         return (max(fs, key=lambda f: int(f.rsplit("_", 1)[1])), info["orientation"], info) if fs else None
 
+    excluded = set()
+    for f in a.exclude or []:
+        excluded |= {p["id"] for p in json.load(open(f))}
     picked = []
     if a.ids:
         want = {int(x) for x in a.ids.split(",")}
@@ -190,7 +222,10 @@ def prepare(a):
         random.seed(a.seed)
         cand, quota = [], []
         for g in spec:
-            grp = [r for r in rows if r[2] == g["model"] and r[3] == g["ext"].lower() and look_of(r[4]) == g.get("look", "")]
+            exts = [e.lower() for e in (g["ext"] if isinstance(g["ext"], list) else [g["ext"]])]
+            grp = [r for r in rows if r[2] == g["model"] and r[3] in exts and look_of(r[4]) == g.get("look", "")
+                   and (not g.get("pv") or process_version(r[4]) == g["pv"])
+                   and (g.get("edited") is None or (r[5] > 0) == g["edited"]) and r[0] not in excluded]
             random.shuffle(grp)
             must = set(g.get("include", []))
             grp.sort(key=lambda r: (r[0] not in must, r[5] == 0))
@@ -211,7 +246,9 @@ def prepare(a):
             store_preview(pr[0], pr[1], dst)
             info = pr[2]
             picked.append({"id": r[0], "path": r[1], "model": r[2], "look": look_of(r[4]), "edits": r[5], "preview": dst,
-                           "previewQuality": info["quality"], "previewSpace": info["space"], "lrRender": is_lr_render(info), "lens": lenses.get(r[0])})
+                           "previewQuality": info["quality"], "previewSpace": info["space"], "lrRender": is_lr_render(info), "lens": lenses.get(r[0]),
+                           "ext": r[3], "pv": process_version(r[4]), "split": split_of(r[0]), "settings": top_level(strip_look(r[4] or "")),
+                           "curves": curves_of(strip_look(r[4] or ""))})
             got += 1
     json.dump(picked, open(os.path.join(a.work, "sample.json"), "w"), indent=1)
     # records for exactly these photos
@@ -227,6 +264,46 @@ def prepare(a):
     for f in ("c.lrcat", "c.lrcat-wal"):
         if os.path.exists(os.path.join(cdir, f)):
             os.remove(os.path.join(cdir, f))
+    print(f"{len(picked)} photos -> {a.work}/sample.json")
+
+
+def assemble(a):
+    """One work folder from prepared ones (their stored previews and records; no catalog or
+    Lightroom previews needed): photos whose original is reachable (after `--relocate OLD=NEW`),
+    each once, with process version, split, settings and curves taken from its record."""
+    os.makedirs(os.path.join(a.work, "previews"), exist_ok=True)
+    moves = [m.split("=", 1) for m in a.relocate or []]
+
+    def reloc(path):
+        if path and not os.path.exists(path):
+            for old, new in moves:
+                if path.startswith(old) and os.path.exists(new + path[len(old):]):
+                    return new + path[len(old):]
+        return path
+    picked, images, seen = [], [], set()
+    for src in a.sets.split(","):
+        sample = json.load(open(os.path.join(src, "sample.json")))
+        recs = {i["id"]: i for i in json.load(open(os.path.join(src, "records.json")))["images"]}
+        for p in sample:
+            r = recs.get(p["id"])
+            if p["id"] in seen or r is None or p.get("lrRender") is False:
+                continue
+            path = reloc(p["path"])
+            if not os.path.exists(path) or not os.path.exists(p["preview"]):
+                continue
+            seen.add(p["id"])
+            dst = os.path.join(a.work, "previews", f"{p['id']}.png")
+            shutil.copyfile(p["preview"], dst)
+            text = r.get("develop") or ""
+            q = dict(p, path=path, preview=dst, ext=path.rsplit(".", 1)[-1].lower(), pv=process_version(text), split=split_of(p["id"]),
+                     settings=top_level(strip_look(text)), curves=curves_of(strip_look(text)), set=os.path.basename(src.rstrip("/")))
+            picked.append(q)
+            r = dict(r, path=path)
+            if r.get("root") and not os.path.exists(r["root"]):
+                r["root"] = reloc(r["root"].rstrip("/")) + "/"
+            images.append(r)
+    json.dump(picked, open(os.path.join(a.work, "sample.json"), "w"), indent=1)
+    json.dump({"catalog": "", "images": images, "collections": []}, open(os.path.join(a.work, "records.json"), "w"))
     print(f"{len(picked)} photos -> {a.work}/sample.json")
 
 
@@ -671,6 +748,113 @@ def compare(a):
             out.save(os.path.join(a.work, "strips", f"{sid}-{a.tag}.jpg"), quality=90)
 
 
+# ---------------------------------------------------------------- colour residuals by hue
+def hues(a):
+    """Where colour goes wrong, by hue: Lightroom's preview pixels (chroma > --min-chroma) binned by
+    their CIELAB hue (30° bins), with ours − Lightroom mean ΔL*, ΔC*, Δh° and ΔE2000 per bin, over
+    the photos of a look (and camera). Uses each photo's alignment from results-TAG.json."""
+    sample = {p["id"]: p for p in json.load(open(os.path.join(a.work, "sample.json")))}
+    res = json.load(open(os.path.join(a.work, f"results-{a.tag}.json")))
+    acc = {}
+    for r in res:
+        p = sample.get(r["id"])
+        if not p or (a.look and p["look"] != a.look) or (a.model and a.model not in (p["model"] or "")) or (a.split and p.get("split") != a.split):
+            continue
+        A = Image.open(p["preview"]).convert("RGB")
+        B = Image.open(os.path.join(a.work, "renders", a.tag, f"{p['id']}.jpg")).convert("RGB")
+        if B.size != A.size:
+            B = B.resize(A.size, Image.LANCZOS)
+        al = r["align"]
+        if r["geometry"] != "ok":
+            B = _warp(B, al["scale"], al["rot"], al["dx"], al["dy"], A.size, Image.BICUBIC)
+        k = min(1.0, 256 / max(A.size))
+        ns = (max(1, round(A.size[0] * k)), max(1, round(A.size[1] * k)))
+        la = to_lab(np.asarray(A.resize(ns, Image.BOX)), p.get("previewSpace", "adobe")).reshape(-1, 3)
+        lb = to_lab(np.asarray(B.convert("RGB").resize(ns, Image.BOX)), "srgb").reshape(-1, 3)
+        ca, cb = np.hypot(la[:, 1], la[:, 2]), np.hypot(lb[:, 1], lb[:, 2])
+        ha = np.degrees(np.arctan2(la[:, 2], la[:, 1])) % 360
+        hb = np.degrees(np.arctan2(lb[:, 2], lb[:, 1])) % 360
+        dh = (hb - ha + 180) % 360 - 180
+        de = de2000(la, lb)
+        m = ca > a.min_chroma
+        for b in range(12):
+            mk = m & (ha >= b * 30) & (ha < b * 30 + 30)
+            if mk.sum() < 20:
+                continue
+            e = acc.setdefault(b, [])
+            e.append((mk.sum(), (lb[mk, 0] - la[mk, 0]).mean(), (cb[mk] - ca[mk]).mean(), dh[mk].mean(), de[mk].mean(), ca[mk].mean()))
+    print(f"{'hue':>8}{'photos':>8}{'C lr':>7}{'dL':>7}{'dC':>7}{'dh°':>7}{'dE':>7}")
+    for b in sorted(acc):
+        v = np.array(acc[b]); w = v[:, 0] / v[:, 0].sum()
+        print(f"{b * 30:>4}-{b * 30 + 30:<3}{len(v):>8}{(v[:, 5] * w).sum():7.1f}{(v[:, 1] * w).sum():7.2f}{(v[:, 2] * w).sum():7.2f}{(v[:, 3] * w).sum():7.1f}{(v[:, 4] * w).sum():7.2f}")
+
+
+# ---------------------------------------------------------------- acceptance gate
+CAMERA_SHORT = {"LEICA M (Typ 262)": "M262", "Canon EOS R6": "R6", "RICOH GR III": "GR III", "iPhone 13 Pro Max": "iPhone",
+                "iPhone 13 Pro": "iPhone ProRAW", "LEICA Q2": "Q2", "X-T2": "X-T2", "X100F": "X100F"}
+
+
+def recipe_of(p, by_pv=True):
+    """The acceptance cell of a sampled photo: look × camera (× process version)."""
+    cam = CAMERA_SHORT.get(p["model"] or "", p["model"] or "?")
+    pv = {"11.0": "PV5", "15.4": "PV6"}.get(p.get("pv", ""), p.get("pv") or "PV?")
+    return f"{p['look'] or '(none)'} · {cam}" + (f" · {pv}" if by_pv else "")
+
+
+def gate(a):
+    """Per-recipe acceptance table and pass gate: every look × camera (× process version) cell's
+    mean / p95 CIEDE2000 and photos passing (ΔE ≤ 2 and p95 ≤ 5); with --base, fails (exit 1) when
+    any cell with ≥ 3 photos gets worse by more than --tol mean ΔE, when the photos passing drop,
+    or when the overall mean gets worse by more than --tol-all."""
+    sample = {p["id"]: p for p in json.load(open(os.path.join(a.work, "sample.json")))}
+
+    def load(tag):
+        rows = [r for r in json.load(open(os.path.join(a.work, f"results-{tag}.json"))) if r["id"] in sample]
+        return {r["id"]: r for r in rows if not a.split or sample[r["id"]].get("split") == a.split}
+    cur = load(a.tag)
+    base = load(a.base) if a.base else None
+    if base is not None:  # compare like with like: only photos both runs scored
+        common = cur.keys() & base.keys()
+        cur = {k: cur[k] for k in common}
+        base = {k: base[k] for k in common}
+
+    def stats(rows):
+        if not rows:
+            return None
+        de = [r["de"] for r in rows]
+        return {"n": len(rows), "de": round(float(np.mean(de)), 3), "p95": round(float(np.mean([r["p95"] for r in rows])), 2),
+                "de128": round(float(np.mean([r["de_lo"] for r in rows])), 3), "pass": sum(r["de"] <= 2 and r["p95"] <= 5 for r in rows),
+                "dL": round(float(np.mean([r["dL"] for r in rows])), 2)}
+    keys = [("all", lambda p: True), ("edited", lambda p: p["edits"] > 0), ("default", lambda p: p["edits"] == 0)]
+    keys += [(f"PV {v}", (lambda v: lambda p: p.get("pv") == v)(v)) for v in sorted({p.get("pv", "") for p in sample.values()})]
+    cells = sorted({recipe_of(sample[i], not a.no_pv) for i in cur})
+    keys += [(c, (lambda c: lambda p: recipe_of(p, not a.no_pv) == c)(c)) for c in cells]
+    out, fails = [], []
+    print(f"{'recipe':<40}{'n':>4}{'dE':>7}{'p95':>7}{'dE128':>7}{'dL':>7}{'pass':>6}" + ("   base dE  Δ      pass" if base else ""))
+    for name, f in keys:
+        s = stats([r for i, r in cur.items() if f(sample[i])])
+        if not s:
+            continue
+        line = f"{name[:39]:<40}{s['n']:>4}{s['de']:7.2f}{s['p95']:7.1f}{s['de128']:7.2f}{s['dL']:7.2f}{s['pass']:>6}"
+        row = {"recipe": name, **s}
+        if base:
+            b = stats([r for i, r in base.items() if f(sample[i])])
+            d = s["de"] - b["de"]
+            row["base"] = b
+            bad = (name == "all" and (d > a.tol_all or s["pass"] < b["pass"])) or (name != "all" and s["n"] >= 3 and d > a.tol)
+            line += f"   {b['de']:6.2f} {d:+6.2f}  {b['pass']:>3}→{s['pass']:<3}" + ("  FAIL" if bad else "")
+            if bad:
+                fails.append(name)
+        print(line)
+        out.append(row)
+    json.dump({"tag": a.tag, "base": a.base, "split": a.split, "cells": out, "fail": fails},
+              open(os.path.join(a.work, f"gate-{a.tag}.json"), "w"), indent=1)
+    if base is not None:
+        print("GATE:", "FAIL " + ", ".join(fails) if fails else "pass")
+        if fails:
+            sys.exit(1)
+
+
 # ---------------------------------------------------------------- white-balance map
 def neutral_cast(prev, prev_space, ours, size=256):
     """Median (da*, db*) of Lightroom minus ours on near-neutral pixels, or None."""
@@ -981,7 +1165,13 @@ def main():
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--min-px", type=int, default=900)
     p.add_argument("--any-preview", action="store_true", help="also take camera-embedded / thumbnail / stale previews (not ground truth)")
+    p.add_argument("--exclude", action="append", help="sample.json whose photos are never picked (other test sets)")
     p.set_defaults(fn=prepare)
+    p = sub.add_parser("assemble", help="one work folder from prepared ones (stored previews; originals relocated)")
+    p.add_argument("--work", required=True)
+    p.add_argument("--sets", required=True, help="comma-separated prepared work folders")
+    p.add_argument("--relocate", action="append", help="OLD=NEW path prefix for originals that moved (e.g. a backup drive)")
+    p.set_defaults(fn=assemble)
     for name, fn in (("migrate", migrate), ("render", render)):
         p = sub.add_parser(name)
         p.add_argument("--work", required=True)
@@ -1039,6 +1229,23 @@ def main():
     p.add_argument("--strip")
     p.add_argument("--all-previews", action="store_true", help="also score photos whose preview is not Lightroom's rendering")
     p.set_defaults(fn=compare)
+    p = sub.add_parser("hues", help="colour residuals by hue (after compare)")
+    p.add_argument("--work", required=True)
+    p.add_argument("--tag", required=True)
+    p.add_argument("--look")
+    p.add_argument("--model")
+    p.add_argument("--split", choices=["A", "B"])
+    p.add_argument("--min-chroma", type=float, default=8.0)
+    p.set_defaults(fn=hues)
+    p = sub.add_parser("gate", help="per-recipe acceptance table; with --base, exit 1 on a regression")
+    p.add_argument("--work", required=True)
+    p.add_argument("--tag", required=True)
+    p.add_argument("--base", help="results tag to compare with")
+    p.add_argument("--split", choices=["A", "B"], help="only the fit (A) or held-out (B) half")
+    p.add_argument("--tol", type=float, default=0.15, help="allowed mean-ΔE regression per recipe cell")
+    p.add_argument("--tol-all", type=float, default=0.03, help="allowed mean-ΔE regression overall")
+    p.add_argument("--no-pv", action="store_true", help="don't split cells by process version")
+    p.set_defaults(fn=gate)
     a = ap.parse_args()
     a.fn(a)
 

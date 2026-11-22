@@ -1,7 +1,7 @@
 //! The per-pixel stage: everything after the spatial planes are ready, in one parallel pass.
 
 use lightcraft_color::luminance_2020;
-use lightcraft_color::spline::{Lut1, MonotoneCurve};
+use lightcraft_color::spline::{Lut1, NaturalCurve};
 use lightcraft_color::transfer::linear_to_srgb;
 use lightcraft_develop::{DevelopSettings, LocalAdjustments, ToneCurve, VignetteStyle};
 use lightcraft_geom::Point;
@@ -26,34 +26,74 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 const PARAMETRIC_AMOUNT: f32 = 0.11;
 const PARAMETRIC_WIDTH: f32 = 1.05;
 
-/// Parametric region curve (encoded domain) composed with the master point curve.
-/// The user's tone curves as per-channel tables, under a look profile's own curves (`look`:
-/// master, red, green, blue point curves, applied first — Bryan's fork, [`crate::adobe::Look`]).
-fn curve_luts(c: &ToneCurve, look: Option<&[Vec<Point>; 4]>) -> Option<[Lut1; 3]> {
-    let user = curve_luts_user(c);
-    let look_pts = look.filter(|l| l.iter().any(|p| !ToneCurve::point_curve_is_identity(p)))?;
-    const N: usize = 1024;
-    let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
-    let lut = |p: &[Point]| if ToneCurve::point_curve_is_identity(p) { Lut1::identity(N) } else { MonotoneCurve::new(&to_pts(p)).to_lut(N) };
-    let master = lut(&look_pts[0]);
-    let pre: [Lut1; 3] = std::array::from_fn(|i| lut(&look_pts[i + 1]).compose(&master));
-    Some(match user {
-        Some(u) => std::array::from_fn(|i| u[i].compose(&pre[i])),
-        None => pre,
+/// The tone curves as Lightroom applies them (Camera Raw oracle, `docs/lr-match.md` → *Recipes, curves and the process version*):
+/// the parametric curve, then the point curve (natural cubic spline, clamped), as one *master*
+/// curve applied hue-preserving to the encoded style-space colour (largest and smallest channel
+/// through the curve, the middle one interpolated: [`crate::adobe::rgb_tone`]), then the red /
+/// green / blue point curves per channel. 1024 entries each.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Curves {
+    pub master: Lut1,
+    pub chans: [Lut1; 3],
+}
+
+impl Curves {
+    /// The curves on an encoded style-space colour.
+    #[inline]
+    pub fn apply(&self, e: [f32; 3]) -> [f32; 3] {
+        let m = crate::adobe::rgb_tone(e, |v| self.master.eval(v));
+        [self.chans[0].eval(m[0]), self.chans[1].eval(m[1]), self.chans[2].eval(m[2])]
+    }
+}
+
+const CURVE_LUT_N: usize = 1024;
+
+fn point_lut(p: &[Point]) -> Option<Lut1> {
+    (!ToneCurve::point_curve_is_identity(p)).then(|| NaturalCurve::new(&p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>()).to_lut(CURVE_LUT_N))
+}
+
+/// The user's tone curves, under a look profile's own curves (`look`: master, red, green, blue
+/// point curves, applied first — Bryan's fork, [`crate::adobe::Look`]). A look's per-channel curves
+/// are moved after the user's master curve (none of the Adobe looks has any).
+fn curve_luts(c: &ToneCurve, look: Option<&[Vec<Point>; 4]>) -> Option<Curves> {
+    let look = look.map(|l| [point_lut(&l[0]), point_lut(&l[1]), point_lut(&l[2]), point_lut(&l[3])]);
+    let user_master = parametric_lut(c).map(|par| match point_lut(&c.master) {
+        Some(m) => m.compose(&par),
+        None => par,
+    });
+    let user_master = user_master.or_else(|| point_lut(&c.master));
+    let user_ch = [point_lut(&c.red), point_lut(&c.green), point_lut(&c.blue)];
+    let look_master = look.as_ref().and_then(|l| l[0].clone());
+    let master = match (user_master, look_master) {
+        (Some(u), Some(l)) => Some(u.compose(&l)),
+        (u, l) => u.or(l),
+    };
+    let chans: [Option<Lut1>; 3] = std::array::from_fn(|i| {
+        let l = look.as_ref().and_then(|l| l[i + 1].clone());
+        match (user_ch[i].clone(), l) {
+            (Some(u), Some(l)) => Some(u.compose(&l)),
+            (u, l) => u.or(l),
+        }
+    });
+    if master.is_none() && chans.iter().all(Option::is_none) {
+        return None;
+    }
+    Some(Curves {
+        master: master.unwrap_or_else(|| Lut1::identity(CURVE_LUT_N)),
+        chans: chans.map(|c| c.unwrap_or_else(|| Lut1::identity(CURVE_LUT_N))),
     })
 }
 
-fn curve_luts_user(c: &ToneCurve) -> Option<[Lut1; 3]> {
-    let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
-    let master = !ToneCurve::point_curve_is_identity(&c.master);
-    let chans = [&c.red, &c.green, &c.blue].map(|p| !ToneCurve::point_curve_is_identity(p));
-    if !parametric && !master && !chans.iter().any(|b| *b) {
+/// The parametric curve (encoded domain), `None` when all four regions are 0. Fitted on previews
+/// (`PARAMETRIC_AMOUNT`, `PARAMETRIC_WIDTH`); Camera Raw's own curve is measured (R08) but stays
+/// off until the Basic-tone tables are refitted on top of it.
+fn parametric_lut(c: &ToneCurve) -> Option<Lut1> {
+    if c.highlights == 0.0 && c.lights == 0.0 && c.darks == 0.0 && c.shadows == 0.0 {
         return None;
     }
-    const N: usize = 1024;
     let (s1, s2, s3) = ((c.split_shadows / 100.0) as f32, (c.split_mid / 100.0) as f32, (c.split_highlights / 100.0) as f32);
     let regions = [(0.0, s1, c.shadows), (s1, s2, c.darks), (s2, s3, c.lights), (s3, 1.0, c.highlights)];
-    let mut base = Lut1::from_fn(N, |x| {
+    let mut base = Lut1::from_fn(CURVE_LUT_N, |x| {
         let mut d = 0.0;
         for (a, b, amt) in regions {
             if amt == 0.0 {
@@ -67,15 +107,10 @@ fn curve_luts_user(c: &ToneCurve) -> Option<[Lut1; 3]> {
         (x + d * 4.0 * x * (1.0 - x)).clamp(0.0, 1.0)
     });
     // keep monotone
-    for i in 1..N {
+    for i in 1..CURVE_LUT_N {
         base.v[i] = base.v[i].max(base.v[i - 1]);
     }
-    let to_pts = |p: &[Point]| p.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>();
-    if master {
-        base = MonotoneCurve::new(&to_pts(&c.master)).to_lut(N).compose(&base);
-    }
-    let per = [&c.red, &c.green, &c.blue];
-    Some(std::array::from_fn(|i| if chans[i] { MonotoneCurve::new(&to_pts(per[i])).to_lut(N).compose(&base) } else { base.clone() }))
+    Some(base)
 }
 
 /// Vignette (post-crop) parameters.
@@ -295,8 +330,9 @@ pub struct FinishParams {
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
     pub calib: Option<[[f32; 3]; 3]>,
     pub shadow_tint: f32,
-    /// Tone curves (parametric ∘ point, per channel) on encoded values, 1024 entries each.
-    pub curves: Option<[Lut1; 3]>,
+    /// Tone curves (parametric ∘ point as the hue-preserving master curve, then per channel) on
+    /// encoded values.
+    pub curves: Option<Curves>,
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
     pub refine_sat: f32,
     pub vig: Option<Vig>,
@@ -394,12 +430,12 @@ impl FinishParams {
                 let k = l.blend((s.profile.amount / 100.0) as f32);
                 (l, k)
             }),
-            ops: if adobe.is_some() { ColorOps::new(s).with_measured(s) } else { ColorOps::new(s) },
+            ops: ColorOps::new(s).with_measured(s),
             // an Adobe look's own curves go under the user's (with an Adobe base only: the looks
             // are raw-only in Lightroom too)
             curves: match adobe.as_ref().and(crate::adobe::look_for(&s.profile.id)) {
-                Some(look) => curve_luts(&s.curve, Some(&look.curves)).or_else(|| curve_luts_user(&s.curve)),
-                None => curve_luts_user(&s.curve),
+                Some(look) => curve_luts(&s.curve, Some(&look.curves)),
+                None => curve_luts(&s.curve, None),
             },
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
@@ -743,7 +779,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let mut e = mul3(&fp.to_style, d).map(enc_s);
                 if let Some(l) = curves {
                     let e0 = e;
-                    e = [l[0].eval(e[0]), l[1].eval(e[1]), l[2].eval(e[2])];
+                    e = l.apply(e);
                     if fp.refine_sat < 1.0 {
                         e = refine_saturation(e0, e, fp.refine_sat);
                     }
@@ -924,6 +960,30 @@ mod tests {
         for (a, b) in STYLE_LUMA.iter().zip(STYLE_SPACE.luma()) {
             assert!((f64::from(*a) - b).abs() < 1e-5, "{STYLE_LUMA:?} vs {:?}", STYLE_SPACE.luma());
         }
+    }
+
+    #[test]
+    fn the_master_curve_keeps_hue_and_the_channel_curves_act_alone() {
+        use lightcraft_geom::Point;
+        let pts = |v: &[f64]| v.chunks(2).map(|c| Point::new(c[0] / 255.0, c[1] / 255.0)).collect::<Vec<_>>();
+        // Bryan's custom curve: Lightroom applies it hue-preserving (Camera Raw oracle)
+        let c = ToneCurve { master: pts(&[0.0, 6.0, 62.0, 39.0, 98.0, 84.0, 181.0, 167.0, 255.0, 211.0]), ..ToneCurve::default() };
+        let k = curve_luts(&c, None).expect("a curve");
+        let n = k.apply([0.5, 0.5, 0.5]);
+        assert!(n.iter().all(|v| (v - n[0]).abs() < 1e-6) && (n[0] - 0.466369).abs() < 2e-3, "{n:?}");
+        let e = [0.7, 0.4, 0.2];
+        let o = k.apply(e);
+        let f = |x: f32| k.master.eval(x);
+        assert!((o[0] - f(0.7)).abs() < 1e-6 && (o[2] - f(0.2)).abs() < 1e-6);
+        // the middle channel keeps its place between the others (per channel it would not)
+        let t = (o[1] - o[2]) / (o[0] - o[2]);
+        assert!((t - 0.4).abs() < 1e-4, "{o:?}");
+        // a red curve alone changes red only
+        let r = ToneCurve { red: pts(&[0.0, 0.0, 128.0, 160.0, 255.0, 255.0]), ..ToneCurve::default() };
+        let k = curve_luts(&r, None).expect("a curve");
+        let o = k.apply(e);
+        assert!(o[0] > 0.7 && (o[1] - 0.4).abs() < 1e-3 && (o[2] - 0.2).abs() < 1e-3, "{o:?}");
+        assert!(curve_luts(&ToneCurve::default(), None).is_none());
     }
 
     #[test]

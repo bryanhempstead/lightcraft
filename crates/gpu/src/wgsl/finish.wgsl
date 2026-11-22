@@ -219,6 +219,43 @@ fn ad_rgb_tone(c0: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(o.z, o.x, o.y);
 }
 
+// `finish::Curves::apply`'s master curve (curve LUT 3), hue-preserving like `adobe::rgb_tone`
+fn cv_tone3(hi: f32, mid: f32, lo: f32) -> vec3<f32> {
+    let th = curve(3u, hi);
+    let tl = curve(3u, lo);
+    return vec3<f32>(th, tl + (th - tl) * (mid - lo) / (hi - lo), tl);
+}
+
+fn curve_rgb_tone(c0: vec3<f32>) -> vec3<f32> {
+    let c = clamp(c0, vec3<f32>(0.0), vec3<f32>(1.0));
+    let r = c.x;
+    let g = c.y;
+    let b = c.z;
+    if (r >= g) {
+        if (g > b) {
+            let o = cv_tone3(r, g, b);
+            return vec3<f32>(o.x, o.y, o.z);
+        } else if (b > r) {
+            let o = cv_tone3(b, r, g);
+            return vec3<f32>(o.y, o.z, o.x);
+        } else if (b > g) {
+            let o = cv_tone3(r, b, g);
+            return vec3<f32>(o.x, o.z, o.y);
+        }
+        let gg = curve(3u, g);
+        return vec3<f32>(curve(3u, r), gg, gg);
+    }
+    if (r >= b) {
+        let o = cv_tone3(g, r, b);
+        return vec3<f32>(o.y, o.x, o.z);
+    } else if (b > g) {
+        let o = cv_tone3(b, g, r);
+        return vec3<f32>(o.z, o.y, o.x);
+    }
+    let o = cv_tone3(g, b, r);
+    return vec3<f32>(o.z, o.x, o.y);
+}
+
 fn adobe_tone(c: vec3<f32>) -> vec3<f32> {
     var p = mul3(ad_mat(F_AD_TO_PP), c);
     let black = pf(F_AD_BLACK);
@@ -798,6 +835,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var e = vec3<f32>(encode_srgb(sd.x), encode_srgb(sd.y), encode_srgb(sd.z));
         if (pu(F_CURVES) != 0u) {
             let e0 = e;
+            e = curve_rgb_tone(e);
             e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
             let rs = pf(F_REFINE_SAT);
             if (rs < 1.0) {

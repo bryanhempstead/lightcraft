@@ -1,0 +1,20 @@
+[
+ {"model": "LEICA M (Typ 262)", "ext": "dng", "look": "Summer Fields", "pv": "15.4", "n": 14},
+ {"model": "Canon EOS R6", "ext": "cr3", "look": "Summer Fields", "pv": "11.0", "n": 14},
+ {"model": "Canon EOS R6", "ext": "cr3", "look": "Summer Fields", "pv": "15.4", "n": 12},
+ {"model": "RICOH GR III", "ext": "dng", "look": "Summer Fields", "pv": "15.4", "n": 12},
+ {"model": "iPhone 13 Pro Max", "ext": ["jpeg", "jpg"], "look": "Summer Fields", "n": 10},
+ {"model": "iPhone 13 Pro", "ext": "dng", "look": "Summer Fields", "n": 6},
+ {"model": "Canon EOS R6", "ext": "cr3", "look": "Nautica", "pv": "11.0", "n": 12},
+ {"model": "Canon EOS R6", "ext": "cr3", "look": "Nautica", "pv": "15.4", "n": 10},
+ {"model": "iPhone 13 Pro Max", "ext": ["jpeg", "jpg"], "look": "Nautica", "n": 10},
+ {"model": "LEICA M (Typ 262)", "ext": "dng", "look": "Adobe Color", "pv": "15.4", "n": 14},
+ {"model": "Canon EOS R6", "ext": "cr3", "look": "Adobe Color", "pv": "11.0", "n": 12},
+ {"model": "Canon EOS R6", "ext": "cr3", "look": "Adobe Color", "pv": "15.4", "n": 10},
+ {"model": "RICOH GR III", "ext": "dng", "look": "Adobe Color", "pv": "15.4", "n": 12},
+ {"model": "iPhone 13 Pro Max", "ext": ["jpeg", "jpg"], "look": "", "n": 8},
+ {"model": "LEICA M (Typ 262)", "ext": "dng", "look": "Adobe Monochrome", "n": 8},
+ {"model": "LEICA Q2", "ext": "dng", "look": "Summer Fields", "n": 6},
+ {"model": "X-T2", "ext": "raf", "look": "Adobe Color", "n": 6},
+ {"model": "X100F", "ext": "raf", "look": "Summer Fields", "n": 6}
+]
