@@ -601,18 +601,36 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     // Preset: load a built-in or saved set of options into the dialog
                     field(ui, "Preset", |ui| {
                         let mut chosen = None;
+                        let mut delete = None;
                         let c = egui::ComboBox::from_id_salt("exportPreset").width(220.0).selected_text(crate::i18n::tr("Choose…")).show_ui(ui, |ui| {
                             let mut builtin = true;
-                            for (p, b) in app.session.all_export_presets() {
+                            for (i, (p, b)) in app.session.all_export_presets().into_iter().enumerate() {
                                 if builtin && !b {
                                     ui.separator();
                                 }
                                 builtin = b;
-                                if ui.selectable_label(false, crate::i18n::builtin_label(&p.name, b)).clicked() {
-                                    chosen = Some(p.name);
-                                }
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    if ui.selectable_label(false, crate::i18n::builtin_label(&p.name, b)).clicked() {
+                                        chosen = Some(p.name.clone());
+                                    }
+                                    // a saved preset can be deleted right here (E13)
+                                    if !b {
+                                        let r = ui.small_button("del.");
+                                        crate::widgets::register(ui.ctx(), format!("button:exportPresetDelete-{i}"), r.rect);
+                                        if r.clicked() {
+                                            delete = Some(p.name.clone());
+                                        }
+                                    }
+                                });
                             }
                         });
+                        if let Some(name) = delete {
+                            match app.run("export.deletePreset", json!({"name": name})) {
+                                Ok(_) => app.toast(ui.ctx(), format!("Deleted export preset “{name}”")),
+                                Err(e) => app.toast(ui.ctx(), e),
+                            }
+                        }
                         crate::widgets::register(ui.ctx(), "combo:exportPreset", c.response.rect);
                         if let Some(name) = chosen
                             && let Ok(params) = app.session.export_params(&json!({"preset": name}))
