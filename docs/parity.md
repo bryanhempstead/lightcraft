@@ -29,7 +29,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | F. Edit panel — global adjustments (EDIT) | 43 | 7 | 0 | 1 | 24/28 (86%) | 13/15 (87%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
-| I. Remove / healing (REM) | 11 | 1 | 1 | 0 | 4/4 (100%) | 3/4 (75%) |
+| I. Remove / healing (REM) | 11 | 2 | 0 | 0 | 4/4 (100%) | 3/4 (75%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
 | K. Masking (MASK) | 21 | 2 | 1 | 0 | 8/8 (100%) | 6/6 (100%) |
 | L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
@@ -48,9 +48,9 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | Y. Menus | 83 | 1 | 1 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 3 | 1 | 0 | 49/52 (94%) | 24/24 (100%) |
 | Lightroom Classic extras | 68 | 20 | 33 | 9 | — | 34/35 (97%) |
-| **Total** | 461 | 56 | 47 | 33 | 189/201 (94%) | 163/170 (96%) |
+| **Total** | 461 | 57 | 46 | 33 | 189/201 (94%) | 163/170 (96%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **86.7%** of 564 in-scope rows — P0 97.0% of 201 · P1 97.9% of 170 · P2 66.1% of 192.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **86.8%** of 564 in-scope rows — P0 97.0% of 201 · P1 97.9% of 170 · P2 66.4% of 192.
 <!-- /parity:summary -->
 
 ## Top gaps

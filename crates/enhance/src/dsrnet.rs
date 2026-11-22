@@ -181,7 +181,7 @@ impl Down {
     }
     fn forward(&self, x: &Tensor) -> candle_core::Result<Tensor> {
         let (_, cin, h, wd) = x.dims4()?;
-        if h % 2 != 0 || wd % 2 != 0 {
+        if !h.is_multiple_of(2) || !wd.is_multiple_of(2) {
             candle_core::bail!("a stride-2 layer needs even sides");
         }
         let (oh, ow) = (h / 2, wd / 2);
@@ -458,7 +458,7 @@ impl Dereflector {
     /// `[1, 3, H, W]` (0..1, display-encoded; sides multiples of [`MULTIPLE`]) → (transmission, reflection).
     pub fn forward(&self, x: &Tensor) -> candle_core::Result<(Tensor, Tensor)> {
         let (_, c, h, w) = x.dims4()?;
-        if c != 3 || h % MULTIPLE != 0 || w % MULTIPLE != 0 || h < MULTIPLE || w < MULTIPLE {
+        if c != 3 || !h.is_multiple_of(MULTIPLE) || !w.is_multiple_of(MULTIPLE) || h < MULTIPLE || w < MULTIPLE {
             candle_core::bail!("the network takes RGB a multiple of {MULTIPLE} pixels in size");
         }
         let vf = self.vgg.forward(x)?;

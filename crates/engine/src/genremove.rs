@@ -651,7 +651,7 @@ impl Session {
                 geometry: lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(rect[0], rect[1], rect[2], rect[3]), angle: 0.0 },
                 flip_h: false,
                 flip_v: false,
-                ..s.crop.clone()
+                ..s.crop
             };
             s.geometry.constrain_crop = false;
             let job = self.crop_job(id, long, long, &s)?;
@@ -753,7 +753,7 @@ impl Session {
         s.masks.clear();
         s.lens_blur.enabled = false;
         s.reflection.enabled = false;
-        s.crop = lightcraft_develop::Crop { geometry: lightcraft_geom::CropGeometry::default(), flip_h: false, flip_v: false, ..s.crop.clone() };
+        s.crop = lightcraft_develop::Crop { geometry: lightcraft_geom::CropGeometry::default(), flip_h: false, flip_v: false, ..s.crop };
         s.geometry.constrain_crop = false;
         let edge = reflection_edge().min(oriented.0.max(oriented.1).round() as usize).max(64);
         let render = self.crop_job(id, edge, edge, &s)?;

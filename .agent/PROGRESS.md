@@ -7,8 +7,17 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
 
 ## Open
 - [ ] (genremove agent, 2026-11-22, branch worktree-agent-a3ee2e30c0c3eb570, not merged) **Remove tool, AI side (parity I:
-  LR-REM-GEN, LR-REM-DETECT, LR-REM-PEOPLE, LR-REM-REFLECT)** — in progress: LaMa big-lama on candle (327bc1b17),
-  Generative Remove spots + variations, Detect candidates to pick.
+  LR-REM-GEN 🟡, LR-REM-DETECT ✅, LR-REM-PEOPLE ✅, LR-REM-REFLECT 🟡, KEY-GENAI ✅; `docs/remove.md`)** — 327bc1b17 LaMa
+  big-lama on candle (FFT as cos/sin matrix products, matched to PyTorch to 3e-6), a22cb17ad Generative Remove spots
+  (gen.ai., 3 variations via context/mirror/scale recipes, < / > and ⌥← / ⌥→, more.; fills cached in
+  ~/Library/Caches/LightCraft/Remove before white balance, remade from the photo when missing; PatchMatch stand-in +
+  notice without the model) and Detect candidates (det. → chips + highlighted outlines, click / ⌘ / ⇧, all. / none.,
+  rem.N; one generative spot per object), fbf698d66 Remove Reflections (DSRNet + VGG-19, matched to PyTorch to 1.4e-6;
+  refl. / rmv. / keep. / Amount, layer at ≤ 512 px subtracted after white balance). Models in the Enhance catalog:
+  inpaint, reflection (authors' Google Drive), vgg19 (timm on HF), all pinned. Verified headless on public-domain / CC0
+  photos (scratch only). needs.you #163–#165. Left: LaMa ~5 s per 1024² variation (f16 / faster 7×7 convs), fills
+  capped at 1024 px, wires (SAM 3) not run, Find Dust Spots over-reports on textured photos, Lightroom's generative /
+  reflection XMP not read.
 - [ ] (AI masks agent, 2026-11-22, branch worktree-agent-af352bb019bacca9d, not merged) **AI masks — parity K + REM rows**
   Done: 08552d289 SAM 3 downloads work (5 ungated HF copies, every file hash-pinned; DEFAULT_MIRRORS was empty);
   365717b7c SegFormer in pure Rust (crates/segment/src/segformer.rs, ported from candle-transformers) + three

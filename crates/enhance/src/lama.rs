@@ -92,7 +92,7 @@ pub fn reflect_pad(x: &Tensor, p: usize) -> candle_core::Result<Tensor> {
 pub fn conv3_s2(x: &Tensor, w: &Tensor) -> candle_core::Result<Tensor> {
     let (n, cin, h, wd) = x.dims4()?;
     let (cout, cin_k, kh, kw) = w.dims4()?;
-    if n != 1 || cin != cin_k || (kh, kw) != (3, 3) || h % 2 != 0 || wd % 2 != 0 {
+    if n != 1 || cin != cin_k || (kh, kw) != (3, 3) || !h.is_multiple_of(2) || !wd.is_multiple_of(2) {
         candle_core::bail!("stride-2 convolution shapes do not match");
     }
     let xp = reflect_pad(x, 1)?;
@@ -185,7 +185,7 @@ impl Dft {
         };
         // reduce the products mod n so the angles stay small and exact
         let ang = |a: usize, b: usize, n: usize| tau * ((a * b) % n) as f64 / n as f64;
-        let wt = |l: usize| if l == 0 || (w % 2 == 0 && l == w / 2) { 1.0 } else { 2.0 };
+        let wt = |l: usize| if l == 0 || (w.is_multiple_of(2) && l == w / 2) { 1.0 } else { 2.0 };
         Ok(Dft {
             h,
             w,
@@ -380,7 +380,7 @@ impl Inpainter {
     /// `[1, 3, H, W]` (0..1).
     pub fn forward(&self, x: &Tensor) -> candle_core::Result<Tensor> {
         let (_, c, h, w) = x.dims4()?;
-        if c != 4 || h % MULTIPLE != 0 || w % MULTIPLE != 0 || h < 2 * MULTIPLE || w < 2 * MULTIPLE {
+        if c != 4 || !h.is_multiple_of(MULTIPLE) || !w.is_multiple_of(MULTIPLE) || h < 2 * MULTIPLE || w < 2 * MULTIPLE {
             candle_core::bail!("LaMa takes a 4-channel picture a multiple of {MULTIPLE} in size, at least {} across", 2 * MULTIPLE);
         }
         let mut t = self.init_bn.relu(&crate::netrun::conv2d(&reflect_pad(x, 3)?, &self.init, 0)?)?;
