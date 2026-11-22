@@ -77,6 +77,28 @@ const FIELDS: &[(&str, usize)] = &[
     ("GRADE_CR_OFF", 1),
     ("BW_CR", 1),
     ("BW_CR_OFF", 1),
+    // Camera Raw's scene tone map (`lightcraft_pipeline::scene_cr`, round 11): flags (1 map, 2
+    // Clarity, 4 Highlights / Shadows, 8 positive Dehaze), the map in aux (A, B, then Clarity's
+    // four fits and guide, the haze density, the unit curves + pair), its size and scale, the
+    // global Shadows / Highlights and the airlight at this Exposure (ProPhoto)
+    ("SC", 1),
+    ("SC_OFF", 1),
+    ("SC_MW", 1),
+    ("SC_MH", 1),
+    ("SC_SX", 1),
+    ("SC_SY", 1),
+    ("SC_CL_OFF", 1),
+    ("SC_HZ_OFF", 1),
+    ("SC_HS_OFF", 1),
+    ("SC_SH", 1),
+    ("SC_HL", 1),
+    ("SC_HS_SHIFT", 1),
+    ("SC_AIR", 3),
+    // the camera RGB Camera Raw's Texture gain applies in (`texture_cr::space`): flag, working →
+    // camera, camera → working
+    ("TX_SPACE", 1),
+    ("TX_FROM", 9),
+    ("TX_TO", 9),
     ("PP_TO", 9),
     ("PP_FROM", 9),
     ("VIG", 1),
@@ -270,6 +292,34 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     if let Some(m) = &fp.ops.bw_cr {
         aux.extend_from_slice(&m.grid);
     }
+    // Camera Raw's scene tone map
+    let sc_off = aux.len();
+    let (mut sc_flags, mut sc_cl, mut sc_hz, mut sc_hs) = (0u32, 0usize, 0usize, 0usize);
+    if let Some(t) = &fp.scene {
+        let (a, b) = t.map.coefficients();
+        sc_flags |= 1;
+        aux.extend_from_slice(a);
+        aux.extend_from_slice(b);
+        if t.clarity {
+            sc_flags |= 2;
+            sc_cl = aux.len();
+            let d = t.map.detail();
+            for f in d.slopes.iter().chain(&d.offsets) {
+                aux.extend_from_slice(f);
+            }
+            aux.extend_from_slice(&d.guide);
+        }
+        if let Some((curves, _, _)) = &t.hs {
+            sc_flags |= 4;
+            sc_hs = aux.len();
+            aux.extend(curves.words());
+        }
+        if let Some((h, _)) = &t.haze {
+            sc_flags |= 8;
+            sc_hz = aux.len();
+            aux.extend_from_slice(&h.density);
+        }
+    }
     let mask_off = aux.len();
     for m in masks {
         aux.extend_from_slice(m);
@@ -344,6 +394,30 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("GRADE_CR_OFF", grade_cr_off as u32);
     p.b("BW_CR", ops.bw_cr.is_some());
     p.u("BW_CR_OFF", bw_cr_off as u32);
+    if let Some(t) = &fp.scene {
+        p.u("SC", sc_flags);
+        p.u("SC_OFF", sc_off as u32);
+        p.u("SC_MW", t.map.w as u32);
+        p.u("SC_MH", t.map.h as u32);
+        p.f("SC_SX", t.scale[0]);
+        p.f("SC_SY", t.scale[1]);
+        p.u("SC_CL_OFF", sc_cl as u32);
+        p.u("SC_HZ_OFF", sc_hz as u32);
+        p.u("SC_HS_OFF", sc_hs as u32);
+        if let Some((_, sh, hl)) = &t.hs {
+            p.f("SC_SH", *sh);
+            p.f("SC_HL", *hl);
+            p.f("SC_HS_SHIFT", t.hs_shift);
+        }
+        if let Some((_, air)) = &t.haze {
+            p.fs("SC_AIR", air);
+        }
+    }
+    if let Some((from, to)) = &fp.tex_space {
+        p.b("TX_SPACE", true);
+        p.fs("TX_FROM", from.as_flattened());
+        p.fs("TX_TO", to.as_flattened());
+    }
     let (to_pp, from_pp) = lightcraft_pipeline::colorops::pp_matrices();
     p.fs("PP_TO", to_pp.as_flattened());
     p.fs("PP_FROM", from_pp.as_flattened());

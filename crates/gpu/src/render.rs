@@ -52,6 +52,9 @@ struct Planes {
     p99: Option<f32>,
     /// The tone statistics of `log_l` (`tone::lr::image_stats`).
     tone_stats: Option<lightcraft_pipeline::tone::lr::ToneStats>,
+    /// Camera Raw's scene tone map and haze (`scene_cr`, made on the CPU from the read-back image).
+    scene_map: Option<Option<Arc<lightcraft_pipeline::scene_cr::MapBase>>>,
+    haze: Option<Option<Arc<lightcraft_pipeline::scene_cr::Haze>>>,
 }
 
 impl GpuStages {
@@ -588,7 +591,7 @@ pub fn render(
         Some(p) if p.key == plan.lin_key => p,
         _ => Planes { key: plan.lin_key, ..Default::default() },
     };
-    let prep = prepare(&mut cx, &lin, &plan, req, info.native_long, &mut planes);
+    let prep = prepare(&mut cx, &lin, &plan, req, info, &mut planes);
     lap("planes", &mut t, &mut cx);
     if let Some(c) = stages {
         c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), planes });
@@ -599,7 +602,11 @@ pub fn render(
     lap("masks", &mut t, &mut cx);
 
     // 5. per-pixel stage
-    let mut fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, prep.tone_stats, req.space);
+    let mut fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, prep.tone_stats, req.space).with_scene(
+        prep.scene_map.as_ref(),
+        prep.haze.as_ref(),
+        s,
+    );
     fp.dz_key = prep.p99.filter(|_| local::dehaze_key_needed(s)).map(|k| k + fp.ev);
     let present = Present {
         clarity: prep.clarity.is_some(),
@@ -786,6 +793,8 @@ struct Prep {
     chroma: Option<Arc<Buf>>,
     air: f32,
     tone_stats: Option<lightcraft_pipeline::tone::lr::ToneStats>,
+    scene_map: Option<Arc<lightcraft_pipeline::scene_cr::MapBase>>,
+    haze: Option<Arc<lightcraft_pipeline::scene_cr::Haze>>,
 }
 
 fn plane_at(slot: &mut Option<(u32, Arc<Buf>)>, sigma: f32, f: impl FnOnce() -> Buf) -> Arc<Buf> {
@@ -800,7 +809,8 @@ fn plane_at(slot: &mut Option<(u32, Arc<Buf>)>, sigma: f32, f: impl FnOnce() -> 
 }
 
 /// The spatial planes (`local::prepare`), reusing those in `planes`.
-fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, native_long: f32, planes: &mut Planes) -> Prep {
+fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, info: &SourceInfo, planes: &mut Planes) -> Prep {
+    let native_long = info.native_long;
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let sig = local::plane_sigmas(&plan.settings, plan.px_per_long, req.quality);
@@ -840,7 +850,8 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, nat
         Some((k, b)) if *k == lv as u32 => b.clone(),
         _ => {
             let img = cx.read_rgb(lin, w, h);
-            let d = lightcraft_pipeline::texture_cr::detail_rgb(&img, lv);
+            let space = lightcraft_pipeline::texture_cr::space(info);
+            let d = lightcraft_pipeline::texture_cr::detail_rgb_in(&img, lv, space.as_ref().map(|m| &m.0));
             let b = Arc::new(cx.gpu.upload(rgb_words(&d)));
             planes.texture_detail = Some((lv as u32, b.clone()));
             b
@@ -900,7 +911,20 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, nat
             gaussian(cx, &ch, w, h, 3, sg)
         })
     });
-    Prep { log_l, base, clarity, texture, texture_gauss, texture_detail, tex_g_off, dark, p99, chroma, air, tone_stats }
+    // Camera Raw's scene tone map and haze: measured on the CPU (a small map, once per image)
+    let (need_map, need_haze) = lightcraft_pipeline::scene_cr::needs(&plan.settings);
+    let missing = (need_map && planes.scene_map.is_none()) || (need_haze && planes.haze.is_none());
+    if let Some(img) = missing.then(|| cx.read_rgb(lin, w, h)) {
+        if need_map && planes.scene_map.is_none() {
+            planes.scene_map = Some(lightcraft_pipeline::scene_cr::MapBase::of(&img).map(Arc::new));
+        }
+        if need_haze && planes.haze.is_none() {
+            planes.haze = Some(lightcraft_pipeline::scene_cr::Haze::of(&img).map(Arc::new));
+        }
+    }
+    let scene_map = if need_map { planes.scene_map.clone().flatten() } else { None };
+    let haze = if need_haze { planes.haze.clone().flatten() } else { None };
+    Prep { log_l, base, clarity, texture, texture_gauss, texture_detail, tex_g_off, dark, p99, chroma, air, tone_stats, scene_map, haze }
 }
 
 /// Most brush dabs the mask kernel evaluates per pixel (more: the CPU rasterizes the brush).

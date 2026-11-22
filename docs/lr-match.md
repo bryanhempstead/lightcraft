@@ -1087,3 +1087,132 @@ catalog uses no Camera Matching profile: 14,674 Adobe Standard, 2,051 Embedded, 
 (all 16,823 photos resolve, `tests_profiles::every_profile_in_the_lightroom_catalog_resolves` with
 `LIGHTCRAFT_LRCAT`). Adobe Adaptive: Color / B&W render their look table; their per-photo gain table
 map and RGB tables come from Camera Raw's `ModelZoo/ai_look`, an encrypted Core ML bundle.
+
+## Round 11 (2026-11-22): Clarity, positive Dehaze and Highlights / Shadows from RAWmakase's scene map
+
+**Reused, then measured.** RAWmakase (<https://github.com/pch/rawmakase>, MIT; round 10) renders
+Clarity, positive Dehaze and Highlights / Shadows from one *measurement map* of the photo: its
+scene luminance reduced to 512 px on the long edge, a guided base level on it (radius 3.2 %,
+ε 0.5) kept as coefficients so each pixel's base is `A · level + B`, and per operator:
+Clarity's four edge-aware blurs (σ 0.4 / 1.5 / 5 / 15 % of the long edge, range σ 2 EV) weighted
+by the base level against the photo's brightest levels; a dark-channel haze model (airlight of
+the haziest 1 %, guided density, transmission `1 − ω · density`, ω 0.3 / 0.45 / 0.9 at
++20 / +40 / +100, airlight scaled by the gains already applied); and Highlights / Shadows as
+the photo's *global rule* — two ensembles of four small networks from 24 / 28 histogram and
+texture descriptors of a base level to Camera Raw's gain at ±100, evaluated at 48 levels per
+photo, linear in the slider, with both sliders blended towards a uniform gain at each one's
+extreme. All of it is ported as `crates/pipeline/src/scene_cr.rs` (the fitted networks copied
+verbatim into `scene_cr_rule_*.rs`; NOTICE), computed once per photo and image (CPU; the GPU
+reads the map from the aux table), CPU and GPU equivalent (`crates/gpu/tests/scene_cr.rs`).
+Masks use the same operators at the slider plus the mask's value.
+
+New oracle set `oracle/make_r11.py SET syn,mask,real ACC` (276 Camera Raw renders): the colour
+grid, the spatial and frequency scenes, two photo-like scenes (`land`: a hazy landscape, `room`:
+a dark interior with a window), full-frame and half masks next to the same global sliders, and
+9 of Bryan's split-A raws on readable disks (M262 ×4, R6 ×3, GR III ×2; Camera Raw's minimum
+size) with one-slider sidecars and his tone recipe. `lcrun.sh` now renders those raws too;
+`r11cmp.py` lists two runs side by side with per-setting means.
+
+ΔE2000 against Camera Raw, mean over the photos / scenes that have the setting (synthetic: grid,
+spatial, land, room, frequency scene; real: the 9 raws):
+
+| row | setting | before | after |
+|---|---|---|---|
+| R21 Clarity | real +50 / +100 | 2.04 / 3.75 | **1.61 / 2.51** |
+| | real −50 | 1.36 | 1.36 (kept: the model is 1.43) |
+| | synthetic +25 / +50 / +100 | 1.70 / 2.69 / 4.93 | **1.22 / 1.83 / 3.20** |
+| | grid +25 / +50 / +100 | 1.04 / 1.90 / 3.77 | **0.73 / 1.19 / 2.20** |
+| | synthetic −25 / −50 / −100 | 0.69 / 0.77 / 0.99 | unchanged |
+| R21 Dehaze (+) | real +30 / +100 | 2.42 / 10.12 | **1.59 / 4.71** |
+| | synthetic +15 / +30 / +60 / +100 | 1.28 / 2.26 / 4.64 / 8.74 | **1.08 / 1.74 / 2.84 / 5.30** |
+| | of which grid / spatial +15 and +30 | 0.56 / 0.70, 0.89 / 1.31 | 0.77 / 0.99, 1.07 / 1.66 |
+| R16 masks | local Clarity +40, full / half frame | 3.61 / 2.09 | **2.74 / 1.65** |
+| | local Dehaze +30 / +60 | 3.75 / 7.90 | **2.06 / 5.34** |
+| R02 H/S rule (off) | real H−100 / H+50 / S+100 / S−50 | 2.65 / 1.90 / 4.32 / 2.12 | 1.62 / 1.38 / 2.67 / 1.18 |
+| | real H−100 S+100 | 4.03 | 2.77 |
+| | real tone recipe (E −1.1, C −72, H +30, S +69, W −36, B +30) | 3.08 | 3.22 |
+| | synthetic H−100 / H−50 / H+50 / S+50 / S+100 / S−50 | 3.35 / 1.60 / 1.84 / 3.31 / 6.42 / 2.94 | 2.65 / 1.29 / 1.57 / 2.15 / 4.32 / 1.30 |
+| | masks' local H/S (rule = global) | 1.28–2.17 | 1.70–2.60 |
+| R21 Texture in camera RGB (off) | grid +50 / −50 | 3.15 / 2.26 | 3.39 / 2.49 |
+
+### Clarity (R21)
+
+RAWmakase's model as it is (gains made at each map cell's own level, upsampled with the pixel's
+luminance as a guide) took real +100 3.75 → 3.20 and kept Camera Raw's shape, but it is too weak
+on fine detail: on the frequency scene Camera Raw's +100 multiplies log contrast by **2.16 at
+every period from 3 to 233 px**, RAWmakase's gains give 1.17 at 3 px and 1.8 at 13–34 px (the
+map, 2 render px per cell here, cannot hold finer detail). Two changes, each a const:
+
+- `CLARITY_FINE`: each cell's gain is kept as `slope · level + offset` (Σ weight · (level −
+  blur)) and evaluated at the *pixel's* level, so detail finer than the map gains as Camera Raw's
+  does (1.92 at 3 px). The guide's Cauchy weights still keep the upsampling edge-aware.
+- the weights refit for that evaluation on our oracle (`oracle/clafit.py`): Camera Raw's change
+  of scene log2 luminance (its render read back through its own base render's global map,
+  against LightCraft's scene level) regressed on LightCraft's terms (`LIGHTCRAFT_CLARITY_DUMP`),
+  ridge towards RAWmakase's weights, plus a fifth row: a gain by the base level alone —
+  Camera Raw's Clarity also moves whole regions (−20 L* on the land scene's ridges, +19 on the
+  room's walls at +100). Held out (BHM_8480, L1006270, R0002574, room), the RMS of the scene
+  change at +100 is 0.56 / 0.41 / 0.57 / 0.54 EV with RAWmakase's weights, 0.34 / 0.25 / 0.43 /
+  0.41 refit.
+
+Negative Clarity stays LightCraft's band (`CLARITY_NEGATIVE_MEASURED`): the model was 1.36 →
+1.43 on the raws at −50 (0.99 → 0.89 at −100 on the synthetic scenes). Left at +100: Camera
+Raw's regional moves are only partly explained (land 5.86, real BHM_8476 / 8480 ~4.1–4.5).
+
+### Positive Dehaze (R21)
+
+RAWmakase's haze model as it is, except the airlight's 99th-percentile edge is softened over 1 %
+of its level (so a CPU and a GPU render of a photo, equal to rounding, get the same airlight).
+It halves the error on Bryan's raws (+100 10.1 → 4.7, +30 2.4 → 1.6) and on the photo-like
+scenes, but is a little worse than LightCraft's old removal at +15 / +30 on the grid and the
+spatial scene (0.56 → 0.77, 1.31 → 1.66), where the old one happened to be close. ω was not
+retuned: (0.2, 0.32, 0.85) at +20 / +40 / +100 helped the synthetic scenes (+30 1.72 → 1.08)
+and hurt the raws (1.59 → 1.65, +100 4.71 → 4.81). In a mask the same model at the summed
+amount; Camera Raw's local Dehaze is not its global one (land: local vs global +60 3.41 ΔE).
+
+GPU: a channel Dehaze takes to almost 0 keeps the last bits of the airlight and the steep
+start of the tone and sRGB curves shows them: such pixels may differ by 5 LSB (mean < 0.15).
+
+### Highlights / Shadows (R02): RAWmakase's global rule, measured, not switched on
+
+On the oracle the rule is much closer than LightCraft's preview-fitted tables for single
+sliders and both sliders together (table above), at the render's Exposure as RAWmakase builds it
+(`HS_BEFORE_EXPOSURE`: reading the photo before Exposure, round 8's reading, made the tone
+recipe worse, 3.22 → 3.37). But on Bryan's own tone recipe it is worse on three of the nine
+raws (BHM_8476 / 8480 2.56 → 5.10, R0002574 2.46 → 4.53: Shadows +69 lifts their darks
+~5 L* more than Camera Raw), and masks' local sliders, which now follow the global rule as in
+Camera Raw (local = global to 0.1–0.8 ΔE), get worse on the synthetic scenes. On the acceptance
+set (below) it is better overall (3.99 → 3.96 ΔE, photos passing 25 → 31, edited 4.56 → 4.52) but
+fails the gate on the R6 cells (Summer Fields · R6 5.83 → 6.05, ΔL* +1.75; Nautica · R6 5.46 → 5.62),
+the same R6 lift as on the oracle. So it stays off; the R6 shadows lift (Shadows' first ensemble,
+which reads only levels relative to the photo) is the next thing to look at.
+
+`scene_cr::HS_MEASURED` switches it; `LIGHTCRAFT_HS_CR=1` (or `scene_cr::force_hs_measured`)
+renders with it for measurement.
+
+### Texture's colour at colour edges (R21): measured, not changed
+
+Camera Raw's Texture changes saturated colours' chroma (grid, +50: +8.2 C* on the most saturated
+patches, −2 on mid ones, +2.2 on neutrals beside colours; ours +0.5 / −1.0 / +0.5). Taking each
+channel's detail in the camera's RGB (RAWmakase's choice, `texture_cr::CAMERA_SPACE`) made the
+grid worse (3.15 → 3.39); ProPhoto RGB is a hair better (3.07) but not worth a change. The
+likely cause: each channel's large log contrast between neighbouring saturated patches is
+compressed away (`band / (1 + (band / t)²)`), which Camera Raw does not do to colour.
+
+Negative Dehaze on fine gratings (Camera Raw keeps the mean level at 3–13 px periods) was not
+taken up this round.
+
+### Acceptance gate
+
+The LOT48 share answered this round: the full acceptance set (183 photos; the Summer Fields and
+Nautica looks imported from Bryan's Camera Raw settings with `migrate --profiles`, without which
+they go unmatched, which is why round 10's 41-photo gate sat at ~7 ΔE), CPU, Lightroom's previews:
+
+| run | ΔE | p95 | pass | gate |
+|---|---|---|---|---|
+| before this round | 3.99 | 10.8 | 25 | — |
+| this round (Clarity, positive Dehaze) | 3.99 | 10.8 | 25 | pass (every cell within 0.04) |
+| + the Highlights / Shadows rule | 3.96 | 10.3 | 31 | fail: Summer Fields · R6 +0.22, Nautica · R6 +0.17 |
+
+Only 3 of the 183 photos use Clarity or Dehaze, so the acceptance set hardly sees this round's
+operators (one photo, Clarity −2 with a mask, 3.91 → 3.95); the oracle above is their measure.

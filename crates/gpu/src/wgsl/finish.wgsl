@@ -958,6 +958,192 @@ fn look(d: vec3<f32>, x: u32, y: u32) -> vec3<f32> {
     return mul3(sb, vec3<f32>(decode_srgb(e.x), decode_srgb(e.y), decode_srgb(e.z)));
 }
 
+// ---- Camera Raw's scene tone map (`lightcraft_pipeline::scene_cr`, Bryan's fork round 11)
+
+struct ScS {
+    i: vec4<u32>,
+    w: vec4<f32>,
+}
+
+// `scene_cr::level`
+fn sc_level(y: f32) -> f32 {
+    return log2(min(max(y, SC_FLOOR), 1e9));
+}
+
+// `SceneTone::sample`
+fn sc_sample(x: u32, y: u32) -> ScS {
+    let mw = pu(F_SC_MW);
+    let mh = pu(F_SC_MH);
+    let fx = clamp((f32(x) + 0.5) * pf(F_SC_SX) - 0.5, 0.0, f32(mw - 1u));
+    let fy = clamp((f32(y) + 0.5) * pf(F_SC_SY) - 0.5, 0.0, f32(mh - 1u));
+    let ix = u32(fx);
+    let iy = u32(fy);
+    let jx = min(ix + 1u, mw - 1u);
+    let jy = min(iy + 1u, mh - 1u);
+    let tx = fx - f32(ix);
+    let ty = fy - f32(iy);
+    var r: ScS;
+    r.i = vec4<u32>(iy * mw + ix, iy * mw + jx, jy * mw + ix, jy * mw + jx);
+    r.w = vec4<f32>((1.0 - tx) * (1.0 - ty), tx * (1.0 - ty), (1.0 - tx) * ty, tx * ty);
+    return r;
+}
+
+fn sc_bil(s: ScS, off: u32) -> f32 {
+    var v = 0.0;
+    v += aux[off + s.i.x] * s.w.x;
+    v += aux[off + s.i.y] * s.w.y;
+    v += aux[off + s.i.z] * s.w.z;
+    v += aux[off + s.i.w] * s.w.w;
+    return v;
+}
+
+// `SceneTone::base`
+fn sc_base(s: ScS, l: f32) -> f32 {
+    let cells = pu(F_SC_MW) * pu(F_SC_MH);
+    let a = sc_bil(s, pu(F_SC_OFF));
+    return a * l + sc_bil(s, pu(F_SC_OFF) + cells) + (1.0 - a) * pf(F_EV);
+}
+
+// `SceneTone::clarity_gain`
+fn sc_clarity(s: ScS, amount_in: f32, l: f32) -> f32 {
+    if (amount_in == 0.0 || (pu(F_SC) & 2u) == 0u) {
+        return 0.0;
+    }
+    let amount = clamp(amount_in, -1.0, 1.0);
+    var half = 2u;
+    if (amount < 0.0) {
+        half = 0u;
+    }
+    let a2 = abs(amount) * 2.0;
+    var ba = a2;
+    var bb = 0.0;
+    if (a2 > 1.0) {
+        ba = 2.0 - a2;
+        bb = a2 - 1.0;
+    }
+    let cells = pu(F_SC_MW) * pu(F_SC_MH);
+    let o = pu(F_SC_CL_OFF);
+    var num = 0.0;
+    var den = 0.0;
+    for (var k = 0u; k < 4u; k++) {
+        let j = s.i[k];
+        let guide = aux[o + 8u * cells + j];
+        var xl = guide;
+        if (SC_FINE) {
+            xl = l - pf(F_EV);
+        }
+        let g0 = aux[o + half * cells + j] * xl + aux[o + (4u + half) * cells + j];
+        let g1 = aux[o + (half + 1u) * cells + j] * xl + aux[o + (5u + half) * cells + j];
+        let g = ba * g0 + bb * g1;
+        let q = (guide + pf(F_EV) - l) / SC_UPS;
+        let wt = s.w[k] / (1.0 + q * q);
+        num += g * wt;
+        den += wt;
+    }
+    if (den > 1e-12) {
+        return num / den;
+    }
+    return 0.0;
+}
+
+// `Curve::eval` of unit curve `k`
+fn sc_curve(k: u32, base: f32) -> f32 {
+    let o = pu(F_SC_HS_OFF) + k * (SC_LEVELS + 2u);
+    let lo = aux[o];
+    let hi = aux[o + 1u];
+    let span = max(hi - lo, 1e-6);
+    let f = clamp((base - lo) / span * f32(SC_LEVELS) - 0.5, 0.0, f32(SC_LEVELS - 1u));
+    let i = min(u32(f), SC_LEVELS - 2u);
+    let t = aux[o + 2u + i];
+    return t + (aux[o + 3u + i] - t) * (f - f32(i));
+}
+
+fn sc_ramp(ratio: f32, same: bool) -> f32 {
+    let r = clamp(ratio, 0.0, 1.0);
+    if (same) {
+        return pow(r, SC_PAIR_POW);
+    }
+    return (1.0 - exp(-SC_PAIR_RATE * r)) / (1.0 - exp(-SC_PAIR_RATE));
+}
+
+// `HsCurves::gain`
+fn sc_hs(base: f32, sh: f32, hl: f32) -> f32 {
+    let p = pu(F_SC_HS_OFF) + 4u * (SC_LEVELS + 2u);
+    var fs = 0.0;
+    var es = 0.0;
+    var fh = 0.0;
+    var eh = 0.0;
+    if (sh != 0.0 && hl != 0.0) {
+        var c = 3u;
+        var ks = 2u;
+        var kh = 3u;
+        if (sh > 0.0 && hl > 0.0) {
+            c = 0u;
+            ks = 0u;
+            kh = 3u;
+        } else if (sh <= 0.0 && hl <= 0.0) {
+            c = 1u;
+            ks = 2u;
+            kh = 1u;
+        } else if (sh > 0.0) {
+            c = 2u;
+            ks = 0u;
+            kh = 1u;
+        }
+        let same = c < 2u;
+        let s1 = min(abs(sh), 1.0);
+        let h1 = min(abs(hl), 1.0);
+        fs = aux[p + 4u + c * 2u] * sc_ramp(h1 / s1, same);
+        es = aux[p + ks];
+        fh = aux[p + 4u + c * 2u + 1u] * sc_ramp(s1 / h1, same);
+        eh = aux[p + kh];
+    }
+    var g = 0.0;
+    if (sh != 0.0) {
+        var k = 2u;
+        if (sh > 0.0) {
+            k = 0u;
+        }
+        let u = sc_curve(k, base);
+        g += (u + fs * (es - u)) * min(abs(sh), 1.0);
+    }
+    if (hl != 0.0) {
+        var k = 1u;
+        if (hl > 0.0) {
+            k = 3u;
+        }
+        let u = sc_curve(k, base);
+        g += (u + fh * (eh - u)) * min(abs(hl), 1.0);
+    }
+    return g;
+}
+
+// `scene_cr::omega`
+fn sc_omega(s_in: f32) -> f32 {
+    let s = clamp(s_in, 0.0, 1.0);
+    if (s <= SC_OM_S1) {
+        return SC_OM_W0 + (SC_OM_W1 - SC_OM_W0) * (s - SC_OM_S0) / (SC_OM_S1 - SC_OM_S0);
+    }
+    if (s <= SC_OM_S2) {
+        return SC_OM_W1 + (SC_OM_W2 - SC_OM_W1) * (s - SC_OM_S1) / (SC_OM_S2 - SC_OM_S1);
+    }
+    return SC_OM_W2 + (SC_OM_W3 - SC_OM_W2) * (s - SC_OM_S2) / (SC_OM_S3 - SC_OM_S2);
+}
+
+fn sc_lum_pp(p: vec3<f32>) -> f32 {
+    return 0.2880402 * p.x + 0.7118741 * p.y + 0.0000857 * p.z;
+}
+
+// `SceneTone::dehaze`
+fn sc_dehaze(s: ScS, c: vec3<f32>, dz: f32, tone_gain: f32) -> vec3<f32> {
+    let t = max(1.0 - sc_omega(dz) * sc_bil(s, pu(F_SC_HZ_OFF)), SC_MIN_T);
+    let air = vec3<f32>(pf(F_SC_AIR), pf(F_SC_AIR + 1u), pf(F_SC_AIR + 2u)) * tone_gain;
+    let p = mul3(ad_mat(F_PP_TO), c);
+    let j = (p - air) / t + air;
+    let ratio = max(sc_lum_pp(j), 0.0) / max(sc_lum_pp(p), 1e-9);
+    return mul3(ad_mat(F_PP_FROM), max(j, SC_CH_FLOOR * p * ratio));
+}
+
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w = pu(F_W);
@@ -1027,9 +1213,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    // --- dehaze (scene linear)
+    // Camera Raw's scene tone map (`scene_cr`): the pixel's neighbours on the map, its level after
+    // Exposure, before Dehaze and a mask's Exposure
+    let sc_on = (pu(F_SC) & 1u) != 0u;
+    var smp: ScS;
+    if (sc_on) {
+        smp = sc_sample(x, y);
+    }
+    let l_scene = sc_level(lum2020(c));
+    // --- dehaze (scene linear): positive with Camera Raw's haze model after local tone
     let dz = pf(F_DEHAZE) + lt[10];
-    if (dz != 0.0 && pu(F_HAS_DARK) != 0u) {
+    let haze_cr = dz > 0.0 && sc_on && (pu(F_SC) & 8u) != 0u;
+    if (dz != 0.0 && !haze_cr && pu(F_HAS_DARK) != 0u) {
         let d = clamp(dark[i] / pf(F_AIR_PRE), 0.0, 1.0);
         let air = pf(F_AIR);
         if (dz > 0.0) {
@@ -1073,7 +1268,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let hh = pf(F_HL) + lt[4];
     let ss = pf(F_SH) + lt[5];
-    if (hh != 0.0 || ss != 0.0) {
+    var scene_gain = delta;
+    let hs_cr = sc_on && (pu(F_SC) & 4u) != 0u;
+    if (hs_cr) {
+        // Camera Raw's Highlights / Shadows (`scene_cr`): the photo's rule at the base level
+        let g = sc_hs(sc_base(smp, l_scene + l_exp) - pf(F_SC_HS_SHIFT), pf(F_SC_SH) + lt[5], pf(F_SC_HL) + lt[4]);
+        delta += g;
+        scene_gain = g;
+    } else if (hh != 0.0 || ss != 0.0) {
         delta += wb * legacy_hs(base, hh, ss) + (1.0 - wb) * legacy_hs(l1, hh, ss);
     }
     if (pu(F_LT_CR) != 0u) {
@@ -1091,7 +1293,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
     let cl = pf(F_CLAR) + lt[9];
-    if (cl != 0.0 && pu(F_HAS_CLAR) != 0u) {
+    if (sc_on && (pu(F_SC) & 2u) != 0u && (cl > 0.0 || (SC_CL_NEG && cl < 0.0))) {
+        // Camera Raw's Clarity (`scene_cr`): four scales on the map, upsampled by the level
+        let g = sc_clarity(smp, cl, l_scene);
+        delta += g;
+        scene_gain += g;
+    } else if (cl != 0.0 && pu(F_HAS_CLAR) != 0u) {
         let det = clamp(l_pre - clar[i], -2.5, 2.5);
         let q = base / 3.2;
         let mid = exp(-(q * q));
@@ -1159,7 +1366,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (delta != 0.0) {
         c = c * exp2(delta);
     }
-    c = c * tex_gain;
+    // Camera Raw's positive Dehaze (`scene_cr`): its airlight follows the gains applied so far
+    if (haze_cr) {
+        c = sc_dehaze(smp, c, dz, exp2(scene_gain + l_exp));
+    }
+    if (pu(F_TX_SPACE) != 0u) {
+        c = mul3(ad_mat(F_TX_TO), mul3(ad_mat(F_TX_FROM), c) * tex_gain);
+    } else {
+        c = c * tex_gain;
+    }
 
     // --- calibration (scene linear, before the tone map)
     if (pu(F_CALIB) != 0u || pf(F_SHADOW_TINT) != 0.0) {

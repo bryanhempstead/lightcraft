@@ -48,6 +48,7 @@ pub mod point_color_cr;
 pub mod profiles;
 pub mod redeye;
 pub mod reflection;
+pub mod scene_cr;
 pub mod spots;
 pub mod texture_cr;
 pub mod tone;
@@ -278,6 +279,10 @@ pub(crate) struct Prepared {
     pub masks: Vec<masks::Evaluated>,
     /// Output pixels per unit of the source long edge.
     pub px_per_long: f64,
+    /// Camera Raw's scene tone map ([`scene_cr::MapBase`]: Clarity, Highlights / Shadows) and
+    /// haze (positive Dehaze), when the settings use them.
+    pub scene_map: Option<Arc<scene_cr::MapBase>>,
+    pub haze: Option<Arc<scene_cr::Haze>>,
 }
 
 /// Output size for a source of `src_w × src_h` under `s`, fitting `max_w × max_h`.
@@ -571,7 +576,8 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if p.key == lin_key => p,
         _ => local::Planes { key: lin_key, ..Default::default() },
     };
-    let prep = local::prepare(lin.clone(), s, frame, px_per_long, info.native_long, req.quality, &mut planes);
+    let tex_space = texture_cr::space(info);
+    let prep = local::prepare(lin.clone(), s, frame, px_per_long, info.native_long, req.quality, &mut planes, tex_space.as_ref().map(|m| &m.0));
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });

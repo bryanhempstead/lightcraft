@@ -268,6 +268,9 @@ pub(crate) struct Planes {
     pub p99: Option<f32>,
     /// Blurred chromaticity (local Moiré / Noise).
     pub chroma: Option<(u32, Arc<Rgb32f>)>,
+    /// Camera Raw's scene tone map and haze ([`crate::scene_cr`]; `None` inside: the image is empty).
+    pub scene_map: Option<Option<Arc<crate::scene_cr::MapBase>>>,
+    pub haze: Option<Option<Arc<crate::scene_cr::Haze>>>,
 }
 
 /// Reuse `slot` if it was computed at `sigma`, else compute and store it.
@@ -320,7 +323,11 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
         let sigma = (0.015 * ppl).max(1.0);
         if q == Quality::Draft { sigma.min(24.0) } else { sigma }
     });
-    let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity)).then(|| (0.012 * ppl).max(1.0));
+    // LightCraft's band for Clarity the scene map does not render (`scene_cr::clarity_by_model`)
+    let model = crate::scene_cr::CLARITY_MEASURED;
+    let negative = s.effects.clarity < 0.0 || s.masks.iter().any(|m| m.adjust.clarity < 0.0);
+    let band = !model || (!crate::scene_cr::CLARITY_NEGATIVE_MEASURED && negative);
+    let clarity = (band && (s.effects.clarity != 0.0 || local_any(|a| a.clarity))).then(|| (0.012 * ppl).max(1.0));
     // local Noise and Defringe read the fine detail band (and Texture, unless Camera Raw's
     // measured operator renders it: `texture_cr`)
     let texture_old = !crate::texture_cr::MEASURED && (s.effects.texture != 0.0 || local_any(|a| a.texture));
@@ -354,12 +361,13 @@ pub(crate) fn prepare(
     native_long: f32,
     q: Quality,
     planes: &mut Planes,
+    tex_space: Option<&[[f32; 3]; 3]>,
 ) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
     let texture_detail = texture_level(s, px_per_long, native_long).map(|lv| match &planes.texture_detail {
         Some((k, p)) if *k == lv as u32 => p.clone(),
         _ => {
-            let p = Arc::new(timed("texture detail", || crate::texture_cr::detail_rgb(&img, lv)));
+            let p = Arc::new(timed("texture detail", || crate::texture_cr::detail_rgb_in(&img, lv, tex_space)));
             planes.texture_detail = Some((lv as u32, p.clone()));
             p
         }
@@ -423,9 +431,33 @@ pub(crate) fn prepare(
         (true, k) => k,
         (false, _) => None,
     };
+    let (need_map, need_haze) = crate::scene_cr::needs(s);
+    let scene_map = if need_map {
+        planes.scene_map.get_or_insert_with(|| timed("scene map", || crate::scene_cr::MapBase::of(&img).map(Arc::new))).clone()
+    } else {
+        None
+    };
+    let haze =
+        if need_haze { planes.haze.get_or_insert_with(|| timed("haze", || crate::scene_cr::Haze::of(&img).map(Arc::new))).clone() } else { None };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev));
-    Prepared { img, log_l, base, tone_stats, clarity_blur, texture_blur, texture_detail, dark, p99, chroma_blur, air, masks, px_per_long }
+    Prepared {
+        img,
+        log_l,
+        base,
+        tone_stats,
+        clarity_blur,
+        texture_blur,
+        texture_detail,
+        dark,
+        p99,
+        chroma_blur,
+        air,
+        masks,
+        px_per_long,
+        scene_map,
+        haze,
+    }
 }
 
 /// The airlight is estimated from every `AIRLIGHT_STEP`-th value of the dark channel.

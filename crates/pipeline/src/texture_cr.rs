@@ -18,6 +18,33 @@ use lightcraft_raster::{Plane, par_rows};
 /// older single-band texture (one line, as for `adobe::HUE_SAT_IN_FINISH`).
 pub const MEASURED: bool = true;
 
+/// Take each channel's detail in the camera's own (white-balanced) RGB when the source has a
+/// camera colour model, as RAWmakase does. Off: measured worse (round 11, oracle grid Texture
+/// +50 / −50: 3.15 / 2.26 ΔE → 3.39 / 2.49; Bryan's raws unchanged at 1.46). Camera Raw's colour
+/// effect is a chroma change of saturated colours (+8 C* at +50 on the grid's most saturated
+/// patches, ours +0.5): each channel's large log detail is compressed away here, not there.
+pub const CAMERA_SPACE: bool = false;
+
+/// The working → camera matrices Texture's detail is taken in for `info` (and back), if any.
+pub fn space(info: &crate::SourceInfo) -> Option<([[f32; 3]; 3], [[f32; 3]; 3])> {
+    let cw = info.camera_wb.as_ref().filter(|_| CAMERA_SPACE)?;
+    let ok = |m: &[[f32; 3]; 3]| m.iter().flatten().all(|v| v.is_finite());
+    (ok(&cw.from_working) && ok(&cw.to_working)).then_some((cw.from_working, cw.to_working))
+}
+
+/// `c` (linear working RGB) with each channel's Texture gain `g` applied in `space` ([`space`]).
+#[inline]
+pub fn apply(c: [f32; 3], g: [f32; 3], space: Option<&([[f32; 3]; 3], [[f32; 3]; 3])>) -> [f32; 3] {
+    let mul = |m: &[[f32; 3]; 3], v: [f32; 3]| -> [f32; 3] { std::array::from_fn(|r| m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2]) };
+    match space {
+        Some((from, to)) => {
+            let k = mul(from, c);
+            mul(to, [k[0] * g[0], k[1] * g[1], k[2] * g[2]])
+        }
+        None => [c[0] * g[0], c[1] * g[1], c[2] * g[2]],
+    }
+}
+
 /// Pyramid levels, in full-resolution pixels: level `l` holds detail about `2^l` pixels across.
 pub const LEVELS: usize = 6;
 /// Each level's weight and the log2 contrast above which it is compressed.
@@ -123,8 +150,25 @@ pub fn detail(log_l: &Plane, offset: usize) -> Plane {
 /// [`detail`] of each channel's log2 (linear scene RGB `img`), interleaved: Camera Raw's Texture
 /// also raises colour contrast at colour edges, as if each channel had its own.
 pub fn detail_rgb(img: &lightcraft_raster::Rgb32f, offset: usize) -> lightcraft_raster::Rgb32f {
+    detail_rgb_in(img, offset, None)
+}
+
+/// [`detail_rgb`] with each pixel first taken through `from` (linear working → camera RGB,
+/// [`space`]).
+pub fn detail_rgb_in(img: &lightcraft_raster::Rgb32f, offset: usize, from: Option<&[[f32; 3]; 3]>) -> lightcraft_raster::Rgb32f {
     let ch = |k: usize| {
-        let data = img.data.iter().map(|p| p[k].max(1e-6).log2()).collect();
+        let v = |p: &[f32; 3]| match from {
+            Some(m) => m[k][0] * p[0] + m[k][1] * p[1] + m[k][2] * p[2],
+            None => p[k],
+        };
+        let data = img
+            .data
+            .iter()
+            .map(|p| {
+                let x = v(p);
+                if x.is_finite() { x.max(1e-6).log2() } else { 0.0 }
+            })
+            .collect();
         detail(&Plane { width: img.width, height: img.height, data }, offset)
     };
     let (r, (g, b)) = lightcraft_raster::par_join(|| ch(0), || lightcraft_raster::par_join(|| ch(1), || ch(2)));
