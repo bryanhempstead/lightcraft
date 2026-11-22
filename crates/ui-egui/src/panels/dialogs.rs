@@ -769,7 +769,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         ui,
                         "Format",
                         "exportFormat",
-                        &[(F::Jpeg, "JPEG"), (F::Png, "PNG"), (F::Tiff, "TIFF"), (F::Webp, "WebP"), (F::Avif, "AVIF"), (F::Dng, "DNG"), (F::Original, "Original files")],
+                        &[(F::Jpeg, "JPEG"), (F::Png, "PNG"), (F::Tiff, "TIFF"), (F::Webp, "WebP"), (F::Avif, "AVIF"), (F::Dng, "DNG"), (F::Original, "Original files"), (F::Psd, "PSD"), (F::Jxl, "JPEG XL")],
                         &mut opts.format,
                     );
                     if !opts.format.is_rendered() {
@@ -810,7 +810,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             &mut opts.color_space,
                         );
                     }
-                    if matches!(opts.format, F::Jpeg | F::Avif) {
+                    if matches!(opts.format, F::Jpeg | F::Avif | F::Jxl) {
                         let mut q = opts.quality as f64;
                         if num(ui, &QUALITY, &mut q) {
                             opts.quality = q as u8;

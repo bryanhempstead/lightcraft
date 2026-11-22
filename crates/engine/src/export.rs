@@ -24,6 +24,10 @@ pub enum ExportFormat {
     Original,
     /// A DNG of the raw data (raw photos only), the edits embedded as XMP.
     Dng,
+    /// JPEG XL (E07): lossy at `quality`, or lossless at quality 100.
+    Jxl,
+    /// Photoshop document (E07): one flat layer, 8 or 16 bit (PSB past 30,000 pixels).
+    Psd,
 }
 
 impl ExportFormat {
@@ -36,6 +40,8 @@ impl ExportFormat {
             "avif" => Self::Avif,
             "original" => Self::Original,
             "dng" => Self::Dng,
+            "jxl" | "jpegxl" => Self::Jxl,
+            "psd" | "psb" => Self::Psd,
             _ => return None,
         })
     }
@@ -49,6 +55,8 @@ impl ExportFormat {
             // the original keeps its own extension (see `ExportOptions::file_name_for`)
             Self::Original => "",
             Self::Dng => "dng",
+            Self::Jxl => "jxl",
+            Self::Psd => "psd",
         }
     }
 
@@ -1212,6 +1220,8 @@ impl ExportOptions {
             (ExportFormat::Tiff, _) => OutputDepth::U16,
             (ExportFormat::Avif, Some(10 | 16 | 32)) => OutputDepth::U16,
             (ExportFormat::Avif, _) => OutputDepth::U8,
+            (ExportFormat::Jxl | ExportFormat::Psd, Some(16 | 32)) => OutputDepth::U16,
+            (ExportFormat::Jxl | ExportFormat::Psd, _) => OutputDepth::U8,
         }
     }
 
@@ -1222,12 +1232,19 @@ impl ExportOptions {
             ExportFormat::Png => &[(8, "8-bit"), (16, "16-bit")],
             ExportFormat::Tiff => &[(16, "16-bit"), (8, "8-bit"), (32, "32-bit float")],
             ExportFormat::Avif => &[(8, "8-bit"), (10, "10-bit")],
+            ExportFormat::Jxl => &[(8, "8-bit"), (16, "16-bit")],
+            ExportFormat::Psd => &[(16, "16-bit"), (8, "8-bit")],
         }
     }
 
     /// The colour space the file is actually written in (AVIF: sRGB).
     pub fn effective_space(&self) -> OutputSpace {
-        if self.format == ExportFormat::Avif { OutputSpace::Srgb } else { self.color_space }
+        match (self.format, self.color_space) {
+            (ExportFormat::Avif, _) => OutputSpace::Srgb,
+            // a lossy JPEG XL declares its colours by enum: no Adobe RGB / ProPhoto one
+            (ExportFormat::Jxl, OutputSpace::AdobeRgb | OutputSpace::ProPhoto) if self.quality < 100 => OutputSpace::Srgb,
+            (_, s) => s,
+        }
     }
 
     /// Output file name for photo `p` at 1-based position `seq` in a batch (the original's
@@ -1387,6 +1404,8 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
         ExportFormat::Tiff => encode::encode_tiff(&e, o.tiff_compression, &meta),
         ExportFormat::Webp => encode::encode_webp_lossless(&e, &meta),
         ExportFormat::Avif => encode::encode_avif(&e, o.quality, 8, &meta),
+        ExportFormat::Jxl => lightcraft_codecs::encode_jxl(&e, &meta, &jxl_options(o)),
+        ExportFormat::Psd => lightcraft_codecs::encode_psd(&e, &meta),
         f @ (ExportFormat::Original | ExportFormat::Dng) => return Err(format!("{f:?} export does not encode pixels")),
     };
     r.map_err(|e| e.to_string())
@@ -1450,9 +1469,23 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
         ExportFormat::Png => encode::encode_png(&e, &meta),
         ExportFormat::Tiff => encode::encode_tiff(&e, o.tiff_compression, &meta),
         ExportFormat::Avif => encode::encode_avif(&e, o.quality, 8, &meta),
+        ExportFormat::Jxl => lightcraft_codecs::encode_jxl(&e, &meta, &jxl_options(o)),
+        ExportFormat::Psd => lightcraft_codecs::encode_psd(&e, &meta),
         f => return Err(format!("{f:?} export is 8-bit only")),
     };
     r.map_err(|e| e.to_string())
+}
+
+/// JPEG XL settings from the export options: quality 100 = lossless; the colour encoding of the
+/// output space (ProPhoto / Adobe RGB have no JPEG XL enum: sRGB primaries are declared and the
+/// ICC profile rides along only for lossless files, so those keep to sRGB / P3 / Rec.2020).
+fn jxl_options(o: &ExportOptions) -> lightcraft_codecs::JxlOptions {
+    let colour = match o.effective_space() {
+        OutputSpace::DisplayP3 => lightcraft_codecs::JxlColour::DisplayP3,
+        OutputSpace::Rec2020 => lightcraft_codecs::JxlColour::Rec2020,
+        _ => lightcraft_codecs::JxlColour::Srgb,
+    };
+    lightcraft_codecs::JxlOptions { quality: o.quality, lossless: o.quality >= 100, colour }
 }
 
 /// Parse a shutter speed such as `1/250`, `0.5` or `2"` into seconds.

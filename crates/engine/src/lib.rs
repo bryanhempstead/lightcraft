@@ -929,6 +929,8 @@ mod tests_delete;
 #[cfg(test)]
 mod tests_export;
 #[cfg(test)]
+mod tests_export_formats;
+#[cfg(test)]
 mod tests_folders;
 #[cfg(test)]
 mod tests_forget_local;

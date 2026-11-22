@@ -193,3 +193,23 @@ fn import_from_another_library_dialog() {
     assert_eq!(h.app.session.catalog.photos().count(), 2);
     assert!(h.app.session.catalog.photos().all(|p| p.meta.title == "From A"), "the shared photo took A's metadata");
 }
+
+/// E07: the Export dialog offers PSD and JPEG XL.
+#[test]
+fn export_dialog_offers_psd_and_jpeg_xl() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let id = s.catalog.photos().next().unwrap().id.0;
+    s.execute("library.select", &json!({"ids": [id]})).unwrap();
+    let mut h = headless(s);
+    h.app.run("dialog.export", json!({})).unwrap();
+    settle(&mut h);
+    click(&mut h, "button:exportFormat-7");
+    assert!(
+        matches!(&h.app.ui.dialog, Some(crate::state::Dialog::Export { opts, .. }) if opts.format == lightcraft_engine::export::ExportFormat::Psd)
+    );
+    click(&mut h, "button:exportFormat-8");
+    assert!(
+        matches!(&h.app.ui.dialog, Some(crate::state::Dialog::Export { opts, .. }) if opts.format == lightcraft_engine::export::ExportFormat::Jxl)
+    );
+    shot(&mut h, "e07-export-formats.png");
+}
