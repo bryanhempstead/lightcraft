@@ -49,6 +49,12 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
         lens_serial_number: text(exif, t::LENS_SERIAL_NUMBER),
         ..Default::default()
     };
+    // CinemaDNG writers (Blackmagic cameras) leave out Make and Model and name the camera only in
+    // `UniqueCameraModel` ("Blackmagic Pocket Cinema Camera"): its first word is the make, so the
+    // camera doesn't show up as an unknown make.
+    if m.make.is_none() && text(ifd0, t::MODEL).is_none() {
+        m.make = text(ifd0, t::UNIQUE_CAMERA_MODEL).and_then(|u| u.split_whitespace().next().filter(|w| w.len() > 1).map(str::to_string));
+    }
     // Exif requires LensSpecification/LensInfo as 4 rationals.
     let spec = exif.and_then(|e| e.f64s(t::LENS_SPECIFICATION)).or_else(|| ifd0.and_then(|i| i.f64s(t::LENS_INFO)));
     if let Some(s) = spec.filter(|s| s.len() == 4 && s[0] > 0.0) {
@@ -142,6 +148,25 @@ fn read_gps(g: &Ifd) -> Option<Gps> {
 pub(crate) mod tests {
     use super::*;
     use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+
+    #[test]
+    fn cinema_dng_make_comes_from_the_unique_camera_model() {
+        // Blackmagic CinemaDNG frames carry only UniqueCameraModel; their make showed as unknown
+        let parse = |tags: &[(u16, &str)]| {
+            let mut ifd = IfdBuilder::new();
+            for (tag, v) in tags {
+                ifd.set(*tag, Value::Ascii((*v).into()));
+            }
+            from_tiff(&Tiff::parse(&TiffWriter::new(ByteOrder::Little, false).write(&[ifd]).unwrap()).unwrap())
+        };
+        let m = parse(&[(t::UNIQUE_CAMERA_MODEL, "Blackmagic Pocket Cinema Camera")]);
+        assert_eq!((m.make.as_deref(), m.model.as_deref()), (Some("Blackmagic"), Some("Blackmagic Pocket Cinema Camera")));
+        // a file with its own Make or Model keeps them
+        let m = parse(&[(t::MAKE, "Canon"), (t::MODEL, "Canon EOS R6"), (t::UNIQUE_CAMERA_MODEL, "Canon EOS R6")]);
+        assert_eq!((m.make.as_deref(), m.model.as_deref()), (Some("Canon"), Some("Canon EOS R6")));
+        let m = parse(&[(t::MODEL, "X1"), (t::UNIQUE_CAMERA_MODEL, "Acme X1")]);
+        assert_eq!(m.make, None);
+    }
 
     pub(crate) fn sample_exif(order: ByteOrder) -> Vec<u8> {
         let mut exif = IfdBuilder::new();
