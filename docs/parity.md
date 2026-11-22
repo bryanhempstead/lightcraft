@@ -233,7 +233,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 |---|---|---|---|---|---|
 | LR-EDIT-AUTO | Auto settings | P0 | ✅ | `cmd:develop.auto`, `crates/pipeline/src/auto.rs` | |
 | LR-EDIT-BW | Black & white | P0 | ✅ | `cmd:develop.treatment` | |
-| LR-EDIT-HDR-MODE | HDR editing | P2 | ✅ | `cmd:develop.hdr`, `crates/ui-egui/src/panels/edit.rs` (`hdr_controls`) | the hdr. button at the right of Basic ▸ Treatment (Lightroom's HDR button); with HDR on: HDR Limit, vis.hdr. (Visualize HDR), sdr.prev. (Preview for SDR Display) and the SDR Settings sliders; the HDR copy group in Copy / Sync / presets |
+| LR-EDIT-HDR-MODE | HDR editing | P2 | ✅ | `cmd:develop.hdr`, `crates/ui-egui/src/panels/edit.rs` (`hdr_controls`) | the hdr. button next to Basic ▸ Tone ▸ Auto (Lightroom's HDR button; the Treatment row is too narrow here); with HDR on: HDR Limit, vis.hdr. (Visualize HDR), sdr.prev. (Preview for SDR Display) and the SDR Settings sliders; the HDR copy group in Copy / Sync / presets |
 | LR-EDIT-LIGHT-EXPOSURE | Exposure | P0 | ✅ | `ctl:light.exposure` | |
 | LR-EDIT-LIGHT-CONTRAST | Contrast | P0 | ✅ | `ctl:light.contrast` | |
 | LR-EDIT-LIGHT-HIGHLIGHTS | Highlights | P0 | 🟡 | `ctl:light.highlights` | works, but not as Lightroom renders it: the tables are fitted on Lightroom previews and are 3–5× too weak at −100 against Camera Raw; Camera Raw's photo-dependent model is measured and in the code (`tone::lr::adobe_hs_lut`, `docs/lr-match.md` → Round 8) but off until the rest is refitted |
