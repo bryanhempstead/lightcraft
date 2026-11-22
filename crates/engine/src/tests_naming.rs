@@ -150,3 +150,31 @@ fn export_status_is_recorded_filtered_and_reset() {
     assert!(s.export_log.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// E03 + E04: Export To ▸ Same folder as original, Add to This Catalog stacked above / below.
+#[test]
+fn export_next_to_the_original_and_add_it_stacked() {
+    let dir = std::env::temp_dir().join(format!("lc-export-add-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("shoot")).unwrap();
+    let img = lightcraft_raster::Rgba8 { width: 16, height: 12, data: vec![[200, 120, 40, 255]; 192] };
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
+    std::fs::write(dir.join("shoot/a.png"), png).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [dir.join("shoot").to_string_lossy()]})).unwrap();
+    let orig = s.catalog.photos().next().unwrap().id;
+    let o =
+        crate::export::ExportOptions::from_params(&json!({"sameFolder": true, "addToCatalog": true, "addToStack": "above", "naming": "{name}-edit"}))
+            .unwrap();
+    let to = crate::export::Destination { dir: String::new(), exact: None };
+    let files = crate::export::export_batch(&mut s, &[orig], &o, &to, &mut crate::export::write_file, &|p| std::path::Path::new(p).exists()).unwrap();
+    let out = files[0]["path"].as_str().unwrap().to_string();
+    assert_eq!(std::path::Path::new(&out).parent(), Some(dir.join("shoot").as_path()), "next to the original");
+    let r = crate::export::add_to_catalog(&mut s, &o, &files).unwrap();
+    assert_eq!((r["added"].as_u64(), r["stacked"].as_u64()), (Some(1), Some(1)), "{r}");
+    let new = s.catalog.photos().find(|p| p.id != orig).unwrap().id;
+    let st = s.catalog.stack_of(orig).unwrap();
+    assert_eq!(st.photos, vec![new, orig], "above its original");
+    assert!(crate::export::ExportOptions::from_params(&json!({"addToStack": "sideways"})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

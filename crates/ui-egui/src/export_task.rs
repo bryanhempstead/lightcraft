@@ -23,6 +23,8 @@ pub struct ExportTask {
     pub progress: Arc<Mutex<(usize, String)>>,
     pub cancel: Arc<AtomicBool>,
     rx: Receiver<Result<Vec<Value>, String>>,
+    /// The batch's options (Add to This Catalog runs here once the files are written).
+    opts: ExportOptions,
 }
 
 impl ExportTask {
@@ -44,6 +46,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
     let (p, c) = (progress.clone(), cancel.clone());
+    let task_opts = opts.clone();
     let work = move || {
         let mut w = |path: &str, bytes: &[u8]| write(path, bytes);
         let mut r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
@@ -65,7 +68,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    app.export = Some(ExportTask { total, progress, cancel, rx });
+    app.export = Some(ExportTask { total, progress, cancel, rx, opts: task_opts });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -76,6 +79,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Ok(r) => {
             let cancelled = task.cancel.load(Ordering::Relaxed);
             let total = task.total;
+            let task_opts = task.opts.clone();
             app.export = None;
             let msg = match r {
                 Ok(files) => {
@@ -94,6 +98,9 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                         m += " · cancelled";
                     }
                     app.session.record_exports(&files);
+                    if let Some(added) = lightcraft_engine::export::add_to_catalog(&mut app.session, &task_opts, &files) {
+                        log::info!("export: added to the catalog: {added}");
+                    }
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled}));
                     m
                 }

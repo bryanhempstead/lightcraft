@@ -809,6 +809,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             opts.start_number = v as u32;
                         }
                     }
+                    field(ui, "Export to", |ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        for (i, (label, same)) in [("chosen.folder.", false), ("same.folder.", true)].iter().enumerate() {
+                            if crate::widgets::text_button(ui, &format!("exportTo-{i}"), label, opts.same_folder == *same).clicked() {
+                                opts.same_folder = *same;
+                            }
+                        }
+                    });
+                    if !opts.same_folder {
                     field(ui, "Folder", |ui| {
                         trailing_button_row(ui, |ui| {
                             if app.services.pick_folder.is_some()
@@ -821,6 +830,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             ui.add(egui::TextEdit::singleline(dir).desired_width(ui.available_width()));
                         });
                     });
+                    }
                     field(ui, "Subfolder", |ui| {
                         ui.add(egui::TextEdit::singleline(&mut opts.subfolder).hint_text(crate::i18n::tr("none")).desired_width(f32::INFINITY))
                     });
@@ -833,6 +843,21 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         &mut opts.conflict,
                     );
                     after_export_row(app, ui, opts);
+                    field(ui, "Catalog", |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let r = ui.checkbox(&mut opts.add_to_catalog, crate::i18n::tr("Add to this catalog"));
+                        crate::widgets::register(ui.ctx(), "check:exportAddToCatalog", r.rect);
+                        if opts.add_to_catalog {
+                            use lightcraft_engine::export::StackPlace as P;
+                            let mut st = opts.add_to_stack;
+                            for (i, (label, v)) in [("no.stack.", None), ("stack.above.", Some(P::Above)), ("stack.below.", Some(P::Below))].iter().enumerate() {
+                                if crate::widgets::text_button(ui, &format!("exportStack-{i}"), label, st == *v).clicked() {
+                                    st = *v;
+                                }
+                            }
+                            opts.add_to_stack = st;
+                        }
+                    });
                     ui.add_space(4.0);
                     field(ui, "Save preset", |ui| {
                         trailing_button_row(ui, |ui| {

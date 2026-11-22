@@ -410,7 +410,7 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
             last_dir.map(str::to_string).unwrap_or_else(default_export_dir)
         }
     };
-    if dir.is_empty() && exact.is_none() {
+    if dir.is_empty() && exact.is_none() && !opts.same_folder {
         return Err(NO_EXPORT_FOLDER.into());
     }
     let to = Destination { dir: dir.clone(), exact };
@@ -423,7 +423,8 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
         let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
         let after = lightcraft_engine::export::post_process(&opts, &files);
         app.session.record_exports(&files);
-        json!({"files": files, "postProcessing": after})
+        let added = lightcraft_engine::export::add_to_catalog(&mut app.session, &opts, &files);
+        json!({"files": files, "postProcessing": after, "addedToCatalog": added})
     };
     // remember for Export with Previous (and to prefill the dialog)
     let mut last = p.clone();

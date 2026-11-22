@@ -575,6 +575,12 @@ pub struct ExportOptions {
     /// [`AfterExport::OpenInApp`]: the application (name or path; empty = each file's default
     /// app) or an Export Action (an app or script in the Export Actions folder).
     pub after_app: String,
+    /// Export To ▸ Same folder as original photo (each file next to its original; `dir` unused).
+    pub same_folder: bool,
+    /// Add to This Catalog: the exported files are imported (in place) once written.
+    pub add_to_catalog: bool,
+    /// With `add_to_catalog`: stack each one with its original, above or below it.
+    pub add_to_stack: Option<StackPlace>,
     /// Created inside the destination folder (empty = none).
     pub subfolder: String,
     /// When a file of the same name exists in the destination folder.
@@ -593,6 +599,71 @@ pub struct ExportOptions {
     /// Bits per channel: 8, 16 (PNG, TIFF), 32 (TIFF: float, linear) or 10 (AVIF); `None` = the
     /// format's default (TIFF 16, everything else 8). See [`ExportOptions::effective_depth`].
     pub bit_depth: Option<u8>,
+}
+
+/// Where Add to Stack puts an exported photo: above or below its original.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StackPlace {
+    Above,
+    Below,
+}
+
+/// Add to This Catalog (E03): import the written files in place, each stacked with its original
+/// when asked (`add_to_stack`). Called on the session's thread once an export finished; one undo
+/// step for the stacks. Returns `{added, stacked}`, or `None` when the export doesn't ask.
+pub fn add_to_catalog(s: &mut crate::Session, o: &ExportOptions, files: &[serde_json::Value]) -> Option<serde_json::Value> {
+    use lightcraft_catalog::{Op, PhotoId, Source, Stack};
+    if !o.add_to_catalog {
+        return None;
+    }
+    let written: Vec<(String, Option<u64>)> =
+        files.iter().filter_map(|f| Some((f.get("path")?.as_str()?.to_string(), f.get("photo").and_then(serde_json::Value::as_u64)))).collect();
+    if written.is_empty() {
+        return Some(serde_json::json!({"added": 0}));
+    }
+    let paths: Vec<String> = written.iter().map(|w| w.0.clone()).collect();
+    if let Err(e) = crate::import::import(s, &paths, crate::import::ImportMode::Add) {
+        return Some(serde_json::json!({"added": 0, "error": e.to_string()}));
+    }
+    let by_path: std::collections::HashMap<String, PhotoId> = s
+        .catalog
+        .photos()
+        .filter_map(|p| match &p.source {
+            Source::File { path } => Some((path.clone(), p.id)),
+            Source::Demo { .. } => None,
+        })
+        .collect();
+    let mut added = 0;
+    let mut stacked = 0;
+    for (path, orig) in &written {
+        let Some(new) = by_path.get(path).copied() else { continue };
+        added += 1;
+        let (Some(place), Some(orig)) = (o.add_to_stack, orig.map(PhotoId)) else { continue };
+        if orig == new || s.catalog.photo(orig).is_none() || s.catalog.stack_of(new).is_some() {
+            continue;
+        }
+        let op = match s.catalog.stack_of(orig).cloned() {
+            Some(st) => {
+                let mut photos = st.photos.clone();
+                let at = st.position(orig).map_or(photos.len(), |i| if place == StackPlace::Above { i } else { i + 1 });
+                photos.insert(at.min(photos.len()), new);
+                Op::SetStack { id: st.id, photos, collapsed: st.collapsed }
+            }
+            None => {
+                let id = s.catalog.alloc_stack_id();
+                let photos = if place == StackPlace::Above { vec![new, orig] } else { vec![orig, new] };
+                Op::AddStack { stack: Stack { id, photos, collapsed: false } }
+            }
+        };
+        // one at a time: the next file may join the same stack
+        match s.commit("Add to Stack", op) {
+            Ok(()) => stacked += 1,
+            Err(e) => log::warn!("export: add to stack: {e}"),
+        }
+    }
+    s.merge_undo(stacked, "Add to Stack");
+    Some(serde_json::json!({"added": added, "stacked": stacked}))
 }
 
 /// Lightroom's Export ▸ Post-Processing ▸ After Export.
@@ -723,6 +794,9 @@ impl Default for ExportOptions {
             ext_case: crate::rename::ExtCase::Keep,
             after: AfterExport::Nothing,
             after_app: String::new(),
+            same_folder: false,
+            add_to_catalog: false,
+            add_to_stack: None,
             subfolder: String::new(),
             conflict: Conflict::Unique,
             tiff_compression: TiffCompression::Deflate,
@@ -762,6 +836,9 @@ pub const OPTION_PARAMS: &[&str] = &[
     "extCase",
     "after",
     "afterApp",
+    "sameFolder",
+    "addToCatalog",
+    "addToStack",
     "subfolder",
     "conflict",
     "tiffCompression",
@@ -907,6 +984,11 @@ impl ExportOptions {
                 }
                 "extCase" => one_of(k, v, &["keep", "lower", "upper"])?,
                 "after" => one_of(k, v, &["nothing", "showInFinder", "openInApp"])?,
+                "sameFolder" | "addToCatalog" => {
+                    boolean(k, v)?;
+                }
+                "addToStack" if v.is_null() => {}
+                "addToStack" => one_of(k, v, &["above", "below"])?,
                 "afterApp" => {
                     string(cmd, k, v)?;
                 }
@@ -1025,6 +1107,9 @@ impl ExportOptions {
             ext_case: s("extCase").and_then(crate::rename::ExtCase::parse).unwrap_or(d.ext_case),
             after: enm(p, "after").unwrap_or(d.after),
             after_app: s("afterApp").map_or(d.after_app, |v| v.trim().to_string()),
+            same_folder: p.get("sameFolder").and_then(Value::as_bool).unwrap_or(d.same_folder),
+            add_to_catalog: p.get("addToCatalog").and_then(Value::as_bool).unwrap_or(d.add_to_catalog),
+            add_to_stack: enm(p, "addToStack").or(d.add_to_stack),
             subfolder: s("subfolder").map_or(d.subfolder, |v| v.trim().replace(['\\', ':', '\0'], "_")),
             conflict: enm(p, "conflict").unwrap_or(d.conflict),
             tiff_compression: match s("tiffCompression").map(str::to_ascii_lowercase).as_deref() {
@@ -1500,6 +1585,8 @@ pub fn export_photo(session: &mut crate::Session, id: lightcraft_catalog::PhotoI
 pub struct PreparedExport {
     pub photo: lightcraft_catalog::PhotoId,
     pub file_name: String,
+    /// The original's folder (Export To ▸ Same folder as original photo).
+    pub source_dir: Option<String>,
     work: Work,
     /// The library's originals, which [`run_batch`] never writes over (shared by a batch).
     guard: std::sync::Arc<crate::originals::OriginalGuard>,
@@ -1553,6 +1640,10 @@ fn prepare_guarded(
 ) -> Result<PreparedExport, String> {
     let p = session.catalog.photo(id).ok_or("no such photo")?;
     let file_name = o.file_name_in(p, seq, total);
+    let source_dir = match &p.source {
+        lightcraft_catalog::Source::File { path } => std::path::Path::new(path).parent().map(|d| d.to_string_lossy().to_string()),
+        lightcraft_catalog::Source::Demo { .. } => None,
+    };
     let work = if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
         let meta = export_metadata(p, o);
@@ -1571,7 +1662,7 @@ fn prepare_guarded(
             size: (p.width as usize, p.height as usize),
         }
     };
-    Ok(PreparedExport { photo: id, file_name, work, guard })
+    Ok(PreparedExport { photo: id, file_name, work, guard, source_dir })
 }
 
 impl PreparedExport {
@@ -1701,6 +1792,12 @@ pub fn run_batch(
             break;
         }
         let (photo, name, guard) = (item.photo, item.file_name.clone(), item.guard.clone());
+        // Same folder as original: this photo's own folder (+ the subfolder)
+        let dir = match item.source_dir.as_deref().filter(|_| o.same_folder) {
+            Some(src) if o.subfolder.is_empty() => src.to_string(),
+            Some(src) => join(src, &o.subfolder),
+            None => dir.clone(),
+        };
         let e = match item.run() {
             Ok(e) => e,
             Err(err) if stop_on_error => return Err(err),
