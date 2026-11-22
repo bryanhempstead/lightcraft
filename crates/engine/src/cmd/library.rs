@@ -310,7 +310,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Source",
             [],
             None,
-            "{kind: all|recentlyAdded|previousImport|album|recentlyDeleted|picks|missing|libraryFolder, id?: albumId, path?: a path from library.folders (for libraryFolder), subfolders?: bool (libraryFolder: show the folders inside it or not, whatever Show Photos in Subfolders says)}",
+            "{kind: all|recentlyAdded|previousImport|album|recentlyDeleted|picks|missing|libraryFolder|published, id?: albumId (published: a published collection id), path?: a path from library.folders (for libraryFolder), subfolders?: bool (libraryFolder: show the folders inside it or not, whatever Show Photos in Subfolders says)}",
             always,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("all");
@@ -326,6 +326,16 @@ pub fn specs() -> Vec<CommandSpec> {
                     "recentlyDeleted" => LibrarySource::RecentlyDeleted,
                     "picks" => LibrarySource::Picks,
                     "missing" => LibrarySource::Missing,
+                    "published" => {
+                        let c = p
+                            .get("id")
+                            .and_then(Value::as_u64)
+                            .ok_or_else(|| bad("library.source", "published needs the `id` of a published collection"))?;
+                        if crate::publish::collection(&s.catalog, c).is_none_or(|c| c.set) {
+                            return Err(bad("library.source", "no such published collection"));
+                        }
+                        LibrarySource::Published(c)
+                    }
                     "album" => {
                         let a = album_param(p, "id", "library.source")?;
                         if s.catalog.album(a).is_none_or(|a| a.folder) {

@@ -35,6 +35,7 @@ mod organize;
 mod prefs;
 mod preset_files;
 pub mod previews;
+mod publish;
 mod query;
 pub mod recheck;
 pub mod shoot;
@@ -165,6 +166,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(naming::specs());
         v.extend(cameras::specs());
         v.extend(tether::specs());
+        v.extend(publish::specs());
         v
     })
 }

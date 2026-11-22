@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adobe;
+pub mod apple_photos;
 pub mod availability;
 pub mod backup;
 pub mod camera_match;
@@ -47,6 +48,7 @@ pub mod originals;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
+pub mod publish;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
@@ -848,7 +850,10 @@ impl Session {
                 let (cat, avail) = (&self.catalog, &self.media.availability);
                 visible.retain(|id| cmd::missing::is_missing(cat, avail, *id));
             }
-            if self.source != LibrarySource::RecentlyDeleted {
+            if let LibrarySource::Published(c) = self.source {
+                // grouped by state, in the order the photos were added (stacks don't fold here)
+                visible = publish::view_order(&self.catalog, c, &visible);
+            } else if self.source != LibrarySource::RecentlyDeleted {
                 visible = self.catalog.arrange_stacks(&visible);
             }
             self.visible = visible.into();
@@ -976,6 +981,8 @@ mod tests_organize;
 mod tests_persist;
 #[cfg(test)]
 mod tests_prefs;
+#[cfg(test)]
+mod tests_publish;
 #[cfg(test)]
 mod tests_rating_keys;
 #[cfg(test)]
