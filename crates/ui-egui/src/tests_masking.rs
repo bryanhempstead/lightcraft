@@ -251,6 +251,8 @@ fn double_click_in_crop_box_applies_the_crop() {
 #[test]
 fn option_digit_toggles_keyword_from_set() {
     let mut h = detail("panel.keywords");
+    // Quick Develop (taller since Crop Ratio / Treatment) closed: the keyword set stays on screen
+    h.app.ui.library_sections.retain(|s| s != "quickDevelop");
     exec(&mut h, "photo.setMeta", json!({"addKeywords": ["alpha"]}));
     exec(&mut h, "photo.setMeta", json!({"removeKeywords": ["alpha"]}));
     let has = |h: &Headless| develop_photo_keywords(h).iter().any(|k| k == "alpha");
