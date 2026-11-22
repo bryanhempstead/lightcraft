@@ -43,7 +43,8 @@ fn rawnind_runs_a_tile_on_candle() {
 #[test]
 #[ignore]
 fn enhance_a_real_raw() {
-    use lightcraft_enhance::job::{self, Models, Options};
+    use lightcraft_enhance::Options;
+    use lightcraft_enhance::job::{self, Models};
     let (Some(dir), Some(raw)) = (models(), std::env::var_os("LC_RAW")) else { return };
     let out = std::env::var_os("LC_OUT").map(PathBuf::from);
     let bytes = std::fs::read(&raw).unwrap();
@@ -129,7 +130,14 @@ fn metal_op_speed() {
             let t = Instant::now();
             let c = Tensor::cat(&[&x, &x], 1).unwrap();
             d.synchronize().unwrap();
-            eprintln!("{dt:?}: conv2d {tc:?}, im2col conv {ti:?}, same-size matmul {tm:?}, cat {:?} ({} {} {} {})", t.elapsed(), y.dims()[1], z.dims()[1], m.dims()[0], c.dims()[1]);
+            eprintln!(
+                "{dt:?}: conv2d {tc:?}, im2col conv {ti:?}, same-size matmul {tm:?}, cat {:?} ({} {} {} {})",
+                t.elapsed(),
+                y.dims()[1],
+                z.dims()[1],
+                m.dims()[0],
+                c.dims()[1]
+            );
         }
     }
 }

@@ -35,10 +35,15 @@ ab_glyph = { workspace = true }
 # Apply the font’s vertical substitutions and origins to Japanese watermarks.
 harfrust = { version = "0.12", default-features = false, features = ["std"] }
 lightcraft-segment = { workspace = true, optional = true }
+# Enhance: options, catalog and in-place results always; the models with the `enhance` feature
+lightcraft-enhance = { workspace = true }
+lightcraft-denoise-core = { workspace = true }
 
 [features]
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
 sam = ["dep:lightcraft-segment"]
+# Photo ▸ Enhance with its models (Denoise, Super Resolution, depth; candle). Off for the web build.
+enhance = ["lightcraft-enhance/models"]
 
 [dev-dependencies]
 libc = { workspace = true }

@@ -13,48 +13,11 @@ use lightcraft_denoise_core::run::{Control, Params, TileRunner, denoise_bayer};
 use lightcraft_denoise_core::{DenoiserManifest, known};
 use lightcraft_raster::Rgb32f;
 use lightcraft_raw::{Method, Normalized, RawImage};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::esrgan::SuperResolution;
 use crate::netrun::NetRunner;
-use crate::{Error, Result};
-
-/// What to do (Lightroom's Enhance dialog).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Options {
-    /// AI Denoise with this amount, 1..100 (0: off).
-    pub denoise: f32,
-    /// Raw Details: the finer demosaic (implied by Denoise, which demosaics itself).
-    pub raw_details: bool,
-    /// Super Resolution: twice the width and height.
-    pub super_resolution: bool,
-}
-
-impl Options {
-    pub fn any(&self) -> bool {
-        self.denoise > 0.0 || self.raw_details || self.super_resolution
-    }
-
-    /// Lightroom's file name suffix: `Enhanced-NR`, `-RD`, `-SR`, `-NR-SR` …
-    pub fn suffix(&self) -> String {
-        let mut s = String::from("Enhanced");
-        if self.denoise > 0.0 {
-            s.push_str("-NR");
-        } else if self.raw_details {
-            s.push_str("-RD");
-        }
-        if self.super_resolution {
-            s.push_str("-SR");
-        }
-        s
-    }
-
-    /// A stable text naming these options (cache keys).
-    pub fn key(&self) -> String {
-        format!("nr{:.0}-rd{}-sr{}", self.denoise.clamp(0.0, 100.0), u8::from(self.raw_details), u8::from(self.super_resolution))
-    }
-}
+use crate::{Error, Options, Result};
 
 /// The RawNIND model, loaded.
 pub struct DenoiseModel {
@@ -65,7 +28,8 @@ pub struct DenoiseModel {
 impl DenoiseModel {
     /// Load `model_bayer.onnx` (see [`crate::models`]) on `device`.
     pub fn load(onnx: &Path, device: candle_core::Device) -> Result<Self> {
-        let manifest = known::find("rawnind-bayer").map(|k| k.manifest).ok_or_else(|| Error::Model("RawNIND is not in this build's catalog".into()))?;
+        let manifest =
+            known::find("rawnind-bayer").map(|k| k.manifest).ok_or_else(|| Error::Model("RawNIND is not in this build's catalog".into()))?;
         let net = crate::onnx::read(onnx).map_err(|e| Error::Model(format!("{}: {e}", onnx.display())))?;
         let runner = NetRunner::new(&net, manifest.tile as usize, device).map_err(|e| Error::Model(e.to_string()))?;
         Ok(DenoiseModel { runner, manifest })
@@ -203,20 +167,4 @@ pub fn run(raw: &RawImage, opts: &Options, models: &Models, progress: &Progress)
         timings.push(("superResolution", t1.elapsed().as_secs_f64()));
     }
     Ok(Output { image, denoiser, timings })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn suffixes_and_keys_follow_lightroom() {
-        let o = |denoise, raw_details, super_resolution| Options { denoise, raw_details, super_resolution };
-        assert_eq!(o(50.0, false, false).suffix(), "Enhanced-NR");
-        assert_eq!(o(0.0, true, false).suffix(), "Enhanced-RD");
-        assert_eq!(o(0.0, false, true).suffix(), "Enhanced-SR");
-        assert_eq!(o(50.0, true, true).suffix(), "Enhanced-NR-SR");
-        assert_ne!(o(50.0, false, false).key(), o(60.0, false, false).key());
-        assert!(!o(0.0, false, false).any());
-    }
 }

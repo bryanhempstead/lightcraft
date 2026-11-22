@@ -184,7 +184,21 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             s.data.iter_mut().for_each(|v| *v = 1.0 - *v);
             out = s;
         }
-        MaskShape::DepthRange { .. } | MaskShape::Landscape { .. } => {}
+        MaskShape::DepthRange { lo, hi, feather } => {
+            // the photo's depth map (0 nearest … 1 farthest): full inside [lo, hi], fading over `feather` outside
+            if let Some(grid) = frame.depth.clone() {
+                let (lo, hi) = ((*lo).min(*hi) as f32, (*lo).max(*hi) as f32);
+                let f = (feather.clamp(0.0, 1.0) as f32).max(1e-3);
+                // (positions come in long-edge units)
+                let (sx, sy) = (frame.ow.max(frame.oh) / frame.ow.max(1.0), frame.ow.max(frame.oh) / frame.oh.max(1.0));
+                for_each_pos(frame, w, h, &mut out, move |n, _| {
+                    let d = grid.sample(n.x * sx, n.y * sy);
+                    let outside = (lo - d).max(d - hi).max(0.0);
+                    1.0 - smooth(0.0, f, outside)
+                });
+            }
+        }
+        MaskShape::Landscape { .. } => {}
     }
     out
 }

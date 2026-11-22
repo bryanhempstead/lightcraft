@@ -228,7 +228,10 @@ mod tests {
             ("pool + up", vec![Op::MaxPool2 { src: 0 }, up(1, 4, 9), Op::DepthToSpace2 { src: 2 }]),
             ("skip join", vec![conv(0, None, 4, 4, 3, 3), conv(1, Some(0), 8, 12, 3, 4), Op::DepthToSpace2 { src: 2 }]),
             // 8 channels 8 wide: candle 0.9.2's own CPU convolution gets this wrong
-            ("8 × 8 × 8", vec![Op::MaxPool2 { src: 0 }, conv(1, None, 4, 8, 3, 3), conv(2, None, 8, 8, 3, 4), up(3, 8, 5), Op::DepthToSpace2 { src: 4 }]),
+            (
+                "8 × 8 × 8",
+                vec![Op::MaxPool2 { src: 0 }, conv(1, None, 4, 8, 3, 3), conv(2, None, 8, 8, 3, 4), up(3, 8, 5), Op::DepthToSpace2 { src: 4 }],
+            ),
         ];
         let input = rnd(4 * 16 * 16, 3);
         for (name, ops) in nets {
@@ -274,4 +277,3 @@ mod tests {
         }
     }
 }
-

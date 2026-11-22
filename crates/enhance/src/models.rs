@@ -120,7 +120,7 @@ pub fn missing_message(root: &Path, id: ModelId) -> String {
     )
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "models")]
 /// Download `id` into `root` (blocking; run on a background thread), then extract the archive entry.
 pub fn download(
     root: &Path,

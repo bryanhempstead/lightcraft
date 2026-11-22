@@ -111,7 +111,8 @@ fn band(mosaic: &[f32], width: usize, height: usize, cfa: [[u8; 2]; 2], r0: usiz
         let wv = stride.saturating_sub(8);
         let mut bv = [vec![0f32; wv], vec![0f32; wv], vec![0f32; wv]];
         let mut bh = vec![0f32; stride.saturating_sub(6)];
-        let vstat = |indx: usize| sqr((c[indx - w3] - c[indx - w1] - c[indx + w1] + c[indx + w3]) - 3.0 * (c[indx - w2] + c[indx + w2]) + 6.0 * c[indx]);
+        let vstat =
+            |indx: usize| sqr((c[indx - w3] - c[indx - w1] - c[indx + w1] + c[indx + w3]) - 3.0 * (c[indx - w2] + c[indx + w2]) + 6.0 * c[indx]);
         for row in 3..(rows - 3).min(5) {
             for col in 4..stride - 4 {
                 bv[row - 3][col - 4] = vstat(row * stride + col);
@@ -155,10 +156,18 @@ fn band(mosaic: &[f32], width: usize, height: usize, cfa: [[u8; 2]; 2], r0: usiz
             let indx = row * stride + col;
             let lp = indx / 2;
             let ci = c[indx];
-            let n_grad = EPS + ((c[indx - w1] - c[indx + w1]).abs() + (ci - c[indx - w2]).abs()) + ((c[indx - w1] - c[indx - w3]).abs() + (c[indx - w2] - c[indx - w4]).abs());
-            let s_grad = EPS + ((c[indx - w1] - c[indx + w1]).abs() + (ci - c[indx + w2]).abs()) + ((c[indx + w1] - c[indx + w3]).abs() + (c[indx + w2] - c[indx + w4]).abs());
-            let w_grad = EPS + ((c[indx - 1] - c[indx + 1]).abs() + (ci - c[indx - 2]).abs()) + ((c[indx - 1] - c[indx - 3]).abs() + (c[indx - 2] - c[indx - 4]).abs());
-            let e_grad = EPS + ((c[indx - 1] - c[indx + 1]).abs() + (ci - c[indx + 2]).abs()) + ((c[indx + 1] - c[indx + 3]).abs() + (c[indx + 2] - c[indx + 4]).abs());
+            let n_grad = EPS
+                + ((c[indx - w1] - c[indx + w1]).abs() + (ci - c[indx - w2]).abs())
+                + ((c[indx - w1] - c[indx - w3]).abs() + (c[indx - w2] - c[indx - w4]).abs());
+            let s_grad = EPS
+                + ((c[indx - w1] - c[indx + w1]).abs() + (ci - c[indx + w2]).abs())
+                + ((c[indx + w1] - c[indx + w3]).abs() + (c[indx + w2] - c[indx + w4]).abs());
+            let w_grad = EPS
+                + ((c[indx - 1] - c[indx + 1]).abs() + (ci - c[indx - 2]).abs())
+                + ((c[indx - 1] - c[indx - 3]).abs() + (c[indx - 2] - c[indx - 4]).abs());
+            let e_grad = EPS
+                + ((c[indx - 1] - c[indx + 1]).abs() + (ci - c[indx + 2]).abs())
+                + ((c[indx + 1] - c[indx + 3]).abs() + (c[indx + 2] - c[indx + 4]).abs());
             let l = lpf[lp];
             let n_est = c[indx - w1] * (l + l) / (EPS + l + lpf[lp - w1]);
             let s_est = c[indx + w1] * (l + l) / (EPS + l + lpf[lp + w1]);
@@ -181,12 +190,12 @@ fn band(mosaic: &[f32], width: usize, height: usize, cfa: [[u8; 2]; 2], r0: usiz
         let mut col = 3;
         while col < stride - 3 {
             let indx = row * stride + col;
-            p_hpf[indx / 2] = sqr(
-                (c[indx - w3 - 3] - c[indx - w1 - 1] - c[indx + w1 + 1] + c[indx + w3 + 3]) - 3.0 * (c[indx - w2 - 2] + c[indx + w2 + 2]) + 6.0 * c[indx],
-            );
-            q_hpf[indx / 2] = sqr(
-                (c[indx - w3 + 3] - c[indx - w1 + 1] - c[indx + w1 - 1] + c[indx + w3 - 3]) - 3.0 * (c[indx - w2 + 2] + c[indx + w2 - 2]) + 6.0 * c[indx],
-            );
+            p_hpf[indx / 2] = sqr((c[indx - w3 - 3] - c[indx - w1 - 1] - c[indx + w1 + 1] + c[indx + w3 + 3])
+                - 3.0 * (c[indx - w2 - 2] + c[indx + w2 + 2])
+                + 6.0 * c[indx]);
+            q_hpf[indx / 2] = sqr((c[indx - w3 + 3] - c[indx - w1 + 1] - c[indx + w1 - 1] + c[indx + w3 - 3])
+                - 3.0 * (c[indx - w2 + 2] + c[indx + w2 - 2])
+                + 6.0 * c[indx]);
             col += 2;
         }
     }
@@ -217,10 +226,22 @@ fn band(mosaic: &[f32], width: usize, height: usize, cfa: [[u8; 2]; 2], r0: usiz
             let neigh = 0.25 * (pq[p2] + pq[p2 + 1] + pq[p3] + pq[p3 + 1]);
             let disc = if (0.5 - central).abs() < (0.5 - neigh).abs() { neigh } else { central };
             let (rc, g) = (&rgb[ch], &rgb[1]);
-            let nw_grad = EPS + (rc[indx - w1 - 1] - rc[indx + w1 + 1]).abs() + (rc[indx - w1 - 1] - rc[indx - w3 - 3]).abs() + (g[indx] - g[indx - w2 - 2]).abs();
-            let ne_grad = EPS + (rc[indx - w1 + 1] - rc[indx + w1 - 1]).abs() + (rc[indx - w1 + 1] - rc[indx - w3 + 3]).abs() + (g[indx] - g[indx - w2 + 2]).abs();
-            let sw_grad = EPS + (rc[indx - w1 + 1] - rc[indx + w1 - 1]).abs() + (rc[indx + w1 - 1] - rc[indx + w3 - 3]).abs() + (g[indx] - g[indx + w2 - 2]).abs();
-            let se_grad = EPS + (rc[indx - w1 - 1] - rc[indx + w1 + 1]).abs() + (rc[indx + w1 + 1] - rc[indx + w3 + 3]).abs() + (g[indx] - g[indx + w2 + 2]).abs();
+            let nw_grad = EPS
+                + (rc[indx - w1 - 1] - rc[indx + w1 + 1]).abs()
+                + (rc[indx - w1 - 1] - rc[indx - w3 - 3]).abs()
+                + (g[indx] - g[indx - w2 - 2]).abs();
+            let ne_grad = EPS
+                + (rc[indx - w1 + 1] - rc[indx + w1 - 1]).abs()
+                + (rc[indx - w1 + 1] - rc[indx - w3 + 3]).abs()
+                + (g[indx] - g[indx - w2 + 2]).abs();
+            let sw_grad = EPS
+                + (rc[indx - w1 + 1] - rc[indx + w1 - 1]).abs()
+                + (rc[indx + w1 - 1] - rc[indx + w3 - 3]).abs()
+                + (g[indx] - g[indx + w2 - 2]).abs();
+            let se_grad = EPS
+                + (rc[indx - w1 - 1] - rc[indx + w1 + 1]).abs()
+                + (rc[indx + w1 + 1] - rc[indx + w3 + 3]).abs()
+                + (g[indx] - g[indx + w2 + 2]).abs();
             let nw_est = rc[indx - w1 - 1] - g[indx - w1 - 1];
             let ne_est = rc[indx - w1 + 1] - g[indx - w1 + 1];
             let sw_est = rc[indx + w1 - 1] - g[indx + w1 - 1];

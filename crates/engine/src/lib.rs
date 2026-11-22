@@ -25,6 +25,7 @@ pub mod crs_table;
 pub mod demo;
 pub mod devices;
 pub mod disks;
+pub mod enhance;
 pub mod export;
 pub mod faces;
 pub mod files;
@@ -236,6 +237,8 @@ pub struct Session {
     pub active_mask: Option<u32>,
     /// AI masks (SAM 3): the model and the last photo prepared for it.
     pub segmenter: segment::Segmenter,
+    /// Photo ▸ Enhance: its models and their downloads.
+    pub enhancer: enhance::Enhancer,
     /// Selected spot (Remove panel), by index into the active photo's spots.
     pub active_spot: Option<usize>,
     /// The persistent library this session writes to (`None` = in-memory only).
@@ -353,6 +356,7 @@ impl Session {
             depth: 0,
             active_mask: None,
             segmenter: segment::Segmenter::default(),
+            enhancer: enhance::Enhancer::default(),
             active_spot: None,
             library: None,
             xmp: sidecar::XmpPrefs::default(),
@@ -718,7 +722,7 @@ impl Session {
         let Some(old) = self.develop_of(id) else { return Vec::new() };
         let Some(mut delta) = json_delta(&old.to_json(), &new.to_json()) else { return Vec::new() };
         if let Some(o) = delta.as_object_mut() {
-            for k in ["spots", "red_eye", "version"] {
+            for k in ["spots", "red_eye", "version", "depth", "enhance"] {
                 o.remove(k);
             }
             if o.is_empty() {
@@ -942,6 +946,8 @@ mod tests_cameras;
 mod tests_color;
 #[cfg(test)]
 mod tests_delete;
+#[cfg(test)]
+mod tests_enhance;
 #[cfg(test)]
 mod tests_export;
 #[cfg(test)]

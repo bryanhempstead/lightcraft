@@ -21,29 +21,34 @@ pub mod models;
 pub mod net;
 pub mod onnx;
 mod onnx_proto;
+pub mod options;
 pub mod reference;
 #[doc(hidden)]
 pub mod synthetic;
 #[doc(hidden)]
 pub mod synthetic_proto;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "models")]
 #[allow(clippy::all, dead_code)]
 mod depth_anything_v2;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "models")]
 #[allow(clippy::all, dead_code)]
 mod dinov2;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "models")]
 pub mod depth;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "models")]
 pub mod esrgan;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "models")]
 pub mod job;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "models")]
 pub mod netrun;
 
 pub use lightcraft_denoise_core as denoise;
+pub use options::Options;
+
+#[cfg(feature = "models")]
+pub use lightcraft_fetch as fetch;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -53,14 +58,14 @@ pub enum Error {
     Model(String),
     #[error("cancelled")]
     Cancelled,
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(feature = "models")]
     #[error(transparent)]
     Candle(#[from] candle_core::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "models")]
 /// The best device here: Metal on macOS (when a GPU is available), else the CPU. `LIGHTCRAFT_ENHANCE_CPU=1` forces
 /// the CPU.
 pub fn best_device() -> candle_core::Device {

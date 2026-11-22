@@ -28,6 +28,7 @@ pub enum Section {
     Calibration,
     PointColor,
     RedEye,
+    LensBlur,
 }
 
 impl Section {
@@ -49,6 +50,7 @@ impl Section {
             Section::Calibration => "Calibration",
             Section::PointColor => "Point Color",
             Section::RedEye => "Red Eye",
+            Section::LensBlur => "Lens Blur",
         }
     }
 }
@@ -245,6 +247,11 @@ controls! {
     "calibration.blueHue" => calibration.blue_hue, "Blue Hue", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#30a0d0", to: "#8040d0" };
     "calibration.blueSat" => calibration.blue_sat, "Blue Saturation", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#3a60e0" };
     "crop.angle" => crop.geometry.angle, "Straighten", Geometry, -45, 45, 0, 0.01, 2, Centered;
+    "lensBlur.amount" => lens_blur.amount, "Blur Amount", LensBlur, 0, 100, 0, 1, 0, Plain;
+    "lensBlur.focalDistance" => lens_blur.focal_distance, "Focal Distance", LensBlur, 0, 100, 0, 1, 0, Gradient { from: "#f0c040", to: "#5040c0" };
+    "lensBlur.focalRange" => lens_blur.focal_range, "Focal Range", LensBlur, 0, 100, 0, 1, 0, Plain;
+    "lensBlur.boost" => lens_blur.boost, "Boost", LensBlur, 0, 100, 0, 1, 0, Plain;
+    "enhance.denoise" => enhance.denoise, "Denoise", Detail, 0, 100, 0, 1, 0, Plain;
 }
 
 /// Template specs of the indexed controls (`<family>.<field>`; addressed as `<family>.<i>.<field>`).

@@ -16,6 +16,7 @@ pub mod curves;
 mod delete;
 pub(crate) mod develop;
 mod edit;
+mod enhance;
 mod export;
 pub mod filters;
 pub mod folders;
@@ -145,6 +146,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(convert::specs());
         v.extend(convert::edit_specs());
         v.extend(merge::specs());
+        v.extend(enhance::specs());
         v.extend(query::specs());
         v.extend(xmp::specs());
         v.extend(preset_files::specs());

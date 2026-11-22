@@ -34,6 +34,10 @@ pub struct DevelopSettings {
     pub red_eye: Vec<RedEye>,
     pub lens_blur: LensBlur,
     pub enhance: Enhance,
+    /// The photo's depth map (Lens Blur, Depth Range masks), estimated on request; it belongs to this photo's
+    /// pixels (never synced or pasted). Omitted while there is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth: Option<crate::DepthMap>,
     /// Camera calibration: shadows tint and primary hue/saturation (applied before tone mapping).
     pub calibration: Calibration,
     /// Section on/off toggles (the "eye" buttons on panel headers): section id → enabled.
@@ -67,6 +71,7 @@ impl Default for DevelopSettings {
             red_eye: Vec::new(),
             lens_blur: LensBlur::default(),
             enhance: Enhance::default(),
+            depth: None,
             calibration: Calibration::default(),
             disabled_sections: Vec::new(),
         }
@@ -931,13 +936,80 @@ impl Default for RedEye {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// Lens Blur (Lightroom Classic 13+): a shallow depth of field from the photo's depth map
+/// ([`DevelopSettings::depth`]). What lies inside the focal range stays sharp; the farther in depth from it,
+/// the larger the blur, up to [`LensBlur::amount`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LensBlur {
     pub enabled: bool,
+    /// Blur Amount 0..100 (100: a circle of confusion of 3.5 % of the long edge). Switching Lens Blur on starts
+    /// at Lightroom's defaults (`lensBlur.apply`): amount 50, focus on the nearest fifth.
     pub amount: f64,
+    /// Centre of the in-focus range, 0 (nearest) .. 100 (farthest).
     pub focal_distance: f64,
+    /// Width of the in-focus range, 0..100.
     pub focal_range: f64,
+    /// Shape of the out-of-focus highlights. Omitted while a circle.
+    #[serde(skip_serializing_if = "Bokeh::is_circle")]
+    pub bokeh: Bokeh,
+    /// How much brighter highlights turn into bokeh, 0..100. Omitted while 0.
+    #[serde(skip_serializing_if = "is_zero_f64")]
+    pub boost: f64,
+    /// Refine ▸ Focus brush: painted sharp. Omitted while empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub focus_strokes: Vec<BrushStroke>,
+    /// Refine ▸ Blur brush: painted fully out of focus. Omitted while empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub blur_strokes: Vec<BrushStroke>,
+}
+
+impl Default for LensBlur {
+    fn default() -> Self {
+        LensBlur {
+            enabled: false,
+            amount: 0.0,
+            focal_distance: 0.0,
+            focal_range: 0.0,
+            bokeh: Bokeh::Circle,
+            boost: 0.0,
+            focus_strokes: Vec::new(),
+            blur_strokes: Vec::new(),
+        }
+    }
+}
+
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
+}
+
+/// Lens Blur's bokeh shapes (Lightroom: Circle, Bubble, 5-Blade, Ring, Cat Eye).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Bokeh {
+    #[default]
+    Circle,
+    /// A disc with a bright rim (soap-bubble bokeh).
+    Bubble,
+    /// A pentagon (a five-bladed aperture).
+    FiveBlade,
+    /// A ring (mirror / catadioptric lens).
+    Ring,
+}
+
+impl Bokeh {
+    pub fn is_circle(&self) -> bool {
+        *self == Bokeh::Circle
+    }
+    pub const ALL: [Bokeh; 4] = [Bokeh::Circle, Bokeh::Bubble, Bokeh::FiveBlade, Bokeh::Ring];
+    pub fn label(self) -> &'static str {
+        match self {
+            Bokeh::Circle => "circ.",
+            Bokeh::Bubble => "bubl.",
+            Bokeh::FiveBlade => "5.bld.",
+            Bokeh::Ring => "ring.",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
