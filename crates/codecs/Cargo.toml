@@ -32,13 +32,15 @@ jxl-oxide = { workspace = true, optional = true }
 ravif = { workspace = true, optional = true }
 # JPEG XL encoding (BSD-3-Clause OR Apache-2.0), as upstream's craft-jxl uses
 jixel = { version = "=0.3.4", optional = true }
+rav1e = { workspace = true, optional = true }
+avif-serialize = { workspace = true, optional = true }
 
 [features]
 default = ["parallel", "jxl", "avif"]
 parallel = ["dep:rayon", "lightcraft-raster/parallel", "jpeg-decoder/rayon"]
 jxl = ["dep:jxl-oxide", "dep:jixel"]
 ## AVIF encoding via ravif/rav1e (pure Rust, BSD). Native targets only; a no-op on wasm32.
-avif = ["dep:ravif"]
+avif = ["dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 
 [dev-dependencies]
 proptest = { workspace = true }
