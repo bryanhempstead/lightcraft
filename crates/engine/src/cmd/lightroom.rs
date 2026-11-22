@@ -4,11 +4,12 @@
 use serde_json::Value;
 
 use super::{CommandSpec, always, bad, bool_or, cmd, has_active, str_param};
-use crate::lr_history::{ExtrasOptions, history_of, migrate_extras};
+use crate::lr_history::{ExtrasOptions, Source, history_of, migrate_extras};
 use crate::lr_migrate::{
     MigrateOptions, Records, default_catalog, default_preset_dirs, dump_catalog, flatten_wrapper, migrate, read_records, records_from_db,
     rematch_lens_profiles, rematch_profiles, repair_migration, resume_point, with_catalog_copy,
 };
+use crate::lr_sync::{Conflicts, SyncOptions, sync};
 use crate::{Result, Session};
 
 const C: &str = "library.migrateLightroom";
@@ -50,6 +51,51 @@ pub fn with_catalog(p: &Value, f: impl FnOnce(&std::path::Path, Records) -> Resu
 
 fn extras_options(p: &Value) -> ExtrasOptions {
     ExtrasOptions { history: bool_or(p, "history", true), snapshots: bool_or(p, "snapshots", true), dry_run: bool_or(p, "dryRun", false), only: None }
+}
+
+const SYNC: &str = "library.syncLightroom";
+
+fn sync_options(p: &Value) -> Result<SyncOptions> {
+    let ids = |k: &str| -> std::collections::HashSet<lightcraft_catalog::PhotoId> {
+        p.get(k).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).map(lightcraft_catalog::PhotoId).collect()
+    };
+    let conflicts = match str_param(p, "conflicts") {
+        Some(c) => Conflicts::parse(c).ok_or_else(|| bad(SYNC, format!("conflicts: `{c}` (ask, lightroom, lightcraft, newest)")))?,
+        None => Conflicts::Ask,
+    };
+    Ok(SyncOptions {
+        dry_run: bool_or(p, "dryRun", false),
+        conflicts,
+        take: ids("take"),
+        keep: ids("keep"),
+        import_new: bool_or(p, "import", true),
+        collections: bool_or(p, "collections", true),
+        history: bool_or(p, "history", true),
+    })
+}
+
+/// `library.syncLightroom`: from a catalog (read from a copy now), or from `records` + `extras`
+/// read ahead (the app reads them on a worker thread).
+fn sync_run(s: &mut Session, p: &Value) -> Result<Value> {
+    let opts = sync_options(p)?;
+    if let Some(r) = str_param(p, "records").filter(|r| !r.trim().is_empty()) {
+        let rec = read_records(r).map_err(|e| bad(SYNC, e))?;
+        let ex = match str_param(p, "extras").filter(|e| !e.trim().is_empty()) {
+            Some(e) => Some(read_extras_file(e).map_err(|e| bad(SYNC, e))?),
+            None => None,
+        };
+        return sync(s, &rec, ex.as_ref().map(Source::Read), &opts);
+    }
+    with_catalog(p, |db, rec| sync(s, &rec, Some(Source::Catalog(db)), &opts)).map_err(|e| bad(SYNC, e))?
+}
+
+/// An [`crate::lr_history::Extras`] file (written by the app's worker).
+pub fn read_extras_file(path: &str) -> std::result::Result<crate::lr_history::Extras, String> {
+    let len = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?.len();
+    if len > 2 << 30 {
+        return Err(format!("{path}: too large"));
+    }
+    serde_json::from_slice(&std::fs::read(path).map_err(|e| format!("{path}: {e}"))?).map_err(|e| format!("{path}: {e}"))
 }
 
 /// The preset folders a call asks for: `presetDirs`, else (unless `presets: false`) the default
@@ -166,6 +212,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy with the system sqlite3, the catalog itself is never opened) | records?: records JSON (from recordsOut), recordsOut?: path, import?: bool (default true: add the files in place; false when they were imported already), limit?: N (only the first N photos whose files exist), dryRun?: bool, developAll?: bool (also photos never edited in Lightroom), collectionsOnly?: bool (only the collections, for a library migrated already: nothing imported, no photo changed, no presets), onlyNew?: bool (only the photos this run imports — e.g. files an earlier run failed on — photos already in the library are left as they are), lookMap?: {lookName: profileId} (creative looks → our profiles; an imported profile named like the look matches by itself), profiles?: bool (default: as presets; first import the creative profiles — XMP Look profiles with a colour table such as Summer Fields / Nautica, presets carrying one, .cube files — from profileDirs?: [folders] (default: the preset folders below) so photos using them match), presets?: bool (default true), presetDirs?: [folders] (default: Lightroom Settings/{Settings, Develop Presets, Keyword Sets} next to the catalog + Camera Raw / Lightroom preset folders), history?: bool (default true, with a catalog: each photo's Lightroom history steps, kept in <library>/Lightroom History/), snapshots?: bool (default true, with a catalog: Lightroom snapshots → versions)} → {found, missing, missingByRoot, matched, rated, flagged, labelled, keyworded, virtualCopies, develop: {applied, unmapped: [{key, photos}], photosWithUnmapped…}, albums: {albums, smart, sets, quick, skipped}, presets, lightroomHistory: {history: {photos, steps…}, snapshots: {added…}}} — ratings, flags, colour labels, keywords, caption/copyright/creator/location, collections (the catalog's own tree: sets as album folders, smart collections whose rules map, the Quick Collection into ours), virtual copies, develop settings, history, snapshots and Lightroom's edit times; one undo step (+ one for the snapshots)",
             always,
             run
+        ),
+        cmd!(
+            "library.syncLightroom",
+            "Sync from Lightroom Classic",
+            [],
+            None,
+            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy) | records?: records JSON + extras?: history JSON (read ahead), dryRun?: bool (report only), conflicts?: ask (default: photos whose look changed on both sides stay as they are here and are listed, asked again next time) | lightroom (Lightroom's replace ours, ours kept as the version \"LightCraft before Lightroom sync\") | lightcraft (ours stay) | newest (the side edited last), take?: [photoId] (these conflicts go Lightroom's way), keep?: [photoId] (these stay ours), import?: bool (default true: photos new in Lightroom or whose drive is back), collections?: bool (default true), history?: bool (default true: the changed photos' Lightroom history and snapshots)} — bring what changed in Lightroom Classic since the migration / last sync into this library: new photos, develop settings, ratings / flags / labels / keywords / IPTC text, collection membership, history and snapshots; never overwrites a change made here unless asked; one undo step → {firstSync, since, newPhotos: {found, imported, missingFiles, virtualCopies}, develop: {fromLightroom, keptMine, conflicts, resolved, conflictList: [{photoId, file, lightroomEdited, lightcraftEdited, newer}], unchanged}, metadata: {rating, flag, label, keywords, text, conflicts}, collections: {added, removed, albumsMade}, history}",
+            always,
+            sync_run
         ),
         cmd!(
             "library.migrateLightroomHistory",

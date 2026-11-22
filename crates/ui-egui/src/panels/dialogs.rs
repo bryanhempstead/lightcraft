@@ -108,6 +108,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
         Dialog::About => "About LightCraft",
         Dialog::Shortcuts => "Keyboard Shortcuts",
+        Dialog::LightroomSync { .. } => "Sync from Lightroom Classic",
     }
     .to_string();
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(16, 12));
@@ -760,6 +761,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             .color(t.text_dim),
                     );
                 }
+                Dialog::LightroomSync { catalog, report, conflicts, error, .. } => {
+                    crate::lr_sync::body(ui, catalog, report.as_ref(), conflicts, error.as_deref());
+                }
                 Dialog::About => {
                     ui.set_min_width(680.0);
                     let tab_id = egui::Id::new("about_tab");
@@ -883,6 +887,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::SamModel { .. } if sam_installed || sam_running || sam_nowhere => "",
                     Dialog::SamModel { error, .. } if error.is_some() || sam_failed => "Try Again",
                     Dialog::SamModel { .. } => "Download",
+                    // (nothing to apply until the dry run is in)
+                    Dialog::LightroomSync { report: None, .. } | Dialog::LightroomSync { error: Some(_), .. } => "",
+                    Dialog::LightroomSync { .. } => "sync.",
                     _ if informational => "Close",
                     _ => "OK",
                 };
@@ -917,6 +924,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             // the SAM 3 dialog stays open to show the download (or why it can't start)
             Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
                 if let Dialog::SamModel { error, .. } = &mut dlg {
+                    *error = Some(e);
+                }
+            }
+            Ok(v) if matches!(dlg, Dialog::LightroomSync { .. }) => {
+                app.toast_for(ctx, crate::lr_sync::summary(&v), 8.0);
+                close = true;
+            }
+            Err(e) if matches!(dlg, Dialog::LightroomSync { .. }) => {
+                if let Dialog::LightroomSync { error, .. } = &mut dlg {
                     *error = Some(e);
                 }
             }
@@ -1025,6 +1041,8 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
             r
         }
+        Dialog::LightroomSync { records, extras, conflicts, report: Some(_), .. } => crate::lr_sync::confirm(app, records, extras, conflicts),
+        Dialog::LightroomSync { .. } => Ok(serde_json::Value::Null),
         Dialog::NewAlbum { name, folder } => app.run("album.create", json!({"name": name, "folder": folder, "addSelected": !folder})),
         Dialog::RenameAlbum { id, name } => app.run("album.rename", json!({"id": id, "name": name})),
         Dialog::TextPrompt { value, command, params, key, .. } => {

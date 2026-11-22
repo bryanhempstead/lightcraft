@@ -34,6 +34,7 @@ pub mod library;
 pub mod logging;
 pub mod lr_history;
 pub mod lr_migrate;
+pub mod lr_sync;
 pub mod media;
 pub mod memory;
 pub mod merge;
