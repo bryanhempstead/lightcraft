@@ -1816,7 +1816,8 @@ pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, Str
         return app.run("develop.wb", json!({"mode": mode}));
     }
     if name == "PerspectiveUpright" {
-        let mode = ["off", "auto", "level", "vertical", "full", "guided"].get(rest.parse::<usize>().unwrap_or(0)).copied().unwrap_or("off");
+        // Monogram's Lightroom inputs: 0 Off, 1 Auto, 2 Guided, 3 Level, 4 Vertical, 5 Full
+        let mode = ["off", "auto", "guided", "level", "vertical", "full"].get(rest.parse::<usize>().unwrap_or(0)).copied().unwrap_or("off");
         return app.run("geometry.upright", json!({"mode": mode}));
     }
     // the numbers after the name: dial `^d,min,max` / `vd,…`, slider `v,min,max`
