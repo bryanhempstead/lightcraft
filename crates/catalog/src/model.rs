@@ -188,6 +188,10 @@ pub struct Meta {
     /// Left out of the catalog JSON when empty (most photos), so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<lightcraft_meta::Region>,
+    /// IPTC Extension / PLUS fields (L21): Person Shown, Event, releases, Digital Source Type …,
+    /// by id (`lightcraft_meta::iptc_ext`). Left out of the catalog JSON when empty.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub iptc_ext: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

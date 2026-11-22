@@ -1551,6 +1551,13 @@ pub fn export_metadata_with(cat: Option<&lightcraft_catalog::Catalog>, photo: &l
         out.country = text(&m.country);
     }
     (out.keywords, out.hierarchical_keywords) = export_keywords_with(cat, photo, o);
+    // IPTC Extension (L21): Remove Person Info leaves out what describes the people
+    out.iptc_ext = m
+        .iptc_ext
+        .iter()
+        .filter(|(k, _)| !(o.remove_people && lightcraft_meta::iptc_ext::field(k).is_some_and(|f| f.person)))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     out.capture_time = photo.captured.as_deref().and_then(DateTime::parse_iso);
     out.rating = (photo.rating > 0).then_some(photo.rating as i8);
     // Pixels are exported upright: orientation is baked in.

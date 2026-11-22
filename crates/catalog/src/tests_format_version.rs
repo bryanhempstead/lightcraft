@@ -184,5 +184,6 @@ fn op_variants_are_versioned() {
         }
     }
     let newest = since(&Op::SetFolderRecord { folder: String::new(), record: None });
-    assert_eq!(newest, VERSION, "the newest op's version must be the current format version");
+    // a format can also add a field (v5: `Meta.iptc_ext`), so the newest op may be older
+    assert!(newest <= VERSION, "an op newer than the current format version");
 }

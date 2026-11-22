@@ -30,6 +30,8 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("aux", "http://ns.adobe.com/exif/1.0/aux/"),
     ("lr", "http://ns.adobe.com/lightroom/1.0/"),
     ("Iptc4xmpCore", "http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"),
+    ("Iptc4xmpExt", "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"),
+    ("plus", "http://ns.useplus.org/ldf/xmp/1.0/"),
     ("lc", LC_NS),
     // Read-only: develop settings written by other raw developers (interchange; see docs/xmp-interop.md).
     ("crs", CRS_NS),
@@ -543,6 +545,17 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
         m.gps = Some(Gps { latitude: lat, longitude: lon, altitude });
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
+    for f in crate::iptc_ext::IPTC_EXT {
+        let v = match f.kind {
+            crate::iptc_ext::ExtKind::Bag => {
+                props.get(f.prop).map(|v| v.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; "))
+            }
+            _ => first(f.prop),
+        };
+        if let Some(v) = v.filter(|v| !v.is_empty()) {
+            m.iptc_ext.insert(f.id.to_string(), v);
+        }
+    }
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
     Ok(XmpData { metadata: m, lc_settings, properties: props, values })
 }
@@ -606,6 +619,9 @@ pub fn write_xmp_lc(meta: &Metadata, lc: &[(&str, &str)]) -> String {
     push("photoshop:Country", meta.country.clone());
     push("xmpRights:Marked", meta.copyright_marked.map(|m| if m { "True" } else { "False" }.to_string()));
     push("xmpRights:WebStatement", meta.copyright_url.clone());
+    for f in crate::iptc_ext::IPTC_EXT.iter().filter(|f| f.kind == crate::iptc_ext::ExtKind::Text) {
+        push(f.prop, meta.iptc_ext.get(f.id).filter(|v| !v.trim().is_empty()).cloned());
+    }
     if let Some(g) = meta.gps {
         push("exif:GPSLatitude", Some(fmt_gps_coord(g.latitude, 'N', 'S')));
         push("exif:GPSLongitude", Some(fmt_gps_coord(g.longitude, 'E', 'W')));
@@ -657,6 +673,14 @@ pub fn write_xmp_lc(meta: &Metadata, lc: &[(&str, &str)]) -> String {
     array(&mut x, "dc:creator", "Seq", &one(&meta.artist), false);
     array(&mut x, "dc:subject", "Bag", &meta.keywords, false);
     array(&mut x, "lr:hierarchicalSubject", "Bag", &meta.hierarchical_keywords, false);
+    for f in crate::iptc_ext::IPTC_EXT {
+        let Some(v) = meta.iptc_ext.get(f.id).filter(|v| !v.trim().is_empty()) else { continue };
+        match f.kind {
+            crate::iptc_ext::ExtKind::Alt => array(&mut x, f.prop, "Alt", std::slice::from_ref(v), true),
+            crate::iptc_ext::ExtKind::Bag => array(&mut x, f.prop, "Bag", &crate::iptc_ext::items(v), false),
+            crate::iptc_ext::ExtKind::Text => {}
+        }
+    }
     array(&mut x, "exif:ISOSpeedRatings", "Seq", &meta.iso.map(|v| vec![v.to_string()]).unwrap_or_default(), false);
     if let Some(s) = meta.lens_spec {
         array(&mut x, "exifEX:LensSpecification", "Seq", &s.iter().map(|&v| frac(v)).collect::<Vec<_>>(), false);
@@ -686,6 +710,15 @@ mod tests {
             // write_xmp doesn't emit regions yet (read-only interchange; see docs/xmp-interop.md), so the
             // roundtrip fixture must leave this empty or `roundtrip_all_fields` can't round-trip it.
             regions: Vec::new(),
+            iptc_ext: [
+                ("personShown", "Ann <Lee>; Bo"),
+                ("event", "Wedding & party"),
+                ("modelReleaseStatus", "http://ns.useplus.org/ldf/vocab/MR-NON"),
+                ("digitalSourceType", "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
             make: Some("Maker & Sons".into()),
             model: Some("X <1>".into()),
             serial_number: Some("SN1".into()),

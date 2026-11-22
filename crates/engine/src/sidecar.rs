@@ -100,6 +100,8 @@ pub struct SidecarData {
     pub extended_description: Option<String>,
     pub keywords: Option<Vec<String>>,
     pub regions: Option<Vec<lightcraft_meta::Region>>,
+    /// IPTC Extension fields (L21), by id; only those the file states.
+    pub iptc_ext: std::collections::BTreeMap<String, String>,
     /// Capture time (ISO 8601) from `exif:DateTimeOriginal`, `photoshop:DateCreated` or
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
@@ -141,6 +143,7 @@ pub fn parse_sidecar(xmp: &str, raw: bool) -> std::result::Result<SidecarData, S
         // photo's are kept.
         regions: d.values.contains_key("mwg-rs:Regions").then(|| m.regions.clone()),
         captured: m.capture_time.map(|d| d.to_iso()),
+        iptc_ext: m.iptc_ext.clone(),
         ..Default::default()
     };
     if let Some(r) = m.rating {
@@ -185,6 +188,9 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
         p.label = l;
     }
     let m = &mut p.meta;
+    for (k, v) in &sc.iptc_ext {
+        m.iptc_ext.insert(k.clone(), v.clone());
+    }
     for (src, dst) in [
         (&sc.title, &mut m.title),
         (&sc.caption, &mut m.caption),
@@ -266,6 +272,7 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
         label: p.label.map(|l| cat.label_name(l)),
         capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
         gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
+        iptc_ext: p.meta.iptc_ext.clone(),
         ..Default::default()
     };
     let settings = serde_json::to_string(&*p.develop).unwrap_or_default();
@@ -301,6 +308,20 @@ pub const OWNED: &[&str] = &[
     "xmpRights:Marked",
     "xmpRights:UsageTerms",
     "xmpRights:WebStatement",
+    "Iptc4xmpExt:PersonInImage",
+    "Iptc4xmpExt:Event",
+    "Iptc4xmpExt:OrganisationInImageName",
+    "Iptc4xmpExt:OrganisationInImageCode",
+    "Iptc4xmpExt:AddlModelInfo",
+    "Iptc4xmpExt:ModelAge",
+    "Iptc4xmpExt:DigitalSourceType",
+    "Iptc4xmpExt:MaxAvailWidth",
+    "Iptc4xmpExt:MaxAvailHeight",
+    "plus:ModelReleaseStatus",
+    "plus:ModelReleaseID",
+    "plus:PropertyReleaseStatus",
+    "plus:PropertyReleaseID",
+    "plus:ImageSupplierImageID",
     "lc:*",
 ];
 

@@ -55,3 +55,25 @@ fn metadata_views_mixed_values_and_arrows() {
     click(&mut h, "button:metaArrow-camera");
     assert!(h.app.session.filter.camera.is_some());
 }
+
+/// L21: the IPTC Extension view edits Person Shown (a list) and shows the release status (a popup).
+#[test]
+fn iptc_extension_view() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let id = s.catalog.photos().next().unwrap().id.0;
+    s.execute("library.select", &json!({"ids": [id]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id], "iptcExt": {"event": "Wedding", "propertyReleaseStatus": "PR-NAP"}})).unwrap();
+    let mut h = headless(s);
+    h.app.ui.library_sections = vec!["metadata".into()];
+    h.app.ui.metadata_view = "iptcExt".into();
+    settle(&mut h);
+    let r = h.request("ui.clickWidget", json!({"id": "field:iptcExt.personShown"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.request("ui.text", json!({"text": "Ann Lee; Bo"}), T)["ok"], true);
+    assert_eq!(h.request("ui.key", json!({"key": "Tab"}), T)["ok"], true);
+    settle(&mut h);
+    let m = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).unwrap().meta.iptc_ext.clone();
+    assert_eq!(m.get("personShown").map(String::as_str), Some("Ann Lee; Bo"));
+    shot(&mut h, "l21-iptc-ext.png");
+}
