@@ -11,6 +11,14 @@ use crate::{LightcraftApp, Services};
 const T: Duration = Duration::from_secs(20);
 const RENDER: Duration = Duration::from_secs(240);
 
+/// The 1:1 tests decode and render 24 MP photos: one at a time, so they don't starve the rest of
+/// the suite running beside them.
+static HEAVY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn heavy() -> std::sync::MutexGuard<'static, ()> {
+    HEAVY.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn demo() -> Headless {
     let services = Services { png: None, ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
@@ -40,6 +48,7 @@ fn covered(h: &Headless) -> bool {
 
 #[test]
 fn one_to_one_shows_the_photos_own_pixels_equal_to_the_full_size_render() {
+    let _one = heavy();
     let mut h = demo();
     h.app.renderer.keep_pixels = true;
     h.request("ui.set", json!({"view": "detail", "right": "none", "leftPanel": false, "filmstrip": false}), T);
@@ -81,6 +90,7 @@ fn one_to_one_shows_the_photos_own_pixels_equal_to_the_full_size_render() {
 
 #[test]
 fn panning_at_one_to_one_renders_the_new_part_and_fit_hides_the_detail() {
+    let _one = heavy();
     let mut h = demo();
     h.request("ui.set", json!({"view": "detail", "right": "none", "leftPanel": false, "filmstrip": false}), T);
     exec(&mut h, "view.zoom100", json!({}));
@@ -113,6 +123,7 @@ fn panning_at_one_to_one_renders_the_new_part_and_fit_hides_the_detail() {
 
 #[test]
 fn an_edit_at_one_to_one_re_renders_the_detail_in_the_new_look() {
+    let _one = heavy();
     let mut h = demo();
     h.request("ui.set", json!({"view": "detail", "right": "none", "leftPanel": false, "filmstrip": false}), T);
     exec(&mut h, "view.zoom100", json!({}));

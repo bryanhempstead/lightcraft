@@ -175,8 +175,10 @@ impl TileView {
     }
 
     /// Draw the pieces that belong on screen over `img` (the photo's rectangle; clipped by the
-    /// painter): the previous look's under the current one's.
-    pub fn draw(&mut self, painter: &egui::Painter, img: Rect, visible: Rect) {
+    /// painter): the current look's, and with `stale` (a slider drag without a diagnostic
+    /// overlay) the previous look's under them until the new ones arrive — otherwise the preview
+    /// underneath, already in the new look, shows through.
+    pub fn draw(&mut self, painter: &egui::Painter, img: Rect, visible: Rect, stale: bool) {
         let Some(look) = self.look else { return };
         self.frame += 1;
         let frame = self.frame;
@@ -187,7 +189,7 @@ impl TileView {
             )
         };
         let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
-        let stale = self.shown.filter(|s| *s != look);
+        let stale = self.shown.filter(|s| stale && *s != look);
         for pass in [stale, Some(look)].into_iter().flatten() {
             for p in self.pieces.iter_mut().filter(|p| p.look == pass) {
                 let r = at(&p.rect);

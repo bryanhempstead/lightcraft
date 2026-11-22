@@ -434,7 +434,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if crate::tiles::update(app, &want).is_some()
             && let Some(t) = app.renderer.tiles.get_mut(&view)
         {
-            t.draw(&p.with_clip_rect(main_area.intersect(canvas)), img_rect, main_area);
+            t.draw(
+                &p.with_clip_rect(main_area.intersect(canvas)),
+                img_rect,
+                main_area,
+                interacting && want.overlay == lightcraft_pipeline::Overlay::None,
+            );
         }
         for other in [0u8, 3] {
             if other != view

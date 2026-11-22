@@ -228,7 +228,7 @@ fn photo_tile(
         if crate::tiles::update(app, &w).is_some()
             && let Some(t) = app.renderer.tiles.get_mut(&view)
         {
-            t.draw(&p, display, img_area);
+            t.draw(&p, display, img_area, w.interacting);
         }
     }
     if photo.flag == Flag::Reject {
