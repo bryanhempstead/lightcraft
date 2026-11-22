@@ -191,6 +191,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.saveMetadataPreset", "Save Metadata Preset…", None, ""),
     // Metadata ▸ keyword list (L11)
     ("dialog.importKeywords", "Import Keywords…", None, "Metadata"),
+    ("dialog.importCatalog", "Import from Another Library…", None, "File"),
     ("dialog.exportKeywords", "Export Keywords…", None, "Metadata"),
     ("dialog.keywordShortcut", "Set Keyword Shortcut…", Some("Cmd+Alt+Shift+K"), "Metadata"),
     ("dialog.editKeyword", "Edit Keyword Tag…", None, ""),
@@ -1352,6 +1353,20 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.quit" => {
             app.ui.quit = true;
             Ok(Value::Null)
+        }
+        "dialog.importCatalog" => {
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => Some(x.to_string()),
+                None => app.services.pick_folder.as_mut().and_then(|f| f()),
+            };
+            let Some(path) = path else { return Some(Ok(Value::Null)) };
+            match app.run("library.importCatalog", json!({"path": path, "dryRun": true})) {
+                Ok(preview) => {
+                    app.ui.dialog = Some(crate::state::Dialog::ImportCatalog { path, preview, replace: "none".into() });
+                    Ok(Value::Null)
+                }
+                Err(e) => Err(e),
+            }
         }
         "dialog.importKeywords" => {
             let path = match p.get("path").and_then(Value::as_str) {

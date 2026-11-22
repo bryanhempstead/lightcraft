@@ -152,3 +152,44 @@ fn export_dialog_several_presets() {
     assert_eq!(folders.len(), 1, "one preset picked: one folder");
     assert!(std::fs::read_dir(folders[0].path()).unwrap().count() >= 1, "with the photo in it");
 }
+
+/// L30: File ▸ Import from Another Library… previews what the other library holds and asks what to
+/// do with the photos both have (keep mine / take metadata / take all).
+#[test]
+fn import_from_another_library_dialog() {
+    let dir = temp("l30");
+    let src = dir.0.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    for (i, n) in ["a.png", "b.png"].iter().enumerate() {
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 6, data: vec![[i as u8 * 90, 50, 70, 255]; 48] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        std::fs::write(src.join(n), png).unwrap();
+    }
+    // library A has both photos, titled; B has a.png only
+    let mut a = lightcraft_engine::Session::new().with_fs();
+    a.open_library(dir.0.join("libA"), false).unwrap();
+    let r = a.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    for id in r["imported"].as_array().unwrap() {
+        a.execute("photo.setMeta", &json!({"ids": [id], "title": "From A"})).unwrap();
+    }
+    a.close_library().unwrap();
+    drop(a);
+    let mut b = lightcraft_engine::Session::new().with_fs();
+    b.open_library(dir.0.join("libB"), false).unwrap();
+    b.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    let mut h = headless(b);
+    h.app.run("dialog.importCatalog", json!({"path": dir.0.join("libA").to_string_lossy()})).unwrap();
+    settle(&mut h);
+    match &h.app.ui.dialog {
+        Some(crate::state::Dialog::ImportCatalog { preview, .. }) => {
+            assert_eq!((preview["added"].as_u64(), preview["inBoth"].as_u64()), (Some(1), Some(1)), "{preview}");
+        }
+        other => panic!("no dialog: {other:?}"),
+    }
+    assert_eq!(h.app.session.catalog.photos().count(), 1, "a preview changes nothing");
+    click(&mut h, "button:importCatalogReplace-1");
+    shot(&mut h, "l30-import-library.png");
+    click(&mut h, "button:dialogOk");
+    assert_eq!(h.app.session.catalog.photos().count(), 2);
+    assert!(h.app.session.catalog.photos().all(|p| p.meta.title == "From A"), "the shared photo took A's metadata");
+}

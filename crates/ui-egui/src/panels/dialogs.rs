@@ -178,6 +178,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::CaptureTime { .. } => "Edit Capture Time",
         Dialog::RenameKeyword { .. } => "Rename Keyword",
         Dialog::EditKeyword(_) => "Edit Keyword Tag",
+        Dialog::ImportCatalog { .. } => "Import from Another Library",
         Dialog::MergeKeywords { .. } => "Merge Keywords",
         Dialog::NewSmartAlbum { .. } => "Create Smart Album",
         Dialog::AllMetadata { .. } => "All Metadata",
@@ -509,6 +510,31 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if more > 0 {
                         ui.label(egui::RichText::new(crate::i18n::tr_format!("… and {more} more", more = more)).color(t.text_dim));
                     }
+                }
+                Dialog::ImportCatalog { path, preview, replace } => {
+                    ui.label(egui::RichText::new(path.as_str()).color(t.text_label));
+                    ui.add_space(4.0);
+                    let n = |k: &str| preview[k].as_u64().unwrap_or(0);
+                    ui.label(format!(
+                        "{} photos in it: {} new, {} this library has already; {} albums",
+                        n("photos"),
+                        n("added"),
+                        n("inBoth"),
+                        n("albums")
+                    ));
+                    ui.add_space(6.0);
+                    let mut v: &'static str = match replace.as_str() {
+                        "metadata" => "metadata",
+                        "all" => "all",
+                        _ => "none",
+                    };
+                    choices(ui, "Photos both have", "importCatalogReplace", &[("none", "keep.mine."), ("metadata", "take.metadata."), ("all", "take.all.")], &mut v);
+                    *replace = v.to_string();
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr("take.all. also takes the other library's develop settings; the other library is only read, never changed."))
+                            .size(11.0)
+                            .color(t.text_dim),
+                    );
                 }
                 Dialog::EditKeyword(e) => {
                     field(ui, "Keyword name", |ui| {
@@ -1407,6 +1433,14 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         }
         Dialog::Rename { template, start, text } => app.run("photo.rename", json!({"template": template, "start": start, "text": text})),
         Dialog::EditKeyword(e) => app.run("keyword.edit", e.params()),
+        Dialog::ImportCatalog { path, replace, .. } => {
+            let r = app.run("library.importCatalog", json!({"path": path, "replace": replace}));
+            if let Ok(v) = &r {
+                let msg = format!("Imported {} photos and {} albums ({} replaced, {} skipped)", v["added"], v["albums"], v["replaced"], v["skipped"]);
+                app.ui.toast = Some((msg, app.last_time + 5.0, None));
+            }
+            r
+        }
         Dialog::RenameKeyword { from, to } => app.run("keyword.rename", json!({"from": from, "to": to})),
         Dialog::MergeKeywords { from, into } => app.run("keyword.merge", json!({"from": from, "into": into})),
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),

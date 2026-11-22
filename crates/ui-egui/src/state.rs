@@ -685,6 +685,15 @@ pub enum Dialog {
     },
     /// Edit Keyword Tag (L11): name, synonyms, export options, person.
     EditKeyword(KeywordEdit),
+    /// File ▸ Import from Another Library… (L30): what the other library holds and what to do
+    /// with the photos both have.
+    ImportCatalog {
+        path: String,
+        /// `library.importCatalog {dryRun}`'s answer.
+        preview: serde_json::Value,
+        /// none | metadata | all
+        replace: String,
+    },
     /// Rename a keyword on every photo (children included).
     RenameKeyword {
         from: String,

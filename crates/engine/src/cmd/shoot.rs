@@ -270,7 +270,15 @@ fn import_catalog(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("{path}: not a LightCraft library (no catalog.snap)")));
     }
     let (_, other, _) = Journal::open(Box::new(copy)).map_err(|e| bad(C, format!("{path}: {e}")))?;
-    let replace = bool_or(p, "replace", false);
+    // what a photo both libraries have takes from the other one: nothing, its metadata (rating,
+    // flag, label, metadata), or everything (also its develop settings)
+    let replace = match p.get("replace") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => "none",
+        Some(Value::Bool(true)) => "all",
+        Some(Value::String(r)) if ["none", "all", "metadata"].contains(&r.as_str()) => r.as_str(),
+        Some(_) => return Err(bad(C, "`replace` is none, metadata or all (true = all)")),
+    };
+    let dry = bool_or(p, "dryRun", false);
     let mine: std::collections::HashMap<String, PhotoId> = s
         .catalog
         .photos()
@@ -294,8 +302,10 @@ fn import_catalog(s: &mut Session, p: &Value) -> Result<Value> {
         };
         if let Some(e) = existing {
             ids.insert(q.id, e);
-            if replace {
-                ops.push(Op::SetDevelop { id: e, settings: q.develop.clone(), label: "Import from Catalog".into(), edited: q.edited.clone() });
+            if replace != "none" {
+                if replace == "all" {
+                    ops.push(Op::SetDevelop { id: e, settings: q.develop.clone(), label: "Import from Catalog".into(), edited: q.edited.clone() });
+                }
                 ops.push(Op::SetMeta { id: e, meta: Box::new(q.meta.clone()) });
                 ops.push(Op::SetRating { id: e, rating: q.rating });
                 ops.push(Op::SetFlag { id: e, flag: q.flag });
@@ -355,6 +365,13 @@ fn import_catalog(s: &mut Session, p: &Value) -> Result<Value> {
         ops.push(Op::AddAlbum { album: a });
         n_albums += 1;
     }
+    if dry {
+        // the dialog's preview: nothing changes
+        let both = replaced + skipped;
+        return Ok(
+            json!({"dryRun": true, "added": added, "inBoth": both, "albums": n_albums, "photos": other.photos().filter(|q| q.in_library()).count()}),
+        );
+    }
     if !ops.is_empty() {
         s.commit("Import from Catalog", Op::Batch { ops })?;
     }
@@ -368,7 +385,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import from Another Library…",
             [],
             None,
-            "{path: another LightCraft library's folder, replace?: bool (photos both have: take the other library's settings and metadata; default skip)} — Lightroom's Import from Another Catalog: its photos (settings, metadata, history, virtual copies), albums and smart albums; the other library is only read; one undo step → {added, replaced, skipped, albums}",
+            "{path: another LightCraft library's folder, replace?: none | metadata | all (photos both have: keep this library's, take the other's metadata, or its metadata and develop settings; true = all), dryRun?: bool (count only)} — Lightroom's Import from Another Catalog: its photos (settings, metadata, history, virtual copies), albums and smart albums; the other library is only read; one undo step → {added, replaced, skipped, albums}",
             always,
             import_catalog
         ),
