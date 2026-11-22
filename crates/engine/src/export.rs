@@ -1670,7 +1670,8 @@ pub fn export_metadata_with(cat: Option<&lightcraft_catalog::Catalog>, photo: &l
     out.rating = (photo.rating > 0).then_some(photo.rating as i8);
     // Pixels are exported upright: orientation is baked in.
     out.orientation = Some(lightcraft_meta::Orientation::Normal);
-    if !o.remove_location {
+    // (a photo inside a saved location marked Private keeps its position to the library)
+    if !o.remove_location && !cat.is_some_and(|c| crate::map::in_private_location(c, m.gps)) {
         out.gps = m.gps.map(|(latitude, longitude)| Gps { latitude, longitude, altitude: None });
     }
     if o.metadata == MetadataPolicy::All {

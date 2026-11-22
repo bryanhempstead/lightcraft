@@ -60,6 +60,8 @@ mod tests_library_problem;
 #[cfg(test)]
 mod tests_loupe_info;
 #[cfg(test)]
+mod tests_map;
+#[cfg(test)]
 mod tests_masking;
 #[cfg(test)]
 mod tests_media;
@@ -168,6 +170,8 @@ pub struct Perf {
 }
 
 pub struct LightcraftApp {
+    /// The Map module's tiles and textures (LR-MAP-MODULE).
+    pub map: panels::map::MapRuntime,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
     pub caches: Caches,
@@ -292,6 +296,7 @@ impl LightcraftApp {
             font_language: i18n::Locale::En,
             fonts_ready: false,
             last_time: 0.0,
+            map: Default::default(),
             canvas_rect: None,
             image_rect: None,
             grid_scroll: None,
@@ -919,6 +924,8 @@ impl LightcraftApp {
         if self.ui.left_panel {
             if develop {
                 panels::develop_left::show(self, ui);
+            } else if self.ui.view == state::ViewMode::Map {
+                panels::map::left(self, ui);
             } else {
                 panels::left::show(self, ui);
             }
@@ -940,6 +947,7 @@ impl LightcraftApp {
             state::ViewMode::Survey => panels::compare::show_survey(self, ui),
             state::ViewMode::Reference => panels::compare::show_reference(self, ui),
             state::ViewMode::People => panels::people::show(self, ui),
+            state::ViewMode::Map => panels::map::show(self, ui),
         });
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);

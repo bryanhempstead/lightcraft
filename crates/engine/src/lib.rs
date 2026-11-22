@@ -40,6 +40,7 @@ pub mod lr_dust;
 pub mod lr_history;
 pub mod lr_migrate;
 pub mod lr_sync;
+pub mod map;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -964,6 +965,8 @@ mod tests_keyword_list;
 mod tests_libops;
 #[cfg(test)]
 mod tests_library;
+#[cfg(test)]
+mod tests_map;
 #[cfg(test)]
 mod tests_merge;
 #[cfg(test)]

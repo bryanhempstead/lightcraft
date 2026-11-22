@@ -240,6 +240,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // Lightroom Classic modules and "super keys" (Settings ▸ shrt.; see keymap.rs)
     ("view.library", "Library", Some("Cmd+Alt+1"), "Window"),
     ("view.develop", "Develop", Some("Cmd+Alt+2"), "Window"),
+    ("view.map", "Map", Some("Cmd+Alt+3"), "Window"),
+    ("map.fit", "Fit Map to Photos", None, ""),
+    ("map.zoomIn", "Zoom In on Map", None, ""),
+    ("map.zoomOut", "Zoom Out of Map", None, ""),
+    ("dialog.mapSaveLocation", "Save Map Location…", None, ""),
     ("view.colorMixer", "Color Mixer", None, ""),
     ("view.resumeLastLeftOff", "Go to Where I Left Off", None, "View"),
     ("preset.applyByName", "Apply Preset by Name", None, ""),
@@ -285,8 +290,11 @@ pub fn enter_develop(app: &mut LightcraftApp) {
 pub fn enter_library(app: &mut LightcraftApp, view: Option<ViewMode>) {
     let v = view.unwrap_or(app.ui.library_view);
     app.ui.module = Module::Library;
-    app.ui.view = if v == ViewMode::Reference { ViewMode::PhotoGrid } else { v };
-    app.ui.library_view = app.ui.view;
+    // (Library from the map goes back to the grid: the map is a module of its own)
+    app.ui.view = if v == ViewMode::Reference || (view.is_none() && v == ViewMode::Map) { ViewMode::PhotoGrid } else { v };
+    if app.ui.view != ViewMode::Map {
+        app.ui.library_view = app.ui.view;
+    }
     // Develop's on-canvas tools end with it
     if app.ui.tool != "wbPicker" {
         app.ui.tool.clear();
@@ -631,6 +639,44 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.faceBoxes" => {
             app.ui.face_boxes = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.face_boxes);
             Ok(json!({"show": app.ui.face_boxes}))
+        }
+        "view.map" => {
+            // Lightroom Classic's Map module (⌘⌥3): {lat?, lon?, zoom?} looks there
+            enter_library(app, Some(ViewMode::Map));
+            if let (Some(la), Some(lo)) = (p.get("lat").and_then(Value::as_f64), p.get("lon").and_then(Value::as_f64))
+                && lightcraft_engine::map::valid(la, lo)
+            {
+                (app.ui.map.lat, app.ui.map.lon, app.ui.map.fit_pending) = (la, lo, false);
+            }
+            if let Some(z) = p.get("zoom").and_then(Value::as_f64).filter(|z| z.is_finite()) {
+                app.ui.map.zoom = z.clamp(1.0, lightcraft_engine::map::MAX_ZOOM);
+                app.ui.map.fit_pending = false;
+            }
+            Ok(json!({"view": "map", "lat": app.ui.map.lat, "lon": app.ui.map.lon, "zoom": app.ui.map.zoom, "tiles": app.map.status()}))
+        }
+        "map.fit" => {
+            app.ui.map.fit_pending = true;
+            Ok(Value::Null)
+        }
+        "map.zoomIn" | "map.zoomOut" => {
+            let d = if id == "map.zoomIn" { 1.0 } else { -1.0 };
+            app.ui.map.zoom = (app.ui.map.zoom.round() + d).clamp(1.0, lightcraft_engine::map::MAX_ZOOM);
+            Ok(json!({"zoom": app.ui.map.zoom}))
+        }
+        "dialog.mapSaveLocation" => {
+            // name the place at the map's centre (radius: a sixth of the view's width)
+            let (lat, lon) = (app.ui.map.lat, app.ui.map.lon);
+            let radius = crate::panels::map::default_radius(app);
+            crate::panels::dialogs::prompt(
+                app,
+                "Save Location",
+                "Name",
+                "",
+                "map.saveLocation",
+                json!({"lat": lat, "lon": lon, "radius": radius}),
+                "name",
+            );
+            Ok(Value::Null)
         }
         "view.people" => {
             app.ui.view = ViewMode::People;

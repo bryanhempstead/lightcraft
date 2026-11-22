@@ -24,6 +24,7 @@ pub mod library;
 pub mod lightroom;
 pub mod lut_profiles;
 pub mod manage;
+pub mod map;
 pub mod mask_effect_files;
 pub mod mask_effects;
 mod masks;
@@ -165,6 +166,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(naming::specs());
         v.extend(cameras::specs());
         v.extend(tether::specs());
+        v.extend(map::specs());
         v
     })
 }
