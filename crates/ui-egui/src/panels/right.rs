@@ -624,70 +624,239 @@ fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
 }
 
+/// The Metadata panel's views (L20, Lightroom's preset popup): (id, name, groups shown).
+pub const METADATA_VIEWS: &[(&str, &str, &[&str])] = &[
+    ("default", "Default", &["camera", "rating", "describe", "rights", "file", "location", "gps"]),
+    ("all", "All", &["camera", "rating", "describe", "rights", "file", "location", "gps", "exif", "iptcExt"]),
+    ("exif", "EXIF", &["camera", "file", "exif", "gps"]),
+    ("iptc", "IPTC", &["describe", "rights", "location"]),
+    ("iptcExt", "IPTC Extension", &["iptcExt"]),
+    ("location", "Location", &["location", "gps"]),
+    ("largeCaption", "Large Caption", &["largeCaption"]),
+    ("minimal", "Minimal", &["fileName", "rating", "caption"]),
+    ("quickDescribe", "Quick Describe", &["fileName", "rating", "describe", "rights", "location"]),
+    ("custom", "Custom", &[]),
+];
+
+/// The groups Customize… can turn on, with their names.
+pub const METADATA_GROUPS: &[(&str, &str)] = &[
+    ("camera", "Camera & capture"),
+    ("rating", "Rating & label"),
+    ("describe", "Title, caption, accessibility"),
+    ("rights", "Copyright & creator"),
+    ("file", "File & capture time"),
+    ("location", "Location"),
+    ("gps", "GPS"),
+    ("exif", "EXIF"),
+    ("iptcExt", "IPTC Extension"),
+];
+
+/// The groups the current view shows.
+fn metadata_groups(app: &LightcraftApp) -> Vec<String> {
+    let v = app.ui.metadata_view.as_str();
+    if v == "custom" {
+        return app.ui.metadata_custom.clone();
+    }
+    let groups = METADATA_VIEWS.iter().find(|x| x.0 == v).map_or(METADATA_VIEWS[0].2, |x| x.2);
+    groups.iter().map(|g| g.to_string()).collect()
+}
+
+/// The text of `key` on every selected photo: `Some(v)` when they agree, `None` when mixed.
+fn shared_text(app: &LightcraftApp, key: &str, active: &lightcraft_catalog::Meta) -> Option<String> {
+    let get = |m: &lightcraft_catalog::Meta| -> String {
+        match key {
+            "title" => m.title.clone(),
+            "caption" => m.caption.clone(),
+            "altText" => m.alt_text.clone(),
+            "extendedDescription" => m.extended_description.clone(),
+            "copyright" => m.copyright.clone(),
+            "usageTerms" => m.usage_terms.clone(),
+            "copyrightUrl" => m.copyright_url.clone(),
+            "creator" => m.creator.clone(),
+            "location" => m.location.clone(),
+            "city" => m.city.clone(),
+            "state" => m.state.clone(),
+            "country" => m.country.clone(),
+            _ => String::new(),
+        }
+    };
+    let mine = get(active);
+    let sel = &app.session.selection.ids;
+    if sel.len() < 2 {
+        return Some(mine);
+    }
+    let all_same = sel.iter().filter_map(|i| app.session.catalog.photo(*i)).all(|p| get(&p.meta) == mine);
+    all_same.then_some(mine)
+}
+
+/// The view popup at the top of Metadata (and its Customize… choices).
+fn metadata_view_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let cur = if app.ui.metadata_view.is_empty() { "default".to_string() } else { app.ui.metadata_view.clone() };
+    let name = METADATA_VIEWS.iter().find(|v| v.0 == cur).map_or("Default", |v| v.1);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let r = egui::ComboBox::from_id_salt("metadata-view").width(150.0).selected_text(crate::i18n::tr(name)).show_ui(ui, |ui| {
+            for (id, label, _) in METADATA_VIEWS {
+                if ui.selectable_label(cur == *id, crate::i18n::tr(label)).clicked() {
+                    app.ui.metadata_view = id.to_string();
+                }
+            }
+        });
+        register(ui.ctx(), "combo:metadataView", r.response.rect);
+        let n = app.session.selection.ids.len();
+        if n > 1 {
+            ui.label(egui::RichText::new(format!("{n} selected")).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
+        }
+    });
+    if cur == "custom" {
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 10.0);
+            for (g, label) in METADATA_GROUPS {
+                let on = app.ui.metadata_custom.iter().any(|x| x == g);
+                if text_button(ui, &format!("metadataGroup-{g}"), label, on).clicked() {
+                    if on {
+                        app.ui.metadata_custom.retain(|x| x != g);
+                    } else {
+                        app.ui.metadata_custom.push(g.to_string());
+                    }
+                }
+            }
+        });
+    }
+    ui.add_space(8.0);
+}
+
+/// A small → at the right of a field: shows the library's photos that share its value.
+fn field_arrow(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, tip: &str, filter: serde_json::Value) {
+    if crate::widgets::text_button(ui, &format!("metaArrow-{id}"), label, false).on_hover_text(crate::i18n::tr(tip)).clicked() {
+        let _ = app.run("library.filter", filter);
+    }
+}
+
 pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "Info");
     let t = Tokens::get(ui.ctx());
-    padded(ui, |ui| {
-        camera_card(ui, &p);
-        ui.add_space(6.0);
-        if let Some(why) = &p.preview_only {
-            crate::widgets::preview_only_notice(ui, "info", why);
+    padded(ui, |ui| metadata_view_bar(app, ui));
+    let groups = metadata_groups(app);
+    let has = |g: &str| groups.iter().any(|x| x == g);
+    let top = ["fileName", "largeCaption", "camera", "rating", "caption"].iter().any(|g| has(g));
+    if top {
+        padded(ui, |ui| {
+            if has("fileName") {
+                ui.add(egui::Label::new(egui::RichText::new(&p.file_name).font(t.semibold(12.5)).color(t.text)).truncate());
+                ui.add_space(4.0);
+            }
+            if has("largeCaption") {
+                let mixed = shared_text(app, "caption", &p.meta);
+                meta_field_mixed(app, ui, "Caption", "caption", mixed.as_deref(), 12);
+                return;
+            }
+            if !has("camera") && !has("rating") {
+                if has("caption") {
+                    let mixed = shared_text(app, "caption", &p.meta);
+                    meta_field_mixed(app, ui, "Caption", "caption", mixed.as_deref(), 2);
+                }
+                return;
+            }
+            if has("camera") {
+                camera_card(ui, &p);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if !p.meta.camera.is_empty() {
+                        field_arrow(app, ui, "camera", "cam. →", "Show the photos taken with this camera", json!({"camera": p.meta.camera}));
+                    }
+                    if !p.meta.lens.is_empty() {
+                        field_arrow(app, ui, "lens", "lens. →", "Show the photos taken with this lens", json!({"lens": p.meta.lens}));
+                    }
+                });
+            }
             ui.add_space(6.0);
-        }
-        if let Some(name) = &p.copy_name {
-            let of = p
-                .copy_of
-                .and_then(|m| app.session.catalog.photo(m))
-                .map(|m| m.file_name.clone())
-                .unwrap_or_else(|| crate::i18n::tr("a removed photo").into());
-            ui.label(egui::RichText::new(crate::i18n::tr_format!("Virtual copy “{name}” of {of}", name = name, of = of)).color(t.text_label));
-        }
-        ui.add_space(8.0);
-        if let Some(r) = ui.horizontal(|ui| crate::widgets::stars(ui, "info", p.rating, 20.0)).inner {
-            let _ = app.run("photo.rate", json!({"rating": r}));
-        }
-        ui.add_space(6.0);
-        // colour label: one swatch per label (hover shows its name); clicking the current one clears it
-        ui.horizontal(|ui| {
-            for l in lightcraft_catalog::ColorLabel::ALL {
-                let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-                let key = format!("{l:?}").to_lowercase();
-                register(ui.ctx(), format!("label:{key}"), r);
-                let on = p.label == Some(l);
-                ui.painter().circle_filled(r.center(), if on || resp.hovered() { 8.0 } else { 6.5 }, crate::panels::grid::label_color(l));
-                if on {
-                    ui.painter().circle_stroke(r.center(), 10.0, egui::Stroke::new(1.5, t.text));
-                }
-                let resp = resp.on_hover_text(crate::i18n::color_label(&app.session.catalog, l));
-                if resp.clicked() {
-                    let _ = app.run("photo.label", json!({"label": if on { "none".to_string() } else { key }}));
-                }
+            if !has("rating") {
+                return;
             }
-            if let Some(l) = p.label {
-                ui.label(egui::RichText::new(app.session.catalog.label_name(l)).color(t.text_label));
+            if let Some(why) = &p.preview_only {
+                crate::widgets::preview_only_notice(ui, "info", why);
+                ui.add_space(6.0);
             }
+            if let Some(name) = &p.copy_name {
+                let of = p
+                    .copy_of
+                    .and_then(|m| app.session.catalog.photo(m))
+                    .map(|m| m.file_name.clone())
+                    .unwrap_or_else(|| crate::i18n::tr("a removed photo").into());
+                ui.label(egui::RichText::new(crate::i18n::tr_format!("Virtual copy “{name}” of {of}", name = name, of = of)).color(t.text_label));
+            }
+            ui.add_space(8.0);
+            if let Some(r) = ui.horizontal(|ui| crate::widgets::stars(ui, "info", p.rating, 20.0)).inner {
+                let _ = app.run("photo.rate", json!({"rating": r}));
+            }
+            ui.add_space(6.0);
+            // colour label: one swatch per label (hover shows its name); clicking the current one clears it
+            ui.horizontal(|ui| {
+                for l in lightcraft_catalog::ColorLabel::ALL {
+                    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+                    let key = format!("{l:?}").to_lowercase();
+                    register(ui.ctx(), format!("label:{key}"), r);
+                    let on = p.label == Some(l);
+                    ui.painter().circle_filled(r.center(), if on || resp.hovered() { 8.0 } else { 6.5 }, crate::panels::grid::label_color(l));
+                    if on {
+                        ui.painter().circle_stroke(r.center(), 10.0, egui::Stroke::new(1.5, t.text));
+                    }
+                    let resp = resp.on_hover_text(crate::i18n::color_label(&app.session.catalog, l));
+                    if resp.clicked() {
+                        let _ = app.run("photo.label", json!({"label": if on { "none".to_string() } else { key }}));
+                    }
+                }
+                if let Some(l) = p.label {
+                    ui.label(egui::RichText::new(app.session.catalog.label_name(l)).color(t.text_label));
+                }
+            });
         });
-    });
-    divider(ui);
+    }
+    if groups.iter().all(|g| ["fileName", "rating", "camera", "largeCaption", "caption"].contains(&g.as_str())) {
+        if has("caption") && has("rating") {
+            let mixed = shared_text(app, "caption", &p.meta);
+            padded(ui, |ui| meta_field_mixed(app, ui, "Caption", "caption", mixed.as_deref(), 2));
+        }
+        return;
+    }
+    if top {
+        divider(ui);
+    }
     let m = p.meta.clone();
     padded(ui, |ui| {
-        for (label, key, value, lines) in [
-            ("Title", "title", &m.title, 1),
-            ("Caption", "caption", &m.caption, 2),
-            ("Alt Text", "altText", &m.alt_text, 2),
-            ("Extended Description", "extendedDescription", &m.extended_description, 3),
-            ("Copyright", "copyright", &m.copyright, 1),
-        ] {
-            meta_field(app, ui, label, key, value, lines);
+        if has("describe") {
+            for (label, key, lines) in
+                [("Title", "title", 1), ("Caption", "caption", 2), ("Alt Text", "altText", 2), ("Extended Description", "extendedDescription", 3)]
+            {
+                let v = shared_text(app, key, &m);
+                meta_field_mixed(app, ui, label, key, v.as_deref(), lines);
+            }
         }
-        copyright_status(app, ui, m.copyright_status);
-        for (label, key, value, lines) in [
-            ("Rights Usage Terms", "usageTerms", &m.usage_terms, 2),
-            ("Copyright Info URL", "copyrightUrl", &m.copyright_url, 1),
-            ("Creator", "creator", &m.creator, 1),
-        ] {
-            meta_field(app, ui, label, key, value, lines);
+        if has("rights") {
+            let v = shared_text(app, "copyright", &m);
+            meta_field_mixed(app, ui, "Copyright", "copyright", v.as_deref(), 1);
+            copyright_status(app, ui, m.copyright_status);
+            for (label, key, lines) in [("Rights Usage Terms", "usageTerms", 2), ("Copyright Info URL", "copyrightUrl", 1), ("Creator", "creator", 1)]
+            {
+                let v = shared_text(app, key, &m);
+                meta_field_mixed(app, ui, label, key, v.as_deref(), lines);
+            }
+        }
+        if has("exif") {
+            exif_rows(ui, &p);
+        }
+        if has("iptcExt") {
+            iptc_ext_rows(app, ui, &p);
+        }
+        if !has("file") && !has("location") && !has("gps") {
+            return;
+        }
+        if !has("file") {
+            location_and_gps(app, ui, &p, has("location"), has("gps"));
+            return;
         }
         // file: name (rename), path (reveal), capture time (edit)
         let small = |ui: &mut egui::Ui, text: &str| ui.label(egui::RichText::new(crate::i18n::tr(text)).size(11.5).color(t.text_dim));
@@ -730,14 +899,109 @@ pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             });
         });
         ui.add_space(6.0);
-        for (label, key, value) in [
-            ("Location", "location", &m.location),
-            ("City", "city", &m.city),
-            ("State / Province", "state", &m.state),
-            ("Country", "country", &m.country),
-        ] {
-            meta_field(app, ui, label, key, value, 1);
+        location_and_gps(app, ui, &p, has("location"), has("gps"));
+        tail_notes(app, ui, &p);
+    });
+}
+
+/// The IPTC Extension fields (L21): text fields, or a popup for the release statuses and Digital
+/// Source Type; `< mixed >` when the selected photos differ.
+fn iptc_ext_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(crate::i18n::tr("IPTC Extension")).font(t.semibold(12.0)).color(t.text));
+    ui.add_space(4.0);
+    let sel: Vec<PhotoId> = if app.session.selection.ids.len() > 1 { app.session.selection.ids.to_vec() } else { vec![p.id] };
+    for f in lightcraft_meta::iptc_ext::IPTC_EXT {
+        let mine = p.meta.iptc_ext.get(f.id).cloned().unwrap_or_default();
+        let same = sel.iter().filter_map(|i| app.session.catalog.photo(*i)).all(|q| q.meta.iptc_ext.get(f.id).cloned().unwrap_or_default() == mine);
+        let value = same.then_some(mine);
+        if f.choices.is_empty() {
+            let key = format!("iptcExt.{}", f.id);
+            let id = egui::Id::new(("info-field", key.clone()));
+            ui.label(egui::RichText::new(crate::i18n::tr(f.label)).size(11.5).color(t.text_dim));
+            let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| value.clone().unwrap_or_default());
+            let mut edit = egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY);
+            if value.is_none() {
+                edit = edit.hint_text("< mixed >");
+            } else if f.kind == lightcraft_meta::iptc_ext::ExtKind::Bag {
+                edit = edit.hint_text(crate::i18n::tr("semicolons between them"));
+            }
+            let r = ui.add(edit);
+            register(ui.ctx(), format!("field:{key}"), r.rect);
+            if r.has_focus() {
+                ui.data_mut(|d| d.insert_temp(id, text.clone()));
+            } else {
+                ui.data_mut(|d| d.remove::<String>(id));
+            }
+            if r.lost_focus()
+                && Some(&text) != value.as_ref()
+                && !(value.is_none() && text.is_empty())
+                && let Err(e) = app.run("photo.setMeta", json!({"iptcExt": {f.id: text}}))
+            {
+                app.toast(ui.ctx(), e);
+            }
+        } else {
+            ui.label(egui::RichText::new(crate::i18n::tr(f.label)).size(11.5).color(t.text_dim));
+            let shown = match &value {
+                None => "< mixed >".to_string(),
+                Some(v) if v.is_empty() => "—".to_string(),
+                Some(v) => lightcraft_meta::iptc_ext::display(f, v),
+            };
+            let r = egui::ComboBox::from_id_salt(("iptc-ext", f.id)).width(ui.available_width() - 8.0).selected_text(shown).show_ui(ui, |ui| {
+                if ui.selectable_label(value.as_deref() == Some(""), "—").clicked() {
+                    let _ = app.run("photo.setMeta", json!({"iptcExt": {f.id: ""}}));
+                }
+                for (uri, name) in f.choices {
+                    if ui.selectable_label(value.as_deref() == Some(*uri), crate::i18n::tr(name)).clicked() {
+                        let _ = app.run("photo.setMeta", json!({"iptcExt": {f.id: uri}}));
+                    }
+                }
+            });
+            register(ui.ctx(), format!("combo:iptcExt.{}", f.id), r.response.rect);
         }
+        ui.add_space(6.0);
+    }
+}
+
+/// Read-only EXIF rows (the EXIF view): dimensions, capture settings, flash.
+fn exif_rows(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
+    let t = Tokens::get(ui.ctx());
+    let m = &p.meta;
+    let rows = [
+        ("Dimensions", Some(format!("{} × {}", p.width, p.height))),
+        ("Date Time Original", p.captured.as_deref().map(crate::i18n::display_time)),
+        ("Exposure", (!m.shutter.is_empty()).then(|| format!("{} sec", m.shutter))),
+        ("F-stop", m.aperture.map(|f| format!("f / {f:.1}"))),
+        ("ISO Speed Rating", m.iso.map(|i| format!("ISO {i}"))),
+        ("Focal Length", m.focal_mm.map(|f| format!("{f:.0} mm"))),
+        ("Make & Model", Some(m.camera.clone()).filter(|c| !c.is_empty())),
+        ("Lens", Some(m.lens.clone()).filter(|c| !c.is_empty())),
+        ("File Format", Some(p.format.clone())),
+    ];
+    egui::Grid::new("metadata-exif").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
+        for (k, v) in rows {
+            ui.label(egui::RichText::new(crate::i18n::tr(k)).size(11.5).color(t.text_dim));
+            ui.add(egui::Label::new(egui::RichText::new(v.unwrap_or_else(|| "—".into())).size(12.0).color(t.text)).truncate());
+            ui.end_row();
+        }
+    });
+    ui.add_space(8.0);
+}
+
+/// The Location fields and the GPS field.
+fn location_and_gps(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalog::Photo, location: bool, gps_on: bool) {
+    let t = Tokens::get(ui.ctx());
+    let m = p.meta.clone();
+    if location {
+        for (label, key) in [("Location", "location"), ("City", "city"), ("State / Province", "state"), ("Country", "country")] {
+            let v = shared_text(app, key, &m);
+            meta_field_mixed(app, ui, label, key, v.as_deref(), 1);
+        }
+    }
+    if !gps_on {
+        return;
+    }
+    {
         // GPS: typed as "lat, lon" (or degrees / minutes / seconds); empty clears it
         let gps = m.gps.map(|(la, lo)| format!("{la:.6}, {lo:.6}")).unwrap_or_default();
         let gid = egui::Id::new("info-gps");
@@ -771,6 +1035,13 @@ pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
             });
         }
+    }
+}
+
+/// The notes under Metadata: culling scores, offline originals, All Metadata….
+fn tail_notes(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
+    let t = Tokens::get(ui.ctx());
+    {
         if let Some(a) = p.analysis {
             let mut line = crate::i18n::tr_format!("Focus {:.0}", a.sharpness);
             if a.clipped > 0.02 {
@@ -792,7 +1063,7 @@ pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 .media
                 .smart_dir
                 .as_ref()
-                .is_some_and(|d| avail.exists(&d.join(lightcraft_engine::smart::file_name(&p)).to_string_lossy()) == Some(true));
+                .is_some_and(|d| avail.exists(&d.join(lightcraft_engine::smart::file_name(p)).to_string_lossy()) == Some(true));
             if !online || smart {
                 let text = match (online, smart) {
                     (false, true) => "Original offline · editing the smart preview",
@@ -810,7 +1081,7 @@ pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         {
             let _ = app.run("dialog.allMetadata", json!({}));
         }
-    });
+    }
 }
 
 /// The camera card at the top of Info: camera, lens, size · file size and format, then the
@@ -877,6 +1148,32 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
     });
     register(ui.ctx(), "field:copyrightStatus", r.response.rect);
     ui.add_space(6.0);
+}
+
+/// [`meta_field`] for the selection: `None` = the selected photos differ (shown as `< mixed >`;
+/// typing sets the field on all of them).
+fn meta_field_mixed(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: Option<&str>, lines: usize) {
+    match value {
+        Some(v) => meta_field(app, ui, label, key, v, lines),
+        None => {
+            let t = Tokens::get(ui.ctx());
+            ui.label(egui::RichText::new(crate::i18n::tr(label)).size(11.5).color(t.text_dim));
+            let id = egui::Id::new(("info-field", key));
+            let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+            let edit = if lines > 1 { egui::TextEdit::multiline(&mut text).desired_rows(lines) } else { egui::TextEdit::singleline(&mut text) };
+            let r = ui.add(edit.hint_text("< mixed >").desired_width(f32::INFINITY));
+            register(ui.ctx(), format!("field:{key}"), r.rect);
+            if r.has_focus() {
+                ui.data_mut(|d| d.insert_temp(id, text.clone()));
+            } else {
+                ui.data_mut(|d| d.remove::<String>(id));
+            }
+            if r.lost_focus() && !text.is_empty() {
+                let _ = app.run("photo.setMeta", json!({key: text}));
+            }
+            ui.add_space(6.0);
+        }
+    }
 }
 
 fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize) {

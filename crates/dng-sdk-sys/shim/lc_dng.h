@@ -96,6 +96,11 @@ int lc_render_dng(const uint8_t *dng, size_t dng_len, const uint8_t *dcp, size_t
                   uint32_t max_size, int space, uint32_t *w, uint32_t *h, float **out);
 void lc_free(void *ptr);
 
+// Library ▸ Validate DNG Files (L23): read the raw data and check it against the file's
+// RawImageDigest / NewRawImageDigest. *result: 0 matches, 1 damaged (a digest doesn't match),
+// 2 no digest to check against.
+int lc_validate_dng(const uint8_t *dng, size_t dng_len, int *result);
+
 #ifdef __cplusplus
 }
 #endif

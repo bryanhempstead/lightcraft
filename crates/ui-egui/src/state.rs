@@ -234,6 +234,107 @@ impl InfoOverlay {
     }
 }
 
+/// One line of the loupe's info overlay (Library View Options ▸ Loupe Info 1 / 2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LoupeInfoField {
+    #[default]
+    None,
+    FileName,
+    /// The file name and a virtual copy's name.
+    FileAndCopyName,
+    /// The capture date and time (the import date when the photo has none).
+    CaptureDate,
+    /// Width × height in pixels.
+    Dimensions,
+    /// Shutter speed, aperture, ISO and focal length.
+    Exposure,
+    Camera,
+    Lens,
+    /// Camera and lens on one line.
+    CameraAndLens,
+    Title,
+    Caption,
+    /// Rating and colour label.
+    RatingAndLabel,
+    Keywords,
+    Folder,
+}
+
+impl LoupeInfoField {
+    /// Every field, in the order View Options lists them.
+    pub const ALL: &'static [LoupeInfoField] = &[
+        LoupeInfoField::None,
+        LoupeInfoField::FileName,
+        LoupeInfoField::FileAndCopyName,
+        LoupeInfoField::CaptureDate,
+        LoupeInfoField::Dimensions,
+        LoupeInfoField::Exposure,
+        LoupeInfoField::Camera,
+        LoupeInfoField::Lens,
+        LoupeInfoField::CameraAndLens,
+        LoupeInfoField::Title,
+        LoupeInfoField::Caption,
+        LoupeInfoField::RatingAndLabel,
+        LoupeInfoField::Keywords,
+        LoupeInfoField::Folder,
+    ];
+
+    /// The name View Options shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            LoupeInfoField::None => "None",
+            LoupeInfoField::FileName => "File Name",
+            LoupeInfoField::FileAndCopyName => "File Name and Copy Name",
+            LoupeInfoField::CaptureDate => "Capture Date/Time",
+            LoupeInfoField::Dimensions => "Dimensions",
+            LoupeInfoField::Exposure => "Exposure and ISO",
+            LoupeInfoField::Camera => "Camera",
+            LoupeInfoField::Lens => "Lens",
+            LoupeInfoField::CameraAndLens => "Camera + Lens",
+            LoupeInfoField::Title => "Title",
+            LoupeInfoField::Caption => "Caption",
+            LoupeInfoField::RatingAndLabel => "Rating and Label",
+            LoupeInfoField::Keywords => "Keywords",
+            LoupeInfoField::Folder => "Folder",
+        }
+    }
+}
+
+/// The loupe's Info 1 and Info 2 lines, and Show Briefly When Photo Changes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LoupeInfo {
+    pub info1: [LoupeInfoField; 3],
+    pub info2: [LoupeInfoField; 3],
+    /// Which Info shows for a moment when the loupe changes photo with the overlay off (Off: none).
+    pub briefly: InfoOverlay,
+}
+
+impl LoupeInfo {
+    /// Info 1's lines before they are changed (and after Use Defaults).
+    pub const INFO1: [LoupeInfoField; 3] = [LoupeInfoField::FileName, LoupeInfoField::CaptureDate, LoupeInfoField::Dimensions];
+    /// Info 2's lines before they are changed (and after Use Defaults).
+    pub const INFO2: [LoupeInfoField; 3] = [LoupeInfoField::FileName, LoupeInfoField::Exposure, LoupeInfoField::CameraAndLens];
+}
+
+impl Default for LoupeInfo {
+    fn default() -> Self {
+        LoupeInfo { info1: LoupeInfo::INFO1, info2: LoupeInfo::INFO2, briefly: InfoOverlay::Off }
+    }
+}
+
+/// How long Show Briefly When Photo Changes shows the info overlay (seconds).
+pub const BRIEF_INFO_SECS: f64 = 1.5;
+
+/// When the loupe last changed photo, for Show Briefly When Photo Changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BriefInfo {
+    pub photo: Option<lightcraft_catalog::PhotoId>,
+    pub since: f64,
+    pub shown: bool,
+}
+
 /// App-level preferences (Settings dialog). They belong to the app, not a library, and are
 /// saved with the UI state in the app's config folder (`ui.json`, key `settings`); library
 /// preferences (import defaults, XMP, cache size) live in the library's `prefs.json`.
@@ -267,6 +368,12 @@ pub struct AppSettings {
     /// The colour space photos are shown in (`app.viewSpace`): Display P3 on a Mac so the loupe
     /// matches the export, or sRGB for an sRGB monitor.
     pub view_space: crate::display_p3::ViewSpace,
+    /// Loupe Info 1 / Info 2 lines and Show Briefly When Photo Changes (L19, Library View
+    /// Options ▸ Loupe View; ported from upstream).
+    pub loupe_info: LoupeInfo,
+    /// Square Grid cells: compact (name and format) or expanded (L18: a second line with the
+    /// dimensions and capture date, rotate buttons in the footer).
+    pub grid_expanded: bool,
 }
 
 impl Default for AppSettings {
@@ -285,6 +392,8 @@ impl Default for AppSettings {
             grid_badges: GridBadges::Auto,
             grid_index: false,
             view_space: crate::display_p3::ViewSpace::Auto,
+            loupe_info: LoupeInfo::default(),
+            grid_expanded: false,
         }
     }
 }
@@ -387,6 +496,9 @@ pub struct UiState {
     pub zoom: Zoom,
     /// Pan offset of the loupe when zoomed (image-normalized centre).
     pub pan: (f32, f32),
+    /// L26: Compare with Link Focus off — the select's own zoom and position (None = linked).
+    #[serde(skip)]
+    pub compare_frozen: Option<(Zoom, (f32, f32))>,
     /// Zoom applied by a click on the image (and Z / Space), in percent (100 = 1:1, 200 = 2:1);
     /// one of [`CLICK_ZOOMS`].
     pub click_zoom: u32,
@@ -549,6 +661,16 @@ pub struct UiState {
     pub slideshow: Option<(f64, f64, bool)>,
     /// Info overlay on the loupe.
     pub info_overlay: InfoOverlay,
+    /// The Metadata panel's view (L20): `default`, `all`, `exif`, `iptc`, `location`,
+    /// `largeCaption`, `minimal`, `quickDescribe`, `custom` (see `panels::right::METADATA_VIEWS`).
+    #[serde(default)]
+    pub metadata_view: String,
+    /// The groups the `custom` view shows (Customize…).
+    #[serde(default)]
+    pub metadata_custom: Vec<String>,
+    /// Show Briefly When Photo Changes: when the loupe changed photo (not saved).
+    #[serde(skip)]
+    pub brief_info: BriefInfo,
     /// Navigator mini map in the loupe while zoomed in.
     pub navigator: bool,
     /// App preferences (Settings dialog).
@@ -652,6 +774,17 @@ pub enum Dialog {
         start: u32,
         /// `{text}`: Lightroom's Custom Text.
         text: String,
+    },
+    /// Edit Keyword Tag (L11): name, synonyms, export options, person.
+    EditKeyword(KeywordEdit),
+    /// File ▸ Import from Another Library… (L30): what the other library holds and what to do
+    /// with the photos both have.
+    ImportCatalog {
+        path: String,
+        /// `library.importCatalog {dryRun}`'s answer.
+        preview: serde_json::Value,
+        /// none | metadata | all
+        replace: String,
     },
     /// Rename a keyword on every photo (children included).
     RenameKeyword {
@@ -841,6 +974,7 @@ impl Default for UiState {
             filmstrip: true,
             zoom: Zoom::Fit,
             pan: (0.5, 0.5),
+            compare_frozen: None,
             click_zoom: 100,
             zoom_anim: false,
             before_after: BeforeAfter::Off,
@@ -910,6 +1044,9 @@ impl Default for UiState {
             keyword_painter: None,
             painter: None,
             info_overlay: InfoOverlay::Off,
+            brief_info: BriefInfo::default(),
+            metadata_view: String::new(),
+            metadata_custom: Vec::new(),
             navigator: true,
             settings: AppSettings::default(),
             window_fullscreen: None,
@@ -1024,5 +1161,52 @@ impl UiState {
         self.open_sections = open;
         self.sync_module();
         self
+    }
+}
+
+/// The Edit Keyword Tag dialog's fields.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct KeywordEdit {
+    /// The keyword edited (its full path).
+    pub path: String,
+    /// Its own level's name.
+    pub name: String,
+    /// Synonyms, commas between them.
+    pub synonyms: String,
+    pub include_on_export: bool,
+    pub export_containing: bool,
+    pub export_synonyms: bool,
+    pub person: bool,
+}
+
+impl KeywordEdit {
+    /// From `keyword.info`'s answer.
+    pub fn from_info(v: &serde_json::Value) -> KeywordEdit {
+        let path = v["path"].as_str().unwrap_or("").to_string();
+        let flag = |k: &str| v[k].as_bool().unwrap_or(true);
+        KeywordEdit {
+            name: path.rsplit('|').next().unwrap_or(&path).to_string(),
+            synonyms: v["synonyms"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect::<Vec<_>>().join(", "),
+            include_on_export: flag("includeOnExport"),
+            export_containing: flag("exportContaining"),
+            export_synonyms: flag("exportSynonyms"),
+            person: v["person"].as_bool().unwrap_or(false),
+            path,
+        }
+    }
+
+    /// `keyword.edit`'s parameters.
+    pub fn params(&self) -> serde_json::Value {
+        let synonyms: Vec<&str> = self.synonyms.split(',').map(str::trim).filter(|x| !x.is_empty()).collect();
+        serde_json::json!({
+            "keyword": self.path,
+            "name": self.name.trim(),
+            "synonyms": synonyms,
+            "includeOnExport": self.include_on_export,
+            "exportContaining": self.export_containing,
+            "exportSynonyms": self.export_synonyms,
+            "person": self.person,
+        })
     }
 }

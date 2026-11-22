@@ -366,6 +366,29 @@ fn services() -> Services {
                 .map(|p| vec![p.to_string_lossy().to_string()])
                 .unwrap_or_default()
         })),
+        compose_email: Some(Box::new(|files: &[String]| {
+            // a new message in Mail with the files attached; Bryan sends it himself
+            std::process::Command::new("/usr/bin/open")
+                .args(["-a", "Mail"])
+                .args(files)
+                .status()
+                .map_err(|e| e.to_string())
+                .and_then(|s| if s.success() { Ok(()) } else { Err(format!("Mail didn't open ({s})")) })
+        })),
+        pick_text_file: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter(lightcraft_ui_egui::i18n::tr("Text"), &["txt"])
+                .pick_file()
+                .map(|p| vec![p.to_string_lossy().to_string()])
+                .unwrap_or_default()
+        })),
+        save_text_file: Some(Box::new(|name: &str| {
+            rfd::FileDialog::new()
+                .add_filter(lightcraft_ui_egui::i18n::tr("Text"), &["txt"])
+                .set_file_name(name)
+                .save_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
         save_preset_file: Some(Box::new(|name: &str| {
             rfd::FileDialog::new()
                 .set_title(lightcraft_ui_egui::i18n::tr("Export Presets"))

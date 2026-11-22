@@ -325,6 +325,9 @@ fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         return;
     }
     let w = ui.available_width();
+    // L26: the loupe's zoom levels (1:16 … 16:1) from here too
+    let (zr, _) = ui.allocate_exact_size(vec2(w, 20.0), Sense::hover());
+    super::develop_left::nav_more_zooms(app, ui, Rect::from_min_max(pos2(zr.right() - 90.0, zr.top()), pos2(zr.right() - 12.0, zr.bottom())));
     let (r, resp) = ui.allocate_exact_size(vec2(w, (w * 0.62).clamp(90.0, 200.0)), Sense::click());
     register(ui.ctx(), "navigator".to_string(), r);
     let frame = Rect::from_min_max(r.min + vec2(12.0, 0.0), r.max - vec2(12.0, 10.0));
@@ -718,20 +721,27 @@ fn browse_all_photos(app: &mut LightcraftApp, on: bool) {
     }
 }
 
-fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &[Album], parent: Option<AlbumId>, indent: f32) {
+fn albums_tree_view(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &[Album], parent: Option<AlbumId>, indent: f32, view: &AlbumView) {
+    if indent > 32.0 * 16.0 {
+        return;
+    }
     let mut kids: Vec<&Album> = all.iter().filter(|a| a.parent == parent).collect();
-    kids.sort_by_key(|a| (!a.folder, a.name.to_lowercase()));
+    // favourites first; then sets, then (by kind) smart collections before collections; then names
+    kids.sort_by_key(|a| (!a.favorite, !a.folder, view.by_kind && !a.is_smart(), a.name.to_lowercase()));
     for a in kids {
+        let shown = if a.favorite { format!("★ {}", a.name) } else { a.name.clone() };
+        let dot = a.label.map(crate::theme::label_color);
         if a.folder {
             let open_id = egui::Id::new(("folder-open", a.id.0));
             let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
-            let resp = row(app, ui, &format!("folder:{}", a.id.0), Icon::CollectionSet, &a.name, None, false, indent);
+            let extra = RowExtra { dot, ..Default::default() };
+            let resp = row_ex(app, ui, &format!("folder:{}", a.id.0), Icon::CollectionSet, &shown, Some(&a.name), None, false, indent, &extra);
             if resp.clicked() {
                 ui.data_mut(|d| d.insert_temp(open_id, !open));
             }
             folder_menu(app, &resp, a);
-            if open {
-                albums_tree(app, ui, all, Some(a.id), indent + 16.0);
+            if open || !view.needle.is_empty() {
+                albums_tree_view(app, ui, all, Some(a.id), indent + 16.0, view);
             }
         } else {
             let sel = app.session.source == LibrarySource::Album(a.id);
@@ -742,8 +752,9 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &[Album], parent
             // the album B adds to is marked "+"
             let target =
                 app.session.target_album.filter(|t| app.session.catalog.album(*t).is_some()).or_else(|| app.session.catalog.quick_collection());
-            let label = if target == Some(a.id) { format!("{} +", a.name) } else { a.name.clone() };
-            let mut resp = row(app, ui, &format!("album:{}", a.id.0), icon, &label, Some(n), sel, indent);
+            let label = if target == Some(a.id) { format!("{shown} +") } else { shown.clone() };
+            let extra = RowExtra { dot, ..Default::default() };
+            let mut resp = row_ex(app, ui, &format!("album:{}", a.id.0), icon, &label, Some(&a.name), Some(n), sel, indent, &extra);
             if !a.is_smart() {
                 drop_target(app, ui, &resp, a);
             }
@@ -780,6 +791,10 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
 
 fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
     resp.context_menu(|ui| {
+        if !a.quick {
+            marks_menu(app, ui, "album", json!({"id": a.id.0}), a.label, a.favorite);
+            ui.separator();
+        }
         if !a.folder && !a.is_smart() && ui.button(crate::i18n::tr("Add Selected Photos")).clicked() {
             let _ = app.run("album.addPhotos", json!({"id": a.id.0}));
         }
@@ -965,8 +980,100 @@ fn collections_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rec
     });
     if open {
         let albums: Vec<Album> = app.session.catalog.albums().filter(|a| !a.quick).cloned().collect();
-        albums_tree(app, ui, &albums, None, 0.0);
+        // L24: filter the collections by name, sort by name or kind, favourites only
+        let fid = egui::Id::new("collections-filter");
+        let (mut needle, mut by_kind, mut fav_only): (String, bool, bool) = ui.data(|d| d.get_temp(fid)).unwrap_or_default();
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 18, right: 12, top: 2, bottom: 6 }).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let w = (ui.available_width() - 120.0).max(60.0);
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut needle)
+                        .hint_text(crate::i18n::tr("Filter Collections"))
+                        .desired_width(w)
+                        .min_size(egui::vec2(w, 22.0))
+                        .vertical_align(egui::Align::Center),
+                );
+                register(ui.ctx(), "field:collectionsFilter", r.rect);
+                if crate::widgets::text_button(ui, "collectionsSort", if by_kind { "kind." } else { "name." }, false)
+                    .on_hover_text(crate::i18n::tr("Sort by name or by kind (sets, smart collections, collections)"))
+                    .clicked()
+                {
+                    by_kind = !by_kind;
+                }
+                if crate::widgets::text_button(ui, "collectionsFavorites", "fav.", fav_only)
+                    .on_hover_text(crate::i18n::tr("Favourites only"))
+                    .clicked()
+                {
+                    fav_only = !fav_only;
+                }
+            });
+        });
+        ui.data_mut(|d| d.insert_temp(fid, (needle.clone(), by_kind, fav_only)));
+        let view = AlbumView { needle: needle.trim().to_lowercase(), by_kind, fav_only };
+        let shown: Vec<Album> = albums.iter().filter(|a| album_visible(&albums, a, &view, 0)).cloned().collect();
+        if shown.is_empty() && (!view.needle.is_empty() || fav_only) {
+            ui.label(egui::RichText::new(crate::i18n::tr("No collections match")).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
+        }
+        albums_tree_view(app, ui, &shown, None, 0.0, &view);
     }
+}
+
+/// How Collections lists its albums (L24).
+#[derive(Default)]
+struct AlbumView {
+    needle: String,
+    by_kind: bool,
+    fav_only: bool,
+}
+
+/// An album passes the filter itself, or (a set) holds one that does.
+fn album_visible(all: &[Album], a: &Album, v: &AlbumView, depth: usize) -> bool {
+    if depth > 32 {
+        return false;
+    }
+    let own = (v.needle.is_empty() || a.name.to_lowercase().contains(&v.needle)) && (!v.fav_only || a.favorite);
+    own || (a.folder && all.iter().filter(|c| c.parent == Some(a.id)).any(|c| album_visible(all, c, v, depth + 1)))
+}
+
+/// The Label submenu and the favourite toggle of a folder's or a collection's context menu.
+fn marks_menu(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    kind: &str,
+    target: serde_json::Value,
+    label: Option<lightcraft_catalog::ColorLabel>,
+    favorite: bool,
+) {
+    let fav = if favorite { "Remove from Favorites" } else { "Mark as Favorite" };
+    if ui.button(crate::i18n::tr(fav)).clicked() {
+        let mut p = target.clone();
+        p["on"] = json!(!favorite);
+        if let Err(e) = app.run(&format!("{kind}.favorite"), p) {
+            app.toast(ui.ctx(), e);
+        }
+        ui.close();
+    }
+    ui.menu_button(crate::i18n::tr("Label"), |ui| {
+        for l in lightcraft_catalog::ColorLabel::ALL {
+            let name = app.session.catalog.label_name(l);
+            let on = label == Some(l);
+            if ui.selectable_label(on, name).clicked() {
+                let mut p = target.clone();
+                p["label"] = if on { serde_json::Value::Null } else { json!(format!("{l:?}").to_lowercase()) };
+                if let Err(e) = app.run(&format!("{kind}.label"), p) {
+                    app.toast(ui.ctx(), e);
+                }
+                ui.close();
+            }
+        }
+        if ui.selectable_label(label.is_none(), crate::i18n::tr("None")).clicked() {
+            let mut p = target.clone();
+            p["label"] = serde_json::Value::Null;
+            let _ = app.run(&format!("{kind}.label"), p);
+            ui.close();
+        }
+    });
 }
 
 /// Colours that tell disks apart: a dot on each shoot and on its disk's Folders row.
@@ -1299,7 +1406,13 @@ fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, tree: &[FolderNode], 
             if gone {
                 label.push_str(" ?");
             }
-            (Icon::Folder, label, RowExtra { dim: gone, ..Default::default() }, Some(if subfolders { n.count } else { n.own }))
+            // L24: the folder's favourite star and colour label
+            let rec = app.session.catalog.folder_record(&last.path).cloned().unwrap_or_default();
+            if rec.favorite {
+                label = format!("★ {label}");
+            }
+            let dot = rec.label.map(crate::theme::label_color);
+            (Icon::Folder, label, RowExtra { dim: gone, dot, ..Default::default() }, Some(if subfolders { n.count } else { n.own }))
         };
         let children = &last.children;
         let resp = row_ex(app, ui, &format!("libfolder:{}", n.path), icon, &name, Some(&name), count, sel, indent, &extra);
@@ -1439,6 +1552,15 @@ fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &F
     let added_parent = app.session.folder_parents.iter().any(|f| same_folder(f, path));
     resp.context_menu(|ui| {
         subfolders_toggle(app, ui);
+        ui.separator();
+        marks_menu(
+            app,
+            ui,
+            "folder",
+            json!({"path": path}),
+            app.session.catalog.folder_record(path).cloned().unwrap_or_default().label,
+            app.session.catalog.folder_record(path).is_some_and(|r| r.favorite),
+        );
         ui.separator();
         if ui.button(crate::i18n::tr("Synchronize Folder…")).clicked() {
             synchronize(app, ui.ctx(), path, None);
@@ -1581,14 +1703,27 @@ fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode
                 let _ = app.run("photo.setMeta", json!({"removeKeywords": [n.path]}));
             }
             ui.separator();
+            if ui.button(crate::i18n::tr("Edit Keyword Tag…")).clicked() {
+                let _ = app.run("dialog.editKeyword", json!({"keyword": n.path}));
+            }
             if ui.button(crate::i18n::tr("Rename Keyword…")).clicked() {
                 app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: n.path.clone(), to: n.path.clone() });
             }
             if ui.button(crate::i18n::tr("Merge into…")).clicked() {
                 app.ui.dialog = Some(crate::state::Dialog::MergeKeywords { from: vec![n.path.clone()], into: String::new() });
             }
+            if ui.button(crate::i18n::tr("Use as Keyword Shortcut")).clicked() {
+                let _ = app.run("keyword.setShortcut", json!({"keywords": [n.path]}));
+            }
+            if ui.button(crate::i18n::tr("Put New Keywords Inside This Keyword")).clicked() {
+                let _ = app.run("keyword.setDefaultParent", json!({"keyword": n.path}));
+            }
             if ui.button(crate::i18n::tr("Delete Keyword")).clicked() {
                 let _ = app.run("keyword.delete", json!({"keyword": n.path}));
+            }
+            ui.separator();
+            if ui.button(crate::i18n::tr("Purge Unused Keywords")).clicked() {
+                let _ = app.run("keyword.purgeUnused", json!({}));
             }
         });
         if open && !n.children.is_empty() {

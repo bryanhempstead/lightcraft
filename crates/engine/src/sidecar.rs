@@ -100,6 +100,8 @@ pub struct SidecarData {
     pub extended_description: Option<String>,
     pub keywords: Option<Vec<String>>,
     pub regions: Option<Vec<lightcraft_meta::Region>>,
+    /// IPTC Extension fields (L21), by id; only those the file states.
+    pub iptc_ext: std::collections::BTreeMap<String, String>,
     /// Capture time (ISO 8601) from `exif:DateTimeOriginal`, `photoshop:DateCreated` or
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
@@ -141,6 +143,7 @@ pub fn parse_sidecar(xmp: &str, raw: bool) -> std::result::Result<SidecarData, S
         // photo's are kept.
         regions: d.values.contains_key("mwg-rs:Regions").then(|| m.regions.clone()),
         captured: m.capture_time.map(|d| d.to_iso()),
+        iptc_ext: m.iptc_ext.clone(),
         ..Default::default()
     };
     if let Some(r) = m.rating {
@@ -185,6 +188,9 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
         p.label = l;
     }
     let m = &mut p.meta;
+    for (k, v) in &sc.iptc_ext {
+        m.iptc_ext.insert(k.clone(), v.clone());
+    }
     for (src, dst) in [
         (&sc.title, &mut m.title),
         (&sc.caption, &mut m.caption),
@@ -266,6 +272,7 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
         label: p.label.map(|l| cat.label_name(l)),
         capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
         gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
+        iptc_ext: p.meta.iptc_ext.clone(),
         ..Default::default()
     };
     let settings = serde_json::to_string(&*p.develop).unwrap_or_default();
@@ -301,6 +308,20 @@ pub const OWNED: &[&str] = &[
     "xmpRights:Marked",
     "xmpRights:UsageTerms",
     "xmpRights:WebStatement",
+    "Iptc4xmpExt:PersonInImage",
+    "Iptc4xmpExt:Event",
+    "Iptc4xmpExt:OrganisationInImageName",
+    "Iptc4xmpExt:OrganisationInImageCode",
+    "Iptc4xmpExt:AddlModelInfo",
+    "Iptc4xmpExt:ModelAge",
+    "Iptc4xmpExt:DigitalSourceType",
+    "Iptc4xmpExt:MaxAvailWidth",
+    "Iptc4xmpExt:MaxAvailHeight",
+    "plus:ModelReleaseStatus",
+    "plus:ModelReleaseID",
+    "plus:PropertyReleaseStatus",
+    "plus:PropertyReleaseID",
+    "plus:ImageSupplierImageID",
     "lc:*",
 ];
 
@@ -343,6 +364,43 @@ pub struct SidecarSaved {
     pub merged: bool,
     /// An existing sidecar that couldn't be read as XMP was copied here before being replaced.
     pub backup: Option<PathBuf>,
+    /// The photo's metadata and the file as written now (L22).
+    pub sync: lightcraft_catalog::XmpSync,
+}
+
+/// L22 metadata status of a photo: how its catalog metadata and its sidecar compare with when they
+/// last matched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MetadataStatus {
+    /// Catalog and file agree.
+    UpToDate,
+    /// Changed in the library since: Save Metadata to File would write it.
+    Changed,
+    /// The file changed (another app, or it is gone) since: Read Metadata from File takes it in.
+    ChangedOnDisk,
+    /// Both changed: choose which one wins.
+    Conflict,
+    /// A sidecar LightCraft never wrote or read.
+    Unknown,
+    /// No sidecar, never written.
+    NotWritten,
+    /// No file of its own (a virtual copy, a generated photo).
+    None,
+}
+
+impl MetadataStatus {
+    pub fn id(self) -> &'static str {
+        match self {
+            MetadataStatus::UpToDate => "upToDate",
+            MetadataStatus::Changed => "changed",
+            MetadataStatus::ChangedOnDisk => "changedOnDisk",
+            MetadataStatus::Conflict => "conflict",
+            MetadataStatus::Unknown => "unknown",
+            MetadataStatus::NotWritten => "notWritten",
+            MetadataStatus::None => "none",
+        }
+    }
 }
 
 /// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
@@ -465,9 +523,12 @@ impl Session {
         let orig = file_path(p).ok_or_else(|| EngineError::Other(format!("{} is not a file on disk", p.file_name)))?;
         let path = sidecar_path(orig, owners.naming(p, self.xmp.naming));
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        let packet = sidecar_packet(p, &self.catalog);
+        let sync = lightcraft_catalog::XmpSync { packet: lightcraft_catalog::fnv64(packet.as_bytes()), file: 0 };
+        let (data, merged, backup) = sidecar_contents(&path, packet, &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
-        Ok(SidecarSaved { path, merged, backup })
+        let sync = lightcraft_catalog::XmpSync { file: lightcraft_catalog::fnv64(data.as_bytes()), ..sync };
+        Ok(SidecarSaved { path, merged, backup, sync })
     }
 
     /// The op that applies a photo's sidecar (or embedded XMP) to the catalog, if there is one.
@@ -495,20 +556,55 @@ impl Session {
         Ok(Some((Op::Batch { ops }, from)))
     }
 
-    /// Auto-write: sidecars for photos changed by `ops` (errors are logged, not returned).
-    pub(crate) fn auto_write_sidecars(&self, ops: &[Op]) {
+    /// Auto-write: sidecars for photos changed by `ops` (errors are logged, not returned); what
+    /// each written sidecar now holds, for the metadata status.
+    pub(crate) fn auto_write_sidecars(&self, ops: &[Op]) -> Vec<(PhotoId, lightcraft_catalog::XmpSync)> {
         let mut ids = Vec::new();
         ops.iter().for_each(|o| op_photos(o, &mut ids));
+        let mut out = Vec::new();
         if ids.is_empty() {
-            return;
+            return out;
         }
         let owners = StemOwners::of(&self.catalog);
         for id in ids {
-            if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none())
-                && let Err(e) = self.save_sidecar_with(id, &owners)
-            {
-                log::warn!("auto-write XMP: {e}");
+            if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none()) {
+                match self.save_sidecar_with(id, &owners) {
+                    Ok(r) => out.push((id, r.sync)),
+                    Err(e) => log::warn!("auto-write XMP: {e}"),
+                }
             }
+        }
+        out
+    }
+
+    /// The sync record for photo `id` as it is now in the catalog and on disk (after a read).
+    pub(crate) fn current_sync(&self, id: PhotoId) -> Option<lightcraft_catalog::XmpSync> {
+        let p = self.catalog.photo(id)?;
+        let orig = file_path(p)?;
+        let packet = lightcraft_catalog::fnv64(sidecar_packet(p, &self.catalog).as_bytes());
+        let path = find_sidecar(orig, self.sidecar_naming(id))?;
+        let file = std::fs::read(&path).ok().map(|b| lightcraft_catalog::fnv64(&b))?;
+        Some(lightcraft_catalog::XmpSync { packet, file })
+    }
+
+    /// L22: how photo `id`'s catalog metadata and its sidecar compare (reads the sidecar).
+    pub fn metadata_status(&self, id: PhotoId) -> MetadataStatus {
+        let Some(p) = self.catalog.photo(id) else { return MetadataStatus::None };
+        let Some(orig) = file_path(p).filter(|_| p.copy_of.is_none()) else { return MetadataStatus::None };
+        let side = find_sidecar(orig, self.sidecar_naming(id));
+        let Some(sync) = p.xmp_sync else {
+            return if side.is_some() { MetadataStatus::Unknown } else { MetadataStatus::NotWritten };
+        };
+        let catalog = lightcraft_catalog::fnv64(sidecar_packet(p, &self.catalog).as_bytes()) != sync.packet;
+        let disk = match side.and_then(|s| std::fs::read(s).ok()) {
+            Some(b) => lightcraft_catalog::fnv64(&b) != sync.file,
+            None => true,
+        };
+        match (catalog, disk) {
+            (false, false) => MetadataStatus::UpToDate,
+            (true, false) => MetadataStatus::Changed,
+            (false, true) => MetadataStatus::ChangedOnDisk,
+            (true, true) => MetadataStatus::Conflict,
         }
     }
 }

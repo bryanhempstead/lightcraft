@@ -78,17 +78,23 @@ fn run_all(jobs: Vec<Vec<RenderJob>>, state: &PreviewBuild) {
 
 fn build(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.buildPreviews";
-    let edge = match str_param(p, "size").unwrap_or("standard") {
-        "standard" => Some(p.get("edge").and_then(Value::as_u64).map_or(STANDARD_EDGE, |e| e.clamp(256, 8192) as usize)),
+    let size = str_param(p, "size").unwrap_or("standard");
+    let thumbs_only = size == "thumbs";
+    let edge = match size {
+        "standard" | "thumbs" => Some(p.get("edge").and_then(Value::as_u64).map_or(STANDARD_EDGE, |e| e.clamp(256, 8192) as usize)),
         "full" | "1:1" => None,
-        other => return Err(bad(C, format!("unknown size `{other}` (standard|full)"))),
+        other => return Err(bad(C, format!("unknown size `{other}` (standard|full|thumbs)"))),
     };
     if s.preview_build.as_ref().is_some_and(|b| !b.finished.load(Ordering::Relaxed)) {
         return Err(bad(C, "a preview build is already running"));
     }
     // explicit ids, else the selection, else everything in view
     let ids = if p.get("ids").is_some() || p.get("id").is_some() || !s.selection.ids.is_empty() { s.targets(p) } else { s.visible_cloned() };
-    let jobs: Vec<Vec<RenderJob>> = ids.iter().map(|id| jobs_for(s, *id, edge)).filter(|j| !j.is_empty()).collect();
+    let jobs: Vec<Vec<RenderJob>> = ids
+        .iter()
+        .map(|id| if thumbs_only { s.thumb_job(*id, THUMB_SIZES[THUMB_SIZES.len() - 1]).into_iter().collect() } else { jobs_for(s, *id, edge) })
+        .filter(|j: &Vec<RenderJob>| !j.is_empty())
+        .collect();
     let state = Arc::new(PreviewBuild { total: jobs.len(), ..Default::default() });
     s.preview_build = Some(state.clone());
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false) || cfg!(target_arch = "wasm32");
@@ -345,7 +351,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Build Previews",
             [],
             None,
-            "{size?: standard (2048 px, or `edge`) | full (1:1), ids?, wait?: bool} — render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache, in the background unless `wait` → {total, done, failed, running}",
+            "{size?: standard (2048 px, or `edge`) | full (1:1) | thumbs (the grid thumbnails only: Import's Embedded & Sidecar), ids?, wait?: bool} — render the grid thumbnail and loupe view of the selected photos (else all in view) into the preview cache, in the background unless `wait` → {total, done, failed, running}",
             always,
             build
         ),

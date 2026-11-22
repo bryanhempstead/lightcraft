@@ -59,6 +59,8 @@ fn op_for(c: &mut Catalog, kind: u8, a: u8, b: u8) -> Op {
                     cover: None,
                     smart: None,
                     quick: false,
+                    label: None,
+                    favorite: false,
                 },
             }
         }

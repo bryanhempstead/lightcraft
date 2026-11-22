@@ -7,6 +7,7 @@
 mod backup;
 mod before;
 pub(crate) mod browse;
+pub(crate) mod cameras;
 mod color;
 pub(crate) mod convert;
 pub mod copy_subsets;
@@ -38,6 +39,7 @@ mod query;
 pub mod recheck;
 pub mod shoot;
 pub mod shoots;
+pub mod tether;
 mod xmp;
 
 use serde::Serialize;
@@ -161,6 +163,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(backup::specs());
         v.extend(delete::specs());
         v.extend(naming::specs());
+        v.extend(cameras::specs());
+        v.extend(tether::specs());
         v
     })
 }

@@ -183,6 +183,10 @@ pub fn after_window_import(app: &mut LightcraftApp, prefs: &ImportPrefs, importe
     }
     let edge = app.ui.settings.preview_edge;
     match prefs.previews.as_str() {
+        // I03: Embedded & Sidecar — the grid thumbnails first (quick), the loupe previews on demand
+        "embedded" => {
+            let _ = app.run("library.buildPreviews", json!({"size": "thumbs"}));
+        }
         "standard" => {
             let _ = app.run("library.buildPreviews", json!({"size": "standard", "edge": edge}));
         }
@@ -193,6 +197,15 @@ pub fn after_window_import(app: &mut LightcraftApp, prefs: &ImportPrefs, importe
     }
     if prefs.smart_previews {
         let _ = app.run("library.smartPreviews", json!({"background": true}));
+    }
+    // I03: Assisted Culling of what came in (scores and look-alike groups; nothing is flagged)
+    if prefs.cull {
+        let ids: Vec<u64> = app.session.selection.ids.iter().map(|i| i.0).collect();
+        let params = if ids.is_empty() { json!({}) } else { json!({"ids": ids}) };
+        match app.run("photo.analyze", params) {
+            Ok(v) => log::info!("import: culled {} photos, {} groups", v["photos"].as_array().map_or(0, Vec::len), v["groups"]),
+            Err(e) => log::warn!("import: assisted culling: {e}"),
+        }
     }
     if !prefs.second_copy.trim().is_empty() {
         second_copy(prefs.second_copy.trim(), files.to_vec(), &(app.session.clock)());
@@ -775,6 +788,10 @@ fn options_column(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, d: &mut I
                 let smart_ok = app.session.media.smart_dir.is_some();
                 let r = ui.checkbox(&mut d.prefs.smart_previews, crate::i18n::tr("Build Smart Previews"));
                 register(ui.ctx(), "check:importSmart", r.rect);
+                let r = ui
+                    .checkbox(&mut d.prefs.cull, crate::i18n::tr("Assisted Culling"))
+                    .on_hover_text(crate::i18n::tr("Score focus and clipping and group look-alike shots as they come in"));
+                register(ui.ctx(), "check:importCull", r.rect);
                 if !smart_ok && d.prefs.smart_previews {
                     ui.label(egui::RichText::new(crate::i18n::tr("This library keeps no smart previews.")).small().color(t.caution));
                 }

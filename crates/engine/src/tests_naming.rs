@@ -205,7 +205,7 @@ fn export_keywords_follow_the_metadata_options() {
     }];
     let o = crate::export::ExportOptions::default();
     let (flat, hier) = crate::export::export_keywords(&p, &o);
-    assert_eq!(flat, ["Places", "Portugal", "Lisbon", "dawn", "Ann Lee"]);
+    assert_eq!(flat, ["Lisbon", "Portugal", "Places", "dawn", "Ann Lee"]);
     assert!(hier.is_empty());
     let o = crate::export::ExportOptions::from_params(&json!({"removePeople": true, "keywordHierarchy": true})).unwrap();
     let (flat, hier) = crate::export::export_keywords(&p, &o);
@@ -232,5 +232,35 @@ fn named_watermarks() {
     assert_eq!(list[0]["watermark"]["text"], "© hempstead.studio");
     s.execute("watermark.delete", &json!({"name": "studio"})).unwrap();
     assert!(s.watermark_presets.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// E01: `{original}` is the name a file had when it was imported, also after the import (or a
+/// later Rename Photos) renamed it; photos from older catalogs use their file name.
+#[test]
+fn original_token_is_the_name_at_import() {
+    let dir = std::env::temp_dir().join(format!("lc-original-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("card")).unwrap();
+    let (w, h) = (8usize, 6usize);
+    let img = lightcraft_raster::Rgba8 { width: w, height: h, data: vec![[10, 20, 30, 255]; w * h] };
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(dir.join("card/IMG_0042.png"), png).unwrap();
+    let mut s = crate::Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    let r = s
+        .execute("library.import", &json!({"paths": [dir.join("card").to_string_lossy()], "mode": "copy", "destination": dir.join("photos").to_string_lossy(), "rename": "Trip-{seq:3}"}))
+        .unwrap();
+    let id = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+    let p = s.catalog.photo(id).unwrap().clone();
+    assert_ne!(p.file_name, "IMG_0042.png", "renamed by the import");
+    assert_eq!(p.original_name.as_deref(), Some("IMG_0042.png"));
+    let batch = crate::rename::Batch::default();
+    assert_eq!(crate::rename::expand_tokens_in("{original}", &p, 1, 1, &batch), "IMG_0042");
+    assert_eq!(crate::rename::expand_tokens_in("{originalnum}", &p, 1, 1, &batch), "0042");
+    // a photo from before the field existed: its own name
+    let mut old: lightcraft_catalog::Photo = (*p).clone();
+    old.original_name = None;
+    assert_eq!(crate::rename::expand_tokens_in("{original}", &old, 1, 1, &batch), p.file_name.rsplit_once('.').unwrap().0);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -28,10 +28,62 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::query::{folder_key, folder_within, split_path};
-use crate::{Catalog, Source};
+use crate::{Catalog, ColorLabel, Op, Source};
+
+/// What the library keeps about one of its folders beyond the photos in it (L24, after upstream's
+/// folder records): a colour label and whether it is a favourite. A record with nothing in it is
+/// not kept. Stored under the folder's [`folder_key`]; it follows the folder when LightCraft
+/// renames or moves it ([`Catalog::folder_records_follow_ops`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<ColorLabel>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub favorite: bool,
+}
+
+impl FolderRecord {
+    /// Whether the record says nothing (and so is not kept).
+    pub fn is_empty(&self) -> bool {
+        self.label.is_none() && !self.favorite
+    }
+}
+
+/// The key a folder's record is kept under; `None` for a path that names no folder.
+pub(crate) fn record_key(path: &str) -> Option<String> {
+    let key = folder_key(path);
+    (split_path(path, true).absolute && !key.is_empty()).then_some(key)
+}
+
+impl Catalog {
+    /// The record of the folder at `path`, if it has one.
+    pub fn folder_record(&self, path: &str) -> Option<&FolderRecord> {
+        self.folder_records.get(&record_key(path)?)
+    }
+
+    /// Every folder record, by folder key.
+    pub fn folder_records(&self) -> impl Iterator<Item = (&String, &FolderRecord)> {
+        self.folder_records.iter()
+    }
+
+    /// Ops moving the records of `from` and the folders inside it to `to` (a folder renamed or
+    /// moved on disk).
+    pub fn folder_records_follow_ops(&self, from: &str, to: &str) -> Vec<Op> {
+        let (Some(f), Some(t)) = (record_key(from), record_key(to)) else { return Vec::new() };
+        let mut ops = Vec::new();
+        for (k, r) in &self.folder_records {
+            let rest = if *k == f { Some(String::new()) } else { k.strip_prefix(&format!("{f}/")).map(|r| format!("/{r}")) };
+            if let Some(rest) = rest {
+                ops.push(Op::SetFolderRecord { folder: k.clone(), record: None });
+                ops.push(Op::SetFolderRecord { folder: format!("{t}{rest}"), record: Some(r.clone()) });
+            }
+        }
+        ops
+    }
+}
 
 /// Folder levels kept per photo. No real path comes near it; a deeper one is counted at its
 /// ancestor this many levels down, which bounds the tree's depth (and so every walk of it)

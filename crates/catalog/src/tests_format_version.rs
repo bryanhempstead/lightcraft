@@ -179,8 +179,12 @@ fn op_variants_are_versioned() {
             | Op::SetLabelName { .. }
             | Op::Batch { .. } => 1,
             Op::SetBrowsed { .. } => 2,
+            Op::SetKeyword { .. } => 3,
+            Op::SetFolderRecord { .. } | Op::SetAlbumMarks { .. } => 4,
+            Op::SetXmpSync { .. } => 6,
         }
     }
-    let newest = since(&Op::SetBrowsed { folder: String::new(), at: None });
-    assert_eq!(newest, VERSION, "the newest op's version must be the current format version");
+    let newest = since(&Op::SetXmpSync { id: PhotoId(1), sync: None });
+    // a format can also add a field (v5: `Meta.iptc_ext`), so the newest op may be older
+    assert!(newest <= VERSION, "an op newer than the current format version");
 }

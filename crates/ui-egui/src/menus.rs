@@ -196,6 +196,21 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.restoreLibrary", "Restore Library from Backup…", None, "File"),
     ("photo.locate", "Locate Missing File…", None, ""),
     ("dialog.saveMetadataPreset", "Save Metadata Preset…", None, ""),
+    // Metadata ▸ keyword list (L11)
+    ("dialog.importKeywords", "Import Keywords…", None, "Metadata"),
+    ("dialog.importCatalog", "Import from Another Library…", None, "File"),
+    // L23: Library ▸ Validate DNG Files… (the result as a toast; damaged ones selected)
+    ("dialog.validateDng", "Validate DNG Files…", None, "Library"),
+    // L33: File ▸ Tethered Capture
+    ("dialog.tetherStart", "Start Tethered Capture…", None, "File"),
+    ("dialog.tetherStop", "Stop Tethered Capture", None, "File"),
+    // E12: File ▸ Email Photos…
+    ("file.emailPhotos", "Email Photos…", Some("Cmd+Shift+M"), "File"),
+    // L26: Compare ▸ Link Focus
+    ("compare.linkFocus", "Link Focus", None, ""),
+    ("dialog.exportKeywords", "Export Keywords…", None, "Metadata"),
+    ("dialog.keywordShortcut", "Set Keyword Shortcut…", Some("Cmd+Alt+Shift+K"), "Metadata"),
+    ("dialog.editKeyword", "Edit Keyword Tag…", None, ""),
     ("app.quit", "Quit LightCraft", Some("Cmd+Q"), "File"),
     ("file.importPresets", "Import Profiles & Presets…", None, "File"),
     ("file.exportPresets", "Export Presets…", None, "File"),
@@ -842,8 +857,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             // Validate the complete request before changing either part of the viewport.
             let zoom = match p.get("zoom") {
                 Some(v) => match serde_json::from_value::<Zoom>(v.clone()) {
-                    Ok(Zoom::Percent(p)) if !p.is_finite() || p <= 0.0 || p > 800.0 => {
-                        return Some(Err("view.navigate: zoom percent must be greater than 0 and at most 800".into()));
+                    Ok(Zoom::Percent(p)) if !p.is_finite() || p <= 0.0 || p > 1600.0 => {
+                        return Some(Err("view.navigate: zoom percent must be greater than 0 and at most 1600".into()));
                     }
                     Ok(z) => z,
                     Err(e) => return Some(Err(format!("view.navigate: {e}"))),
@@ -1434,6 +1449,147 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "app.quit" => {
             app.ui.quit = true;
+            Ok(Value::Null)
+        }
+        "dialog.tetherStart" => {
+            let folder = match p.get("folder").and_then(Value::as_str) {
+                Some(f) => Some(f.to_string()),
+                None => app.services.pick_folder.as_mut().and_then(|f| f()),
+            };
+            let Some(folder) = folder else { return Some(Ok(Value::Null)) };
+            let session = p
+                .get("session")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Tethered {}", (app.session.clock)().get(..10).unwrap_or("")));
+            let r = app.run("tether.start", json!({"folder": folder, "session": session}));
+            if let Ok(v) = &r {
+                let how = if v["gphoto2"] == true { "gphoto2 is capturing from the camera" } else { "save shots into it from the camera's app" };
+                app.ui.toast = Some((format!("Tethered: {} — {how}", v["folder"].as_str().unwrap_or("")), app.last_time + 8.0, None));
+            }
+            r
+        }
+        "dialog.tetherStop" => {
+            let r = app.run("tether.stop", json!({}));
+            if r.is_ok() {
+                app.ui.toast = Some(("Tethered capture stopped".into(), app.last_time + 4.0, None));
+            }
+            r
+        }
+        "dialog.validateDng" => {
+            let r = match app.run("library.validateDng", p.clone()) {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e)),
+            };
+            let n = |k: &str| r[k].as_array().map_or(0, Vec::len);
+            let msg = format!(
+                "Checked {} DNG{}: {} valid, {} damaged, {} without a digest, {} not readable",
+                r["checked"],
+                if r["checked"] == 1 { "" } else { "s" },
+                r["valid"],
+                n("damaged"),
+                n("noDigest"),
+                n("failed")
+            );
+            if n("damaged") > 0 {
+                let _ = app.run("library.select", json!({"ids": r["damaged"]}));
+            }
+            app.ui.toast = Some((msg, app.last_time + 8.0, None));
+            Ok(r)
+        }
+        "file.emailPhotos" => {
+            // export the selection small (JPEG, 1600 px, quality 80) into a temporary folder, then
+            // a new mail message with them attached — nothing is sent
+            if app.services.compose_email.is_none() {
+                return Some(Err("Email Photos needs the desktop app (Mail)".into()));
+            }
+            let dir = std::env::temp_dir().join(format!("LightCraft Email {}", (app.session.clock)().replace([':', 'T'], "-")));
+            let mut q = json!({"format": "jpeg", "longEdge": p.get("longEdge").and_then(Value::as_u64).unwrap_or(1600), "quality": 80, "dir": dir.to_string_lossy(), "background": false, "metadata": "copyright"});
+            if let Some(ids) = p.get("ids") {
+                q["ids"] = ids.clone();
+            }
+            let r = match app.run("app.export", q) {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e)),
+            };
+            let files: Vec<String> =
+                r["files"].as_array().into_iter().flatten().filter_map(|f| f["path"].as_str().or(f.as_str())).map(str::to_string).collect();
+            if files.is_empty() {
+                return Some(Err("nothing was exported to attach".into()));
+            }
+            let sent = app.services.compose_email.as_mut().map(|f| f(&files));
+            match sent {
+                Some(Err(e)) => Err(e),
+                _ => Ok(json!({"attached": files})),
+            }
+        }
+        "compare.linkFocus" => {
+            app.ui.compare_frozen = match (p.get("on").and_then(Value::as_bool), app.ui.compare_frozen) {
+                (Some(true), _) | (None, Some(_)) => None,
+                (Some(false), Some(f)) => Some(f),
+                (Some(false), None) | (None, None) => Some((app.ui.zoom, app.ui.pan)),
+            };
+            Ok(json!({"linked": app.ui.compare_frozen.is_none()}))
+        }
+        "dialog.importCatalog" => {
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => Some(x.to_string()),
+                None => app.services.pick_folder.as_mut().and_then(|f| f()),
+            };
+            let Some(path) = path else { return Some(Ok(Value::Null)) };
+            match app.run("library.importCatalog", json!({"path": path, "dryRun": true})) {
+                Ok(preview) => {
+                    app.ui.dialog = Some(crate::state::Dialog::ImportCatalog { path, preview, replace: "none".into() });
+                    Ok(Value::Null)
+                }
+                Err(e) => Err(e),
+            }
+        }
+        "dialog.importKeywords" => {
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => Some(x.to_string()),
+                None => app.services.pick_text_file.as_mut().and_then(|f| f().into_iter().next()),
+            };
+            let Some(path) = path else { return Some(Ok(Value::Null)) };
+            let r = app.run("keyword.import", json!({"path": path}));
+            if let Ok(v) = &r {
+                app.ui.toast = Some((format!("Imported keywords: {} added, {} updated", v["added"], v["updated"]), app.last_time + 4.0, None));
+            }
+            r
+        }
+        "dialog.exportKeywords" => {
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => Some(x.to_string()),
+                None => app.services.save_text_file.as_mut().and_then(|f| f("Keywords.txt")),
+            };
+            let Some(path) = path else { return Some(Ok(Value::Null)) };
+            let r = app.run("keyword.export", json!({"path": path}));
+            if let Ok(v) = &r {
+                app.ui.toast = Some((format!("Exported {} keywords", v["keywords"]), app.last_time + 4.0, None));
+            }
+            r
+        }
+        "dialog.keywordShortcut" => {
+            let now = app.session.execute("keyword.shortcut", &json!({})).ok().and_then(|v| v["keywords"].as_array().cloned()).unwrap_or_default();
+            let text: Vec<&str> = now.iter().filter_map(Value::as_str).collect();
+            crate::panels::dialogs::prompt(
+                app,
+                "Set Keyword Shortcut",
+                "Keywords (commas between them)",
+                &text.join(", "),
+                "keyword.setShortcut",
+                json!({}),
+                "keywords",
+            );
+            Ok(Value::Null)
+        }
+        "dialog.editKeyword" => {
+            let Some(k) = p.get("keyword").and_then(Value::as_str) else { return Some(Err("dialog.editKeyword: missing `keyword`".into())) };
+            let info = match app.session.execute("keyword.info", &json!({"keyword": k})) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            app.ui.dialog = Some(crate::state::Dialog::EditKeyword(crate::state::KeywordEdit::from_info(&info)));
             Ok(Value::Null)
         }
         "dialog.saveMetadataPreset" => {

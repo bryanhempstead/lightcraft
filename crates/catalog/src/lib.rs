@@ -55,6 +55,9 @@ pub enum CatalogError {
     NoStack(StackId),
     #[error("invalid: {0}")]
     Invalid(String),
+    /// A keyword of that name is there already: moving or renaming onto it would merge the two.
+    #[error("there is a keyword “{0}” already")]
+    KeywordExists(String),
     #[error("corrupt catalog data: {0}")]
     Corrupt(String),
     #[error("catalog storage: {0}")]
@@ -218,6 +221,30 @@ pub enum Op {
         folder: String,
         at: Option<String>,
     },
+    /// List a keyword in the library's keyword list with these attributes, or take it off the list
+    /// (`None`; photos that carry it keep it). Format version 3 (ported from upstream's v5).
+    SetKeyword {
+        path: String,
+        info: Option<keywords::KeywordInfo>,
+    },
+    /// What the library keeps about one of its folders (label, favourite; see
+    /// [`folders::FolderRecord`]), under the folder's path; `None` forgets it. Format version 4.
+    SetFolderRecord {
+        folder: String,
+        record: Option<folders::FolderRecord>,
+    },
+    /// What a photo's XMP sidecar held when last written or read (L22; bookkeeping, not an undo
+    /// step). Format version 6.
+    SetXmpSync {
+        id: PhotoId,
+        sync: Option<XmpSync>,
+    },
+    /// An album's (collection's or set's) colour label and favourite mark. Format version 4.
+    SetAlbumMarks {
+        id: AlbumId,
+        label: Option<ColorLabel>,
+        favorite: bool,
+    },
     /// Several ops as one step (undo applies the inverses in reverse).
     Batch {
         ops: Vec<Op>,
@@ -240,6 +267,12 @@ pub struct Catalog {
     /// When each Local folder was last browsed (folder path → ISO 8601), see [`local`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     browsed: BTreeMap<String, String>,
+    /// Keywords listed on their own or given attributes, by lower-case path (see [`keywords`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    keyword_list: BTreeMap<String, keywords::ListedKeyword>,
+    /// What the library keeps about its folders (folder key → record), see [`folders`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    folder_records: BTreeMap<String, folders::FolderRecord>,
     /// Increments on every applied op.
     #[serde(skip)]
     pub revision: u64,
@@ -341,6 +374,18 @@ impl Catalog {
         Ok(())
     }
 
+    /// A listed keyword's attributes (any case), `None` when it isn't listed.
+    pub fn keyword_info(&self, path: &str) -> Option<&keywords::KeywordInfo> {
+        self.keyword_list.get(&keywords::clean(path).to_lowercase()).map(|k| &k.info)
+    }
+    /// How the keyword list spells a listed keyword (any case), `None` when it isn't listed.
+    pub fn listed_path(&self, path: &str) -> Option<&str> {
+        self.keyword_list.get(&keywords::clean(path).to_lowercase()).map(|k| k.path.as_str())
+    }
+    /// The keyword list: keywords listed on their own or given attributes, by path.
+    pub fn listed_keywords(&self) -> impl Iterator<Item = &keywords::ListedKeyword> {
+        self.keyword_list.values()
+    }
     /// The name of a colour label: its custom name, else the colour (`Red`).
     pub fn label_name(&self, l: ColorLabel) -> String {
         self.label_names.get(&l).cloned().unwrap_or_else(|| format!("{l:?}"))
@@ -547,6 +592,10 @@ impl Catalog {
             }
             Op::Relink { id, file_name, source, format } => {
                 let p = self.photo_mut(id)?;
+                // E01: the first rename remembers the name it was imported with
+                if p.original_name.is_none() && p.file_name != file_name {
+                    p.original_name = Some(p.file_name.clone());
+                }
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
                 Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format }
@@ -578,6 +627,40 @@ impl Catalog {
                     None => self.label_names.remove(&label),
                 };
                 Op::SetLabelName { label, name: old }
+            }
+            Op::SetFolderRecord { folder, record } => {
+                let key = folders::record_key(&folder).ok_or_else(|| CatalogError::Invalid(format!("not a folder: {folder}")))?;
+                let old = match record.filter(|r| !r.is_empty()) {
+                    Some(r) => self.folder_records.insert(key.clone(), r),
+                    None => self.folder_records.remove(&key),
+                };
+                Op::SetFolderRecord { folder: key, record: old }
+            }
+            Op::SetXmpSync { id, sync } => {
+                let p = self.photo_mut(id)?;
+                Op::SetXmpSync { id, sync: std::mem::replace(&mut p.xmp_sync, sync) }
+            }
+            Op::SetAlbumMarks { id, label, favorite } => {
+                let a = self.album_mut(id)?;
+                let old = Op::SetAlbumMarks { id, label: a.label, favorite: a.favorite };
+                a.label = label;
+                a.favorite = favorite;
+                old
+            }
+            Op::SetKeyword { path, info } => {
+                let path = keywords::clean(&path);
+                if path.is_empty() {
+                    return Err(CatalogError::Invalid("keyword names can't be empty".into()));
+                }
+                let key = path.to_lowercase();
+                let old = match info {
+                    Some(info) => self.keyword_list.insert(key, keywords::ListedKeyword { path: path.clone(), info }),
+                    None => self.keyword_list.remove(&key),
+                };
+                match old {
+                    Some(old) => Op::SetKeyword { path: old.path, info: Some(old.info) },
+                    None => Op::SetKeyword { path, info: None },
+                }
             }
             Op::SetBrowsed { folder, at } => {
                 let folder = crate::query::folder_key(&folder);

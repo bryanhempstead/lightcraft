@@ -114,6 +114,12 @@ pub fn import_batch_done(s: &mut Session, report: crate::import::ImportReport, m
         s.execute("album.addPhotos", &json!({"id": a, "ids": imported}))?;
         report["album"] = json!(a);
     }
+    // a camera not seen before: recognised, its profiles / lens data resolved and kept (after
+    // the photos are in, so it never holds the import up)
+    let new_cameras = crate::cameras::recognise_new(s, &imported);
+    if !new_cameras.is_empty() {
+        report["newCameras"] = json!(new_cameras);
+    }
     Ok(report)
 }
 
@@ -892,10 +898,43 @@ pub fn specs() -> Vec<CommandSpec> {
                     ),
                     None => None,
                 };
+                // IPTC Extension fields (L21): {id: text}; "" clears one
+                let mut ext: Vec<(String, String)> = Vec::new();
+                match p.get("iptcExt") {
+                    None | Some(Value::Null) => {}
+                    Some(Value::Object(o)) => {
+                        for (k, v) in o {
+                            let f = lightcraft_meta::iptc_ext::field(k).ok_or_else(|| {
+                                bad(
+                                    "photo.setMeta",
+                                    format!(
+                                        "unknown IPTC Extension field `{k}` ({})",
+                                        lightcraft_meta::iptc_ext::IPTC_EXT.iter().map(|f| f.id).collect::<Vec<_>>().join(", ")
+                                    ),
+                                )
+                            })?;
+                            let v = match v {
+                                Value::String(t) => t.clone(),
+                                Value::Null => String::new(),
+                                Value::Array(a) => a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; "),
+                                _ => return Err(bad("photo.setMeta", format!("iptcExt.{k}: text, a list of texts or null"))),
+                            };
+                            ext.push((k.clone(), lightcraft_meta::iptc_ext::normalise(f, &v).map_err(|e| bad("photo.setMeta", e))?));
+                        }
+                    }
+                    Some(_) => return Err(bad("photo.setMeta", "iptcExt is an object {field: text}")),
+                }
                 let mut ops = Vec::new();
                 for id in targets {
                     let Some(ph) = s.catalog.photo(id) else { continue };
                     let mut m = ph.meta.clone();
+                    for (k, v) in &ext {
+                        if v.is_empty() {
+                            m.iptc_ext.remove(k);
+                        } else {
+                            m.iptc_ext.insert(k.clone(), v.clone());
+                        }
+                    }
                     if let Some(g) = gps {
                         m.gps = g;
                     }
@@ -956,7 +995,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let cover = photos.first().copied();
             s.commit(
                 if folder { "New Folder" } else { "New Album" },
-                Op::AddAlbum { album: Album { id, name, parent, folder, photos, cover, smart: None, quick: false } },
+                Op::AddAlbum { album: Album { id, name, parent, folder, photos, cover, smart: None, quick: false, label: None, favorite: false } },
             )?;
             Ok(json!({"id": id.0}))
         }),
@@ -1001,7 +1040,20 @@ pub fn specs() -> Vec<CommandSpec> {
                 let cover = photos.first().copied();
                 s.commit(
                     "New Album from Folder",
-                    Op::AddAlbum { album: Album { id, name, parent: None, folder: false, photos, cover, smart: None, quick: false } },
+                    Op::AddAlbum {
+                        album: Album {
+                            id,
+                            name,
+                            parent: None,
+                            folder: false,
+                            photos,
+                            cover,
+                            smart: None,
+                            quick: false,
+                            label: None,
+                            favorite: false,
+                        },
+                    },
                 )?;
                 Ok(json!({"id": id.0, "photos": n}))
             }
@@ -1034,6 +1086,8 @@ pub fn specs() -> Vec<CommandSpec> {
                         cover: q.photos.first().copied(),
                         smart: None,
                         quick: false,
+                        label: None,
+                        favorite: false,
                     },
                 }];
                 if bool_or(p, "clear", true) {

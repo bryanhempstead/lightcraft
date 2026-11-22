@@ -177,6 +177,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::LabelNames { .. } => "Edit Color Label Names",
         Dialog::CaptureTime { .. } => "Edit Capture Time",
         Dialog::RenameKeyword { .. } => "Rename Keyword",
+        Dialog::EditKeyword(_) => "Edit Keyword Tag",
+        Dialog::ImportCatalog { .. } => "Import from Another Library",
         Dialog::MergeKeywords { .. } => "Merge Keywords",
         Dialog::NewSmartAlbum { .. } => "Create Smart Album",
         Dialog::AllMetadata { .. } => "All Metadata",
@@ -511,6 +513,56 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         ui.label(egui::RichText::new(crate::i18n::tr_format!("… and {more} more", more = more)).color(t.text_dim));
                     }
                 }
+                Dialog::ImportCatalog { path, preview, replace } => {
+                    ui.label(egui::RichText::new(path.as_str()).color(t.text_label));
+                    ui.add_space(4.0);
+                    let n = |k: &str| preview[k].as_u64().unwrap_or(0);
+                    ui.label(format!(
+                        "{} photos in it: {} new, {} this library has already; {} albums",
+                        n("photos"),
+                        n("added"),
+                        n("inBoth"),
+                        n("albums")
+                    ));
+                    ui.add_space(6.0);
+                    let mut v: &'static str = match replace.as_str() {
+                        "metadata" => "metadata",
+                        "all" => "all",
+                        _ => "none",
+                    };
+                    choices(ui, "Photos both have", "importCatalogReplace", &[("none", "keep.mine."), ("metadata", "take.metadata."), ("all", "take.all.")], &mut v);
+                    *replace = v.to_string();
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr("take.all. also takes the other library's develop settings; the other library is only read, never changed."))
+                            .size(11.0)
+                            .color(t.text_dim),
+                    );
+                }
+                Dialog::EditKeyword(e) => {
+                    field(ui, "Keyword name", |ui| {
+                        let r = ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(f32::INFINITY));
+                        crate::widgets::register(ui.ctx(), "field:editKeywordName", r.rect);
+                    });
+                    field(ui, "Synonyms", |ui| {
+                        let r = ui.add(egui::TextEdit::singleline(&mut e.synonyms).hint_text(crate::i18n::tr("commas between them")).desired_width(f32::INFINITY));
+                        crate::widgets::register(ui.ctx(), "field:editKeywordSynonyms", r.rect);
+                    });
+                    ui.add_space(4.0);
+                    for (id, label, v) in [
+                        ("include", "Include on Export", &mut e.include_on_export),
+                        ("containing", "Export Containing Keywords", &mut e.export_containing),
+                        ("synonyms", "Export Synonyms", &mut e.export_synonyms),
+                        ("person", "Person", &mut e.person),
+                    ] {
+                        let r = ui.checkbox(v, crate::i18n::tr(label));
+                        crate::widgets::register(ui.ctx(), format!("check:editKeyword-{id}"), r.rect);
+                    }
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr("A keyword left out of export stays in the library; a person keyword is left out when an export removes person info."))
+                            .size(11.0)
+                            .color(t.text_dim),
+                    );
+                }
                 Dialog::RenameKeyword { from, to } => {
                     let n = app.session.catalog.photos().filter(|p| p.meta.keywords.iter().any(|k| lightcraft_catalog::keywords::is_under(k, from))).count();
                     let r = ui.add(egui::TextEdit::singleline(to).hint_text(crate::i18n::tr("New name")).desired_width(f32::INFINITY));
@@ -663,13 +715,77 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             *opts = o;
                         }
                     });
+                    // E05: several presets at once — pick them (click = just this one, ⌘-click adds
+                    // or removes one, ⇧-click the run from the last), each exports into a folder
+                    // named after it under the chosen folder
+                    let bid = egui::Id::new("export-batch-presets");
+                    let (mut picked, mut last): (Vec<String>, Option<usize>) = ui.data(|d| d.get_temp(bid)).unwrap_or_default();
+                    let names: Vec<String> = app.session.all_export_presets().into_iter().map(|(p, _)| p.name).collect();
+                    field(ui, "Several", |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+                            let mods = ui.input(|i| i.modifiers);
+                            for (i, n) in names.iter().enumerate() {
+                                let on = picked.contains(n);
+                                if crate::widgets::text_button(ui, &format!("exportBatch-{i}"), n, on).clicked() {
+                                    if mods.shift && let Some(a) = last {
+                                        let (lo, hi) = (a.min(i), a.max(i));
+                                        for m in names.iter().take(hi + 1).skip(lo) {
+                                            if !picked.contains(m) {
+                                                picked.push(m.clone());
+                                            }
+                                        }
+                                    } else if mods.command {
+                                        if on {
+                                            picked.retain(|x| x != n);
+                                        } else {
+                                            picked.push(n.clone());
+                                        }
+                                    } else {
+                                        picked = vec![n.clone()];
+                                    }
+                                    last = Some(i);
+                                }
+                            }
+                            if crate::widgets::text_button(ui, "exportBatchAll", "all.", false).clicked() {
+                                picked = names.clone();
+                            }
+                            if crate::widgets::text_button(ui, "exportBatchNone", "none.", false).clicked() {
+                                picked.clear();
+                            }
+                        });
+                    });
+                    if !picked.is_empty() {
+                        field(ui, "", |ui| {
+                            let label = format!("export.{}.presets.", picked.len());
+                            if crate::widgets::text_button(ui, "exportBatchRun", &label, false)
+                                .on_hover_text(crate::i18n::tr("Export with each checked preset, each into a folder named after it"))
+                                .clicked()
+                            {
+                                let order: Vec<String> = names.iter().filter(|n| picked.contains(n)).cloned().collect();
+                                let mut params = json!({"presets": order});
+                                if !dir.trim().is_empty() {
+                                    params["dir"] = json!(dir.trim());
+                                }
+                                match app.run("app.export", params) {
+                                    Ok(v) => {
+                                        let n = v["presets"].as_array().map_or(0, Vec::len);
+                                        app.toast(ui.ctx(), format!("Exported with {n} presets"));
+                                        close = true;
+                                    }
+                                    Err(e) => app.toast(ui.ctx(), e),
+                                }
+                            }
+                        });
+                    }
+                    ui.data_mut(|d| d.insert_temp(bid, (picked, last)));
                     ui.add_space(4.0);
                     let before = opts.format;
                     choices(
                         ui,
                         "Format",
                         "exportFormat",
-                        &[(F::Jpeg, "JPEG"), (F::Png, "PNG"), (F::Tiff, "TIFF"), (F::Webp, "WebP"), (F::Avif, "AVIF"), (F::Dng, "DNG"), (F::Original, "Original files")],
+                        &[(F::Jpeg, "JPEG"), (F::Png, "PNG"), (F::Tiff, "TIFF"), (F::Webp, "WebP"), (F::Avif, "AVIF"), (F::Dng, "DNG"), (F::Original, "Original files"), (F::Psd, "PSD"), (F::Jxl, "JPEG XL")],
                         &mut opts.format,
                     );
                     if !opts.format.is_rendered() {
@@ -710,7 +826,42 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             &mut opts.color_space,
                         );
                     }
-                    if matches!(opts.format, F::Jpeg | F::Avif) {
+                    // E08: convert to another profile (ColorMatch RGB, or any RGB profile on this Mac)
+                    if matches!(opts.format, F::Jpeg | F::Png | F::Tiff | F::Psd) {
+                        field(ui, "Profile", |ui| {
+                            let shown = match opts.icc_profile.as_deref() {
+                                None => crate::i18n::tr("the space above").to_string(),
+                                Some(x) if x.eq_ignore_ascii_case("colorMatch") => "ColorMatch RGB".to_string(),
+                                Some(x) => std::path::Path::new(x).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| x.to_string()),
+                            };
+                            let key = egui::Id::new("export-installed-profiles");
+                            let installed: Vec<String> = match ui.data(|d| d.get_temp::<Vec<String>>(key)) {
+                                Some(v) => v,
+                                None => {
+                                    let v = lightcraft_engine::export::installed_profiles();
+                                    ui.data_mut(|d| d.insert_temp(key, v.clone()));
+                                    v
+                                }
+                            };
+                            let r = egui::ComboBox::from_id_salt("exportIccProfile").width(260.0).selected_text(shown).show_ui(ui, |ui| {
+                                if ui.selectable_label(opts.icc_profile.is_none(), crate::i18n::tr("the space above")).clicked() {
+                                    opts.icc_profile = None;
+                                }
+                                if ui.selectable_label(opts.icc_profile.as_deref() == Some("colorMatch"), "ColorMatch RGB").clicked() {
+                                    opts.icc_profile = Some("colorMatch".into());
+                                }
+                                ui.separator();
+                                for path in &installed {
+                                    let name = std::path::Path::new(path).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                    if ui.selectable_label(opts.icc_profile.as_deref() == Some(path.as_str()), name).clicked() {
+                                        opts.icc_profile = Some(path.clone());
+                                    }
+                                }
+                            });
+                            crate::widgets::register(ui.ctx(), "combo:exportIccProfile", r.response.rect);
+                        });
+                    }
+                    if matches!(opts.format, F::Jpeg | F::Avif | F::Jxl) {
                         let mut q = opts.quality as f64;
                         if num(ui, &QUALITY, &mut q) {
                             opts.quality = q as u8;
@@ -1332,6 +1483,15 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             r
         }
         Dialog::Rename { template, start, text } => app.run("photo.rename", json!({"template": template, "start": start, "text": text})),
+        Dialog::EditKeyword(e) => app.run("keyword.edit", e.params()),
+        Dialog::ImportCatalog { path, replace, .. } => {
+            let r = app.run("library.importCatalog", json!({"path": path, "replace": replace}));
+            if let Ok(v) = &r {
+                let msg = format!("Imported {} photos and {} albums ({} replaced, {} skipped)", v["added"], v["albums"], v["replaced"], v["skipped"]);
+                app.ui.toast = Some((msg, app.last_time + 5.0, None));
+            }
+            r
+        }
         Dialog::RenameKeyword { from, to } => app.run("keyword.rename", json!({"from": from, "to": to})),
         Dialog::MergeKeywords { from, into } => app.run("keyword.merge", json!({"from": from, "into": into})),
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),

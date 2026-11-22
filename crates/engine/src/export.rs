@@ -24,6 +24,10 @@ pub enum ExportFormat {
     Original,
     /// A DNG of the raw data (raw photos only), the edits embedded as XMP.
     Dng,
+    /// JPEG XL (E07): lossy at `quality`, or lossless at quality 100.
+    Jxl,
+    /// Photoshop document (E07): one flat layer, 8 or 16 bit (PSB past 30,000 pixels).
+    Psd,
 }
 
 impl ExportFormat {
@@ -36,6 +40,8 @@ impl ExportFormat {
             "avif" => Self::Avif,
             "original" => Self::Original,
             "dng" => Self::Dng,
+            "jxl" | "jpegxl" => Self::Jxl,
+            "psd" | "psb" => Self::Psd,
             _ => return None,
         })
     }
@@ -49,6 +55,8 @@ impl ExportFormat {
             // the original keeps its own extension (see `ExportOptions::file_name_for`)
             Self::Original => "",
             Self::Dng => "dng",
+            Self::Jxl => "jxl",
+            Self::Psd => "psd",
         }
     }
 
@@ -601,6 +609,10 @@ pub struct ExportOptions {
     pub watermark: Option<Watermark>,
     /// Output colour space (AVIF is always sRGB: its muxer cannot embed a profile).
     pub color_space: OutputSpace,
+    /// E08: an ICC profile the file is converted to and tagged with (`colorMatch`, or the path of an
+    /// `.icc` / `.icm` RGB profile): the photo is rendered in ProPhoto RGB, then converted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icc_profile: Option<String>,
     /// Bits per channel: 8, 16 (PNG, TIFF), 32 (TIFF: float, linear) or 10 (AVIF); `None` = the
     /// format's default (TIFF 16, everything else 8). See [`ExportOptions::effective_depth`].
     pub bit_depth: Option<u8>,
@@ -812,6 +824,7 @@ impl Default for ExportOptions {
             keyword_hierarchy: false,
             watermark: None,
             color_space: OutputSpace::Srgb,
+            icc_profile: None,
             bit_depth: None,
         }
     }
@@ -824,6 +837,7 @@ pub const TARGET_PARAMS: &[&str] = &["id", "ids", "path", "dir", "preset", "back
 /// The export option params [`ExportOptions::from_json`] reads (and [`ExportOptions::to_json`] writes).
 pub const OPTION_PARAMS: &[&str] = &[
     "format",
+    "iccProfile",
     "quality",
     "resize",
     "longEdge",
@@ -1001,7 +1015,7 @@ impl ExportOptions {
                 "afterApp" => {
                     string(cmd, k, v)?;
                 }
-                "naming" | "subfolder" | "path" | "dir" | "preset" | "customText" => {
+                "naming" | "subfolder" | "path" | "dir" | "preset" | "customText" | "iccProfile" => {
                     string(cmd, k, v)?;
                 }
                 "sharpen" => one_of(k, v, &["none", "screen", "matte", "glossy"])?,
@@ -1139,6 +1153,11 @@ impl ExportOptions {
             }
             .filter(|w: &Watermark| !w.text.trim().is_empty() || !w.image.trim().is_empty()),
             color_space: s("colorSpace").and_then(OutputSpace::parse).unwrap_or(d.color_space),
+            icc_profile: match p.get("iccProfile") {
+                Some(serde_json::Value::String(x)) if !x.trim().is_empty() => Some(x.trim().to_string()),
+                Some(_) => None,
+                None => d.icc_profile.clone(),
+            },
             bit_depth: u("bitDepth").filter(|b| matches!(b, 8 | 10 | 16 | 32)).map(|b| b as u8),
         }
     }
@@ -1212,6 +1231,8 @@ impl ExportOptions {
             (ExportFormat::Tiff, _) => OutputDepth::U16,
             (ExportFormat::Avif, Some(10 | 16 | 32)) => OutputDepth::U16,
             (ExportFormat::Avif, _) => OutputDepth::U8,
+            (ExportFormat::Jxl | ExportFormat::Psd, Some(16 | 32)) => OutputDepth::U16,
+            (ExportFormat::Jxl | ExportFormat::Psd, _) => OutputDepth::U8,
         }
     }
 
@@ -1222,12 +1243,21 @@ impl ExportOptions {
             ExportFormat::Png => &[(8, "8-bit"), (16, "16-bit")],
             ExportFormat::Tiff => &[(16, "16-bit"), (8, "8-bit"), (32, "32-bit float")],
             ExportFormat::Avif => &[(8, "8-bit"), (10, "10-bit")],
+            ExportFormat::Jxl => &[(8, "8-bit"), (16, "16-bit")],
+            ExportFormat::Psd => &[(16, "16-bit"), (8, "8-bit")],
         }
     }
 
     /// The colour space the file is actually written in (AVIF: sRGB).
     pub fn effective_space(&self) -> OutputSpace {
-        if self.format == ExportFormat::Avif { OutputSpace::Srgb } else { self.color_space }
+        match (self.format, self.color_space) {
+            (ExportFormat::Avif, _) => OutputSpace::Srgb,
+            // E08: rendered wide, then converted to the chosen profile
+            _ if self.icc_profile.is_some() && !matches!(self.format, ExportFormat::Jxl | ExportFormat::Webp) => OutputSpace::ProPhoto,
+            // a lossy JPEG XL declares its colours by enum: no Adobe RGB / ProPhoto one
+            (ExportFormat::Jxl, OutputSpace::AdobeRgb | OutputSpace::ProPhoto) if self.quality < 100 => OutputSpace::Srgb,
+            (_, s) => s,
+        }
     }
 
     /// Output file name for photo `p` at 1-based position `seq` in a batch (the original's
@@ -1350,8 +1380,19 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
         let wm = Watermark { color: srgb8_in(space, wm.color), target: Some(space), ..wm.clone() };
         draw_watermark(&mut img, &wm);
     }
-    let profile = icc::write_named(named_space(space));
-    let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_color_space(space))));
+    let mut profile = icc::write_named(named_space(space));
+    let mut exif_space = exif_color_space(space);
+    if let Some(target) = export_profile(o)? {
+        // E08: ProPhoto → the chosen profile (8-bit)
+        let mut f: Vec<f32> = img.data.iter().flat_map(|p| p.iter().map(|v| f32::from(*v) / 255.0)).collect();
+        icc::convert_samples(&profile, &target, &mut f, 4)?;
+        for (px, c) in img.data.iter_mut().zip(f.as_chunks::<4>().0) {
+            *px = [0, 1, 2, 3].map(|k| (c[k].clamp(0.0, 1.0) * 255.0).round() as u8);
+        }
+        profile = target;
+        exif_space = 0xFFFF;
+    }
+    let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_space)));
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let e = EncodeImage::rgba8(&img);
@@ -1387,9 +1428,51 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
         ExportFormat::Tiff => encode::encode_tiff(&e, o.tiff_compression, &meta),
         ExportFormat::Webp => encode::encode_webp_lossless(&e, &meta),
         ExportFormat::Avif => encode::encode_avif(&e, o.quality, 8, &meta),
+        ExportFormat::Jxl => lightcraft_codecs::encode_jxl(&e, &meta, &jxl_options(o)),
+        ExportFormat::Psd => lightcraft_codecs::encode_psd(&e, &meta),
         f @ (ExportFormat::Original | ExportFormat::Dng) => return Err(format!("{f:?} export does not encode pixels")),
     };
     r.map_err(|e| e.to_string())
+}
+
+/// E08: the ICC profile an export converts to (ColorMatch RGB, or a profile file), checked.
+pub fn export_profile(o: &ExportOptions) -> Result<Option<Vec<u8>>, String> {
+    let Some(p) = o.icc_profile.as_deref() else { return Ok(None) };
+    if matches!(o.format, ExportFormat::Jxl | ExportFormat::Webp | ExportFormat::Avif | ExportFormat::Original | ExportFormat::Dng) {
+        return Ok(None);
+    }
+    let bytes = if p.eq_ignore_ascii_case("colorMatch") {
+        icc::colormatch_profile()
+    } else {
+        let len = std::fs::metadata(p).map_err(|e| format!("{p}: {e}"))?.len();
+        if len > icc::MAX_EXPORT_ICC as u64 {
+            return Err(format!("{p}: larger than 16 MB, not an ICC profile"));
+        }
+        std::fs::read(p).map_err(|e| format!("{p}: {e}"))?
+    };
+    icc::check_export_profile(&bytes).map_err(|e| format!("{p}: {e}"))?;
+    Ok(Some(bytes))
+}
+
+/// RGB ICC profiles installed on this Mac (ColorSync folders), by file path, for the Export
+/// dialog's Profile popup.
+pub fn installed_profiles() -> Vec<String> {
+    let mut dirs = vec![std::path::PathBuf::from("/Library/ColorSync/Profiles"), std::path::PathBuf::from("/System/Library/ColorSync/Profiles")];
+    if let Some(h) = std::env::var_os("HOME") {
+        dirs.push(std::path::PathBuf::from(h).join("Library/ColorSync/Profiles"));
+    }
+    let mut out = Vec::new();
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten().take(500) {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("icc") || x.eq_ignore_ascii_case("icm")) {
+                out.push(p.display().to_string());
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// The codecs' name of an output space (for its ICC profile).
@@ -1434,11 +1517,22 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
         let wm = Watermark { color: srgb8_in(img.space, wm.color), target: Some(img.space), ..wm.clone() };
         draw_watermark_deep(&mut img, &wm);
     }
-    let profile = match img.samples {
+    let mut profile = match img.samples {
         DeepSamples::F32(_) => icc::write_matrix_trc(&img.space.rgb_space(), &lightcraft_codecs::Trc::Linear),
         DeepSamples::U16(_) => icc::write_named(named_space(img.space)),
     };
-    let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_color_space(img.space))));
+    let mut exif_space = exif_color_space(img.space);
+    if let (Some(target), DeepSamples::U16(v)) = (export_profile(o)?, &mut img.samples) {
+        // E08: ProPhoto → the chosen profile (16-bit)
+        let mut f: Vec<f32> = v.iter().map(|x| f32::from(*x) / 65535.0).collect();
+        icc::convert_samples(&profile, &target, &mut f, 3)?;
+        for (x, c) in v.iter_mut().zip(&f) {
+            *x = (c.clamp(0.0, 1.0) * 65535.0).round() as u16;
+        }
+        profile = target;
+        exif_space = 0xFFFF;
+    }
+    let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_space)));
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let (w, h) = (img.width as u32, img.height as u32);
@@ -1450,9 +1544,23 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
         ExportFormat::Png => encode::encode_png(&e, &meta),
         ExportFormat::Tiff => encode::encode_tiff(&e, o.tiff_compression, &meta),
         ExportFormat::Avif => encode::encode_avif(&e, o.quality, 8, &meta),
+        ExportFormat::Jxl => lightcraft_codecs::encode_jxl(&e, &meta, &jxl_options(o)),
+        ExportFormat::Psd => lightcraft_codecs::encode_psd(&e, &meta),
         f => return Err(format!("{f:?} export is 8-bit only")),
     };
     r.map_err(|e| e.to_string())
+}
+
+/// JPEG XL settings from the export options: quality 100 = lossless; the colour encoding of the
+/// output space (ProPhoto / Adobe RGB have no JPEG XL enum: sRGB primaries are declared and the
+/// ICC profile rides along only for lossless files, so those keep to sRGB / P3 / Rec.2020).
+fn jxl_options(o: &ExportOptions) -> lightcraft_codecs::JxlOptions {
+    let colour = match o.effective_space() {
+        OutputSpace::DisplayP3 => lightcraft_codecs::JxlColour::DisplayP3,
+        OutputSpace::Rec2020 => lightcraft_codecs::JxlColour::Rec2020,
+        _ => lightcraft_codecs::JxlColour::Srgb,
+    };
+    lightcraft_codecs::JxlOptions { quality: o.quality, lossless: o.quality >= 100, colour }
 }
 
 /// Parse a shutter speed such as `1/250`, `0.5` or `2"` into seconds.
@@ -1518,6 +1626,11 @@ pub fn split_camera(camera: &str) -> (Option<String>, Option<String>) {
 
 /// The metadata to embed for `photo` under `o.metadata` / `o.remove_location`. `None` = embed nothing.
 pub fn export_metadata(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> Option<Metadata> {
+    export_metadata_with(None, photo, o)
+}
+
+/// [`export_metadata`] with the library's keyword list (synonyms, export options, person keywords).
+pub fn export_metadata_with(cat: Option<&lightcraft_catalog::Catalog>, photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> Option<Metadata> {
     let m = &photo.meta;
     let text = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     // copyright info (also under "copyright only"): notice, creator, status, usage terms, info URL
@@ -1545,7 +1658,14 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> 
         out.state = text(&m.state);
         out.country = text(&m.country);
     }
-    (out.keywords, out.hierarchical_keywords) = export_keywords(photo, o);
+    (out.keywords, out.hierarchical_keywords) = export_keywords_with(cat, photo, o);
+    // IPTC Extension (L21): Remove Person Info leaves out what describes the people
+    out.iptc_ext = m
+        .iptc_ext
+        .iter()
+        .filter(|(k, _)| !(o.remove_people && lightcraft_meta::iptc_ext::field(k).is_some_and(|f| f.person)))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     out.capture_time = photo.captured.as_deref().and_then(DateTime::parse_iso);
     out.rating = (photo.rating > 0).then_some(photo.rating as i8);
     // Pixels are exported upright: orientation is baked in.
@@ -1564,30 +1684,43 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> 
     Some(out)
 }
 
-/// The keywords an export writes (E06): each `a|b|c` keyword as its own words `a`, `b`, `c`
-/// (Lightroom includes the parents on export), the named people unless Remove Person Info, and
-/// the full paths as `lr:hierarchicalSubject` when Write Keywords as Lightroom Hierarchy is on.
+/// The keywords an export writes (E06), with default keyword options: see [`export_keywords_with`].
 pub fn export_keywords(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> (Vec<String>, Vec<String>) {
-    let mut flat: Vec<String> = Vec::new();
-    let mut push = |k: &str| {
-        let k = k.trim();
-        if !k.is_empty() && !flat.iter().any(|x| x.eq_ignore_ascii_case(k)) {
-            flat.push(k.to_string());
+    export_keywords_with(None, photo, o)
+}
+
+/// The keywords an export writes (E06, L11): each `a|b|c` keyword as its own words `a`, `b`, `c`
+/// (Lightroom includes the containing keywords unless the keyword says not to), its synonyms, none
+/// of a keyword left out of export (the keyword list's options), the named people unless Remove
+/// Person Info (which also leaves out keywords marked as a person), and the full paths as
+/// `lr:hierarchicalSubject` when Write Keywords as Lightroom Hierarchy is on.
+pub fn export_keywords_with(
+    cat: Option<&lightcraft_catalog::Catalog>,
+    photo: &lightcraft_catalog::Photo,
+    o: &ExportOptions,
+) -> (Vec<String>, Vec<String>) {
+    let empty;
+    let cat = match cat {
+        Some(c) => c,
+        None => {
+            empty = lightcraft_catalog::Catalog::new();
+            &empty
         }
     };
-    for k in &photo.meta.keywords {
-        for part in k.split('|') {
-            push(part);
-        }
-    }
+    let kws: Vec<String> =
+        photo.meta.keywords.iter().filter(|k| !(o.remove_people && cat.keyword_info(k).is_some_and(|i| i.person))).cloned().collect();
+    let ek = cat.export_keywords(&kws);
+    let mut flat = ek.flat;
     if !o.remove_people {
         for r in photo.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
-            if let Some(n) = r.name.as_deref() {
-                push(n);
+            if let Some(n) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty())
+                && !flat.iter().any(|x| x.eq_ignore_ascii_case(n))
+            {
+                flat.push(n.to_string());
             }
         }
     }
-    let hier = if o.keyword_hierarchy { photo.meta.keywords.iter().filter(|k| !k.trim().is_empty()).cloned().collect() } else { Vec::new() };
+    let hier = if o.keyword_hierarchy { ek.hierarchical } else { Vec::new() };
     (flat, hier)
 }
 
@@ -1684,7 +1817,7 @@ fn prepare_guarded(
     };
     let work = if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
-        let meta = export_metadata(p, o);
+        let meta = export_metadata_with(Some(&session.catalog), p, o);
         let mut opts = o.clone();
         // a text watermark is a text template (E10): its tokens are this photo's ({title},
         // {date:%Y}, {creator}, {seq} …, the file-name tokens)

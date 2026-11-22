@@ -681,6 +681,32 @@ def metrics(prev, ours, size, space="adobe"):
     }
 
 
+def publish_cameras(res, tag):
+    """Per-camera mean ΔE of this compare into LightCraft's config folder (``lr-compare.json``),
+    which Settings ▸ cams. shows as "vs Lightroom". Other cameras' earlier numbers are kept."""
+    import datetime
+    cfg = os.environ.get("LIGHTCRAFT_CAMERAS")
+    path = os.path.join(os.path.dirname(cfg), "lr-compare.json") if cfg else os.path.expanduser("~/Library/Application Support/LightCraft/lr-compare.json")
+    try:
+        cur = json.load(open(path)) if os.path.exists(path) else {}
+    except (OSError, ValueError):
+        cur = {}
+    cams = cur.get("cameras") if isinstance(cur.get("cameras"), dict) else {}
+    groups = {}
+    for m in res:
+        if m.get("model"):
+            groups.setdefault(m["model"], []).append(m)
+    today = datetime.date.today().isoformat()
+    for model, rows in groups.items():
+        cams[model] = {"de": round(float(np.mean([r["de"] for r in rows])), 2), "de128": round(float(np.mean([r["de_lo"] for r in rows])), 2),
+                       "photos": len(rows), "tag": tag, "date": today}
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    json.dump({"cameras": cams}, open(tmp, "w"), indent=1)
+    os.replace(tmp, path)
+    print(f"per-camera dE written to {path}")
+
+
 def compare(a):
     sample = json.load(open(os.path.join(a.work, "sample.json")))
     base = None
@@ -717,6 +743,8 @@ def compare(a):
     print("mean dE by look:  ", summary(lambda m: m["look"] or "(none)", res))
     print("mean dE128 by camera:", summary2(lambda m: m["model"] or "?", res))
     print(f"all: dE {np.mean([m['de'] for m in res]):.2f}, dE128 {np.mean([m['de_lo'] for m in res]):.2f}; pass (dE<=2 & p95<=5): {sum(m['de'] <= 2 and m['p95'] <= 5 for m in res)}/{len(res)}")
+    if res and not getattr(a, "no_publish", False):
+        publish_cameras(res, a.tag)
     if a.strip:
         os.makedirs(os.path.join(a.work, "strips"), exist_ok=True)
         for sid in a.strip.split(","):
@@ -1227,6 +1255,7 @@ def main():
     p.add_argument("--base")
     p.add_argument("--size", type=int, default=512)
     p.add_argument("--strip")
+    p.add_argument("--no-publish", action="store_true", help="don't write the per-camera dE into LightCraft's config folder")
     p.add_argument("--all-previews", action="store_true", help="also score photos whose preview is not Lightroom's rendering")
     p.set_defaults(fn=compare)
     p = sub.add_parser("hues", help="colour residuals by hue (after compare)")

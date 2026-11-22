@@ -139,7 +139,19 @@ fn area_and_filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui) -> Rect {
 
 /// Draw one photo fitted into `area` (rendered at its display size into `slot`), with its caption
 /// strip below. Returns the image rect and the click/drag response.
-fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slot, area: Rect, label: &str, zoom: Zoom) -> (Rect, egui::Response) {
+#[allow(clippy::too_many_arguments)]
+fn photo_tile(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    id: PhotoId,
+    slot: Slot,
+    area: Rect,
+    label: &str,
+    zoom: Zoom,
+    frozen: Option<(Zoom, (f32, f32))>,
+) -> (Rect, egui::Response) {
+    // L26: an unlinked Compare keeps the select's own zoom and position
+    let (zoom, pan) = frozen.unwrap_or((zoom, app.ui.pan));
     let t = Tokens::get(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
     let resp = ui.interact(area, egui::Id::new(("cull-tile", slot_index(slot), id.0)), Sense::click_and_drag());
@@ -155,8 +167,8 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     );
     let aspect = frame.aspect() as f32;
     let native = [photo.width.max(1) as usize, photo.height.max(1) as usize];
-    let mut img = super::detail::fit_rect(img_area, aspect, zoom, native, ppp, app.ui.pan);
-    if matches!(app.ui.view, ViewMode::Compare | ViewMode::Reference) {
+    let mut img = super::detail::fit_rect(img_area, aspect, zoom, native, ppp, pan);
+    if frozen.is_none() && matches!(app.ui.view, ViewMode::Compare | ViewMode::Reference) {
         if super::detail::navigate_gesture(app, ui, &resp, img_area, img, native) {
             img = super::detail::fit_rect(img_area, aspect, app.ui.zoom, native, ppp, app.ui.pan);
         } else if resp.dragged() {
@@ -176,11 +188,11 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     let mut display = img;
     if let Some(tex) = app.renderer.textures.get(&slot).filter(|x| x.photo == id) {
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
-        display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
+        display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, pan);
         p.image(tex.tex.id(), display, uv, Color32::WHITE);
     } else if let Some(tex) = app.renderer.textures.get(&Slot::Thumb(id)) {
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
-        display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
+        display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, pan);
         p.image(tex.tex.id(), display, uv, Color32::WHITE);
     } else {
         p.rect_filled(img.intersect(img_area), 0.0, Color32::from_gray(38));
@@ -249,7 +261,8 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ];
     let zoom = app.ui.zoom;
     for (id, r, label, i) in panes {
-        let (img, resp) = photo_tile(app, ui, id, Slot::Compare(i), r, label, zoom);
+        let frozen = if i == 0 { app.ui.compare_frozen } else { None };
+        let (img, resp) = photo_tile(app, ui, id, Slot::Compare(i), r, label, zoom, frozen);
         if i == 1 {
             app.image_rect = Some(img);
         }
@@ -272,6 +285,17 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     let mid = area.center().x;
     ui.painter().line_segment([pos2(mid, area.top()), pos2(mid, area.bottom())], Stroke::new(1.0, Tokens::get(ui.ctx()).divider));
+    // L26: Link Focus — the select follows the candidate's zoom and position, or keeps its own
+    let linked = app.ui.compare_frozen.is_none();
+    let chip = Rect::from_min_size(pos2(canvas.left() + 12.0, canvas.top() + 6.0), vec2(90.0, 22.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(chip).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    let label = if linked { "linked." } else { "unlinked." };
+    if crate::widgets::text_button(&mut child, "compareLink", label, !linked)
+        .on_hover_text(crate::i18n::tr("Link Focus: zoom and move both photos together, or the candidate alone"))
+        .clicked()
+    {
+        let _ = app.run("compare.linkFocus", json!({}));
+    }
 }
 
 /// Columns for `n` tiles of aspect ~3:2 in `area`, maximizing the tile size.
@@ -304,7 +328,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     for (i, id) in photos.iter().enumerate() {
         let (c, r) = (i % cols, i / cols);
         let cell = Rect::from_min_size(pos2(area.left() + c as f32 * cw, area.top() + r as f32 * ch), vec2(cw, ch)).shrink(6.0);
-        let (img, resp) = photo_tile(app, ui, *id, Slot::Compare(i as u8), cell, "", Zoom::Fit);
+        let (img, resp) = photo_tile(app, ui, *id, Slot::Compare(i as u8), cell, "", Zoom::Fit, None);
         if app.session.selection.active == Some(*id) {
             app.image_rect = Some(img);
         }
@@ -352,8 +376,8 @@ pub fn show_reference(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let zoom = app.ui.zoom;
     let left = Rect::from_min_size(area.min, vec2(half, area.height()));
     let right = Rect::from_min_size(pos2(area.right() - half, area.top()), vec2(half, area.height()));
-    let (_, lresp) = photo_tile(app, ui, r, Slot::Compare(0), left, "Reference", zoom);
-    let (img, _) = photo_tile(app, ui, active, Slot::Compare(1), right, "Active", zoom);
+    let (_, lresp) = photo_tile(app, ui, r, Slot::Compare(0), left, "Reference", zoom, None);
+    let (img, _) = photo_tile(app, ui, active, Slot::Compare(1), right, "Active", zoom, None);
     app.image_rect = Some(img);
     lresp.context_menu(|ui| {
         if ui.button(crate::i18n::tr("Clear Reference")).clicked() {

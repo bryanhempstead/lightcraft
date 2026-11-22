@@ -502,7 +502,12 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     let img_rect = if square {
         let base = if selected { t.cell_selected } else { t.cell };
         p.rect_filled(r, 0.0, crate::theme::label_background(base, photo.label, selected));
-        Rect::from_min_max(r.min + vec2(10.0, 24.0), r.max - vec2(10.0, 10.0))
+        if app.ui.settings.grid_expanded {
+            // L18 expanded cells: two header lines and a footer row of their own
+            Rect::from_min_max(r.min + vec2(10.0, 40.0), r.max - vec2(10.0, 30.0))
+        } else {
+            Rect::from_min_max(r.min + vec2(10.0, 24.0), r.max - vec2(10.0, 10.0))
+        }
     } else {
         r
     };
@@ -565,6 +570,27 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         let br = Rect::from_min_size(pos2(r.right() - g.size().x - 14.0, r.top() + 5.0), g.size() + vec2(8.0, 3.0));
         p.rect_filled(br, 2.0, Color32::from_gray(26));
         p.galley(br.min + vec2(4.0, 1.5), g, t.text_label);
+    }
+    if square && app.ui.settings.grid_expanded {
+        // second header line: dimensions and capture date
+        let date = photo.captured.as_deref().map(crate::i18n::display_time).unwrap_or_default();
+        let line =
+            if date.is_empty() { format!("{} × {}", photo.width, photo.height) } else { format!("{} × {}  ·  {date}", photo.width, photo.height) };
+        let g = p.layout_no_wrap(line, t.font(9.5), Color32::PLACEHOLDER);
+        p.galley(pos2(r.left() + 8.0, r.top() + 22.0), g, t.text_dim);
+        // footer: rotate buttons at the right (the rating and flag stay on the image's badge bar)
+        for (k, (glyph, cmd)) in [("↺", "photo.rotateLeft"), ("↻", "photo.rotateRight")].into_iter().enumerate() {
+            let br = Rect::from_min_size(pos2(r.right() - 58.0 + k as f32 * 26.0, r.bottom() - 26.0), vec2(22.0, 20.0));
+            let rr = ui.interact(br, egui::Id::new(("cell-rotate", id.0, k)), Sense::click());
+            let fill = if rr.hovered() { t.hover } else { Color32::from_gray(30) };
+            p.rect_filled(br, 4.0, fill);
+            let g = p.layout_no_wrap(glyph.into(), t.font(12.0), Color32::PLACEHOLDER);
+            p.galley(br.center() - g.size() / 2.0, g, t.text_label);
+            register(ui.ctx(), format!("button:cellRotate{}-{}", if k == 0 { "Left" } else { "Right" }, id.0), br);
+            if rr.on_hover_text(crate::i18n::tr(if k == 0 { "Rotate Left" } else { "Rotate Right" })).clicked() {
+                let _ = app.run(cmd, json!({"ids": [id.0]}));
+            }
+        }
     }
     let show_badges = match app.ui.settings.grid_badges {
         crate::state::GridBadges::Auto => resp.hovered() || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
@@ -637,6 +663,40 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         register(ui.ctx(), format!("badge:previewOnly:{}", id.0), br);
         ui.interact(br, egui::Id::new(("preview-only-badge", id.0)), Sense::hover())
             .on_hover_text(crate::i18n::tr_format!("Preview only — {}", crate::widgets::preview_only_explanation(why)));
+    }
+    // L22: metadata status from the last Scan for Metadata Updates — ↑ needs saving, ↓ changed on
+    // disk, ! both; a click offers which one wins
+    let meta_status = app.session.metadata_status.get(&id).copied();
+    if let Some((glyph, tip)) = meta_status.and_then(|st| {
+        use lightcraft_engine::sidecar::MetadataStatus as M;
+        match st {
+            M::Changed => Some(("xmp ↑", "Metadata changed in the library: Save Metadata to File writes it")),
+            M::ChangedOnDisk => Some(("xmp ↓", "The XMP file changed on disk: import its settings, or overwrite it")),
+            M::Conflict => Some(("xmp !", "Changed in the library and on disk: choose which one to keep")),
+            _ => None,
+        }
+    }) {
+        let g = p.layout_no_wrap(glyph.into(), t.semibold(9.5), Color32::PLACEHOLDER);
+        let br = Rect::from_min_size(pos2(img_rect.right() - g.size().x - 18.0, img_rect.top() + 6.0), vec2(g.size().x + 12.0, 16.0));
+        p.rect_filled(br, 8.0, Color32::from_black_alpha(170));
+        let colour = if meta_status == Some(lightcraft_engine::sidecar::MetadataStatus::Changed) { Color32::WHITE } else { t.caution };
+        p.galley(pos2(br.left() + 6.0, br.center().y - g.size().y / 2.0), g, colour);
+        register(ui.ctx(), format!("badge:metadataStatus:{}", id.0), br);
+        let r = ui.interact(br, egui::Id::new(("meta-status-badge", id.0)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
+        egui::Popup::menu(&r).show(|ui| {
+            if ui.button(crate::i18n::tr("Import Settings from Disk")).clicked() {
+                if let Err(e) = app.run("photo.resolveMetadata", json!({"ids": [id.0], "keep": "disk"})) {
+                    app.toast(ui.ctx(), e);
+                }
+                ui.close();
+            }
+            if ui.button(crate::i18n::tr("Overwrite Settings")).clicked() {
+                if let Err(e) = app.run("photo.resolveMetadata", json!({"ids": [id.0], "keep": "library"})) {
+                    app.toast(ui.ctx(), e);
+                }
+                ui.close();
+            }
+        });
     }
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));

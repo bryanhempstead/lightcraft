@@ -22,9 +22,13 @@ mod jpeg;
 pub mod jpeg_par;
 #[cfg(feature = "jxl")]
 mod jxl;
+pub mod jxl_encode;
 mod other;
 mod png_codec;
 mod psd;
+mod psd_write;
+pub use jxl_encode::{JxlColour, JxlOptions, encode_jxl};
+pub use psd_write::encode_psd;
 mod sniff;
 pub mod space;
 mod tiff_codec;

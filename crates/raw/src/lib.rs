@@ -192,6 +192,11 @@ pub fn probe_info(bytes: &[u8]) -> Result<RawInfo> {
     decode_with(bytes, Mode::Header).map(|(img, _)| img.into_info())
 }
 
+/// [`probe_info`], also saying which decoder would read the file (the cameras. list).
+pub fn probe_info_reporting(bytes: &[u8]) -> Result<(RawInfo, Decoder)> {
+    decode_with(bytes, Mode::Header).map(|(img, d)| (img.into_info(), d))
+}
+
 /// How much of a file a decoder reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {

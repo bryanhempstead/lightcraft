@@ -188,6 +188,10 @@ pub struct Meta {
     /// Left out of the catalog JSON when empty (most photos), so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<lightcraft_meta::Region>,
+    /// IPTC Extension / PLUS fields (L21): Person Shown, Event, releases, Digital Source Type …,
+    /// by id (`lightcraft_meta::iptc_ext`). Left out of the catalog JSON when empty.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub iptc_ext: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -286,6 +290,33 @@ pub struct Photo {
     /// whether the user changed anything since (see [`crate::local`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_baseline: Option<u64>,
+    /// Its XMP sidecar when LightCraft last wrote or read it (L22 metadata status): what the
+    /// library would write then, and the file's bytes, both hashed. `None`: never synced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmp_sync: Option<XmpSync>,
+    /// The file's name when it was imported (E01's `{original}` token), when the import renamed
+    /// it or it was renamed since; `None`: the photo's `file_name` is the original one (and every
+    /// photo imported before this field existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_name: Option<String>,
+}
+
+/// Hashes of a photo's metadata as the library would write it and of its sidecar file, taken
+/// when they last matched (written or read). FNV-1a 64, stable across builds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct XmpSync {
+    pub packet: u64,
+    pub file: u64,
+}
+
+/// FNV-1a 64 of `bytes` (stable: the hashes are stored in the catalog).
+pub fn fnv64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
 }
 
 /// The stamp of this build's raw decoders, compared with [`Photo::preview_checked`]. The fork's
@@ -346,6 +377,8 @@ impl Photo {
             preview_only: None,
             preview_checked: String::new(),
             local_baseline: None,
+            xmp_sync: None,
+            original_name: None,
         }
     }
     /// Sets [`Photo::preview_only`] as this build decided it, with its stamp.
@@ -431,12 +464,29 @@ pub struct Album {
     /// The Quick Collection: a regular album that B adds to (one per library).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quick: bool,
+    /// A colour label on the collection (L24).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<crate::ColorLabel>,
+    /// Marked as a favourite (L24): favourites list first and the favourites filter keeps them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub favorite: bool,
 }
 
 impl Album {
     /// A regular (manual) album.
     pub fn new(id: AlbumId, name: impl Into<String>) -> Album {
-        Album { id, name: name.into(), parent: None, folder: false, photos: Vec::new(), cover: None, smart: None, quick: false }
+        Album {
+            id,
+            name: name.into(),
+            parent: None,
+            folder: false,
+            photos: Vec::new(),
+            cover: None,
+            smart: None,
+            quick: false,
+            label: None,
+            favorite: false,
+        }
     }
     pub fn is_smart(&self) -> bool {
         self.smart.is_some()

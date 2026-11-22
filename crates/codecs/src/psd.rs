@@ -183,6 +183,11 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
 }
 
 /// PackBits: append exactly `row_bytes` bytes (zero-padded if the run data is short).
+#[cfg(test)]
+pub(crate) fn unpackbits_for_tests(src: &[u8], row_bytes: usize, out: &mut Vec<u8>) {
+    unpackbits(src, row_bytes, out)
+}
+
 fn unpackbits(mut src: &[u8], row_bytes: usize, out: &mut Vec<u8>) {
     let target = out.len() + row_bytes;
     while out.len() < target && !src.is_empty() {

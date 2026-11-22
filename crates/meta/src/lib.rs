@@ -17,6 +17,7 @@ mod datetime;
 mod exif;
 mod gpx;
 mod iptc;
+pub mod iptc_ext;
 pub mod tags;
 mod xmp;
 mod xmp_merge;
@@ -142,6 +143,8 @@ pub struct Metadata {
     pub label: Option<String>,
     /// Face/pet/focus/barcode regions (`mwg-rs:Regions`), read from XMP only.
     pub regions: Vec<Region>,
+    /// IPTC Extension / PLUS fields by id ([`iptc_ext::IPTC_EXT`]; a list as `a; b`).
+    pub iptc_ext: std::collections::BTreeMap<String, String>,
 }
 
 macro_rules! fill {
@@ -204,6 +207,9 @@ impl Metadata {
         }
         if self.regions.is_empty() {
             self.regions = other.regions.clone();
+        }
+        for (k, v) in &other.iptc_ext {
+            self.iptc_ext.entry(k.clone()).or_insert_with(|| v.clone());
         }
     }
 

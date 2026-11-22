@@ -25,6 +25,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("interface", "Interface"),
     ("shortcuts", "shrt."),
     ("controllers", "ctrl."),
+    ("cameras", "cams."),
 ];
 
 /// Thumbnail cache sizes offered (MB).
@@ -54,6 +55,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         "interface" => interface_tab(app, ui, &t),
         "shortcuts" => shortcuts_tab(app, ui, &t),
         "controllers" => controllers_tab(app, ui, &t),
+        "cameras" => cameras_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
 }
@@ -656,11 +658,14 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     check(ui, "settings.showFilenames", &mut app.ui.show_filenames, "Square Grid: show file names and formats");
     check(ui, "settings.gridIndex", &mut app.ui.settings.grid_index, "Square Grid: show each photo's index number");
+    row(ui, t, crate::i18n::tr("Square Grid cells"), |ui| {
+        choices(ui, "settingsGridStyle", &[(false, "compact."), (true, "expanded.")], &mut app.ui.settings.grid_expanded);
+    });
     heading(ui, t, crate::i18n::tr("Detail"));
     check(ui, "settings.navigator", &mut app.ui.navigator, "Show the Navigator while zoomed in");
     row(ui, t, crate::i18n::tr("Info overlay"), |ui| {
         use crate::state::InfoOverlay as I;
-        choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "File & date"), (I::Exposure, "Exposure")], &mut app.ui.info_overlay);
+        choices(ui, "settingsInfo", &[(I::Off, "off."), (I::Basic, "info.1."), (I::Exposure, "info.2.")], &mut app.ui.info_overlay);
     });
     row(ui, t, crate::i18n::tr("Photo colours"), |ui| {
         use crate::display_p3::ViewSpace as V;
@@ -672,6 +677,47 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ))
         .color(t.text_dim),
     );
+    // L19: Loupe Info 1 / 2 lines (Library View Options ▸ Loupe View)
+    for (n, which) in [(1usize, "info1"), (2, "info2")] {
+        row(ui, t, &format!("Loupe info {n}"), |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            for i in 0..3 {
+                let cur = if n == 1 { app.ui.settings.loupe_info.info1[i] } else { app.ui.settings.loupe_info.info2[i] };
+                let mut pick = cur;
+                let r = egui::ComboBox::from_id_salt(format!("loupe-{which}-{i}")).width(128.0).selected_text(crate::i18n::tr(cur.label())).show_ui(
+                    ui,
+                    |ui| {
+                        for f in crate::state::LoupeInfoField::ALL {
+                            ui.selectable_value(&mut pick, *f, crate::i18n::tr(f.label()));
+                        }
+                    },
+                );
+                register(ui.ctx(), format!("combo:loupeInfo{n}-{i}"), r.response.rect);
+                if pick != cur {
+                    if n == 1 {
+                        app.ui.settings.loupe_info.info1[i] = pick;
+                    } else {
+                        app.ui.settings.loupe_info.info2[i] = pick;
+                    }
+                }
+            }
+        });
+    }
+    row(ui, t, crate::i18n::tr("Show briefly"), |ui| {
+        use crate::state::InfoOverlay as I;
+        choices(
+            ui,
+            "settingsBriefInfo",
+            &[(I::Off, "never."), (I::Basic, "info.1."), (I::Exposure, "info.2.")],
+            &mut app.ui.settings.loupe_info.briefly,
+        );
+    });
+    row(ui, t, "", |ui| {
+        if crate::widgets::text_button(ui, "settingsLoupeDefaults", "defaults.", false).clicked() {
+            app.ui.settings.loupe_info = crate::state::LoupeInfo::default();
+        }
+    });
+    hint(ui, t, "Show briefly: the info overlay appears for a moment when the loupe changes photo while it is off.");
 }
 
 // ------------------------------------------------------------------------------- Open Library…
@@ -1065,4 +1111,220 @@ fn controllers_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             });
         }
     });
+}
+
+// ------------------------------------------------------------------------------------- Cameras
+
+/// The cameras. list, kept until the catalog changes or a command here changes it.
+fn cameras_list(app: &mut LightcraftApp, ctx: &egui::Context, force: bool) -> Value {
+    let key = egui::Id::new("settingsCamerasList");
+    let rev = app.session.catalog.revision;
+    if !force
+        && let Some((r, v)) = ctx.data(|d| d.get_temp::<(u64, Value)>(key))
+        && r == rev
+    {
+        return v;
+    }
+    let v = app.session.execute("cameras.list", &json!({})).unwrap_or_default();
+    ctx.data_mut(|d| d.insert_temp(key, (rev, v.clone())));
+    v
+}
+
+/// What colours a camera, in a few words.
+fn camera_profile_text(c: &Value) -> String {
+    let p = &c["profile"];
+    let matching = p["matching"].as_array().map_or(0, Vec::len);
+    match p["status"].as_str() {
+        Some("adobe") if matching > 0 => format!("Adobe Standard DCP + {matching} camera matching"),
+        Some("adobe") => "Adobe Standard DCP".to_string(),
+        Some("embedded") => "the DNG's own profile".to_string(),
+        Some("own") => "LightCraft's fitted profile".to_string(),
+        Some(_) => "fallback (no Adobe profile on this Mac)".to_string(),
+        None => "not resolved yet: refresh.".to_string(),
+    }
+}
+
+fn camera_decoder_text(c: &Value) -> String {
+    let d = c["decoder"].as_str().unwrap_or("");
+    let fmt = c["format"].as_str().map(|f| format!(" ({f})")).unwrap_or_default();
+    match d {
+        "native" => format!("LightCraft's own{fmt}"),
+        "libraw" => format!("LibRaw{fmt}"),
+        "embedded preview" => "the camera's embedded JPEG (raw not decoded yet)".to_string(),
+        "rendered" => format!("rendered files only{fmt}"),
+        "unknown" => format!("unknown — {}", c["decoderNote"].as_str().unwrap_or("no file to read")),
+        _ if c["inLibrary"] == false => "— (no photos yet)".to_string(),
+        _ => "—".to_string(),
+    }
+}
+
+/// A fixed-width, 18-point-high cell (the cameras. lines sit closer than the dialog's 24-point rows).
+fn camera_cell(ui: &mut egui::Ui, w: f32, text: RichText) {
+    ui.allocate_ui_with_layout(egui::vec2(w, 18.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_width(w);
+        ui.set_max_width(w);
+        ui.add(egui::Label::new(text).truncate());
+    });
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+fn cameras_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let ctx = ui.ctx().clone();
+    let mut force = false;
+    heading(ui, t, crate::i18n::tr("Cameras"));
+    hint(ui, t, "The cameras in this library, what decodes and colours each, and the lens profiles found for their lenses.");
+    // add a camera: type (suggestions from Camera Raw's cameras on this Mac) or pick one
+    let qkey = egui::Id::new("settingsCamerasQuery");
+    let mut q: String = ctx.data(|d| d.get_temp(qkey)).unwrap_or_default();
+    ui.add_space(4.0);
+    row(ui, t, crate::i18n::tr("Add camera"), |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text("type a model, e.g. Canon EOS R5").desired_width(240.0));
+        register(ui.ctx(), "field:settingsCameraAdd", r.rect);
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (crate::widgets::text_button(ui, "settingsCameraAdd", "add.", false).clicked() || enter) && !q.trim().is_empty() {
+            match app.run("cameras.add", json!({"name": q.trim()})) {
+                Ok(v) => {
+                    app.toast(&ctx, v["notice"].as_str().unwrap_or("Camera added").replace("New camera", "Camera added"));
+                    q.clear();
+                }
+                Err(e) => app.toast_error(&ctx, e),
+            }
+            force = true;
+        }
+        if crate::widgets::text_button(ui, "settingsCamerasRefresh", "refresh.", false).clicked() {
+            match app.run("cameras.refresh", json!({"all": true})) {
+                Ok(v) => {
+                    let n = v["refreshed"].as_array().map_or(0, Vec::len);
+                    app.toast(&ctx, format!("Refreshed {n} camera{}", plural(n)));
+                }
+                Err(e) => app.toast_error(&ctx, e),
+            }
+            force = true;
+        }
+    });
+    if q.trim().chars().count() >= 2 {
+        let known = app.session.execute("cameras.known", &json!({"query": q.trim(), "limit": 6})).unwrap_or_default();
+        let names: Vec<String> = known.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+        if !names.is_empty() {
+            row(ui, t, "", |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+                    for (i, n) in names.iter().enumerate() {
+                        if crate::widgets::text_button(ui, &format!("settingsCameraPick-{i}"), n, false).clicked() {
+                            q = n.clone();
+                        }
+                    }
+                });
+            });
+        }
+    }
+    ctx.data_mut(|d| d.insert_temp(qkey, q));
+    ui.add_space(8.0);
+    // the first time the page opens this session: resolve the cameras not resolved yet (one file
+    // read per camera, then kept in cameras.json)
+    let auto_key = egui::Id::new("settingsCamerasAutoRefreshed");
+    if !ctx.data(|d| d.get_temp::<bool>(auto_key).unwrap_or(false)) {
+        ctx.data_mut(|d| d.insert_temp(auto_key, true));
+        if let Err(e) = app.run("cameras.refresh", json!({})) {
+            log::warn!("cameras: {e}");
+        }
+        force = true;
+    }
+    let list = cameras_list(app, &ctx, force);
+    let cams: Vec<Value> = list["cameras"].as_array().cloned().unwrap_or_default();
+    if list["adobe"] == false {
+        hint(ui, t, "Adobe's Camera Raw data or the DNG SDK isn't available here: every camera uses LightCraft's own colour.");
+    }
+    let open_key = egui::Id::new("settingsCamerasOpen");
+    let mut open: Vec<String> = ctx.data(|d| d.get_temp(open_key)).unwrap_or_default();
+    let mut remove: Option<String> = None;
+    egui::ScrollArea::vertical().id_salt("camerasList").max_height(300.0).min_scrolled_height(300.0).auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        if cams.is_empty() {
+            hint(ui, t, "No cameras yet: import photos, or add one above.");
+        }
+        for (i, c) in cams.iter().enumerate() {
+            let name = c["name"].as_str().unwrap_or("").to_string();
+            if i > 0 {
+                ui.add_space(14.0);
+            }
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let is_open = open.contains(&name);
+                let photos = c["photos"].as_u64().unwrap_or(0) as usize;
+                ui.label(RichText::new(&name).font(t.semibold(12.5)).color(t.text));
+                let count = if photos == 0 { "added by hand".to_string() } else { format!("{photos} photo{}", plural(photos)) };
+                ui.label(RichText::new(count).size(11.0).color(t.text_dim));
+                let lenses = c["lenses"].as_array().map_or(0, Vec::len);
+                if lenses > 0 && crate::widgets::text_button(ui, &format!("settingsCameraLenses-{i}"), "ln.", is_open).clicked() {
+                    if is_open {
+                        open.retain(|n| n != &name);
+                    } else {
+                        open.push(name.clone());
+                    }
+                }
+                if c["added"] == true && crate::widgets::text_button(ui, &format!("settingsCameraRemove-{i}"), "rem.", false).clicked() {
+                    remove = Some(name.clone());
+                }
+            });
+            let line = |ui: &mut egui::Ui, label: &str, text: String| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    camera_cell(ui, 90.0, RichText::new(crate::i18n::tr(label)).size(11.0).color(t.text_label));
+                    ui.add(egui::Label::new(RichText::new(text).size(11.0).color(t.text)).truncate());
+                });
+            };
+            line(ui, "decoder", camera_decoder_text(c));
+            line(ui, "profile", camera_profile_text(c));
+            let lens_list = c["lenses"].as_array().cloned().unwrap_or_default();
+            let with = lens_list.iter().filter(|l| l["profile"].is_string()).count();
+            let lens_text = if lens_list.is_empty() {
+                match c["makeLensProfiles"].as_u64() {
+                    Some(n) if n > 0 => format!("none seen yet · {n} profiles installed for {}", c["make"].as_str().unwrap_or("its make")),
+                    _ => "none seen yet".to_string(),
+                }
+            } else if c["resolved"] != true {
+                format!("{} lens{} (not resolved yet)", lens_list.len(), if lens_list.len() == 1 { "" } else { "es" })
+            } else {
+                format!("profiles for {with} of {} lens{}", lens_list.len(), if lens_list.len() == 1 { "" } else { "es" })
+            };
+            line(ui, "lenses", lens_text);
+            let de = match c["deltaE"]["de"].as_f64() {
+                Some(de) => {
+                    let n = c["deltaE"]["photos"].as_u64().map(|n| format!(" · {n} photos")).unwrap_or_default();
+                    let when = c["deltaE"]["date"].as_str().or(c["deltaE"]["tag"].as_str()).map(|d| format!(" · {d}")).unwrap_or_default();
+                    format!("{de:.2} ΔE{n}{when}")
+                }
+                None => "not measured (tools/lr-compare)".to_string(),
+            };
+            line(ui, "vs Lightroom", de);
+            if open.contains(&name) {
+                for l in &lens_list {
+                    let profile = l["profile"].as_str().map(str::to_string).unwrap_or_else(|| "no profile on this Mac".to_string());
+                    let n = l["photos"].as_u64().unwrap_or(0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        camera_cell(ui, 90.0, RichText::new(""));
+                        camera_cell(ui, 210.0, RichText::new(format!("{} ({n})", l["lens"].as_str().unwrap_or(""))).size(11.0).color(t.text));
+                        ui.add(egui::Label::new(RichText::new(profile).size(10.5).color(t.text_dim)).truncate());
+                    });
+                }
+            }
+        }
+    });
+    ctx.data_mut(|d| d.insert_temp(open_key, open));
+    if let Some(name) = remove {
+        if let Err(e) = app.run("cameras.remove", json!({"name": name})) {
+            app.toast_error(&ctx, e);
+        }
+        cameras_list(app, &ctx, true);
+    }
+    if let Some(p) = list["cache"].as_str() {
+        ui.add_space(4.0);
+        hint(ui, t, &format!("Kept in {p}"));
+    }
 }

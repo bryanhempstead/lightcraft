@@ -422,6 +422,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     register(ui.ctx(), "canvas:image", img_rect);
     let map = CanvasMap::new(&frame, img_rect);
+    brief_info(app, ui.ctx(), id);
     info_overlay(app, &p, canvas, &photo);
     if !fullscreen {
         filter_pill(app, ui, canvas);
@@ -482,18 +483,39 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
-/// The info overlay at the canvas' top left (`view.infoOverlay`): file name with the capture date
-/// and size, or with the camera and exposure.
-fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &lightcraft_catalog::Photo) {
-    use crate::state::InfoOverlay;
-    let lines: Vec<String> = match app.ui.info_overlay {
-        InfoOverlay::Off => return,
-        InfoOverlay::Basic => {
-            let date = photo.captured.as_deref().unwrap_or(&photo.imported);
-            vec![photo.file_name.clone(), format!("{} · {} × {}", pretty_date(date), photo.width, photo.height)]
-        }
-        InfoOverlay::Exposure => {
-            let m = &photo.meta;
+/// View Options' Show Briefly When Photo Changes: note when the loupe changes to photo `id`, and
+/// whether the brief info overlay shows this frame (a repaint is asked for when it ends).
+fn brief_info(app: &mut LightcraftApp, ctx: &egui::Context, id: lightcraft_catalog::PhotoId) {
+    let now = ctx.input(|i| i.time);
+    let brief = &mut app.ui.brief_info;
+    if brief.photo != Some(id) {
+        brief.photo = Some(id);
+        brief.since = now;
+    }
+    let left = crate::state::BRIEF_INFO_SECS - (now - brief.since);
+    brief.shown = app.ui.settings.loupe_info.briefly != crate::state::InfoOverlay::Off && left > 0.0;
+    if brief.shown {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(left.max(0.01)));
+    }
+}
+
+/// One line of the info overlay for `photo` (`None`: nothing to say, the line is left out).
+pub(crate) fn info_line(field: crate::state::LoupeInfoField, photo: &lightcraft_catalog::Photo) -> Option<String> {
+    use crate::state::LoupeInfoField as F;
+    let m = &photo.meta;
+    let text = |s: &str| Some(s.trim().to_string()).filter(|s| !s.is_empty());
+    // Leica bodies write "not selected" for an uncoded lens: that's no lens name
+    let lens = if m.lens.trim().eq_ignore_ascii_case("not selected") { "" } else { m.lens.trim() };
+    match field {
+        F::None => None,
+        F::FileName => Some(photo.file_name.clone()),
+        F::FileAndCopyName => Some(match &photo.copy_name {
+            Some(c) => format!("{} / {c}", photo.file_name),
+            None => photo.file_name.clone(),
+        }),
+        F::CaptureDate => Some(pretty_date(photo.captured.as_deref().unwrap_or(&photo.imported))),
+        F::Dimensions => Some(format!("{} × {}", photo.width, photo.height)),
+        F::Exposure => {
             let mut exp = Vec::new();
             if !m.shutter.is_empty() {
                 exp.push(format!("{} s", m.shutter));
@@ -507,18 +529,46 @@ fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &li
             if let Some(f) = m.focal_mm {
                 exp.push(format!("{f:.0} mm"));
             }
-            // Leica bodies write "not selected" for an uncoded lens: that's no lens name
-            let lens = if m.lens.trim().eq_ignore_ascii_case("not selected") { "" } else { m.lens.as_str() };
-            let model = camera_model(&m.camera);
-            let camera = [model, lens].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
-            let mut v = vec![photo.file_name.clone()];
-            v.push(if exp.is_empty() { "No exposure information".into() } else { exp.join("  ") });
-            if !camera.is_empty() {
-                v.push(camera);
-            }
-            v
+            Some(if exp.is_empty() { "No exposure information".into() } else { exp.join("  ") })
         }
+        F::Camera => text(camera_model(&m.camera)),
+        F::Lens => text(lens),
+        F::CameraAndLens => text(&[camera_model(&m.camera), lens].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ")),
+        F::Title => text(&m.title),
+        F::Caption => text(&m.caption),
+        F::RatingAndLabel => {
+            let stars = "★".repeat(photo.rating.min(5) as usize);
+            let label = photo.label.map(|l| format!("{l:?}")).unwrap_or_default();
+            text(&[stars.as_str(), label.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("  "))
+        }
+        F::Keywords => text(&m.keywords.iter().map(|k| k.rsplit('|').next().unwrap_or(k)).collect::<Vec<_>>().join(", ")),
+        F::Folder => match &photo.source {
+            lightcraft_catalog::Source::File { path } => {
+                std::path::Path::new(path).parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())
+            }
+            _ => None,
+        },
+    }
+}
+
+/// The info overlay's lines for `photo` (`view.infoOverlay`: Info 1 / Info 2 as View Options
+/// chose them; Show Briefly shows one for a moment when the photo changes), or `None` when off.
+pub(crate) fn info_overlay_lines(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> Option<Vec<String>> {
+    use crate::state::InfoOverlay;
+    let brief = app.ui.info_overlay == InfoOverlay::Off && app.ui.brief_info.shown;
+    let mode = if brief { app.ui.settings.loupe_info.briefly } else { app.ui.info_overlay };
+    let fields = match mode {
+        InfoOverlay::Off => return None,
+        InfoOverlay::Basic => &app.ui.settings.loupe_info.info1,
+        InfoOverlay::Exposure => &app.ui.settings.loupe_info.info2,
     };
+    let lines: Vec<String> = fields.iter().filter_map(|f| info_line(*f, photo)).collect();
+    (!lines.is_empty()).then_some(lines)
+}
+
+/// The info overlay at the canvas' top left.
+fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &lightcraft_catalog::Photo) {
+    let Some(lines) = info_overlay_lines(app, photo) else { return };
     let t = Tokens::get(p.ctx());
     let mut y = canvas.top() + 12.0;
     for (i, l) in lines.iter().enumerate() {
@@ -535,23 +585,9 @@ fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &li
     register(p.ctx(), "canvas:infoOverlay", Rect::from_min_max(canvas.min, pos2(canvas.left() + 320.0, y)));
 }
 
-/// The camera as Lightroom shows it (the Exif model): the stored "make model" loses the make when
-/// the model repeats it — "Canon Canon EOS R6" → "Canon EOS R6", "Leica Camera AG LEICA M (Typ 262)"
-/// → "LEICA M (Typ 262)"; "Canon EOS R6" or "SONY ILCE-7M3" stay as they are.
+/// The camera as Lightroom shows it (the Exif model): see [`lightcraft_engine::cameras::display_name`].
 pub(crate) fn camera_model(camera: &str) -> &str {
-    let words: Vec<&str> = camera.split_whitespace().collect();
-    let Some(first) = words.first() else { return camera.trim() };
-    for k in 1..words.len() {
-        if words[k].eq_ignore_ascii_case(first) {
-            // the model starts at the k-th word: return the rest of the original text
-            let mut rest = camera.trim_start();
-            for w in &words[..k] {
-                rest = rest.trim_start().strip_prefix(w).unwrap_or(rest);
-            }
-            return rest.trim();
-        }
-    }
-    camera.trim()
+    lightcraft_engine::cameras::display_name(camera)
 }
 
 #[cfg(test)]

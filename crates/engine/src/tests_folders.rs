@@ -516,3 +516,41 @@ fn classic_folder_commands() {
     assert_eq!(top(&mut s), "Trip 2026");
     assert!(s.execute("folder.promoteSubfolders", &json!({"path": moved})).is_err());
 }
+
+/// L24: folder and collection colour labels and favourites; a folder's follow it when renamed,
+/// undo takes them back, a bad label is an error.
+#[test]
+fn folder_and_collection_labels_and_favourites() {
+    let dir = Scratch::new("marks");
+    std::fs::create_dir_all(dir.0.join("trip/day1")).unwrap();
+    let (trip, day1) = (dir.path("trip"), dir.path("trip/day1"));
+    let mut s = Session::new();
+    add(&mut s, &format!("{trip}/a.jpg"));
+    add(&mut s, &format!("{day1}/b.jpg"));
+    s.execute("folder.label", &json!({"path": trip, "label": "red"})).unwrap();
+    s.execute("folder.favorite", &json!({"path": day1})).unwrap();
+    assert_eq!(s.catalog.folder_record(&trip).unwrap().label, Some(lightcraft_catalog::ColorLabel::Red));
+    assert!(s.catalog.folder_record(&day1).unwrap().favorite);
+    assert!(s.execute("folder.label", &json!({"path": trip, "label": "teal"})).is_err());
+    assert!(s.execute("folder.label", &json!({"path": trip})).is_err());
+    assert!(s.execute("folder.favorite", &json!({"path": trip, "on": "yes"})).is_err());
+    s.execute("folder.rename", &json!({"path": trip, "name": "holiday"})).unwrap();
+    let (holiday, hday1) = (dir.path("holiday"), dir.path("holiday/day1"));
+    assert_eq!(s.catalog.folder_record(&holiday).and_then(|r| r.label), Some(lightcraft_catalog::ColorLabel::Red), "the label follows");
+    assert!(s.catalog.folder_record(&hday1).is_some_and(|r| r.favorite), "and the subfolder's star");
+    assert!(s.catalog.folder_record(&trip).is_none());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.catalog.folder_record(&trip).is_some());
+    // collections
+    let a = s.execute("album.create", &json!({"name": "Best"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("album.label", &json!({"id": a, "label": "green"})).unwrap();
+    s.execute("album.favorite", &json!({"id": a})).unwrap();
+    let al = s.catalog.album(lightcraft_catalog::AlbumId(a)).unwrap();
+    assert_eq!((al.label, al.favorite), (Some(lightcraft_catalog::ColorLabel::Green), true));
+    s.execute("album.label", &json!({"id": a, "label": null})).unwrap();
+    assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(a)).unwrap().label, None);
+    assert!(s.execute("album.favorite", &json!({"id": 999})).is_err());
+    // an empty record isn't kept
+    s.execute("folder.label", &json!({"path": trip, "label": null})).unwrap();
+    assert!(s.catalog.folder_record(&trip).is_none());
+}
