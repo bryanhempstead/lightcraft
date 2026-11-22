@@ -440,3 +440,20 @@ Baseline (main at ce413b5, CPU):
 | Adobe Color · R6 | 64 | 2.96 | 8.0 | 16 |
 | Adobe Color · M262 | 7 | 1.27 | 3.1 | 7 |
 | Nautica · R6 | 4 | 5.46 | 17.2 | 0 |
+
+### Process Version 5 vs 6 (R12)
+
+Bryan's catalog holds 6,384 photos at `ProcessVersion` 11.0 (Process Version 5) and 10,439 at 15.4
+(Version 6); LightCraft reads neither. The previews can't separate them (PV5 is nearly all older R6
+work: 7 of the 183 acceptance photos), so the oracle rendered the same synthetic DNGs under both
+(`oracle/make_pv.py`, `pvcmp.py`, `pvgrid.py`; colour grid + spatial scene; base, every Basic-tone
+slider, Clarity, Texture, Dehaze, Vibrance, Saturation and his whole Summer Fields recipe):
+
+- **Tone is identical**: on the neutral spatial scene PV6 vs PV5 is ΔE ≤ 0.01 for every slider,
+  Highlights / Shadows / Clarity / Texture / Dehaze included.
+- **Colour differs only for saturated, bright colours**: grid mean 0.27 (base) … 0.57 (recipe); by
+  grid saturation 0.00 (neutral) → 0.13 (0.35) → 0.84–1.13 (0.8–0.9), by level 0.01 (−9 EV) → 0.56
+  (0 EV); worst at violet-blue (hue 250–270°: PV6 up to +10 L*, less chroma — a highlight gamut
+  change).
+- LightCraft's base on the grid: 0.35 against PV5, 0.42 against PV6. Not worth a per-PV path; the
+  photos' PV is kept in the acceptance set's cells so a PV-dependent change can be gated.
