@@ -32,11 +32,7 @@ fn headless(session: lightcraft_engine::Session) -> Headless {
     let png = |img: &lightcraft_raster::Rgba8| {
         lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
     };
-    let services = Services {
-        png: Some(Box::new(png)),
-        write: Some(Box::new(|p: &str, b: &[u8]| std::fs::write(p, b).map_err(|e| e.to_string()))),
-        ..Default::default()
-    };
+    let services = Services { png: Some(Box::new(png)), write: Some(Box::new(lightcraft_engine::export::write_file)), ..Default::default() };
     let mut h = Headless::new(LightcraftApp::new(session, services), [1300.0, 900.0], 1.0);
     h.step();
     h.step();
@@ -253,4 +249,23 @@ fn painter_modes() {
     assert!(h.app.run("tool.painter", json!({"mode": "glitter", "value": "x"})).is_err());
     h.request("ui.key", json!({"key": "escape"}), T);
     assert!(h.app.ui.painter.is_none());
+}
+
+/// E05: one export with several presets, each into its own subfolder.
+#[test]
+fn export_with_several_presets() {
+    let dir = temp("presets-export");
+    let mut h = headless(lightcraft_engine::Session::with_demo());
+    let names: Vec<String> = h.app.session.all_export_presets().into_iter().take(2).map(|(p, _)| p.name).collect();
+    assert_eq!(names.len(), 2);
+    let id = h.app.session.visible_cloned()[0];
+    let r = h.app.run("app.export", json!({"presets": names, "ids": [id.0], "dir": dir.0.to_string_lossy(), "longEdge": 64})).unwrap();
+    let done = r["presets"].as_array().unwrap();
+    assert_eq!(done.len(), 2, "{r}");
+    for (d, name) in done.iter().zip(&names) {
+        assert_eq!(d["preset"], json!(name));
+        let path = d["files"][0]["path"].as_str().unwrap_or_default();
+        assert!(std::path::Path::new(path).exists() && path.contains(&name.replace(['/', '\\', ':'], "-")), "{r}");
+    }
+    assert!(h.app.run("app.export", json!({"presets": []})).is_err());
 }
