@@ -513,6 +513,56 @@ fn detect_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
 }
 
+/// Remove Reflections (`refl.`): on / off, Remove (`rmv.`) or Keep (`keep.`), the models' downloads; the Amount
+/// slider follows below the panel's text.
+fn reflection_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    let t = Tokens::get(ui.ctx());
+    let st = app.session.reflection_status(id);
+    let on = st["enabled"] == true;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+        if text_button(ui, "reflectionToggle", "refl.", on).on_hover_text(crate::i18n::tr("Remove reflections in glass (DSRNet)")).clicked() {
+            match app.run("reflection.set", json!({"enabled": !on})) {
+                Ok(r) => {
+                    if let Some(n) = r["notice"].as_str() {
+                        app.toast_for(ui.ctx(), n.to_string(), 6.0);
+                    }
+                }
+                Err(e) => app.toast(ui.ctx(), e.to_string()),
+            }
+        }
+        if on {
+            let keep = st["keep"] == true;
+            if text_button(ui, "reflectionRemove", "rmv.", !keep).on_hover_text(crate::i18n::tr("Remove the reflection")).clicked() {
+                let _ = app.run("reflection.set", json!({"keep": false}));
+            }
+            if text_button(ui, "reflectionKeep", "keep.", keep).on_hover_text(crate::i18n::tr("Keep only the reflection")).clicked() {
+                let _ = app.run("reflection.set", json!({"keep": true}));
+            }
+            if st["made"] != true {
+                let text = if st["busy"].as_u64().unwrap_or(0) > 0 { crate::i18n::tr("making…") } else { crate::i18n::tr("not made") };
+                ui.label(egui::RichText::new(text).size(12.0).color(t.text_dim));
+            }
+        }
+    });
+    if on && st["models"] != true {
+        ui.add_space(4.0);
+        let models = app.session.enhancer.models_status();
+        crate::enhance::model_row(app, ui, "reflection", &models);
+        crate::enhance::model_row(app, ui, "vgg19", &models);
+        if text_button(ui, "reflectionMake", "make.", false).on_hover_text(crate::i18n::tr("Make the layers once the models are in")).clicked() {
+            match app.run("remove.generate", json!({})) {
+                Ok(r) => {
+                    if let Some(e) = r["errors"][0].as_str() {
+                        app.toast(ui.ctx(), e.to_string());
+                    }
+                }
+                Err(e) => app.toast(ui.ctx(), e.to_string()),
+            }
+        }
+    }
+}
+
 /// Remove ▸ Use Generative AI (`gen.ai.`): new Remove / Fill strokes are filled by LaMa; the model's download
 /// row while it is missing.
 fn generative_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -543,9 +593,11 @@ fn generative_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// The selected generative spot: which variation shows (`<` `>`), `more.` variations, and whether they are made.
 fn variations_row(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, g: &lightcraft_develop::Generative) {
-    let made = app.session.active().map(|id| app.session.gen_status(id)).and_then(|s| {
-        s["spots"].as_array().and_then(|a| a.iter().find(|x| x["index"] == i).cloned())
-    });
+    let made = app
+        .session
+        .active()
+        .map(|id| app.session.gen_status(id))
+        .and_then(|s| s["spots"].as_array().and_then(|a| a.iter().find(|x| x["index"] == i).cloned()));
     let shown = made.as_ref().and_then(|m| m["made"].get(g.variation as usize)).is_some_and(|v| v == true);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
@@ -567,7 +619,11 @@ fn variations_row(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, g: &ligh
     });
     if !shown {
         let busy = app.session.genremove.busy() > 0;
-        let text = if busy { crate::i18n::tr("Making this variation… (content-aware until then)") } else { crate::i18n::tr("Not made yet: content-aware for now") };
+        let text = if busy {
+            crate::i18n::tr("Making this variation… (content-aware until then)")
+        } else {
+            crate::i18n::tr("Not made yet: content-aware for now")
+        };
         ui.label(egui::RichText::new(text).size(12.0).color(Tokens::get(ui.ctx()).text_dim));
         if !busy && text_button(ui, "genMake", "make.", false).on_hover_text(crate::i18n::tr("Make the missing variations")).clicked() {
             match app.run("remove.generate", json!({})) {
@@ -597,6 +653,8 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         generative_row(app, ui);
         ui.add_space(8.0);
         detect_rows(app, ui, id);
+        ui.add_space(8.0);
+        reflection_rows(app, ui, id);
         ui.add_space(8.0);
         ui.label(crate::i18n::tr_format!("{} spot(s) on this photo", d.spots.len()));
         ui.add_space(4.0);
@@ -629,6 +687,7 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         (app.ui.remove_size, app.ui.remove_feather, app.ui.remove_opacity) = (sp.size as f32, sp.feather as f32, sp.opacity as f32);
         divider(ui);
         let mode = match sp.mode {
+            _ if sp.generative.is_some() => "Generative",
             lightcraft_develop::SpotMode::Heal => "Heal",
             lightcraft_develop::SpotMode::Clone => "Clone",
             lightcraft_develop::SpotMode::Remove => "Remove",
@@ -683,6 +742,13 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
             });
         });
+    }
+    if d.reflection.enabled
+        && let Some(spec) = lightcraft_develop::controls::find("reflection.amount")
+    {
+        let v = lightcraft_develop::controls::get(&d, spec.id).unwrap_or(spec.default);
+        let out = slider(ui, spec, v, true, None);
+        super::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": spec.id, "value": v})));
     }
     // Visualize Spots (A): a black/white high-pass view that makes dust and specks stand out
     padded(ui, |ui| {

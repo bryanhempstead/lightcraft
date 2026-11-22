@@ -17,6 +17,10 @@ pub enum ModelId {
     Depth,
     /// LaMa big-lama: Generative Remove's inpainting.
     Inpaint,
+    /// DSRNet: Remove Reflections (with [`ModelId::Vgg19`]).
+    Reflection,
+    /// VGG-19's ImageNet weights: the features DSRNet is built on.
+    Vgg19,
 }
 
 pub struct ModelInfo {
@@ -40,7 +44,7 @@ pub struct ModelInfo {
     pub entry: Option<&'static str>,
 }
 
-pub const MODELS: [ModelInfo; 4] = [
+pub const MODELS: [ModelInfo; 6] = [
     ModelInfo {
         id: ModelId::RawDenoise,
         key: "raw-denoise",
@@ -98,6 +102,35 @@ pub const MODELS: [ModelInfo; 4] = [
         weights: "big-lama.safetensors",
         entry: None,
     },
+    ModelInfo {
+        id: ModelId::Reflection,
+        key: "reflection",
+        name: "DSRNet (Remove Reflections)",
+        licence: "Apache-2.0",
+        licence_url: "https://github.com/mingcv/DSRNet/blob/main/LICENSE",
+        source: "https://github.com/mingcv/DSRNet",
+        // the authors' released checkpoint (setting II, with the Nature data), from their Google Drive folder
+        url: "https://drive.usercontent.google.com/download?id=19His-4uV0C_fteSOI_mBL8vyQn_Fdh_8&export=download&confirm=t",
+        file: "dsrnet_l_4000_epoch33.pt",
+        size: 495_086_231,
+        sha256: "09a7acdb3efef6ad7065164e205bf5173a016ce8b24fc56d9751c8791cf65cff",
+        weights: "dsrnet_l_4000_epoch33.pt",
+        entry: None,
+    },
+    ModelInfo {
+        id: ModelId::Vgg19,
+        key: "vgg19",
+        name: "VGG-19 ImageNet features (for Remove Reflections)",
+        licence: "BSD-3-Clause",
+        licence_url: "https://github.com/pytorch/vision/blob/main/LICENSE",
+        source: "https://huggingface.co/timm/vgg19.tv_in1k",
+        url: "https://huggingface.co/timm/vgg19.tv_in1k/resolve/6ee3e2c532177d3b28c99c0eb12b069f160879c7/model.safetensors",
+        file: "model.safetensors",
+        size: 574_672_302,
+        sha256: "11aea017b543ff59233749d8f1cf544cda749378f5790d2fedab841fb86b7669",
+        weights: "model.safetensors",
+        entry: None,
+    },
 ];
 
 pub fn info(id: ModelId) -> &'static ModelInfo {
@@ -106,6 +139,8 @@ pub fn info(id: ModelId) -> &'static ModelInfo {
         ModelId::SuperResolution => &MODELS[1],
         ModelId::Depth => &MODELS[2],
         ModelId::Inpaint => &MODELS[3],
+        ModelId::Reflection => &MODELS[4],
+        ModelId::Vgg19 => &MODELS[5],
     }
 }
 

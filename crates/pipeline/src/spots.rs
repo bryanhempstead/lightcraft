@@ -157,11 +157,28 @@ pub fn gen_geometry(spot: &Spot) -> u64 {
     fnv(nums.flat_map(|v| v.to_bits().to_le_bytes()))
 }
 
+/// The pixels `name` names, through the installed loader.
+pub fn load_named(name: &str) -> Option<Arc<GenFill>> {
+    let load = LOADER.read().unwrap_or_else(PoisonError::into_inner).clone()?;
+    load(name)
+}
+
+/// Tests: pixels by name, served by a loader over this list (one for every test in the crate: the loader is
+/// process-wide).
+#[cfg(test)]
+pub(crate) fn test_fill(name: &str, fill: GenFill) {
+    static FILLS: std::sync::Mutex<Vec<(String, Arc<GenFill>)>> = std::sync::Mutex::new(Vec::new());
+    fn find(name: &str) -> Option<Arc<GenFill>> {
+        FILLS.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(n, _)| n == name).map(|(_, f)| f.clone())
+    }
+    FILLS.lock().unwrap_or_else(PoisonError::into_inner).push((name.to_string(), Arc::new(fill)));
+    set_gen_loader(Some(Arc::new(find)));
+}
+
 /// The generated pixels of `spot`, when it is a generative spot and they are there for its current geometry.
 pub fn gen_fill(spot: &Spot) -> Option<Arc<GenFill>> {
     let g = spot.generative.as_ref()?;
-    let load = LOADER.read().unwrap_or_else(PoisonError::into_inner).clone()?;
-    let fill = load(&g.name())?;
+    let fill = load_named(&g.name())?;
     let ok = fill.geometry == gen_geometry(spot)
         && fill.image.width > 0
         && fill.image.height > 0
@@ -175,9 +192,11 @@ pub fn gen_fill(spot: &Spot) -> Option<Arc<GenFill>> {
 /// Which generative spots have their pixels (part of the scene-linear stage's cache key: pixels that arrive later
 /// must replace the stand-in fill).
 pub fn gen_state(spots: &[Spot]) -> u64 {
-    spots.iter().enumerate().filter(|(_, s)| s.generative.is_some()).fold(0, |h, (i, s)| {
-        if gen_fill(s).is_some() { h ^ (i as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15) } else { h }
-    })
+    spots
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.generative.is_some())
+        .fold(0, |h, (i, s)| if gen_fill(s).is_some() { h ^ (i as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15) } else { h })
 }
 
 /// The generated pixels under the stroke (`alpha > 0`) of the box at `(x0, y0)`, resampled from `g` (averaging
@@ -466,12 +485,6 @@ mod tests {
 
     #[test]
     fn generated_pixels_render_at_any_size_white_balanced_and_only_for_their_spot() {
-        use std::sync::Mutex;
-        static FILLS: Mutex<Vec<(String, Arc<GenFill>)>> = Mutex::new(Vec::new());
-        fn find(name: &str) -> Option<Arc<GenFill>> {
-            FILLS.lock().unwrap().iter().find(|(n, _)| n == name).map(|(_, f)| f.clone())
-        }
-        set_gen_loader(Some(Arc::new(find)));
         let spot = Spot {
             mode: SpotMode::Fill,
             points: vec![Point::new(0.5, 0.5)],
@@ -482,12 +495,18 @@ mod tests {
         };
         // a left-to-right ramp over the middle of the photo
         let image = Rgb32f::from_fn(100, 100, |x, _| [x as f32 / 100.0, 0.5, 0.25]);
-        FILLS.lock().unwrap().push(("00000000000000ab-0".into(), Arc::new(GenFill { geometry: gen_geometry(&spot), rect: [0.25, 0.25, 0.75, 0.75], image })));
+        test_fill("00000000000000ab-0", GenFill { geometry: gen_geometry(&spot), rect: [0.25, 0.25, 0.75, 0.75], image });
         assert_ne!(gen_state(std::slice::from_ref(&spot)), 0);
         for w in [80usize, 400] {
             let mut img = Rgb32f::from_fn(w, w, |_, _| [0.1; 3]);
             let frame = Frame::new(w, w, &DevelopSettings::default(), true);
-            apply_with_wb(&mut img, std::slice::from_ref(&spot), &frame, frame.px_per_long(w), Some([[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]));
+            apply_with_wb(
+                &mut img,
+                std::slice::from_ref(&spot),
+                &frame,
+                frame.px_per_long(w),
+                Some([[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+            );
             let c = img.get(w / 2, w / 2);
             // the middle of the ramp (0.5), red doubled by the white balance
             assert!((c[0] - 1.0).abs() < 0.05 && (c[1] - 0.5).abs() < 0.02 && (c[2] - 0.25).abs() < 0.02, "{w}: {c:?}");

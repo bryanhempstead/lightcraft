@@ -39,6 +39,9 @@ pub struct DevelopSettings {
     pub red_eye: Vec<RedEye>,
     pub lens_blur: LensBlur,
     pub enhance: Enhance,
+    /// Remove Reflections (Lightroom Classic's Reflection Removal). Omitted while off and never used.
+    #[serde(skip_serializing_if = "Reflection::is_unused")]
+    pub reflection: Reflection,
     /// The photo's depth map (Lens Blur, Depth Range masks), estimated on request; it belongs to this photo's
     /// pixels (never synced or pasted). Omitted while there is none.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -77,6 +80,7 @@ impl Default for DevelopSettings {
             red_eye: Vec::new(),
             lens_blur: LensBlur::default(),
             enhance: Enhance::default(),
+            reflection: Reflection::default(),
             depth: None,
             calibration: Calibration::default(),
             disabled_sections: Vec::new(),
@@ -1118,6 +1122,38 @@ impl Bokeh {
             Bokeh::FiveBlade => "5.bld.",
             Bokeh::Ring => "ring.",
         }
+    }
+}
+
+/// Remove Reflections: the photo split into the scene behind a window and the reflection on it (a model's work,
+/// kept outside the catalog like Generative Remove's fills and named by `key`); Remove takes the reflection away,
+/// Keep shows only the reflection, by `amount`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Reflection {
+    pub enabled: bool,
+    /// Keep the reflection (and lose the scene behind the glass) instead of removing it.
+    pub keep: bool,
+    /// 0..100.
+    pub amount: f64,
+    /// Names the separated layers (hex): what the photo looked like when they were made. Empty before.
+    pub key: String,
+}
+
+impl Default for Reflection {
+    fn default() -> Self {
+        Reflection { enabled: false, keep: false, amount: 100.0, key: String::new() }
+    }
+}
+
+impl Reflection {
+    pub fn is_unused(&self) -> bool {
+        *self == Reflection::default()
+    }
+
+    /// Whether renders change the photo.
+    pub fn active(&self) -> bool {
+        self.enabled && self.amount.is_finite() && self.amount > 0.0 && !self.key.is_empty()
     }
 }
 

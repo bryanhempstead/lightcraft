@@ -208,11 +208,20 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 aliased.push((id.to_string(), serde_json::from_str(params).unwrap_or_default()));
             }
         }
-        // < / > (Shift+, / Shift+.) show another variation of the selected Generative Remove spot
-        for (key, delta) in [(Key::Comma, -1), (Key::Period, 1)] {
-            if matches(i, Modifiers::SHIFT, key) {
+        // ⌥← / ⌥→ (Lightroom) and < / > show another variation of the selected Generative Remove spot; ⌥⇧G turns
+        // Use Generative AI on and off (both only in the Remove tool, see `run_fired`)
+        for (m, key, delta) in [
+            (Modifiers::SHIFT, Key::Comma, -1),
+            (Modifiers::SHIFT, Key::Period, 1),
+            (Modifiers::ALT, Key::ArrowLeft, -1),
+            (Modifiers::ALT, Key::ArrowRight, 1),
+        ] {
+            if matches(i, m, key) {
                 fire.push(format!("genVariation:{delta}"));
             }
+        }
+        if matches(i, Modifiers::ALT | Modifiers::SHIFT, Key::G) {
+            fire.push("genToggle".into());
         }
         // rating 0-5, colour labels 6-9 (with Shift: and advance)
         for (n, key) in [Key::Num0, Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5].iter().enumerate() {
@@ -296,6 +305,13 @@ fn run_aliased(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: s
 }
 
 fn run_fired(app: &mut LightcraftApp, ctx: &egui::Context, f: String) {
+    if f == "genToggle" {
+        if app.ui.right == crate::state::RightPanel::Remove {
+            app.ui.remove_generative = !app.ui.remove_generative;
+            app.toast(ctx, if app.ui.remove_generative { "Use Generative AI: on" } else { "Use Generative AI: off" });
+        }
+        return;
+    }
     if let Some(d) = f.strip_prefix("genVariation:") {
         if app.ui.right == crate::state::RightPanel::Remove && app.session.active_spot.is_some() {
             let delta: i64 = d.parse().unwrap_or(1);

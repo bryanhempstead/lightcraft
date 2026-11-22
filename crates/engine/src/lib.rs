@@ -734,7 +734,7 @@ impl Session {
         let Some(old) = self.develop_of(id) else { return Vec::new() };
         let Some(mut delta) = json_delta(&old.to_json(), &new.to_json()) else { return Vec::new() };
         if let Some(o) = delta.as_object_mut() {
-            for k in ["spots", "red_eye", "version", "depth", "enhance"] {
+            for k in ["spots", "red_eye", "version", "depth", "enhance", "reflection"] {
                 o.remove(k);
             }
             if o.is_empty() {
@@ -974,9 +974,9 @@ mod tests_export_icc;
 #[cfg(test)]
 mod tests_folders;
 #[cfg(test)]
-mod tests_genremove;
-#[cfg(test)]
 mod tests_forget_local;
+#[cfg(test)]
+mod tests_genremove;
 #[cfg(test)]
 mod tests_import;
 #[cfg(test)]

@@ -118,7 +118,8 @@ impl Session {
                 .iter()
                 .enumerate()
                 .map(|(i, c)| {
-                    let pts: Vec<Value> = c.spots.iter().map(|s| json!({"points": s.points.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "size": s.size})).collect();
+                    let pts: Vec<Value> =
+                        c.spots.iter().map(|s| json!({"points": s.points.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "size": s.size})).collect();
                     json!({"index": i, "kind": c.kind, "label": c.label, "rect": c.rect, "spots": pts})
                 })
                 .collect()
@@ -188,7 +189,12 @@ mod tests {
     #[test]
     fn a_merged_spot_covers_every_row_and_stays_bounded() {
         let rows: Vec<Spot> = (0..5)
-            .map(|k| Spot { mode: SpotMode::Fill, points: vec![Point::new(0.1, 0.1 + k as f64 * 0.01), Point::new(0.2, 0.1)], size: 0.01, ..Default::default() })
+            .map(|k| Spot {
+                mode: SpotMode::Fill,
+                points: vec![Point::new(0.1, 0.1 + k as f64 * 0.01), Point::new(0.2, 0.1)],
+                size: 0.01,
+                ..Default::default()
+            })
             .collect();
         let m = merged(&rows).unwrap();
         assert_eq!((m.points.len(), m.size, m.mode), (10, 0.01, SpotMode::Fill));

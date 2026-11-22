@@ -1554,7 +1554,14 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     for (i, s) in d.spots.iter().enumerate() {
         let r = (s.size * long) as f32;
         let sel = Some(i) == active;
-        let col = Color32::from_white_alpha(if sel { 230 } else { 150 });
+        // a spot over a whole detected object has hundreds of points: draw it quieter unless selected
+        let col = Color32::from_white_alpha(if sel {
+            230
+        } else if s.points.len() > 24 {
+            60
+        } else {
+            150
+        });
         for q in &s.points {
             p.circle_stroke(map.screen(*q), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
         }
@@ -1593,9 +1600,24 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
                     }
                 }
             }
-            let col = if picked { accent } else if hot { Color32::WHITE } else { Color32::from_white_alpha(140) };
-            p.rect_stroke(rect, 2.0, Stroke::new(if picked || hot { 1.5 } else { 1.0 }, col), egui::StrokeKind::Outside);
-            p.text(rect.left_top() + vec2(4.0, 4.0), egui::Align2::LEFT_TOP, &c.label, egui::FontId::proportional(12.0), col);
+            let col = if picked {
+                accent
+            } else if hot {
+                Color32::WHITE
+            } else {
+                Color32::from_white_alpha(140)
+            };
+            if c.kind == lightcraft_engine::remove_detect::Kind::Dust {
+                // dust is scattered: a ring on each speck, no box
+                for s in &c.spots {
+                    for q in &s.points {
+                        p.circle_stroke(map.screen(*q), ((s.size * long) as f32).max(4.0), Stroke::new(1.0, col));
+                    }
+                }
+            } else {
+                p.rect_stroke(rect, 2.0, Stroke::new(if picked || hot { 1.5 } else { 1.0 }, col), egui::StrokeKind::Outside);
+                p.text(rect.left_top() + vec2(4.0, 4.0), egui::Align2::LEFT_TOP, &c.label, egui::FontId::proportional(12.0), col);
+            }
             register(ui.ctx(), format!("removeCandidate:{i}"), rect);
         }
     }

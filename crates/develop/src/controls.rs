@@ -29,6 +29,7 @@ pub enum Section {
     PointColor,
     RedEye,
     LensBlur,
+    Reflection,
 }
 
 impl Section {
@@ -51,6 +52,7 @@ impl Section {
             Section::PointColor => "Point Color",
             Section::RedEye => "Red Eye",
             Section::LensBlur => "Lens Blur",
+            Section::Reflection => "Reflections",
         }
     }
 }
@@ -259,6 +261,7 @@ controls! {
     "lensBlur.focalDistance" => lens_blur.focal_distance, "Focal Distance", LensBlur, 0, 100, 0, 1, 0, Gradient { from: "#f0c040", to: "#5040c0" };
     "lensBlur.focalRange" => lens_blur.focal_range, "Focal Range", LensBlur, 0, 100, 0, 1, 0, Plain;
     "lensBlur.boost" => lens_blur.boost, "Boost", LensBlur, 0, 100, 0, 1, 0, Plain;
+    "reflection.amount" => reflection.amount, "Amount", Reflection, 0, 100, 100, 1, 0, Plain;
     "enhance.denoise" => enhance.denoise, "Denoise", Detail, 0, 100, 0, 1, 0, Plain;
 }
 

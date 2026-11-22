@@ -46,6 +46,7 @@ pub mod parametric_adobe;
 pub mod point_color_cr;
 pub mod profiles;
 pub mod redeye;
+pub mod reflection;
 pub mod spots;
 pub mod texture_cr;
 pub mod tone;
@@ -461,6 +462,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         src_long,
         lens_blur::key(s),
         spots::gen_state(&s.spots),
+        reflection::key(s),
     ));
     Plan { settings, frame, w, h, px_per_long, src_long, geo, lin_key, eyes }
 }
@@ -469,7 +471,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
 pub fn lin_needs_cpu(s: &DevelopSettings) -> bool {
     let o = &s.optics;
     let defringe = s.section_enabled("optics") && (o.defringe_purple_amount > 0.0 || o.defringe_green_amount > 0.0);
-    defringe || !s.spots.is_empty() || lens_blur::active(s)
+    defringe || !s.spots.is_empty() || lens_blur::active(s) || s.reflection.active()
 }
 
 /// The white-balanced, defringed, retouched image (before noise reduction): the CPU part of the
@@ -477,8 +479,10 @@ pub fn lin_needs_cpu(s: &DevelopSettings) -> bool {
 pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let s = &*p.settings;
     local::white_balance(img, info, s);
+    let wb = local::wb_matrix_for(info, s);
+    reflection::apply(img, s, &p.frame, wb);
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
-    spots::apply_with_wb(img, &s.spots, &p.frame, p.px_per_long, local::wb_matrix_for(info, s));
+    spots::apply_with_wb(img, &s.spots, &p.frame, p.px_per_long, wb);
     redeye::apply(img, &p.eyes);
     lens_blur::apply(img, s, &p.frame, p.px_per_long);
 }

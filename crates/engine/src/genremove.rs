@@ -17,7 +17,6 @@
 //! - In the app the work runs on a worker thread ([`GenRemover::background`]) and [`Session::gen_poll`] picks up
 //!   the results; the CLI and MCP wait for them.
 
-
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -39,8 +38,16 @@ pub const MAX_EDGE: usize = 1024;
 pub const VARIATIONS: u8 = 3;
 
 /// How variation `i` is made: (context around the spot, in spot sizes; mirrored; scale of the model's input).
-pub const RECIPES: [(f64, bool, f64); 8] =
-    [(1.0, false, 1.0), (1.0, true, 1.0), (1.8, false, 1.0), (1.8, true, 1.0), (1.0, false, 0.6), (1.0, true, 0.6), (2.6, false, 1.0), (2.6, true, 1.0)];
+pub const RECIPES: [(f64, bool, f64); 8] = [
+    (1.0, false, 1.0),
+    (1.0, true, 1.0),
+    (1.8, false, 1.0),
+    (1.8, true, 1.0),
+    (1.0, false, 0.6),
+    (1.0, true, 0.6),
+    (2.6, false, 1.0),
+    (2.6, true, 1.0),
+];
 
 /// Where generated pixels are kept: `LIGHTCRAFT_REMOVE_CACHE`, else `~/Library/Caches/LightCraft/Remove`.
 pub fn cache_dir() -> PathBuf {
@@ -56,6 +63,15 @@ pub fn cache_dir() -> PathBuf {
     }
 }
 
+/// Longest edge Remove Reflections analyzes the photo at (`LIGHTCRAFT_REFLECTION_EDGE` overrides, 64..4096):
+/// DSRNet was trained on small crops; on a 1024 px view it took a graffiti wall behind the glass for a reflection
+/// that it left alone at 512 px.
+pub const REFLECTION_EDGE: usize = 512;
+
+fn reflection_edge() -> usize {
+    std::env::var("LIGHTCRAFT_REFLECTION_EDGE").ok().and_then(|v| v.parse::<usize>().ok()).map_or(REFLECTION_EDGE, |v| v.clamp(64, 4096))
+}
+
 fn max_edge() -> usize {
     std::env::var("LIGHTCRAFT_GENREMOVE_EDGE").ok().and_then(|v| v.parse::<usize>().ok()).map_or(MAX_EDGE, |v| v.clamp(64, 4096))
 }
@@ -64,7 +80,8 @@ fn max_edge() -> usize {
 fn valid_name(name: &str) -> bool {
     let mut parts = name.split('-');
     let (Some(k), Some(v), None) = (parts.next(), parts.next(), parts.next()) else { return false };
-    k.len() == 16 && k.bytes().all(|b| b.is_ascii_hexdigit()) && v.len() == 1 && v.bytes().all(|b| b.is_ascii_digit())
+    // a variation's digit, or a reflection layer (`r`: the reflection to subtract, `k`: the reflection kept)
+    k.len() == 16 && k.bytes().all(|b| b.is_ascii_hexdigit()) && v.len() == 1 && v.bytes().all(|b| b.is_ascii_digit() || b == b'r' || b == b'k')
 }
 
 fn path_of(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -91,7 +108,8 @@ fn parse_header_key(k: &str) -> Option<(u64, [f64; 4])> {
 /// Write generated pixels.
 pub fn save(dir: &Path, name: &str, fill: &GenFill) -> Result<(), String> {
     let path = path_of(dir, name).ok_or("not a generated-pixels name")?;
-    lightcraft_denoise_core::product::write(&path, &fill.image, &header_key(fill.geometry, fill.rect)).map_err(|e| format!("{}: {e}", path.display()))?;
+    lightcraft_denoise_core::product::write(&path, &fill.image, &header_key(fill.geometry, fill.rect))
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     loaded_forget();
     Ok(())
 }
@@ -161,11 +179,25 @@ pub fn install_loader() {
 
 /// The part of a render's cache key that follows generated pixels arriving (0 without generative spots).
 pub fn render_key(s: &DevelopSettings) -> u64 {
-    if s.spots.iter().all(|sp| sp.generative.is_none()) {
+    let spots = s.spots.iter().any(|sp| sp.generative.is_some());
+    if !spots && !s.reflection.active() {
         return 0;
     }
     install_loader();
-    lightcraft_pipeline::spots::gen_state(&s.spots).wrapping_mul(0x2545_f491_4f6c_dd1d) | 1
+    let refl =
+        lightcraft_pipeline::reflection::key(s).bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+    (lightcraft_pipeline::spots::gen_state(&s.spots).wrapping_mul(0x2545_f491_4f6c_dd1d) ^ refl) | 1
+}
+
+/// The key of photo `d`'s reflection layers on a photo whose content is `content`: what moves or changes its pixels
+/// before the retouch stage (not the spots or red eye, which come after it).
+pub fn reflection_key(content: &str, d: &DevelopSettings) -> String {
+    let mut base = d.clone();
+    base.spots.clear();
+    base.red_eye.clear();
+    let text = format!("refl v{GEN_VERSION} {content} {}", lightcraft_develop::ai::basis(&base));
+    let h = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+    format!("{h:016x}")
 }
 
 /// The key of spot `i` of `d` on a photo whose content is `content`.
@@ -206,6 +238,8 @@ pub struct GenJob {
     pub exposure: f64,
     /// Variations to make: (index, the scene-linear crop for its context, that crop's rectangle).
     pub variations: Vec<(u8, crate::media::RenderJob, [f64; 4])>,
+    /// Instead: separate the whole photo (this render of it) into the scene and its reflection.
+    pub reflection: Option<crate::media::RenderJob>,
 }
 
 /// What a finished job made.
@@ -251,8 +285,13 @@ impl GenRemover {
                 while let Ok(job) = rx.recv() {
                     let photo = job.photo;
                     let key = job.key.clone();
-                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&job)))
-                        .unwrap_or_else(|_| GenDone { photo, key: key.clone(), made: Vec::new(), error: Some("generating failed unexpectedly".into()), seconds: 0.0 });
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&job))).unwrap_or_else(|_| GenDone {
+                        photo,
+                        key: key.clone(),
+                        made: Vec::new(),
+                        error: Some("generating failed unexpectedly".into()),
+                        seconds: 0.0,
+                    });
                     busy.fetch_sub(1, Ordering::SeqCst);
                     if dtx.send(r).is_err() {
                         break;
@@ -274,6 +313,23 @@ pub fn model_installed(models_root: &Path) -> bool {
     lightcraft_enhance::models::installed(models_root, lightcraft_enhance::models::ModelId::Inpaint).is_some()
 }
 
+/// Whether both Remove Reflections models are installed.
+pub fn reflection_installed(models_root: &Path) -> bool {
+    use lightcraft_enhance::models::{ModelId, installed};
+    installed(models_root, ModelId::Reflection).is_some() && installed(models_root, ModelId::Vgg19).is_some()
+}
+
+/// What to tell the user when a Remove Reflections model is missing.
+pub fn reflection_missing(models_root: &Path) -> String {
+    use lightcraft_enhance::models::{ModelId, installed, missing_message};
+    let missing: Vec<String> = [ModelId::Reflection, ModelId::Vgg19]
+        .into_iter()
+        .filter(|m| installed(models_root, *m).is_none())
+        .map(|m| missing_message(models_root, m))
+        .collect();
+    format!("Remove Reflections needs its models: {}", missing.join("; "))
+}
+
 /// What to tell the user when the model is missing.
 pub fn missing_message(models_root: &Path) -> String {
     format!(
@@ -290,6 +346,22 @@ mod model {
     use lightcraft_enhance::models::{self, ModelId};
 
     static LAMA: Mutex<Option<(std::path::PathBuf, Arc<Inpainter>)>> = Mutex::new(None);
+    static DSRNET: Mutex<Option<(std::path::PathBuf, Arc<lightcraft_enhance::dsrnet::Dereflector>)>> = Mutex::new(None);
+
+    /// DSRNet with its VGG-19 (kept for the process: loading reads ~600 MB).
+    pub fn dereflector(root: &std::path::Path) -> Result<Arc<lightcraft_enhance::dsrnet::Dereflector>, String> {
+        let net = models::installed(root, ModelId::Reflection).ok_or_else(|| super::reflection_missing(root))?;
+        let vgg = models::installed(root, ModelId::Vgg19).ok_or_else(|| super::reflection_missing(root))?;
+        let mut g = DSRNET.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((p, m)) = g.as_ref()
+            && *p == net
+        {
+            return Ok(m.clone());
+        }
+        let m = Arc::new(lightcraft_enhance::dsrnet::Dereflector::load(&net, &vgg, lightcraft_enhance::best_device()).map_err(|e| e.to_string())?);
+        *g = Some((net, m.clone()));
+        Ok(m)
+    }
 
     pub fn get(root: &std::path::Path) -> Result<Arc<Inpainter>, String> {
         let path = models::installed(root, ModelId::Inpaint).ok_or_else(|| super::missing_message(root))?;
@@ -315,14 +387,8 @@ struct Encoding {
 impl Encoding {
     fn of(img: &Rgb32f, hole: &[bool], exposure: f64) -> Encoding {
         let gain = (exposure.clamp(-10.0, 10.0) as f32).exp2();
-        let mut lum: Vec<f32> = img
-            .data
-            .iter()
-            .zip(hole)
-            .filter(|(_, h)| !**h)
-            .map(|(p, _)| p[0].max(p[1]).max(p[2]) * gain)
-            .filter(|v| v.is_finite())
-            .collect();
+        let mut lum: Vec<f32> =
+            img.data.iter().zip(hole).filter(|(_, h)| !**h).map(|(p, _)| p[0].max(p[1]).max(p[2]) * gain).filter(|v| v.is_finite()).collect();
         let top = if lum.is_empty() {
             1.0
         } else {
@@ -438,7 +504,13 @@ fn make(_job: &GenJob) -> (Vec<String>, Option<String>) {
 
 /// One variation: its crop through the model, decoded and taken back before white balance.
 #[cfg(feature = "enhance")]
-fn make_one(m: &lightcraft_enhance::lama::Inpainter, job: &GenJob, render: &crate::media::RenderJob, rect: [f64; 4], recipe: (f64, bool, f64)) -> Result<GenFill, String> {
+fn make_one(
+    m: &lightcraft_enhance::lama::Inpainter,
+    job: &GenJob,
+    render: &crate::media::RenderJob,
+    rect: [f64; 4],
+    recipe: (f64, bool, f64),
+) -> Result<GenFill, String> {
     let (lin, wb) = render.clone().linear()?;
     let hole = hole_of(&job.spot, rect, lin.width, lin.height, job.oriented);
     if !hole.iter().any(|h| *h) {
@@ -461,8 +533,49 @@ fn make_one(m: &lightcraft_enhance::lama::Inpainter, job: &GenJob, render: &crat
     Ok(GenFill { geometry: job.geometry, rect, image })
 }
 
+/// Separate the whole photo into the scene and its reflection; the layers are kept before white balance.
+#[cfg(feature = "enhance")]
+fn make_reflection(job: &GenJob, render: &crate::media::RenderJob) -> (Vec<String>, Option<String>) {
+    let run = || -> Result<Vec<String>, String> {
+        let m = model::dereflector(&job.models_root)?;
+        let (lin, wb) = render.clone().linear()?;
+        let enc = Encoding::of(&lin, &vec![false; lin.data.len()], job.exposure);
+        let mut shown = lin.clone();
+        shown.data.iter_mut().for_each(|p| *p = enc.encode(*p));
+        let (t, r) = m.separate(&shown).map_err(|e| e.to_string())?;
+        let back = wb.and_then(invert3);
+        let unwb = |c: [f32; 3]| match &back {
+            Some(m) => std::array::from_fn(|i| m[i][0] * c[0] + m[i][1] * c[1] + m[i][2] * c[2]),
+            None => c,
+        };
+        // what the model took away, in the same (clipped) range it saw: highlights beyond it stay
+        let sub = Rgb32f::from_fn(lin.width, lin.height, |x, y| {
+            let i = y * lin.width + x;
+            let (a, b) = (shown.data.get(i).copied().unwrap_or([0.0; 3]), t.data.get(i).copied().unwrap_or([0.0; 3]));
+            let (a, b) = (enc.decode(a), enc.decode(b));
+            unwb([a[0] - b[0], a[1] - b[1], a[2] - b[2]])
+        });
+        let kept = Rgb32f::from_fn(lin.width, lin.height, |x, y| unwb(enc.decode(r.data.get(y * lin.width + x).copied().unwrap_or([0.0; 3]))));
+        let dir = cache_dir();
+        let mut made = Vec::new();
+        for (suffix, image) in [('r', sub), ('k', kept)] {
+            let name = format!("{}-{suffix}", job.key);
+            save(&dir, &name, &GenFill { geometry: 0, rect: [0.0, 0.0, 1.0, 1.0], image })?;
+            made.push(name);
+        }
+        Ok(made)
+    };
+    match run() {
+        Ok(m) => (m, None),
+        Err(e) => (Vec::new(), Some(e)),
+    }
+}
+
 #[cfg(feature = "enhance")]
 fn make(job: &GenJob) -> (Vec<String>, Option<String>) {
+    if let Some(r) = &job.reflection {
+        return make_reflection(job, r);
+    }
     let m = match model::get(&job.models_root) {
         Ok(m) => m,
         Err(e) => return (Vec::new(), Some(e)),
@@ -547,7 +660,17 @@ impl Session {
         if variations.is_empty() {
             return None;
         }
-        Some(GenJob { photo: id, models_root: self.enhancer.models_root.clone(), key: g.key.clone(), geometry: gen_geometry(&spot), spot, oriented, exposure: d.light.exposure, variations })
+        Some(GenJob {
+            photo: id,
+            reflection: None,
+            models_root: self.enhancer.models_root.clone(),
+            key: g.key.clone(),
+            geometry: gen_geometry(&spot),
+            spot,
+            oriented,
+            exposure: d.light.exposure,
+            variations,
+        })
     }
 
     /// Make the missing pixels of photo `id`'s generative spots: queued on the worker in the app
@@ -568,24 +691,94 @@ impl Session {
             let Some(job) = self.gen_job(id, i) else { continue };
             count += 1;
             let names: Vec<String> = job.variations.iter().map(|(v, _, _)| format!("{}-{v}", job.key)).collect();
-            if self.genremove.background
-                && let Some(tx) = self.genremove.sender()
-            {
-                self.genremove.busy.fetch_add(1, Ordering::SeqCst);
-                self.genremove.pending.extend(names);
-                if tx.send(job).is_err() {
-                    self.genremove.busy.fetch_sub(1, Ordering::SeqCst);
-                    errors.push("the Generative Remove worker stopped".into());
-                }
-                continue;
-            }
-            let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&job)))
-                .unwrap_or_else(|_| GenDone { photo: id, key: job.key.clone(), made: Vec::new(), error: Some("generating failed unexpectedly".into()), seconds: 0.0 });
-            if let Some(e) = done.error {
+            if let Some(e) = self.gen_submit(id, job, names) {
                 errors.push(e);
             }
         }
         (count, errors)
+    }
+
+    /// Queue `job` on the worker (the app) or run it now: an error to report.
+    fn gen_submit(&mut self, id: PhotoId, job: GenJob, names: Vec<String>) -> Option<String> {
+        if self.genremove.background
+            && let Some(tx) = self.genremove.sender()
+        {
+            self.genremove.busy.fetch_add(1, Ordering::SeqCst);
+            self.genremove.pending.extend(names);
+            if tx.send(job).is_err() {
+                self.genremove.busy.fetch_sub(1, Ordering::SeqCst);
+                return Some("the Generative Remove worker stopped".into());
+            }
+            return None;
+        }
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&job))).unwrap_or_else(|_| GenDone {
+            photo: id,
+            key: job.key.clone(),
+            made: Vec::new(),
+            error: Some("generating failed unexpectedly".into()),
+            seconds: 0.0,
+        });
+        done.error
+    }
+
+    /// Give photo `id`'s reflection settings in `d` the key their layers have now.
+    pub fn reflection_rekey(&self, id: PhotoId, d: &mut DevelopSettings) {
+        if d.reflection.enabled {
+            d.reflection.key = reflection_key(&self.gen_content(id), d);
+        }
+    }
+
+    /// Make photo `id`'s missing reflection layers (queued in the app, else now): an error to report.
+    pub fn reflection_schedule(&mut self, id: PhotoId) -> Option<String> {
+        install_loader();
+        let d = self.develop_of(id)?;
+        let r = d.reflection.clone();
+        if !r.enabled || r.key.is_empty() {
+            return None;
+        }
+        let names = [format!("{}-r", r.key), format!("{}-k", r.key)];
+        if names.iter().all(|n| made(n)) || names.iter().any(|n| self.genremove.pending.contains(n)) {
+            return None;
+        }
+        if !reflection_installed(&self.enhancer.models_root) {
+            return Some(reflection_missing(&self.enhancer.models_root));
+        }
+        let p = self.catalog.photo(id)?.clone();
+        let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
+        let oriented = if d.orientation.swaps_axes() { (h, w) } else { (w, h) };
+        // the whole photo before the retouch stage: no crop, spots, masks or lens blur
+        let mut s = (*d).clone();
+        s.spots.clear();
+        s.red_eye.clear();
+        s.masks.clear();
+        s.lens_blur.enabled = false;
+        s.reflection.enabled = false;
+        s.crop = lightcraft_develop::Crop { geometry: lightcraft_geom::CropGeometry::default(), flip_h: false, flip_v: false, ..s.crop.clone() };
+        s.geometry.constrain_crop = false;
+        let edge = reflection_edge().min(oriented.0.max(oriented.1).round() as usize).max(64);
+        let render = self.crop_job(id, edge, edge, &s)?;
+        let job = GenJob {
+            photo: id,
+            models_root: self.enhancer.models_root.clone(),
+            key: r.key.clone(),
+            geometry: 0,
+            spot: Spot::default(),
+            oriented,
+            exposure: d.light.exposure,
+            variations: Vec::new(),
+            reflection: Some(render),
+        };
+        self.gen_submit(id, job, names.to_vec())
+    }
+
+    /// `reflection.status`: photo `id`'s Remove Reflections settings, whether its layers are made, the models.
+    pub fn reflection_status(&self, id: PhotoId) -> Value {
+        let r = self.develop_of(id).map(|d| d.reflection.clone()).unwrap_or_default();
+        let made = !r.key.is_empty() && made(&format!("{}-r", r.key)) && made(&format!("{}-k", r.key));
+        json!({
+            "enabled": r.enabled, "keep": r.keep, "amount": r.amount, "made": made,
+            "models": reflection_installed(&self.enhancer.models_root), "busy": self.genremove.busy(),
+        })
     }
 
     /// Pick up finished background generations: (photos that got pixels, errors).

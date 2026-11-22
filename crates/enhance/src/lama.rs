@@ -72,7 +72,13 @@ pub fn reflect_pad(x: &Tensor, p: usize) -> candle_core::Result<Tensor> {
         (0..n + 2 * p)
             .map(|i| {
                 let j = i as i64 - p as i64;
-                let j = if j < 0 { -j } else if j >= n as i64 { 2 * (n as i64 - 1) - j } else { j };
+                let j = if j < 0 {
+                    -j
+                } else if j >= n as i64 {
+                    2 * (n as i64 - 1) - j
+                } else {
+                    j
+                };
                 j.clamp(0, n as i64 - 1) as u32
             })
             .collect()
@@ -526,7 +532,13 @@ mod tests {
     /// Plain-loop references for the strided and transposed convolutions.
     fn naive_conv_s2(x: &[f32], cin: usize, h: usize, w: usize, k: &[f32], cout: usize) -> Vec<f32> {
         let refl = |i: i64, n: usize| -> usize {
-            let i = if i < 0 { -i } else if i >= n as i64 { 2 * (n as i64 - 1) - i } else { i };
+            let i = if i < 0 {
+                -i
+            } else if i >= n as i64 {
+                2 * (n as i64 - 1) - i
+            } else {
+                i
+            };
             i as usize
         };
         let (oh, ow) = (h / 2, w / 2);
@@ -612,6 +624,25 @@ mod tests {
         candle_core::safetensors::save(&std::collections::HashMap::from([("x".to_string(), t)]), &p).unwrap();
         assert!(Inpainter::load(&p, Device::Cpu).is_err());
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// Opt-in timing: `LC_LAMA=<big-lama.safetensors> cargo test -p lightcraft-enhance --release -- --ignored
+    /// lama_speed --nocapture`.
+    #[test]
+    #[ignore]
+    fn lama_speed() {
+        let Ok(p) = std::env::var("LC_LAMA") else { return };
+        let d = crate::best_device();
+        let m = Inpainter::load(Path::new(&p), d.clone()).unwrap();
+        for side in [512usize, 1024, 1024] {
+            let img = Rgb32f::from_fn(side, side, |x, y| [x as f32 / side as f32, y as f32 / side as f32, 0.5]);
+            let hole: Vec<bool> =
+                (0..side * side).map(|i| (i % side).abs_diff(side / 2) < side / 6 && (i / side).abs_diff(side / 2) < side / 4).collect();
+            let t = std::time::Instant::now();
+            let out = m.inpaint(&img, &hole).unwrap();
+            eprintln!("{side}²: {:.2} s on {d:?}", t.elapsed().as_secs_f64());
+            assert!(out.data.iter().flatten().all(|v| v.is_finite()));
+        }
     }
 
     /// Opt-in, against the Python reference (`scripts/lama_ref.py` in the builder's scratch: advimman/lama's

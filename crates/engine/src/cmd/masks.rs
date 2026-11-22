@@ -764,9 +764,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 let indices: Vec<usize> = if bool_or(p, "all", false) {
                     (0..n).collect()
                 } else {
-                    p.get("indices").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|v| v as usize).collect()).unwrap_or_default()
+                    p.get("indices")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_u64).map(|v| v as usize).collect())
+                        .unwrap_or_default()
                 };
-                let generative = p.get("generative").and_then(Value::as_bool).unwrap_or_else(|| crate::genremove::model_installed(&s.enhancer.models_root));
+                let generative =
+                    p.get("generative").and_then(Value::as_bool).unwrap_or_else(|| crate::genremove::model_installed(&s.enhancer.models_root));
                 let added = s.remove_apply(&indices, generative).map_err(|e| bad(c, e))?;
                 Ok(json!({"added": added, "remaining": s.remove_found.items.len()}))
             }
@@ -1287,7 +1291,17 @@ pub fn specs() -> Vec<CommandSpec> {
                         s.set_develop(id, next, "Update Generative Remove")?;
                     }
                 }
-                let (n, errors) = s.gen_schedule(id);
+                let (n, mut errors) = s.gen_schedule(id);
+                if let Some(d) = s.develop_of(id)
+                    && d.reflection.enabled
+                {
+                    let mut next = (*d).clone();
+                    s.reflection_rekey(id, &mut next);
+                    if next != *d {
+                        s.set_develop(id, next, "Update Remove Reflections")?;
+                    }
+                    errors.extend(s.reflection_schedule(id));
+                }
                 Ok(json!({"spots": n, "errors": errors}))
             }
         ),
@@ -1301,6 +1315,51 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, _| {
                 let id = s.active().ok_or_else(|| bad("remove.status", "no active photo"))?;
                 Ok(s.gen_status(id))
+            }
+        ),
+        cmd!(
+            "reflection.set",
+            "Remove Reflections",
+            [],
+            None,
+            "{enabled?: bool, keep?: bool (Keep: show only the reflection), amount?: 0..100} — Lightroom's Reflection Removal on the active photo: the photo is split into the scene behind the glass and the reflection (DSRNet, downloaded on request: enhance.model.download reflection + vgg19), made in the background in the app → reflection.status (+ notice when a model is missing)",
+            has_active,
+            |s, p| {
+                let c = "reflection.set";
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
+                if let Some(v) = p.get("enabled").and_then(Value::as_bool) {
+                    d.reflection.enabled = v;
+                }
+                if let Some(v) = p.get("keep").and_then(Value::as_bool) {
+                    d.reflection.keep = v;
+                }
+                if let Some(v) = p.get("amount").and_then(Value::as_f64) {
+                    if !v.is_finite() {
+                        return Err(bad(c, "amount is 0..100"));
+                    }
+                    d.reflection.amount = v.clamp(0.0, 100.0);
+                }
+                s.reflection_rekey(id, &mut d);
+                s.set_develop(id, d, "Remove Reflections")?;
+                let notice = s.reflection_schedule(id);
+                let mut out = s.reflection_status(id);
+                if let Some(n) = notice {
+                    out["notice"] = json!(n);
+                }
+                Ok(out)
+            }
+        ),
+        cmd!(
+            query "reflection.status",
+            "Remove Reflections Status",
+            [],
+            None,
+            "{} — the active photo's Remove Reflections settings, whether its layers are made, whether the models are installed, the work in progress",
+            has_active,
+            |s, _| {
+                let id = s.active().ok_or_else(|| bad("reflection.status", "no active photo"))?;
+                Ok(s.reflection_status(id))
             }
         ),
         cmd!("spot.delete", "Delete Spot", [], None, "{index? (the selected spot)}", has_active, |s, p| {
