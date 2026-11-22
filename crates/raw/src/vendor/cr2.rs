@@ -19,7 +19,7 @@
 //!   bytes (ColorData versions -3 and -4), which are paired up in the maker note's byte order first.
 //! - sRAW / mRAW (YCbCr, subsampled) are not supported yet.
 
-use super::{black_from_columns, white_from_data};
+use super::{black_columns, black_from_columns, white_from_data};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
 use lightcraft_geom::Orientation;
 use lightcraft_tiff::image::chunk_bytes;
@@ -149,7 +149,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let wb = mn.as_ref().and_then(|m| m.ifd.value(COLOR_BALANCE).map(|v| words(v, m.order))).and_then(|v| wb_from_color_balance(&v));
     let cfa = cfa_from_tag(raw.u64(CR2_CFA_PATTERN)).unwrap_or_else(|| Cfa::bayer_static("RGGB"));
     let black = if active.x >= 8 {
-        black_from_columns(&data, width, 2..active.x - 2, active.y..active.y + active.height, active)
+        let rows = active.y..active.y + active.height;
+        black_from_columns(&data, width, black_columns(&data, width, 2..active.x - 2, rows.clone()), rows, active)
     } else {
         BlackLevel::uniform(0.0)
     };
