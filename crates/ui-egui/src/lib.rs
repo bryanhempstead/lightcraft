@@ -24,6 +24,7 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 pub mod panels;
+pub mod publish_ui;
 pub mod recheck;
 pub mod render;
 pub mod shortcuts;
@@ -71,6 +72,8 @@ mod tests_metadata_views;
 mod tests_offline;
 #[cfg(test)]
 mod tests_panels;
+#[cfg(test)]
+mod tests_publish;
 #[cfg(test)]
 mod tests_quit_unsaved;
 #[cfg(test)]

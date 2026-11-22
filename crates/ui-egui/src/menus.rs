@@ -204,6 +204,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // L33: File ▸ Tethered Capture
     ("dialog.tetherStart", "Start Tethered Capture…", None, "File"),
     ("dialog.tetherStop", "Stop Tethered Capture", None, "File"),
+    // LRC-LIB-PUBLISH: publish the published collection on screen; LR-EXP-PHOTOS
+    ("dialog.publish", "Publish Now", None, "Library"),
+    ("dialog.exportToPhotos", "Export to Photos…", None, "File"),
     // E12: File ▸ Email Photos…
     ("file.emailPhotos", "Email Photos…", Some("Cmd+Shift+M"), "File"),
     // L26: Compare ▸ Link Focus
@@ -1515,6 +1518,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             r
         }
+        "dialog.publish" => crate::publish_ui::start_publish(app, p),
+        "dialog.exportToPhotos" => crate::publish_ui::start_photos(app, p),
         "dialog.tetherStop" => {
             let r = app.run("tether.stop", json!({}));
             if r.is_ok() {
@@ -1944,6 +1949,8 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
         s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
         "dialog.syncSettings" => app.session.selection.ids.len() > 1,
+        "dialog.publish" => matches!(app.session.source, lightcraft_engine::LibrarySource::Published(_)),
+        "dialog.exportToPhotos" => app.session.active().is_some() && lightcraft_engine::apple_photos::available(),
         "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {
             app.session.active().is_some()
         }

@@ -79,6 +79,7 @@ pub fn source_key(app: &LightcraftApp) -> String {
         LibrarySource::RecentlyAdded => "recentlyAdded".into(),
         LibrarySource::PreviousImport => "previousImport".into(),
         LibrarySource::Album(a) => format!("album:{}", a.0),
+        LibrarySource::Published(c) => format!("published:{c}"),
         LibrarySource::RecentlyDeleted => "recentlyDeleted".into(),
         LibrarySource::Picks => "picks".into(),
         LibrarySource::Folder => format!("folder:{}", app.session.browse.as_ref().map(|b| b.path.as_str()).unwrap_or("")),
@@ -191,6 +192,8 @@ pub fn resume(app: &mut LightcraftApp) -> Result<Value, String> {
     if source_key(app) != spot.source {
         let r = if let Some(a) = spot.source.strip_prefix("album:") {
             app.run("library.source", json!({"kind": "album", "id": a.parse::<u64>().unwrap_or(0)}))
+        } else if let Some(c) = spot.source.strip_prefix("published:") {
+            app.run("library.source", json!({"kind": "published", "id": c.parse::<u64>().unwrap_or(0)}))
         } else if let Some(f) = spot.source.strip_prefix("folder:") {
             app.run("library.browse", json!({"path": f}))
         } else if let Some(f) = spot.source.strip_prefix("libraryFolder:") {

@@ -24,6 +24,9 @@ pub enum LibrarySource {
     /// A folder the library's photos were imported from ([`crate::Session::library_folder`]),
     /// and the folders inside it (`library.folders`).
     LibraryFolder,
+    /// A published collection (LRC-LIB-PUBLISH, [`crate::publish`]): its photos grouped New,
+    /// Modified, Published, Deleted.
+    Published(u64),
 }
 
 /// The folder a [`LibrarySource::Folder`] view shows.
@@ -60,7 +63,7 @@ impl LibrarySource {
             LibrarySource::RecentlyDeleted => f.deleted = true,
             LibrarySource::Picks => f.flag = Some(lightcraft_catalog::Flag::Pick),
             // the folder itself is filled in by the session (it holds the path)
-            LibrarySource::Folder | LibrarySource::Missing | LibrarySource::LibraryFolder => {}
+            LibrarySource::Folder | LibrarySource::Missing | LibrarySource::LibraryFolder | LibrarySource::Published(_) => {}
         }
         f
     }
@@ -76,6 +79,7 @@ impl LibrarySource {
             LibrarySource::Folder => "Folder".into(),
             LibrarySource::LibraryFolder => "Folder".into(),
             LibrarySource::Missing => "Missing Photos".into(),
+            LibrarySource::Published(c) => crate::publish::collection(cat, *c).map(|c| c.name).unwrap_or_else(|| "Published Collection".into()),
         }
     }
 }
