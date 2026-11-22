@@ -485,17 +485,26 @@ fn hsv_table(m: &sdk::HueSatMap) -> Option<HsvTable> {
     HsvTable::from_tags(&[m.dims[0] as u64, m.dims[1] as u64, m.dims[2].max(1) as u64], &data, m.encoding as u64)
 }
 
-/// Cameras whose profile hue/sat map is applied in the per-pixel stage, after white balance and
-/// Calibration, as Camera Raw does (R10, `docs/lr-match.md` → *Round 7*), instead of in the raw
-/// decode; their custom white balance then moves as the DNG colour spec says (strength 1, R05).
-/// Empty for now: with every camera in it Bryan's acceptance set goes 4.01 → 3.81 ΔE (Summer
-/// Fields R6 5.88 → 4.51), but one default photo crosses the pass line (1.99 → 2.01) and the three
-/// X100F PV6 photos get 0.17 worse, so the gate fails (`docs/lr-match.md` → *Round 7*).
+/// Apply every camera's profile hue/sat map in the per-pixel stage, after white balance and
+/// Calibration, as Camera Raw does (R10), instead of in the raw decode; the custom white balance
+/// then moves as the DNG colour spec says (strength 1, R05). On since round 12: the oracle chart's
+/// Summer Fields calibration 4.23 → 2.20 ΔE and every single Calibration stop closer; with the
+/// round's other changes the acceptance gate passes (`docs/lr-match.md` → Round 12).
+pub const HUE_SAT_IN_FINISH_ALL: bool = true;
+/// Cameras whose hue/sat map is applied in the per-pixel stage when [`HUE_SAT_IN_FINISH_ALL`] is off.
 pub const HUE_SAT_IN_FINISH: &[&str] = &[];
 
-/// Whether `model`'s hue/sat map is applied in the per-pixel stage ([`HUE_SAT_IN_FINISH`]).
+/// Whether `model`'s hue/sat map is applied in the per-pixel stage ([`HUE_SAT_IN_FINISH_ALL`],
+/// [`HUE_SAT_IN_FINISH`], or `LIGHTCRAFT_HUE_SAT_FINISH=1|0` in the environment for every camera:
+/// measurement runs, read once).
 pub fn hue_sat_in_finish(model: &str) -> bool {
-    HUE_SAT_IN_FINISH.contains(&model)
+    static ALL: OnceLock<bool> = OnceLock::new();
+    let all = *ALL.get_or_init(|| match std::env::var("LIGHTCRAFT_HUE_SAT_FINISH").as_deref() {
+        Ok("1") => true,
+        Ok("0") => false,
+        _ => HUE_SAT_IN_FINISH_ALL,
+    });
+    all || HUE_SAT_IN_FINISH.contains(&model)
 }
 
 /// The base of camera `key` with `hue_sat` applied by the per-pixel stage (Bryan's fork, R10:

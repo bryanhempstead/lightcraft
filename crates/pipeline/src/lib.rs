@@ -25,6 +25,7 @@
 
 pub mod adobe;
 pub mod auto;
+pub mod black_cr;
 pub mod bw_cr;
 pub mod colorops;
 pub mod colortab;
@@ -646,7 +647,17 @@ fn render_impl(
         seed_planes(&mut planes, g);
     }
     let tex_space = texture_cr::space(info);
-    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, info.native_long, req.quality, &mut planes, tex_space.as_ref().map(|m| &m.0));
+    let mut prep = local::prepare(
+        lin.clone(),
+        s,
+        frame,
+        px_per_long,
+        info.native_long,
+        req.quality,
+        &mut planes,
+        tex_space.as_ref().map(|m| &m.0),
+        info.adobe.is_some(),
+    );
     if let Some(a) = globals.and_then(|g| g.air).filter(|_| prep.dark.is_some()) {
         prep.air = a;
     }

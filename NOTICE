@@ -63,6 +63,10 @@ copied verbatim) ports RAWmakase's scene tone map from the same crate: local_ton
 map, guided base, grid sampling), clarity.rs and clarity_data.rs, scene_tone/haze.rs,
 local_tone_rule.rs and local_tone_rule_data.rs, local_tone_rule_ext_data.rs,
 local_tone_rule_pair_data.rs (fitted networks and tables), under the same MIT License.
+Round 12 (black_cr.rs, with black_cr.bin copied verbatim from scene_tone/default_black.bin) ports
+RAWmakase's default black point (scene_tone/global.rs: default_black, black_correction,
+without_black, evaluate; pipeline/tone.rs: the Shadows shift of the dark key), under the same MIT
+License, modified by the LightCraft contributors (2026).
 
 LibRaw (https://www.libraw.org, Copyright 2008-2025 LibRaw LLC; based on dcraw by Dave Coffin) is
 LightCraft's fallback raw decoder in this fork (crates/libraw-sys). It is not in this repository:

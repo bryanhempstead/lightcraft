@@ -83,4 +83,12 @@ fn scene_tone_map_matches_cpu() {
         ..Default::default()
     }];
     check_max("masks on the scene map", &src, &info, &s, DEHAZE_MAX_LSB);
+    // round 12: Camera Raw's default black at the photo's dark key, moved by Shadows and faded by
+    // positive Blacks (`black_cr`), on a darker photo
+    let dark = Arc::new(Rgb32f { width: src.width, height: src.height, data: src.data.iter().map(|p| p.map(|v| v * 0.02)).collect() });
+    let mut s = DevelopSettings::default();
+    check("default black at the photo's key", &dark, &info, &s);
+    s.light.shadows = 70.0;
+    s.light.blacks = 10.0;
+    check("default black after shadows", &dark, &info, &s);
 }

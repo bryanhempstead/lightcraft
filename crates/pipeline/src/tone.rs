@@ -442,6 +442,20 @@ impl ToneMap {
     /// Blacks in turn as EV moves; Highlights / Shadows are local (`hs_lut`). The table is applied
     /// channel-wise in ProPhoto (`RefBaselineRGBTone`), not on luminance.
     pub fn adobe_lr(base: &crate::adobe::Base, exposure: f64, contrast: f64, whites: f64, blacks: f64, key: Option<f32>) -> ToneMap {
+        Self::adobe_lr_black(base, exposure, contrast, whites, blacks, key, None)
+    }
+
+    /// [`Self::adobe_lr`] with the black response swapped for the photo's (`black`: samples of
+    /// [`crate::black_cr::correction`] over the profile curve's input).
+    pub fn adobe_lr_black(
+        base: &crate::adobe::Base,
+        exposure: f64,
+        contrast: f64,
+        whites: f64,
+        blacks: f64,
+        key: Option<f32>,
+        black: Option<&[f32]>,
+    ) -> ToneMap {
         use crate::tone_adobe as t;
         let pivot = key.filter(|k| k.is_finite()).map_or(0.0, |k| (k - t::KEY_RAMP).clamp(-10.0, 10.0) * t::CONTRAST_PIVOT);
         let (e, c, w, b) = (exposure as f32, contrast as f32, whites as f32, blacks as f32);
@@ -464,7 +478,11 @@ impl ToneMap {
                     x += adobe_shift(&t::K_VALUES, &t::K_TABLE, b, x);
                 }
                 let d = table_at(&t::BASE, ev) + (x - ev);
-                base.curve_at(GREY * 2f32.powf(ev + d))
+                let y = GREY * 2f32.powf(ev + d);
+                base.curve_at(match black {
+                    Some(b) if y < 1.0 => crate::black_cr::evaluate(b, y),
+                    _ => y,
+                })
             })
             .collect();
         ToneMap { lut, chroma: NO_CHROMA }
@@ -937,5 +955,25 @@ mod tests {
         let m = adobe_shift(&crate::tone_adobe::W_VALUES, &crate::tone_adobe::W_TABLE, 37.5, 1.0);
         assert!((m - (a + b2) / 2.0).abs() < 1e-5);
         assert_eq!(adobe_shift(&crate::tone_adobe::W_VALUES, &crate::tone_adobe::W_TABLE, 0.0, 1.0), 0.0);
+    }
+
+    /// Round 12: a photo whose darkest tones sit higher than the measurement ramp's gets Camera
+    /// Raw's deeper default black (`black_cr`) — darker shadows, the same mid-tones and white.
+    #[test]
+    fn a_brighter_dark_key_deepens_the_tones_toe() {
+        let base = crate::adobe::Base {
+            hue_sat: None,
+            hue_sat_ev: 0.0,
+            look: None,
+            curve: (0..=crate::adobe::CURVE_N).map(|i| (i as f32 / crate::adobe::CURVE_N as f32).sqrt()).collect(),
+            black: 0.0,
+        };
+        let plain = ToneMap::adobe_lr(&base, 0.0, 0.0, 0.0, 0.0, None);
+        let c = crate::black_cr::correction(-8.0, crate::black_cr::RAMP_KEY, 1.0).expect("keys differ");
+        let deep = ToneMap::adobe_lr_black(&base, 0.0, 0.0, 0.0, 0.0, None, Some(&c[..]));
+        let at = |t: &ToneMap, ev: f32| t.apply(0.18 * ev.exp2());
+        assert!(at(&deep, -7.0) < 0.95 * at(&plain, -7.0), "{} {}", at(&deep, -7.0), at(&plain, -7.0));
+        assert!((at(&deep, 0.0) - at(&plain, 0.0)).abs() < 0.01 && (at(&deep, 2.5) - at(&plain, 2.5)).abs() < 1e-3);
+        assert!(deep.lut().windows(2).all(|p| p[1] >= p[0] - 1e-4));
     }
 }
