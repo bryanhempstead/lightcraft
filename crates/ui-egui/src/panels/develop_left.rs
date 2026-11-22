@@ -82,6 +82,39 @@ fn note(ui: &mut egui::Ui, text: &str) {
 /// The zoom presets of the Navigator header: (label, `view.navigate` zoom).
 pub const NAV_ZOOMS: [(&str, &str); 4] = [("FIT", "fit"), ("FILL", "fill"), ("1:1", "100"), ("2:1", "200")];
 
+/// L26: the Navigator's other zoom levels (Lightroom's 1:16 … 11:1 popup), percent.
+pub const NAV_MORE_ZOOMS: [f32; 15] = [6.25, 8.33, 12.5, 16.67, 25.0, 33.33, 50.0, 66.67, 100.0, 200.0, 300.0, 400.0, 800.0, 1100.0, 1600.0];
+
+/// The navigator's ▾ popup with [`NAV_MORE_ZOOMS`], at `r`.
+pub(crate) fn nav_more_zooms(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
+    let resp = ui.interact(r, egui::Id::new("nav-zoom-more"), Sense::click());
+    register(ui.ctx(), "button:navZoomMore", r);
+    let t = Tokens::get(ui.ctx());
+    let cur = match app.ui.zoom {
+        Zoom::Percent(p) if !NAV_MORE_ZOOMS.iter().any(|z| (z - p).abs() < 0.05) || p > 200.0 || p < 100.0 => Some(p),
+        _ => None,
+    };
+    let text = cur.map(|p| format!("{p:.0}%")).unwrap_or_else(|| "more.".into());
+    let g = ui.painter().layout_no_wrap(text, t.semibold(11.0), Color32::PLACEHOLDER);
+    let c = if cur.is_some() {
+        t.text
+    } else if resp.hovered() {
+        t.text_label
+    } else {
+        t.text_dim
+    };
+    ui.painter().galley(pos2(r.right() - g.size().x - 2.0, r.center().y - g.size().y / 2.0), g, c);
+    egui::Popup::menu(&resp).show(|ui| {
+        for z in NAV_MORE_ZOOMS {
+            let label = if z < 100.0 { format!("1:{:.0}  ({z:.0}%)", 100.0 / z) } else { format!("{:.0}:1", z / 100.0) };
+            if ui.button(label).clicked() {
+                let _ = app.run("view.navigate", json!({"zoom": {"percent": z}}));
+                ui.close();
+            }
+        }
+    });
+}
+
 /// Which navigator zoom preset `z` is (index into [`NAV_ZOOMS`]).
 pub fn nav_zoom_index(z: Zoom) -> Option<usize> {
     match z {
@@ -140,6 +173,8 @@ fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         x = r.left() - 6.0;
     }
+    // L26: the other zoom levels (1:16 … 16:1) in a popup left of the presets
+    nav_more_zooms(app, ui, Rect::from_min_max(pos2(x - 70.0, row.top() + 3.0), pos2(x - 4.0, row.bottom() - 3.0)));
     // the photo with the visible area boxed; click or drag to pan there
     let w = ui.available_width();
     let (area, resp) = ui.allocate_exact_size(vec2(w, (w * 0.66).clamp(90.0, 260.0)), Sense::click_and_drag());

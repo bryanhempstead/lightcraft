@@ -192,6 +192,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // Metadata ▸ keyword list (L11)
     ("dialog.importKeywords", "Import Keywords…", None, "Metadata"),
     ("dialog.importCatalog", "Import from Another Library…", None, "File"),
+    // L26: Compare ▸ Link Focus
+    ("compare.linkFocus", "Link Focus", None, ""),
     ("dialog.exportKeywords", "Export Keywords…", None, "Metadata"),
     ("dialog.keywordShortcut", "Set Keyword Shortcut…", Some("Cmd+Alt+Shift+K"), "Metadata"),
     ("dialog.editKeyword", "Edit Keyword Tag…", None, ""),
@@ -830,8 +832,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             // Validate the complete request before changing either part of the viewport.
             let zoom = match p.get("zoom") {
                 Some(v) => match serde_json::from_value::<Zoom>(v.clone()) {
-                    Ok(Zoom::Percent(p)) if !p.is_finite() || p <= 0.0 || p > 800.0 => {
-                        return Some(Err("view.navigate: zoom percent must be greater than 0 and at most 800".into()));
+                    Ok(Zoom::Percent(p)) if !p.is_finite() || p <= 0.0 || p > 1600.0 => {
+                        return Some(Err("view.navigate: zoom percent must be greater than 0 and at most 1600".into()));
                     }
                     Ok(z) => z,
                     Err(e) => return Some(Err(format!("view.navigate: {e}"))),
@@ -1353,6 +1355,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.quit" => {
             app.ui.quit = true;
             Ok(Value::Null)
+        }
+        "compare.linkFocus" => {
+            app.ui.compare_frozen = match (p.get("on").and_then(Value::as_bool), app.ui.compare_frozen) {
+                (Some(true), _) | (None, Some(_)) => None,
+                (Some(false), Some(f)) => Some(f),
+                (Some(false), None) | (None, None) => Some((app.ui.zoom, app.ui.pan)),
+            };
+            Ok(json!({"linked": app.ui.compare_frozen.is_none()}))
         }
         "dialog.importCatalog" => {
             let path = match p.get("path").and_then(Value::as_str) {

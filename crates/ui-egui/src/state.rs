@@ -434,6 +434,9 @@ pub struct UiState {
     pub zoom: Zoom,
     /// Pan offset of the loupe when zoomed (image-normalized centre).
     pub pan: (f32, f32),
+    /// L26: Compare with Link Focus off — the select's own zoom and position (None = linked).
+    #[serde(skip)]
+    pub compare_frozen: Option<(Zoom, (f32, f32))>,
     /// Zoom applied by a click on the image (and Z / Space), in percent (100 = 1:1, 200 = 2:1);
     /// one of [`CLICK_ZOOMS`].
     pub click_zoom: u32,
@@ -860,6 +863,7 @@ impl Default for UiState {
             filmstrip: true,
             zoom: Zoom::Fit,
             pan: (0.5, 0.5),
+            compare_frozen: None,
             click_zoom: 100,
             zoom_anim: false,
             before_after: BeforeAfter::Off,

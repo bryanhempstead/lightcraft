@@ -325,6 +325,9 @@ fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         return;
     }
     let w = ui.available_width();
+    // L26: the loupe's zoom levels (1:16 … 16:1) from here too
+    let (zr, _) = ui.allocate_exact_size(vec2(w, 20.0), Sense::hover());
+    super::develop_left::nav_more_zooms(app, ui, Rect::from_min_max(pos2(zr.right() - 90.0, zr.top()), pos2(zr.right() - 12.0, zr.bottom())));
     let (r, resp) = ui.allocate_exact_size(vec2(w, (w * 0.62).clamp(90.0, 200.0)), Sense::click());
     register(ui.ctx(), "navigator".to_string(), r);
     let frame = Rect::from_min_max(r.min + vec2(12.0, 0.0), r.max - vec2(12.0, 10.0));

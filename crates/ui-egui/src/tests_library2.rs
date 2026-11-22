@@ -267,3 +267,33 @@ fn import_previews_and_culling() {
     settle(&mut h);
     shot(&mut h, "i03-import-window.png");
 }
+
+/// L26: Compare's Link Focus (the select keeps its own zoom while unlinked) and the Navigator's
+/// other zoom levels.
+#[test]
+fn compare_link_focus_and_navigator_zooms() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    s.execute("library.select", &json!({"ids": ids})).unwrap();
+    let mut h = headless(s);
+    h.app.run("view.compare", json!({})).unwrap();
+    settle(&mut h);
+    shot(&mut h, "l26-compare.png");
+    assert!(h.app.ui.compare_frozen.is_none(), "linked by default");
+    click(&mut h, "button:compareLink");
+    assert!(h.app.ui.compare_frozen.is_some(), "unlinked");
+    let frozen = h.app.ui.compare_frozen;
+    h.app.run("view.navigate", json!({"zoom": {"percent": 1600}})).unwrap();
+    settle(&mut h);
+    assert_eq!(h.app.ui.compare_frozen, frozen, "the select keeps its view");
+    shot(&mut h, "l26-compare-unlinked.png");
+    click(&mut h, "button:compareLink");
+    assert!(h.app.ui.compare_frozen.is_none());
+    // the navigator's ▾ shows a level outside the presets
+    h.app.run("view.navigate", json!({"zoom": {"percent": 25}})).unwrap();
+    h.app.run("view.detail", json!({})).unwrap();
+    settle(&mut h);
+    let w = request(&mut h, "ui.widgets", json!({})).to_string();
+    assert!(w.contains("button:navZoomMore"), "{w}");
+    shot(&mut h, "l26-navigator.png");
+}
