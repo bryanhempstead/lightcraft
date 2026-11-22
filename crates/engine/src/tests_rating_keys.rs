@@ -369,3 +369,28 @@ fn text_filter_targets_and_rules() {
     let n = count(&mut s, json!({"text": "harbour", "textTarget": "title", "textRule": "notContains"}));
     assert_eq!(n as usize, v.len() - 2);
 }
+
+/// L27 + L28: Auto-Stack by Similarity (one undo step) and Find Duplicates.
+#[test]
+fn auto_stack_by_similarity_and_duplicates() {
+    let mut s = Session::with_demo();
+    let free =
+        s.visible_cloned().into_iter().filter(|id| s.catalog.stack_of(*id).is_none() && s.catalog.photo(*id).unwrap().copy_of.is_none()).count();
+    // everything alike, any time apart: one stack of every free photo
+    let r = s.execute("stack.autoSimilar", &json!({"similarity": 0.0, "gap": 0, "preview": true})).unwrap();
+    // (photos whose look can't be read — no source — break a run)
+    let (stacks, photos) = (r["stacks"].as_u64().unwrap(), r["photos"].as_u64().unwrap());
+    assert!(stacks >= 1 && photos > stacks && photos <= free as u64, "{r}");
+    let stacked = |s: &Session| s.catalog.photos().filter(|p| s.catalog.stack_of(p.id).is_some()).count();
+    let before = stacked(&s);
+    s.execute("stack.autoSimilar", &json!({"similarity": 0.0, "gap": 0})).unwrap();
+    assert_eq!(stacked(&s), before + photos as usize);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(stacked(&s), before, "one undo step");
+    // nothing is exactly alike in the demo: no look-alike duplicates at 1.0 within 0 s
+    let d = s.execute("library.duplicates", &json!({"similarity": 1.0, "gap": 0.001, "filter": false})).unwrap();
+    assert!(d["groups"].is_array());
+    let d = s.execute("library.duplicates", &json!({"similarity": 0.0, "gap": 0})).unwrap();
+    assert!(d["photos"].as_u64().unwrap() > 1);
+    assert_eq!(s.filter.only.len() as u64, d["photos"].as_u64().unwrap(), "the view shows them");
+}
