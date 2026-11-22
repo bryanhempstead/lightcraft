@@ -39,7 +39,7 @@ duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | Nikon / Sony / Panasonic / older-Canon raw shooter | ~65% | Camera colour fidelity and coverage (ARW, NEF and RW2 preview estimates are only a starting point); Panasonic compacts and kit zooms also miss their embedded distortion correction |
 | Fujifilm raw shooter | ~65% | Uncompressed and lossless/lossy compressed RAF decoded; camera colour calibration remains missing. Verified on 13 bodies, including 14/16-bit GFX; see `docs/raf-compression.md` |
 | Canon CR3 / Olympus compressed-raw shooter | ~65% | CR3 lossless Bayer and version 0x100/0x200 C-RAW develop from sensor data (M50, R100, R8 verified pixel for pixel; all 2,451 of Bryan's R6 CR3s); other CRX variants (e.g. R6 crop-mode C-RAW) and compressed ORF go through LibRaw in this fork instead of the embedded JPEG. Camera colour and broader model verification remain |
-| Lightroom Classic power user | ~45% | Print, Book, Map, publish, tethering |
+| Lightroom Classic power user | ~45% | Print, Book, Map, publish, tethering (catalogs migrate with history and snapshots, and re-sync) |
 | Relies on AI (masks, denoise) | ~25% | Object / Describe masks via optional SAM 3 (download not yet hosted); no AI denoise |
 
 ## Where we're going
@@ -222,6 +222,11 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   bodies; RW2 gets the file-local camera look (accepted on 140 of 174 files with a preview).
 - 2026-10-08: independent Rust CR3 lossless and version 0x100/0x200 C-RAW decoding, six exact full-sensor regressions on M50/R100/R8; any CR3 decode error falls back to the embedded JPEG; guarded CR3 camera-JPEG colour fitting with independent framing validation (`docs/cr3.md`). Unverified CRX variants and broader model verification remain.
 - 2026-11-21 (fork): LibRaw 0.22.3 as the fallback raw decoder (`crates/libraw-sys`): native first, then LibRaw, then the embedded preview; 1,258 camera models; sRAW, CRX variants, compressed ORF, CRW/MRW/SRW and the long tail decode from sensor data.
+- 2026-11-21 (fork): the Lightroom Classic migration keeps going after the move: `library.syncLightroom` (File ▸ Sync
+  from Lightroom Classic…, dry run first) brings photos, edits, metadata, collections, history and snapshots changed in
+  Lightroom since the migration / last sync, without overwriting edits made here unless asked; migrated photos keep
+  their Lightroom history (side files, History panel) and snapshots (versions); Upright uses the transform Lightroom
+  stored.
 
 ## Chinese and Japanese interfaces, and text watermarks
 

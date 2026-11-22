@@ -18,6 +18,7 @@ pub mod keymap;
 pub mod leftoff;
 pub mod links;
 pub mod lr_migrate;
+pub mod lr_sync;
 pub mod menubar;
 pub mod menus;
 pub mod merge;

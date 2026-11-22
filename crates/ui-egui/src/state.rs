@@ -655,6 +655,17 @@ pub enum Dialog {
     },
     About,
     Shortcuts,
+    /// File ▸ Sync from Lightroom Classic…: what a sync would bring (`report`, the dry run; `None`
+    /// while the catalog is read into `records` / `extras`) and the rule for photos changed on
+    /// both sides (`conflicts`: ask | lightroom | newest).
+    LightroomSync {
+        catalog: String,
+        records: String,
+        extras: String,
+        report: Option<serde_json::Value>,
+        conflicts: String,
+        error: Option<String>,
+    },
 }
 
 impl Default for UiState {

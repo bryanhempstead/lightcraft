@@ -159,6 +159,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.previousImport", "Previous Import", None, "Library"),
     ("view.focusSearch", "Find…", Some("Cmd+F"), "Edit"),
     ("dialog.export", "Export…", None, "File"),
+    ("dialog.syncLightroom", "Sync from Lightroom Classic…", None, "File"),
     ("photo.editInExternal", "Edit in External Editor", Some("Cmd+Shift+E"), "Photo"),
     ("dialog.mergeHdr", "HDR…", Some("Ctrl+H"), "Photo>Photo Merge"),
     ("dialog.mergePanorama", "Panorama…", Some("Ctrl+M"), "Photo>Photo Merge"),
@@ -1164,6 +1165,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.dialog = Some(Dialog::CopySettings { groups });
             Ok(Value::Null)
         }
+        // File ▸ Sync from Lightroom Classic…: the catalog is read in the background (lr_sync.rs)
+        "dialog.syncLightroom" if !cfg!(target_arch = "wasm32") => crate::lr_sync::start(app, p),
         "dialog.export" => {
             let prev = app.session.last_export.clone().unwrap_or_default();
             let u = |k: &str, d: u64| prev.get(k).and_then(Value::as_u64).unwrap_or(d);

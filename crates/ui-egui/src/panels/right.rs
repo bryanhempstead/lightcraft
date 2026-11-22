@@ -1147,8 +1147,10 @@ pub(crate) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "History");
     let t = Tokens::get(ui.ctx());
+    // the steps it had in Lightroom Classic (migrated with it), under ours
+    let lightroom = lightcraft_engine::lr_history::history_of(&app.session, id);
     padded(ui, |ui| {
-        if p.history.is_empty() {
+        if p.history.is_empty() && lightroom.is_none() {
             ui.label(egui::RichText::new(crate::i18n::tr("No edits yet.")).color(t.text_dim));
         }
         for (i, h) in p.history.iter().enumerate().rev() {
@@ -1179,6 +1181,34 @@ pub(crate) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                 ui.separator();
                 if ui.button(crate::i18n::tr("Clear History")).clicked() {
                     let _ = app.run("history.clear", json!({}));
+                }
+            });
+        }
+        let Some(lr) = lightroom else { return };
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(crate::i18n::tr("In Lightroom Classic")).font(t.semibold(11.5)).color(t.text_dim));
+        for (i, st) in lr.steps.iter().enumerate().rev() {
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+            register(ui.ctx(), format!("lrhistory:{i}"), r);
+            if resp.hovered() {
+                ui.painter().rect_filled(r, 3.0, t.hover);
+            }
+            paint(ui.painter(), Rect::from_min_size(r.min + vec2(0.0, 4.0), vec2(16.0, 16.0)), Icon::Clock, t.text_dim);
+            ui.painter().text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, &st.label, t.font(12.5), t.text_dim);
+            let resp = match &st.at {
+                Some(at) => resp.on_hover_text(short_time(at)),
+                None => resp,
+            };
+            if resp.clicked() {
+                let _ = app.run("history.restoreLightroom", json!({"index": i}));
+            }
+            resp.context_menu(|ui| {
+                if ui.button(crate::i18n::tr("Copy History Step Settings to Before")).clicked() {
+                    let _ = app.run("beforeAfter.setBefore", json!({"source": "lightroom", "index": i}));
+                }
+                if ui.button(crate::i18n::tr("Create Version from Step")).clicked() {
+                    let _ = app.run("history.restoreLightroom", json!({"index": i}));
+                    let _ = app.run("version.create", json!({"name": st.label}));
                 }
             });
         }
