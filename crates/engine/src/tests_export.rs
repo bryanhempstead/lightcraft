@@ -5,6 +5,7 @@ use serde_json::json;
 use crate::Session;
 use crate::export::{ExportFormat, ExportOptions, export_photo};
 use crate::tests_xmp::{synthetic_dng_with, temp_dir};
+use lightcraft_pipeline::OutputSpace;
 
 #[test]
 fn full_size_export_of_a_cropped_photo_is_not_upscaled() {
@@ -439,4 +440,36 @@ fn hdr_avif_export_is_pq_rec2020() {
     assert!(hdr.bytes.windows(4).any(|w| w == b"clli"), "content light level box");
     // a photo without an HDR edit exports as an ordinary (sRGB) AVIF
     assert!(nclx(&sdr.bytes).is_none_or(|c| c[3] != 16));
+}
+
+#[test]
+fn hdr_avif_png_and_jxl_take_pq_or_hlg_and_jxl_can_carry_a_gain_map() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
+    // HLG AVIF: nclx BT.2020 (9), HLG (18), BT.2020 NCL (9), full range; no content light level
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "avif", "hdr": true, "hdrTransfer": "hlg", "quality": 70}));
+    assert_eq!(o.hdr_transfer, crate::export::HdrCurve::Hlg);
+    assert_eq!(o.to_json()["hdrTransfer"], "hlg");
+    let f = export_photo(&mut s, id, &o, 1).unwrap();
+    let i = f.bytes.windows(4).position(|w| w == b"nclx").expect("colr nclx box");
+    assert_eq!(f.bytes[i + 4..i + 11].to_vec(), vec![0, 9, 0, 18, 0, 9, 0x80]);
+    assert!(!f.bytes.windows(4).any(|w| w == b"clli"));
+    // HDR PNG: 16-bit, cICP BT.2020 + PQ
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "png", "hdr": true}));
+    assert!(o.hdr_output() && !o.gain_map_output());
+    let f = export_photo(&mut s, id, &o, 1).unwrap();
+    let i = f.bytes.windows(4).position(|w| w == b"cICP").expect("cICP chunk");
+    assert_eq!(f.bytes[i + 4..i + 8].to_vec(), vec![9, 16, 0, 1]);
+    // HDR JPEG XL: Maximize Compatibility (default) = SDR base + jhgm gain map; off = PQ
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "jxl", "hdr": true, "quality": 80}));
+    assert!(o.gain_map_output());
+    let f = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(f.bytes.windows(4).any(|w| w == b"jhgm"), "gain map box");
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "jxl", "hdr": true, "hdrCompat": false, "quality": 80}));
+    assert_eq!(o.effective_space(), OutputSpace::Rec2020);
+    let f = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(!f.bytes.windows(4).any(|w| w == b"jhgm"));
+    let d = lightcraft_codecs::decode(&f.bytes, lightcraft_codecs::DecodeOptions::default()).unwrap();
+    assert_eq!(d.image.width.max(d.image.height), 160);
 }

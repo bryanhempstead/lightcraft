@@ -388,33 +388,88 @@ pub fn pq_decode(e: f32) -> f32 {
     ((p - C1).max(0.0) / (C2 - C3 * p)).powf(1.0 / M1) * 10_000.0
 }
 
+/// Transfer curve of an HDR file: SMPTE ST 2084 (PQ, absolute) or ITU-R BT.2100 HLG (relative).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HdrTransfer {
+    #[default]
+    Pq,
+    Hlg,
+}
+
+impl HdrTransfer {
+    /// The CICP / H.273 transfer characteristics code (16 = PQ, 18 = HLG).
+    pub fn cicp(self) -> u8 {
+        match self {
+            HdrTransfer::Pq => 16,
+            HdrTransfer::Hlg => 18,
+        }
+    }
+
+    /// Display-referred linear Rec. 2020 RGB (SDR white = 1.0) → this curve's signal 0..1.
+    pub fn signal(self, rgb: [f32; 3]) -> [f32; 3] {
+        match self {
+            HdrTransfer::Pq => rgb.map(|v| pq_encode((if v.is_finite() { v.max(0.0) } else { 0.0 }) * HDR_REFERENCE_WHITE_NITS)),
+            HdrTransfer::Hlg => hlg_signal(rgb),
+        }
+    }
+}
+
+/// Nominal peak of the HLG reference display, cd/m² (ITU-R BT.2100 / BT.2408).
+pub const HLG_REFERENCE_PEAK_NITS: f32 = 1000.0;
+
+/// Display-referred linear RGB (SDR white = 1.0, Rec. 2020) → HLG signal 0..1, per BT.2100:
+/// display light normalised to the 1000 cd/m² reference display, the inverse OOTF (system gamma
+/// 1.2, applied on luminance so hue is kept), then the HLG OETF. SDR white lands at signal 0.75,
+/// as BT.2408 asks. Non-finite or negative inputs count as 0. (Ported from upstream LightCraft.)
+pub fn hlg_signal(rgb: [f32; 3]) -> [f32; 3] {
+    const K: [f32; 3] = [0.2627, 0.6780, 0.0593];
+    const GAMMA: f32 = 1.2;
+    let fd = rgb.map(|v| (if v.is_finite() { v.max(0.0) } else { 0.0 }) * (HDR_REFERENCE_WHITE_NITS / HLG_REFERENCE_PEAK_NITS));
+    let yd = (K[0] * fd[0] + K[1] * fd[1] + K[2] * fd[2]).min(1.0);
+    let scale = if yd > 0.0 { yd.powf((1.0 - GAMMA) / GAMMA) } else { 0.0 };
+    fd.map(|v| lightcraft_color::transfer::hlg_encode(f64::from((v * scale).clamp(0.0, 1.0))).clamp(0.0, 1.0) as f32)
+}
+
+/// MaxCLL and MaxFALL (cd/m², 1..=10000) of display-referred linear Rec. 2020 `rgb` with SDR
+/// white at [`HDR_REFERENCE_WHITE_NITS`].
+fn content_light(rgb: &[[f32; 3]]) -> (u16, u16) {
+    const K: [f32; 3] = [0.2627, 0.6780, 0.0593];
+    let (mut max, mut sum) = (0f32, 0f64);
+    for c in rgb {
+        let nits = c.map(|v| (if v.is_finite() { v.max(0.0) } else { 0.0 }) * HDR_REFERENCE_WHITE_NITS);
+        max = max.max(nits[0].max(nits[1]).max(nits[2]));
+        sum += f64::from(K[0] * nits[0] + K[1] * nits[1] + K[2] * nits[2]);
+    }
+    let avg = if rgb.is_empty() { 1.0 } else { sum / rgb.len() as f64 };
+    (max.ceil().clamp(1.0, 10_000.0) as u16, avg.ceil().clamp(1.0, 10_000.0) as u16)
+}
+
+/// Encode an HDR AVIF with the PQ curve (see [`encode_avif_hdr`]).
+pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: u8, meta: &EncodeMeta) -> Result<Vec<u8>> {
+    encode_avif_hdr(width, height, rgb, quality, speed, meta, HdrTransfer::Pq)
+}
+
 /// Encode an HDR AVIF: `rgb` is linear light in **Rec. 2020** primaries with SDR white at 1.0
 /// (`width × height × 3`). Written as 10-bit 4:4:4 BT.2020 non-constant-luminance YCbCr with the
-/// PQ transfer curve, SDR white at [`HDR_REFERENCE_WHITE_NITS`], and a content light level box.
+/// `transfer` curve: PQ with SDR white at [`HDR_REFERENCE_WHITE_NITS`] and a content light level
+/// box, or HLG ([`hlg_signal`], no light level box: HLG is relative to the display).
 /// `quality` 1..=100, `speed` 1..=10. Native targets with the `avif` feature only.
-pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: u8, meta: &EncodeMeta) -> Result<Vec<u8>> {
+pub fn encode_avif_hdr(width: u32, height: u32, rgb: &[f32], quality: u8, speed: u8, meta: &EncodeMeta, transfer: HdrTransfer) -> Result<Vec<u8>> {
     let (w, h) = (width as usize, height as usize);
     let n = w.checked_mul(h).ok_or_else(|| Error::Encode("image too large".into()))?;
-    if n == 0 || rgb.len() < n * 3 {
+    if n == 0 || n.checked_mul(3).is_none_or(|need| rgb.len() < need) {
         return Err(Error::Encode("HDR AVIF: sample buffer too short".into()));
     }
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     {
         use rav1e::prelude::*;
         const K: [f32; 3] = [0.2627, 0.6780, 0.0593]; // BT.2020 NCL
-        let mut max_nits = 0f32;
-        let mut sum_nits = 0f64;
-        let planes: Vec<[u16; 3]> = rgb
-            .as_chunks::<3>()
-            .0
+        let px = rgb.as_chunks::<3>().0.get(..n).unwrap_or_default();
+        let cll = content_light(px);
+        let planes: Vec<[u16; 3]> = px
             .iter()
-            .take(n)
             .map(|c| {
-                let nits = c.map(|v| (if v.is_finite() { v.max(0.0) } else { 0.0 }) * HDR_REFERENCE_WHITE_NITS);
-                let y_nits = K[0] * nits[0] + K[1] * nits[1] + K[2] * nits[2];
-                max_nits = max_nits.max(nits[0].max(nits[1]).max(nits[2]));
-                sum_nits += y_nits as f64;
-                let [r, g, b] = nits.map(pq_encode);
+                let [r, g, b] = transfer.signal(*c);
                 let y = K[0] * r + K[1] * g + K[2] * b;
                 let cb = (b - y) / (2.0 * (1.0 - K[2])) + 0.5;
                 let cr = (r - y) / (2.0 * (1.0 - K[0])) + 0.5;
@@ -440,11 +495,14 @@ pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: 
         ec.pixel_range = PixelRange::Full;
         ec.color_description = Some(ColorDescription {
             color_primaries: ColorPrimaries::BT2020,
-            transfer_characteristics: TransferCharacteristics::SMPTE2084,
+            transfer_characteristics: match transfer {
+                HdrTransfer::Pq => TransferCharacteristics::SMPTE2084,
+                HdrTransfer::Hlg => TransferCharacteristics::HLG,
+            },
             matrix_coefficients: MatrixCoefficients::BT2020NCL,
         });
-        let cll = (max_nits.ceil().clamp(1.0, 10_000.0) as u16, ((sum_nits / n as f64).ceil().clamp(1.0, 10_000.0)) as u16);
-        ec.content_light = Some(ContentLight { max_content_light_level: cll.0, max_frame_average_light_level: cll.1 });
+        ec.content_light =
+            (transfer == HdrTransfer::Pq).then_some(ContentLight { max_content_light_level: cll.0, max_frame_average_light_level: cll.1 });
         ec.still_picture = true;
         ec.quantizer = quantizer;
         ec.min_quantizer = quantizer.min(255) as u8;
@@ -482,10 +540,15 @@ pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: 
         use avif_serialize::constants as c;
         let mut a = avif_serialize::Aviffy::new();
         a.set_matrix_coefficients(c::MatrixCoefficients::Bt2020Ncl)
-            .set_transfer_characteristics(c::TransferCharacteristics::Smpte2084)
+            .set_transfer_characteristics(match transfer {
+                HdrTransfer::Pq => c::TransferCharacteristics::Smpte2084,
+                HdrTransfer::Hlg => c::TransferCharacteristics::Hlg,
+            })
             .set_color_primaries(c::ColorPrimaries::Bt2020)
-            .set_full_color_range(true)
-            .set_content_light_level(cll.0, cll.1);
+            .set_full_color_range(true);
+        if transfer == HdrTransfer::Pq {
+            a.set_content_light_level(cll.0, cll.1);
+        }
         if let Some(exif) = meta.exif {
             a.set_exif(exif.to_vec());
         }
@@ -493,9 +556,59 @@ pub fn encode_avif_pq(width: u32, height: u32, rgb: &[f32], quality: u8, speed: 
     }
     #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
     {
-        let _ = (quality, speed, meta);
+        let _ = (quality, speed, meta, transfer);
         Err(Error::Encode("AVIF encoding is not available in this build".into()))
     }
+}
+
+/// Encode an HDR PNG: `rgb` is linear light in **Rec. 2020** primaries with SDR white at 1.0
+/// (`width × height × 3`), as for [`encode_avif_hdr`]. Written as 16-bit RGB with the `transfer`
+/// curve, described by a `cICP` chunk (PNG third edition: BT.2020 primaries, PQ or HLG, RGB, full
+/// range) and, for PQ, a `cLLI` content light level chunk. EXIF and XMP are embedded; an ICC
+/// profile is not (`cICP` describes the colour, and readers prefer it). (Upstream LightCraft's
+/// HDR PNG, cbc0e2d7d.)
+pub fn encode_png_hdr(width: u32, height: u32, rgb: &[f32], meta: &EncodeMeta, transfer: HdrTransfer) -> Result<Vec<u8>> {
+    let (w, h) = (width as usize, height as usize);
+    let n = w.checked_mul(h).ok_or_else(|| Error::Encode("image too large".into()))?;
+    if n == 0 || n.checked_mul(3).is_none_or(|need| rgb.len() < need) {
+        return Err(Error::Encode("HDR PNG: sample buffer too short".into()));
+    }
+    let px = rgb.as_chunks::<3>().0.get(..n).unwrap_or_default();
+    let mut bytes = Vec::with_capacity(n.saturating_mul(6));
+    for c in px {
+        for v in transfer.signal(*c) {
+            bytes.extend_from_slice(&((v * 65535.0).round().clamp(0.0, 65535.0) as u16).to_be_bytes());
+        }
+    }
+    let mut info = png::Info::with_size(width, height);
+    info.color_type = png::ColorType::Rgb;
+    info.bit_depth = png::BitDepth::Sixteen;
+    info.exif_metadata = meta.exif.map(|b| b.to_vec().into());
+    info.pixel_dims = meta.ppi.filter(|p| *p > 0).map(|p| {
+        let ppm = (f64::from(p) / 0.0254).round() as u32;
+        png::PixelDimensions { xppu: ppm, yppu: ppm, unit: png::Unit::Meter }
+    });
+    let mut out = Vec::new();
+    let e = |e: png::EncodingError| Error::Encode(e.to_string());
+    {
+        let mut enc = png::Encoder::with_info(&mut out, info).map_err(e)?;
+        enc.set_compression(png::Compression::Fast);
+        if let Some(xmp) = meta.xmp {
+            enc.add_itxt_chunk("XML:com.adobe.xmp".into(), xmp.into()).map_err(e)?;
+        }
+        let mut wr = enc.write_header().map_err(e)?;
+        // BT.2020 primaries (9), PQ (16) / HLG (18), RGB (0), full range (1)
+        wr.write_chunk(png::chunk::ChunkType(*b"cICP"), &[9, transfer.cicp(), 0, 1]).map_err(e)?;
+        if transfer == HdrTransfer::Pq {
+            // MaxCLL and MaxFALL in units of 0.0001 cd/m²
+            let cll = content_light(px);
+            let clli = [(u32::from(cll.0) * 10_000).to_be_bytes(), (u32::from(cll.1) * 10_000).to_be_bytes()].concat();
+            wr.write_chunk(png::chunk::ChunkType(*b"cLLI"), &clli).map_err(e)?;
+        }
+        wr.write_image_data(&bytes).map_err(e)?;
+        wr.finish().map_err(e)?;
+    }
+    Ok(out)
 }
 
 /// 16-bit RGB(A) → 10-bit BT.601 full-range YCbCr planes (the matrix `ravif` uses for 8-bit input).
@@ -525,4 +638,53 @@ fn avif_10bit(enc: &ravif::Encoder, img: &EncodeImage, s: &[u16]) -> Result<Vec<
         .encode_raw_planes_10_bit(img.width as usize, img.height as usize, planes, alpha, ravif::PixelRange::Full, ravif::MatrixCoefficients::BT601)
         .map_err(|e| Error::Encode(e.to_string()))?;
     Ok(r.avif_file)
+}
+
+#[cfg(test)]
+mod hdr_tests {
+    use super::*;
+
+    #[test]
+    fn hlg_reference_white_and_peak() {
+        // BT.2408: SDR (HDR reference) white sits at 75 % HLG signal
+        for v in hlg_signal([1.0; 3]) {
+            assert!((v - 0.75).abs() < 0.005, "{v}");
+        }
+        // the 1000 cd/m² peak (≈ 4.9× SDR white) reaches full signal; above it clips
+        let peak = HLG_REFERENCE_PEAK_NITS / HDR_REFERENCE_WHITE_NITS;
+        assert!(hlg_signal([peak; 3]).iter().all(|v| (v - 1.0).abs() < 1e-3));
+        assert_eq!(hlg_signal([100.0; 3]), [1.0; 3]);
+        assert_eq!(hlg_signal([0.0, -1.0, f32::NAN]), [0.0; 3]);
+        assert!(hlg_signal([f32::INFINITY, 0.0, 0.0]).iter().all(|v| v.is_finite()));
+        let mut prev = 0.0;
+        for i in 1..50 {
+            let v = hlg_signal([i as f32 * 0.1; 3])[1];
+            assert!(v >= prev);
+            prev = v;
+        }
+    }
+
+    #[test]
+    fn hdr_encoders_reject_short_buffers() {
+        let m = EncodeMeta::default();
+        for t in [HdrTransfer::Pq, HdrTransfer::Hlg] {
+            assert!(encode_avif_hdr(4, 4, &[0.5; 10], 80, 10, &m, t).is_err());
+            assert!(encode_avif_hdr(0, 4, &[], 80, 10, &m, t).is_err());
+            assert!(encode_png_hdr(4, 4, &[0.5; 10], &m, t).is_err());
+            assert!(encode_png_hdr(u32::MAX, u32::MAX, &[], &m, t).is_err());
+        }
+    }
+
+    #[test]
+    fn hdr_png_has_cicp_and_reads_back() {
+        let rgb: Vec<f32> = (0..16 * 8).flat_map(|i| [i as f32 / 32.0; 3]).collect();
+        for t in [HdrTransfer::Pq, HdrTransfer::Hlg] {
+            let png = encode_png_hdr(16, 8, &rgb, &EncodeMeta::default(), t).unwrap();
+            let i = png.windows(4).position(|w| w == b"cICP").unwrap();
+            assert_eq!(png[i + 4..i + 8].to_vec(), vec![9, t.cicp(), 0, 1]);
+            assert_eq!(png.windows(4).any(|w| w == b"cLLI"), t == HdrTransfer::Pq);
+            let d = crate::decode(&png, crate::DecodeOptions::default()).unwrap();
+            assert_eq!((d.width, d.height), (16, 8));
+        }
+    }
 }

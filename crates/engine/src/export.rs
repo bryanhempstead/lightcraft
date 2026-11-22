@@ -621,6 +621,39 @@ pub struct ExportOptions {
     /// not applied), AVIF as 10-bit Rec. 2020 PQ, 32-bit float TIFF with the highlights above SDR
     /// white kept. Other formats, and photos without an HDR edit, are SDR.
     pub hdr: bool,
+    /// The curve of an HDR AVIF, PNG or JPEG XL: PQ (default) or HLG.
+    pub hdr_transfer: HdrCurve,
+    /// Lightroom's "Maximize Compatibility" for HDR output: an SDR base image plus a gain map
+    /// (JPEG always; JPEG XL with this on), so the file looks right in every viewer and lights up
+    /// on HDR displays. Off: JPEG XL is written PQ / HLG.
+    pub hdr_compat: bool,
+}
+
+/// Transfer curve of an HDR AVIF / PNG / JPEG XL export (`hdrTransfer`): PQ (absolute, SDR white
+/// at 203 cd/m²) or HLG (relative to the display; BT.2100 with SDR white at signal 0.75).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HdrCurve {
+    #[default]
+    Pq,
+    Hlg,
+}
+
+impl HdrCurve {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "pq" => Some(Self::Pq),
+            "hlg" => Some(Self::Hlg),
+            _ => None,
+        }
+    }
+
+    pub fn codec(self) -> lightcraft_codecs::HdrTransfer {
+        match self {
+            Self::Pq => lightcraft_codecs::HdrTransfer::Pq,
+            Self::Hlg => lightcraft_codecs::HdrTransfer::Hlg,
+        }
+    }
 }
 
 /// Where Add to Stack puts an exported photo: above or below its original.
@@ -832,6 +865,8 @@ impl Default for ExportOptions {
             icc_profile: None,
             bit_depth: None,
             hdr: false,
+            hdr_transfer: HdrCurve::Pq,
+            hdr_compat: true,
         }
     }
 }
@@ -878,6 +913,8 @@ pub const OPTION_PARAMS: &[&str] = &[
     "colorSpace",
     "bitDepth",
     "hdr",
+    "hdrTransfer",
+    "hdrCompat",
 ];
 
 /// The keys of a `watermark` object ([`Watermark`], camelCase).
@@ -1009,7 +1046,7 @@ impl ExportOptions {
                     }
                     serde_json::from_value::<Resize>(v.clone()).map_err(|e| bad(format!("`{k}`: {e}")))?;
                 }
-                "dontEnlarge" | "removeLocation" | "removePeople" | "keywordHierarchy" | "background" | "hdr" => {
+                "dontEnlarge" | "removeLocation" | "removePeople" | "keywordHierarchy" | "background" | "hdr" | "hdrCompat" => {
                     boolean(k, v)?;
                 }
                 "extCase" => one_of(k, v, &["keep", "lower", "upper"])?,
@@ -1026,6 +1063,7 @@ impl ExportOptions {
                     string(cmd, k, v)?;
                 }
                 "sharpen" => one_of(k, v, &["none", "screen", "matte", "glossy"])?,
+                "hdrTransfer" => one_of(k, v, &["pq", "hlg"])?,
                 "sharpenAmount" => one_of(k, v, &["low", "standard", "high"])?,
                 "conflict" => one_of(k, v, &["unique", "overwrite", "skip"])?,
                 "tiffCompression" => one_of(k, v, &["none", "lzw", "zip", "deflate"])?,
@@ -1167,6 +1205,8 @@ impl ExportOptions {
             },
             bit_depth: u("bitDepth").filter(|b| matches!(b, 8 | 10 | 16 | 32)).map(|b| b as u8),
             hdr: p.get("hdr").and_then(Value::as_bool).unwrap_or(d.hdr),
+            hdr_transfer: s("hdrTransfer").and_then(HdrCurve::parse).unwrap_or(d.hdr_transfer),
+            hdr_compat: p.get("hdrCompat").and_then(Value::as_bool).unwrap_or(d.hdr_compat),
         }
     }
 
@@ -1232,13 +1272,14 @@ impl ExportOptions {
     pub fn effective_depth(&self) -> OutputDepth {
         match (self.format, self.bit_depth) {
             (ExportFormat::Jpeg | ExportFormat::Webp | ExportFormat::Original | ExportFormat::Dng, _) => OutputDepth::U8,
+            (ExportFormat::Png | ExportFormat::Avif, _) if self.hdr => OutputDepth::F32Hdr,
+            (ExportFormat::Jxl, _) if self.hdr && !self.hdr_compat => OutputDepth::F32Hdr,
             (ExportFormat::Png, Some(16 | 32)) => OutputDepth::U16,
             (ExportFormat::Png, _) => OutputDepth::U8,
             (ExportFormat::Tiff, Some(8)) => OutputDepth::U8,
             (ExportFormat::Tiff, Some(32)) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Tiff, Some(32)) => OutputDepth::F32Linear,
             (ExportFormat::Tiff, _) => OutputDepth::U16,
-            (ExportFormat::Avif, _) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Avif, Some(10 | 16 | 32)) => OutputDepth::U16,
             (ExportFormat::Avif, _) => OutputDepth::U8,
             (ExportFormat::Jxl | ExportFormat::Psd, Some(16 | 32)) => OutputDepth::U16,
@@ -1261,13 +1302,24 @@ impl ExportOptions {
     /// Whether these options write HDR files (for photos edited in HDR): JPEG (gain map), AVIF
     /// (PQ) or 32-bit float TIFF with [`ExportOptions::hdr`].
     pub fn hdr_output(&self) -> bool {
-        self.hdr && matches!((self.format, self.bit_depth), (ExportFormat::Jpeg | ExportFormat::Avif, _) | (ExportFormat::Tiff, Some(32)))
+        self.hdr
+            && matches!(
+                (self.format, self.bit_depth),
+                (ExportFormat::Jpeg | ExportFormat::Avif | ExportFormat::Png | ExportFormat::Jxl, _) | (ExportFormat::Tiff, Some(32))
+            )
+    }
+
+    /// Whether these options write an SDR base plus a gain map (HDR JPEG, and HDR JPEG XL with
+    /// Maximize Compatibility).
+    pub fn gain_map_output(&self) -> bool {
+        self.hdr_output() && (self.format == ExportFormat::Jpeg || (self.format == ExportFormat::Jxl && self.hdr_compat))
     }
 
     /// The colour space the file is actually written in (AVIF: sRGB, or Rec. 2020 for HDR).
     pub fn effective_space(&self) -> OutputSpace {
         match (self.format, self.color_space) {
-            (ExportFormat::Avif, _) if self.hdr => OutputSpace::Rec2020,
+            (ExportFormat::Avif | ExportFormat::Png, _) if self.hdr => OutputSpace::Rec2020,
+            (ExportFormat::Jxl, _) if self.hdr && !self.hdr_compat => OutputSpace::Rec2020,
             (ExportFormat::Avif, _) => OutputSpace::Srgb,
             // E08: rendered wide, then converted to the chosen profile
             _ if self.icc_profile.is_some() && !matches!(self.format, ExportFormat::Jxl | ExportFormat::Webp) => OutputSpace::ProPhoto,
@@ -1533,6 +1585,9 @@ pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, met
     let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_color_space(space))));
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let em = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
+    if o.format == ExportFormat::Jxl {
+        return lightcraft_codecs::encode_jxl_gain_map(&EncodeImage::rgba8(&base), &em, &jxl_options(o), &map, &gm).map_err(|e| e.to_string());
+    }
     let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
     gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, o.quality, sub, &em).map_err(|e| e.to_string())
 }
@@ -1598,12 +1653,18 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
         DeepSamples::F32(v) => EncodeImage::new(w, h, 3, Samples::F32(v)),
     };
     let r = match (o.format, &img.samples) {
-        (ExportFormat::Png, _) => encode::encode_png(&e, &meta),
         (ExportFormat::Tiff, _) => encode::encode_tiff(&e, o.tiff_compression, &meta),
         (ExportFormat::Avif, DeepSamples::F32(v)) if img.space == OutputSpace::Rec2020 => {
-            lightcraft_codecs::encode_avif_pq(w, h, v, o.quality, 8, &meta)
+            lightcraft_codecs::encode_avif_hdr(w, h, v, o.quality, 8, &meta, o.hdr_transfer.codec())
+        }
+        (ExportFormat::Png, DeepSamples::F32(v)) if img.space == OutputSpace::Rec2020 && o.hdr => {
+            lightcraft_codecs::encode_png_hdr(w, h, v, &meta, o.hdr_transfer.codec())
+        }
+        (ExportFormat::Jxl, DeepSamples::F32(v)) if img.space == OutputSpace::Rec2020 && o.hdr => {
+            lightcraft_codecs::encode_jxl_hdr(w, h, v, &meta, &jxl_options(o), o.hdr_transfer.codec())
         }
         (ExportFormat::Avif, _) => encode::encode_avif(&e, o.quality, 8, &meta),
+        (ExportFormat::Png, _) => encode::encode_png(&e, &meta),
         (ExportFormat::Jxl, _) => lightcraft_codecs::encode_jxl(&e, &meta, &jxl_options(o)),
         (ExportFormat::Psd, _) => lightcraft_codecs::encode_psd(&e, &meta),
         (f, _) => return Err(format!("{f:?} export is 8-bit only")),
@@ -1895,7 +1956,7 @@ fn prepare_guarded(
             let batch = crate::rename::Batch { total, text: o.custom_text.clone(), ..Default::default() };
             wm.text = crate::rename::expand_tokens_in(&wm.text, p, seq, 1, &batch);
         }
-        let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
+        let gain_map = o.gain_map_output();
         let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
         let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
         Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts }))
