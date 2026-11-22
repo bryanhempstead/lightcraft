@@ -32,6 +32,7 @@ pub mod faces;
 pub mod files;
 pub mod fonts;
 pub mod guard;
+pub mod imageio;
 pub mod import;
 mod import_move;
 pub mod lcp;

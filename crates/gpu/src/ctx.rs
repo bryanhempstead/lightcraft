@@ -275,6 +275,7 @@ fn constants() -> String {
         s += &format!("const {name}: f32 = {v:?};\n");
     }
     s += &format!("const HALO_TAU: f32 = {:?};\n", lightcraft_pipeline::finish::HALO_TAU);
+    s += &format!("const HL_SAT_GAIN: f32 = {:?};\n", lightcraft_pipeline::finish::HL_SAT_GAIN);
     s += &format!("const BW_GAIN: f32 = {:?};\n", lightcraft_pipeline::colorops::BW_GAIN);
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");

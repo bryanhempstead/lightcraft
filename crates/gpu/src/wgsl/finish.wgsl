@@ -190,7 +190,8 @@ fn ad_tone3(hi: f32, mid: f32, lo: f32) -> vec3<f32> {
 }
 
 fn ad_rgb_tone(c0: vec3<f32>) -> vec3<f32> {
-    let c = clamp(c0, vec3<f32>(0.0), vec3<f32>(1.0));
+    // an HDR render keeps scene values up to SCENE_TOP (`adobe::rgb_tone_to`)
+    let c = clamp(c0, vec3<f32>(0.0), vec3<f32>(pf(F_SCENE_TOP)));
     let r = c.x;
     let g = c.y;
     let b = c.z;
@@ -907,6 +908,56 @@ fn out_encode(v: f32) -> f32 {
     return 1.099 * pow(l, 0.45) - 0.099;
 }
 
+// The look: curves, a creative profile's table and grain in the style space (ProPhoto
+// primaries, sRGB curve; `finish::STYLE_SPACE`) whatever the output space, then back to linear
+// working colour (`finish_with`'s `style`).
+fn look(d: vec3<f32>, x: u32, y: u32) -> vec3<f32> {
+    let sm = array<vec3<f32>, 3>(
+        vec3<f32>(pf(F_ST_TO), pf(F_ST_TO + 1u), pf(F_ST_TO + 2u)),
+        vec3<f32>(pf(F_ST_TO + 3u), pf(F_ST_TO + 4u), pf(F_ST_TO + 5u)),
+        vec3<f32>(pf(F_ST_TO + 6u), pf(F_ST_TO + 7u), pf(F_ST_TO + 8u)),
+    );
+    let sb = array<vec3<f32>, 3>(
+        vec3<f32>(pf(F_ST_FROM), pf(F_ST_FROM + 1u), pf(F_ST_FROM + 2u)),
+        vec3<f32>(pf(F_ST_FROM + 3u), pf(F_ST_FROM + 4u), pf(F_ST_FROM + 5u)),
+        vec3<f32>(pf(F_ST_FROM + 6u), pf(F_ST_FROM + 7u), pf(F_ST_FROM + 8u)),
+    );
+    let sd = mul3(sm, d);
+    var e = vec3<f32>(encode_srgb(sd.x), encode_srgb(sd.y), encode_srgb(sd.z));
+    if (pu(F_CURVES) != 0u) {
+        let e0 = e;
+        e = curve_rgb_tone(e);
+        e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
+        let rs = pf(F_REFINE_SAT);
+        if (rs < 1.0) {
+            e = refine_saturation(e0, e, rs);
+        }
+    }
+    if (pu(F_LUT) == 1u) {
+        // a creative profile's table after the curves (`finish_with`), in its own space
+        let lin = mul3(sb, vec3<f32>(decode_srgb(e.x), decode_srgb(e.y), decode_srgb(e.z)));
+        let l = mul3(sm, lut_profile(lin));
+        e = vec3<f32>(encode_srgb(l.x), encode_srgb(l.y), encode_srgb(l.z));
+    }
+    if (pu(F_GRAIN) != 0u) {
+        let px = f32(x) + 0.5;
+        let py = f32(y) + 0.5;
+        let gx = pf(F_GRAIN_AFF) * px + pf(F_GRAIN_AFF + 2u) * py + pf(F_GRAIN_AFF + 4u);
+        let gy = pf(F_GRAIN_AFF + 1u) * px + pf(F_GRAIN_AFF + 3u) * py + pf(F_GRAIN_AFF + 5u);
+        let sc = pf(F_GRAIN_SC);
+        let seed = pu(F_GRAIN_SEED);
+        let u = gx * sc;
+        let v = gy * sc;
+        let g = grain_noise(GRAIN_ROT_C * u - GRAIN_ROT_S * v, GRAIN_ROT_S * u + GRAIN_ROT_C * v, seed);
+        let lum = dot(e, STYLE_LUMA);
+        // `finish::grain_tone`
+        let lo = pow(clamp(lum / GRAIN_KNEE, 0.0, 1.0), 0.75);
+        let k = pf(F_GRAIN_AMT) * g * lo * (1.0 - GRAIN_HI * clamp(lum - GRAIN_HI0, 0.0, 1.0));
+        e = e + k;
+    }
+    return mul3(sb, vec3<f32>(decode_srgb(e.x), decode_srgb(e.y), decode_srgb(e.z)));
+}
+
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w = pu(F_W);
@@ -1131,14 +1182,22 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             d = vec3<f32>(o) + (d - vec3<f32>(o)) * k;
         }
         let mx = max(d.x, max(d.y, d.z));
-        if (mx > 1.0) {
-            let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
+        let peak = pf(F_PEAK);
+        if (mx > peak) {
+            let t = clamp((mx - peak) / max(mx - o, 1e-6), 0.0, 1.0);
             d = d + (o - d) * t;
         }
     }
 
     // --- colour
     d = color_ops(d, lt[11], lt[12]);
+    let hs = pf(F_HL_SAT);
+    if (hs != 0.0) {
+        // `finish::highlight_saturation`
+        let yh = lum2020(d);
+        let f = 1.0 + HL_SAT_GAIN * hs * sstep(0.5, 1.0, yh);
+        d = max(vec3<f32>(yh) + (d - vec3<f32>(yh)) * f, vec3<f32>(0.0));
+    }
     if (tint_on) {
         let lab = oklab(d);
         d = oklab_inv(vec3<f32>(lab.x, lab.y + tint_dir.x * 0.08 * tint_amt, lab.z + tint_dir.y * 0.08 * tint_amt));
@@ -1174,6 +1233,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 } else {
                     d = d * f;
                 }
+            } else if (pf(F_PEAK) > 1.0) {
+                // HDR: lighten towards SDR white; never pull HDR highlights down to it
+                d = d + max(vec3<f32>(1.0) - d, vec3<f32>(0.0)) * amount * t * 0.85;
             } else {
                 d = d + (1.0 - d) * amount * t * 0.85;
             }
@@ -1183,50 +1245,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // --- the look: curves and grain in the style space (ProPhoto primaries, sRGB curve;
     // `finish::STYLE_SPACE`) whatever the output space, then back to linear working colour
     if (pu(F_CURVES) != 0u || pu(F_GRAIN) != 0u || pu(F_LUT) == 1u) {
-        let sm = array<vec3<f32>, 3>(
-            vec3<f32>(pf(F_ST_TO), pf(F_ST_TO + 1u), pf(F_ST_TO + 2u)),
-            vec3<f32>(pf(F_ST_TO + 3u), pf(F_ST_TO + 4u), pf(F_ST_TO + 5u)),
-            vec3<f32>(pf(F_ST_TO + 6u), pf(F_ST_TO + 7u), pf(F_ST_TO + 8u)),
-        );
-        let sb = array<vec3<f32>, 3>(
-            vec3<f32>(pf(F_ST_FROM), pf(F_ST_FROM + 1u), pf(F_ST_FROM + 2u)),
-            vec3<f32>(pf(F_ST_FROM + 3u), pf(F_ST_FROM + 4u), pf(F_ST_FROM + 5u)),
-            vec3<f32>(pf(F_ST_FROM + 6u), pf(F_ST_FROM + 7u), pf(F_ST_FROM + 8u)),
-        );
-        let sd = mul3(sm, d);
-        var e = vec3<f32>(encode_srgb(sd.x), encode_srgb(sd.y), encode_srgb(sd.z));
-        if (pu(F_CURVES) != 0u) {
-            let e0 = e;
-            e = curve_rgb_tone(e);
-            e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
-            let rs = pf(F_REFINE_SAT);
-            if (rs < 1.0) {
-                e = refine_saturation(e0, e, rs);
-            }
+        if (pf(F_PEAK) > 1.0) {
+            // HDR: the look acts on the SDR part (up to white, in the style space); what lies
+            // above SDR white is carried over unchanged
+            let q = mul3(ad_mat(F_ST_TO), d);
+            let lq = mul3(ad_mat(F_ST_TO), look(mul3(ad_mat(F_ST_FROM), min(q, vec3<f32>(1.0))), x, y));
+            d = mul3(ad_mat(F_ST_FROM), lq + max(q - vec3<f32>(1.0), vec3<f32>(0.0)));
+        } else {
+            d = look(d, x, y);
         }
-        if (pu(F_LUT) == 1u) {
-            // a creative profile's table after the curves (`finish_with`), in its own space
-            let lin = mul3(sb, vec3<f32>(decode_srgb(e.x), decode_srgb(e.y), decode_srgb(e.z)));
-            let l = mul3(sm, lut_profile(lin));
-            e = vec3<f32>(encode_srgb(l.x), encode_srgb(l.y), encode_srgb(l.z));
-        }
-        if (pu(F_GRAIN) != 0u) {
-            let px = f32(x) + 0.5;
-            let py = f32(y) + 0.5;
-            let gx = pf(F_GRAIN_AFF) * px + pf(F_GRAIN_AFF + 2u) * py + pf(F_GRAIN_AFF + 4u);
-            let gy = pf(F_GRAIN_AFF + 1u) * px + pf(F_GRAIN_AFF + 3u) * py + pf(F_GRAIN_AFF + 5u);
-            let sc = pf(F_GRAIN_SC);
-            let seed = pu(F_GRAIN_SEED);
-            let u = gx * sc;
-            let v = gy * sc;
-            let g = grain_noise(GRAIN_ROT_C * u - GRAIN_ROT_S * v, GRAIN_ROT_S * u + GRAIN_ROT_C * v, seed);
-            let lum = dot(e, STYLE_LUMA);
-            // `finish::grain_tone`
-            let lo = pow(clamp(lum / GRAIN_KNEE, 0.0, 1.0), 0.75);
-            let k = pf(F_GRAIN_AMT) * g * lo * (1.0 - GRAIN_HI * clamp(lum - GRAIN_HI0, 0.0, 1.0));
-            e = e + k;
-        }
-        d = mul3(sb, vec3<f32>(decode_srgb(e.x), decode_srgb(e.y), decode_srgb(e.z)));
     }
 
     // --- gamut map to the output space (desaturate towards luminance until in range)
@@ -1236,14 +1263,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         vec3<f32>(pf(F_OUT_M + 6u), pf(F_OUT_M + 7u), pf(F_OUT_M + 8u)),
     );
     var r = mul3(om, d);
-    let yy = clamp(pf(F_OUT_Y) * r.x + pf(F_OUT_Y + 1u) * r.y + pf(F_OUT_Y + 2u) * r.z, 0.0, 1.0);
+    let peak = pf(F_PEAK);
+    let yy = clamp(pf(F_OUT_Y) * r.x + pf(F_OUT_Y + 1u) * r.y + pf(F_OUT_Y + 2u) * r.z, 0.0, peak);
     var tg = 1.0;
     for (var k = 0u; k < 3u; k++) {
         let cc = r[k];
         if (cc < 0.0) {
             tg = min(tg, yy / max(yy - cc, 1e-9));
-        } else if (cc > 1.0) {
-            tg = min(tg, (1.0 - yy) / max(cc - yy, 1e-9));
+        } else if (cc > peak) {
+            tg = min(tg, (peak - yy) / max(cc - yy, 1e-9));
         }
     }
     if (tg < 1.0) {
@@ -1251,6 +1279,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     // --- encode (sRGB curve, then the output's own curve)
+    if (peak > 1.0) {
+        // HDR: the (unbounded) sRGB curve, so values above SDR white encode above 1; the LUT
+        // sees SDR values and the part above white is carried over. Stored linear (0..peak)
+        // after the packed 8-bit (clipped) image.
+        var e = vec3<f32>(ad_lin_to_srgb(max(r.x, 0.0)), ad_lin_to_srgb(max(r.y, 0.0)), ad_lin_to_srgb(max(r.z, 0.0)));
+        if (pu(F_LUT) == 2u) {
+            let c = clamp(e, vec3<f32>(0.0), vec3<f32>(1.0));
+            e = e + (lut_apply(c) - c) * pf(F_LUT_AMT);
+        }
+        let o = n + 3u * i;
+        for (var k = 0u; k < 3u; k++) {
+            out[o + k] = bitcast<u32>(clamp(ad_srgb_to_lin(max(e[k], 0.0)), 0.0, peak));
+        }
+        let e8 = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
+        out[i] = enc8(e8.x) | (enc8(e8.y) << 8u) | (enc8(e8.z) << 16u) | (255u << 24u);
+        return;
+    }
     var e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
     if (pu(F_LUT) == 2u) {
         // a `.cube` profile on the encoded output, blended by the amount

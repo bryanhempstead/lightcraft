@@ -536,6 +536,26 @@ pub struct FinishParams {
     /// Peak linear output relative to SDR white: 1 for SDR renders; `2^max_ev` for an HDR render
     /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them.
     pub peak: f32,
+    /// The SDR rendition's highlight saturation (`crs:SDRBlend` / 100, −1..1, see
+    /// [`highlight_saturation`]); 0 for every other render.
+    pub hl_sat: f32,
+}
+
+/// Chroma gain of `crs:SDRBlend` at ±100 on the brightest SDR tones (Camera Raw's "highlight
+/// saturation": RAWmakase measured no luminance change and about ±0.1 saturation at ±100,
+/// above about half of SDR white).
+pub const HL_SAT_GAIN: f32 = 0.25;
+
+/// `crs:SDRBlend` on a display-linear colour `d` (Rec.2020): its chroma around its luminance
+/// scaled by `1 + HL_SAT_GAIN · k`, faded in from half of SDR white to white. Luminance is kept.
+#[inline]
+pub fn highlight_saturation(d: [f32; 3], k: f32) -> [f32; 3] {
+    let y = luminance_2020(d);
+    let f = 1.0 + HL_SAT_GAIN * k * smooth(0.5, 1.0, y);
+    if f == 1.0 {
+        return d;
+    }
+    d.map(|v| (y + (v - y) * f).max(0.0))
 }
 
 impl FinishParams {
@@ -582,6 +602,7 @@ impl FinishParams {
         let peak = s.hdr.peak();
         FinishParams {
             peak,
+            hl_sat: if s.hdr.enabled || !s.hdr.rendition_blend.is_finite() { 0.0 } else { (s.hdr.rendition_blend / 100.0).clamp(-1.0, 1.0) as f32 },
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: if let Some(a) = adobe.as_ref() {
@@ -941,6 +962,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- colour
             d = ops.apply(d, l_sat, l_hue);
+            if fp.hl_sat != 0.0 {
+                d = highlight_saturation(d, fp.hl_sat);
+            }
             if let Some((dir, amt)) = tint_col {
                 let lab = lightcraft_color::perceptual::oklab_from_2020(d);
                 d = lightcraft_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);

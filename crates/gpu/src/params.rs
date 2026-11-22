@@ -130,6 +130,13 @@ const FIELDS: &[(&str, usize)] = &[
     ("LUT_TRC", 1),
     ("LUT_GAMMA", 1),
     ("LUT_CLIP", 1),
+    // an HDR render (`OutputDepth::F32Hdr` with HDR on): peak linear output over SDR white (1 =
+    // SDR), the brightest scene value the Adobe channel-wise tone keeps; `out` then holds the
+    // linear float result (3 words a pixel) after the packed 8-bit image
+    ("PEAK", 1),
+    ("SCENE_TOP", 1),
+    // the SDR rendition's highlight saturation (`crs:SDRBlend`, `finish::highlight_saturation`)
+    ("HL_SAT", 1),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -410,5 +417,9 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.f("LUT_GAMMA", gamma);
         p.b("LUT_CLIP", l.clip);
     }
+    let hdr = fp.peak.is_finite() && fp.peak > 1.0;
+    p.f("PEAK", if hdr { fp.peak } else { 1.0 });
+    p.f("SCENE_TOP", if hdr { lightcraft_pipeline::tone::HDR_SCENE_TOP } else { 1.0 });
+    p.f("HL_SAT", fp.hl_sat);
     (p.0, aux)
 }

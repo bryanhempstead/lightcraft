@@ -6,6 +6,20 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (hdr2 agent, 2026-11-22, branch worktree-agent-ac64e49f32754ea1f, not merged) **HDR leftovers + LR-VID-EDIT** —
+  e0f0ea988 HDR loupe on the GPU (finish kernel's float HDR output, `PEAK`/`SCENE_TOP` params appended; CPU/GPU
+  equivalence crates/gpu/tests/hdr.rs; 1936x1290 draft drag 12–14 ms GPU vs 340–620 ms CPU under load ~100; UI
+  half-float conversion threaded 49 → ~10 ms), 5f71af34b the whole Edit panel on video (video_settings keeps all but
+  geometry / per-photo tools / HDR; develop_frame = media::develop, GPU, full quality for playback and export),
+  0c2d7825a crs:SDRBlend rendered (highlight saturation, Hdr::rendition_blend, CPU+GPU), 34adf5884 HDR histogram
+  (pipeline::hdr_histogram + panels/hdr_histogram.rs, Slot::HdrMaster 512 px render, RenderJob::hdr_master),
+  Visualize HDR beyond-the-display red (Overlay::HdrRange(headroom tenths), Lightroom's cyan/blue/purple/magenta),
+  HDR in Compare / Survey / Second Window, 655697c9a gain-map AVIF via macOS ImageIO (engine/src/imageio.rs + .swift;
+  Core Image reads it as HDR, peak 4.0x). needs.you #161 (Studio Display look), #162 (AVIF in Preview/Photos, edited
+  video playback). Left: J clipping in HDR mode (Lightroom's yellow/red), HDR tone vs Lightroom, SDR rendition is the
+  HDR-off render (Lightroom: local tone map), Second Window uses the main display's headroom, Windows/Linux HDR.
+  Note for merging: crates/gpu/src/wgsl/finish.wgsl's look block became `fn look(d, x, y)` (same code, moved) —
+  the Clarity/Dehaze builder edits the operators above it.
 - [ ] (AI masks agent, 2026-11-22, branch worktree-agent-af352bb019bacca9d, not merged) **AI masks — parity K + REM rows**
   Done: 08552d289 SAM 3 downloads work (5 ungated HF copies, every file hash-pinned; DEFAULT_MIRRORS was empty);
   365717b7c SegFormer in pure Rust (crates/segment/src/segformer.rs, ported from candle-transformers) + three

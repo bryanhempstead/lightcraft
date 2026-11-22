@@ -611,8 +611,16 @@ pub fn render(
     };
     let (p, aux) = finish_block(&fp, &terms, &present);
     let aux = gpu.upload(&aux);
+    // an HDR render (`OutputDepth::F32Hdr` with HDR on) also writes the linear float result, 3
+    // words a pixel, after the packed 8-bit image
+    let hdr = req.depth == lightcraft_pipeline::OutputDepth::F32Hdr && fp.peak.is_finite() && fp.peak > 1.0;
+    let words = if hdr { n * 4 } else { n };
+    if hdr && !gpu.fits(words) {
+        fail(FailKind::Limit, format!("{w}×{h} HDR output needs {} MiB, over the device's storage-buffer limit", (words * 4).div_ceil(1 << 20)));
+        return None;
+    }
     // cleared, so that work which never ran cannot pass for an image (see the check below)
-    let out = cx.zeroed(n);
+    let out = cx.zeroed(words);
     if fault == Some(crate::Fault::Validation) {
         // a dispatch the device rejects (too many workgroups)
         cx.run("box_h", &[0; 5], &[Some(&aux), Some(&out)], [gpu.device.limits().max_compute_workgroups_per_dimension + 1, 1, 1]);
@@ -648,7 +656,13 @@ pub fn render(
             _ => Err(m),
         }
     });
-    let data: Vec<[u8; 4]> = cx.read(&out, n);
+    let (data, deep): (Vec<[u8; 4]>, Option<Vec<f32>>) = if hdr {
+        let all: Vec<u32> = cx.read(&out, words);
+        let (px, lin) = all.split_at(n.min(all.len()));
+        (bytemuck::cast_slice(px).to_vec(), Some(bytemuck::cast_slice(lin).to_vec()))
+    } else {
+        (cx.read(&out, n), None)
+    };
     let image = Rgba8 { width: w, height: h, data };
     lap("finish + readback", &mut t, &mut cx);
     if crate::ctx::failed() {
@@ -681,7 +695,17 @@ pub fn render(
         }
     });
     lightcraft_pipeline::visualize::apply(&mut image, req.overlay, &plan, overlay_mask.as_ref());
-    Some(Rendered { image, histogram, deep: None })
+    let deep = match deep {
+        Some(v) if v.len() == n * 3 => {
+            Some(lightcraft_pipeline::DeepImage { width: w, height: h, space: req.space, samples: lightcraft_pipeline::DeepSamples::F32(v) })
+        }
+        Some(v) => {
+            fail(FailKind::Fatal, format!("the GPU returned {} of {} HDR samples", v.len(), n * 3));
+            return None;
+        }
+        None => None,
+    };
+    Some(Rendered { image, histogram, deep })
 }
 
 /// Pixels whose alpha is not 255 (cheap: no early exit, so it vectorizes).

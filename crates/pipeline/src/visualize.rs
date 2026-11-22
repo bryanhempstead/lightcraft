@@ -52,13 +52,30 @@ pub enum Overlay {
     SharpenDetail,
     /// The sharpening mask, white where sharpening applies (Alt-drag on Sharpening Masking).
     SharpenMask,
-    /// Visualize HDR (photos edited in HDR): the SDR image dimmed to grey, with every pixel the HDR
-    /// rendition puts above SDR white painted by how far above it is ([`HDR_BANDS`]).
-    HdrRange,
+    /// Visualize HDR (photos edited in HDR), as Lightroom shows it: the photo as it is up to SDR
+    /// white, every pixel the HDR rendition puts above it painted by how many stops above
+    /// ([`HDR_BANDS`], by its brightest channel), and what lies beyond the HDR display's current
+    /// headroom in red ([`HDR_BEYOND`]). The value is that headroom in tenths of a stop (0: no
+    /// HDR display known, nothing marked beyond).
+    HdrRange(u8),
 }
 
-/// [`Overlay::HdrRange`] colours (sRGB) for 0–1, 1–2, 2–3 and ≥ 3 stops above SDR white.
-pub const HDR_BANDS: [[u8; 3]; 4] = [[255, 214, 92], [255, 150, 40], [235, 64, 52], [214, 60, 210]];
+/// [`Overlay::HdrRange`] colours (sRGB) for 0–1, 1–2, 2–3 and ≥ 3 stops above SDR white:
+/// cyan, blue, purple, magenta (Lightroom's; RAWmakase's write-up of Lightroom Classic 13).
+pub const HDR_BANDS: [[u8; 3]; 4] = [[60, 220, 235], [60, 120, 255], [150, 70, 235], [225, 60, 200]];
+
+/// [`Overlay::HdrRange`]'s colour for light beyond the display's current headroom (Lightroom:
+/// red = beyond what the display can show).
+pub const HDR_BEYOND: [u8; 3] = [240, 40, 40];
+
+/// An HDR display headroom (linear peak over SDR white) as [`Overlay::HdrRange`]'s value:
+/// tenths of a stop, 0 for none (not finite, or no headroom).
+pub fn headroom_tenths(headroom: Option<f32>) -> u8 {
+    match headroom {
+        Some(h) if h.is_finite() && h > 1.0 => (h.log2() * 10.0).floor().clamp(1.0, 250.0) as u8,
+        _ => 0,
+    }
+}
 
 /// How [`Overlay::Mask`] draws the mask.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -144,7 +161,7 @@ impl Overlay {
             Overlay::Grayscale => (8, 0.0),
             Overlay::SharpenDetail => (9, 0.0),
             Overlay::SharpenMask => (10, 0.0),
-            Overlay::HdrRange => (11, 0.0),
+            Overlay::HdrRange(d) => (11, d as f64),
         }
     }
 
@@ -159,7 +176,7 @@ impl Overlay {
             8 => Overlay::Grayscale,
             9 => Overlay::SharpenDetail,
             10 => Overlay::SharpenMask,
-            11 => Overlay::HdrRange,
+            11 => Overlay::HdrRange(v.clamp(0.0, 250.0) as u8),
             _ => Overlay::None,
         }
     }
@@ -176,7 +193,7 @@ impl Overlay {
             Overlay::Grayscale => 0x5002,
             Overlay::SharpenDetail => 0x5003,
             Overlay::SharpenMask => 0x5004,
-            Overlay::HdrRange => 0x6000,
+            Overlay::HdrRange(d) => 0x6000 + d as u64,
         }
     }
 
@@ -219,7 +236,7 @@ pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
 pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, mask: Option<&Plane>) {
     match o {
         // drawn by the renderer from the HDR rendition ([`hdr_range`])
-        Overlay::None | Overlay::HdrRange => {}
+        Overlay::None | Overlay::HdrRange(_) => {}
         Overlay::PointColorRange(i) => {
             if let Some(p) = plan.settings.point_colors.get(i as usize) {
                 point_color_range(img, &PointK::new(p));
@@ -373,29 +390,35 @@ fn point_color_range(img: &mut Rgba8, k: &PointK) {
     });
 }
 
+/// Channels up to this count as SDR white (a primaries conversion's rounding).
+const WHITE_ROUNDING: f32 = 1.001;
+
 /// Draw [`Overlay::HdrRange`] on `img` (the SDR render) from `hdr` (the HDR render of the same
-/// request, float linear with luminance weights `luma`): grey below SDR white, band colours above.
-pub fn hdr_range(img: &mut Rgba8, hdr: &crate::DeepImage, luma: [f32; 3]) {
+/// request, float linear): the photo as it is where no channel rises above SDR white, band
+/// colours by the brightest channel's stops above it, red beyond `display_tenths` / 10 stops
+/// (the HDR display's headroom; 0 = none known, nothing marked beyond).
+pub fn hdr_range(img: &mut Rgba8, hdr: &crate::DeepImage, display_tenths: u8) {
     let crate::DeepSamples::F32(v) = &hdr.samples else { return };
     if (hdr.width, hdr.height) != (img.width, img.height) {
         return;
     }
     let w = img.width;
+    let beyond = (display_tenths > 0).then(|| (f32::from(display_tenths) / 10.0).exp2());
     for_rows(&mut img.data, w, |y, row| {
         for (x, p) in row.iter_mut().enumerate() {
             let i = (y * w + x) * 3;
             let Some(c) = v.get(i..i + 3) else { continue };
-            let lum = luma[0] * c[0] + luma[1] * c[1] + luma[2] * c[2];
-            let grey = (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) * 0.55;
-            if lum > 1.0 {
-                let stops = lum.log2();
-                let band = HDR_BANDS[(stops as usize).min(HDR_BANDS.len() - 1)];
-                for k in 0..3 {
-                    p[k] = (grey * 0.25 + band[k] as f32 * 0.75).round().clamp(0.0, 255.0) as u8;
-                }
-            } else {
-                let g = grey.round().clamp(0.0, 255.0) as u8;
-                (p[0], p[1], p[2]) = (g, g, g);
+            let mx = c.iter().copied().filter(|x| x.is_finite()).fold(0.0f32, f32::max);
+            if mx <= WHITE_ROUNDING {
+                continue;
+            }
+            let band = match beyond {
+                Some(b) if mx > b => HDR_BEYOND,
+                _ => HDR_BANDS[(mx.log2() as usize).min(HDR_BANDS.len() - 1)],
+            };
+            let grey = 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32;
+            for k in 0..3 {
+                p[k] = (grey * 0.2 + band[k] as f32 * 0.8).round().clamp(0.0, 255.0) as u8;
             }
         }
     });

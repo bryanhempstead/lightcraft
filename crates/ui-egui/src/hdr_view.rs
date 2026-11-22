@@ -78,21 +78,64 @@ pub fn f32_to_f16(v: f32) -> u16 {
 
 /// The float HDR render `deep` (linear sRGB primaries, SDR white = 1) as [`HdrPixels`] for a
 /// window in extended Display P3 (`p3`) or extended sRGB. `None` for anything but float samples.
+///
+/// Runs on the UI thread when a render arrives, so it is quick: rows split across the cores, and
+/// the SDR part (0..1, most of a photo) encoded from a table (off by under 1e-4, well inside a
+/// half float's 1/2048 step), the exact curve only above SDR white.
 pub fn pixels(deep: &lightcraft_pipeline::DeepImage, key: u64, p3: bool) -> Option<HdrPixels> {
     let lightcraft_pipeline::DeepSamples::F32(v) = &deep.samples else { return None };
     let n = deep.width.checked_mul(deep.height)?;
     let px = v.as_chunks::<3>().0.get(..n)?;
-    let mut rgba = Vec::with_capacity(n.checked_mul(4)?);
-    let mut peak = 0f32;
+    let mut rgba = vec![0u16; n.checked_mul(4)?];
+    let table = encode_table();
+    let threads = std::thread::available_parallelism().map_or(1, |t| t.get()).clamp(1, 16);
+    let per = n.div_ceil(threads).max(1);
+    let peaks: Vec<f32> = std::thread::scope(|sc| {
+        let jobs: Vec<_> = px.chunks(per).zip(rgba.chunks_mut(per * 4)).map(|(src, dst)| sc.spawn(move || convert(src, dst, p3, table))).collect();
+        jobs.into_iter().map(|j| j.join().unwrap_or(0.0)).collect()
+    });
+    let peak = peaks.into_iter().fold(0f32, f32::max);
+    Some(HdrPixels { key, width: deep.width, height: deep.height, rgba, peak })
+}
+
+/// Entries of [`encode_table`] over 0..=1.
+const TABLE_N: usize = 4096;
+
+/// [`encode_extended`] sampled at `TABLE_N + 1` points over 0..=1.
+fn encode_table() -> &'static [f32] {
+    static T: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    T.get_or_init(|| (0..=TABLE_N).map(|i| encode_extended(i as f32 / TABLE_N as f32)).collect())
+}
+
+/// [`encode_extended`]: from the table up to 1 (linear segments; the curve's steep toe below
+/// 1/TABLE_N is exact), the curve itself above.
+fn encode_fast(x: f32, table: &[f32]) -> f32 {
+    if (1.0 / TABLE_N as f32..=1.0).contains(&x) {
+        let f = x * TABLE_N as f32;
+        let i = (f as usize).min(TABLE_N - 1);
+        let (a, b) = (table.get(i).copied().unwrap_or(0.0), table.get(i + 1).copied().unwrap_or(1.0));
+        a + (b - a) * (f - i as f32)
+    } else {
+        encode_extended(x)
+    }
+}
+
+/// Convert `src` into `dst` (four halves a pixel); returns the brightest linear value.
+fn convert(src: &[[f32; 3]], dst: &mut [u16], p3: bool, table: &[f32]) -> f32 {
     let one = f32_to_f16(1.0);
-    for c in px {
+    let mut peak = 0f32;
+    for (c, out) in src.iter().zip(dst.as_chunks_mut::<4>().0) {
         let c = c.map(|x| if x.is_finite() { x } else { 0.0 });
         let d = if p3 { SRGB_TO_P3.map(|r| r[0] * c[0] + r[1] * c[1] + r[2] * c[2]) } else { c };
         peak = peak.max(c[0].max(c[1]).max(c[2]));
-        rgba.extend(d.map(|x| f32_to_f16(encode_extended(x))));
-        rgba.push(one);
+        for (o, x) in out.iter_mut().zip(d) {
+            *o = f32_to_f16(encode_fast(x, table));
+        }
+        if let Some(a) = out.get_mut(3) {
+            *a = one;
+        }
     }
-    Some(HdrPixels { key, width: deep.width, height: deep.height, rgba, peak })
+    peak
 }
 
 #[cfg(test)]
@@ -128,6 +171,47 @@ mod tests {
             let v = i as f32 / 20.0;
             let srgb = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
             assert!((encode_extended(v) - srgb).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn table_encoding_matches_the_curve() {
+        let t = encode_table();
+        for i in 0..=20_000 {
+            let v = i as f32 / 10_000.0 - 0.5;
+            let (a, b) = (encode_fast(v, t), encode_extended(v));
+            assert!((a - b).abs() < 1e-4, "{v}: {a} vs {b}");
+        }
+        assert_eq!(encode_fast(f32::NAN, t), 0.0);
+        // a render split across threads converts every pixel (odd sizes too)
+        let deep = lightcraft_pipeline::DeepImage {
+            width: 7,
+            height: 3,
+            space: lightcraft_pipeline::OutputSpace::Srgb,
+            samples: lightcraft_pipeline::DeepSamples::F32((0..63).map(|i| i as f32 / 20.0).collect()),
+        };
+        let p = pixels(&deep, 1, false).unwrap();
+        assert!(p.rgba.chunks(4).all(|c| c[3] == 0x3c00));
+        assert!((p.peak - 3.1).abs() < 1e-6);
+        assert!((f16_to_f32(p.rgba[(20 * 4) + 2]) - encode_extended(3.1)).abs() < 2e-3);
+    }
+
+    /// Timing of a ~2.5 MP loupe conversion (`--ignored --nocapture`, release).
+    #[test]
+    #[ignore]
+    fn bench_pixels() {
+        let (w, h) = (1936, 1290);
+        let v: Vec<f32> = (0..w * h * 3).map(|i| (i % 997) as f32 / 300.0).collect();
+        let deep = lightcraft_pipeline::DeepImage {
+            width: w,
+            height: h,
+            space: lightcraft_pipeline::OutputSpace::Srgb,
+            samples: lightcraft_pipeline::DeepSamples::F32(v),
+        };
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            let p = pixels(&deep, 1, false).unwrap();
+            eprintln!("pixels: {:.1} ms ({})", t.elapsed().as_secs_f64() * 1e3, p.rgba.len());
         }
     }
 

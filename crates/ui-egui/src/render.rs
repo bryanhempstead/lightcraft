@@ -47,6 +47,9 @@ pub enum Slot {
     Import(u32),
     /// The second window's view of the active photo.
     Second,
+    /// A small HDR rendition of the active photo at its own HDR Limit, for the HDR histogram
+    /// ([`Tex::hdr_histogram`]; `crate::panels::hdr_histogram`).
+    HdrMaster,
 }
 
 pub struct Tex {
@@ -63,6 +66,8 @@ pub struct Tex {
     /// The HDR rendition for an HDR display (a float render of an HDR edit,
     /// [`crate::hdr_view`]); `tex` then holds its clipped 8-bit image.
     pub hdr: Option<std::sync::Arc<crate::hdr_view::HdrPixels>>,
+    /// The HDR histogram of a [`Slot::HdrMaster`] render.
+    pub hdr_histogram: Option<std::sync::Arc<lightcraft_pipeline::hdr_histogram::HdrHistogram>>,
 }
 
 /// Runs render jobs outside this thread's job pool (the browser build: Web Workers, each with its
@@ -519,12 +524,20 @@ impl Renderer {
                 srgb
             };
             let name = format!("{slot:?}");
-            let hdr = rendered.deep.as_ref().and_then(|d| crate::hdr_view::pixels(d, r.key, self.display_p3)).map(std::sync::Arc::new);
+            // the HDR histogram's render is binned, not shown
+            let (hdr, hdr_histogram) = if slot == Slot::HdrMaster {
+                let limit = session.catalog.photo(r.photo).map_or(4.0, |p| p.develop.hdr.headroom_ev() as f32);
+                let h = rendered.deep.as_ref().and_then(|d| lightcraft_pipeline::hdr_histogram::HdrHistogram::of(d, limit));
+                (None, h.map(std::sync::Arc::new))
+            } else {
+                (rendered.deep.as_ref().and_then(|d| crate::hdr_view::pixels(d, r.key, self.display_p3)).map(std::sync::Arc::new), None)
+            };
             match self.textures.get_mut(&slot) {
                 Some(t) => {
                     t.tex.set(color, egui::TextureOptions::LINEAR);
                     t.pixels = pixels;
                     t.hdr = hdr;
+                    t.hdr_histogram = hdr_histogram;
                     t.key = r.key;
                     t.photo = r.photo;
                     t.size = [img.width, img.height];
@@ -546,6 +559,7 @@ impl Renderer {
                             quick: r.quick,
                             pixels,
                             hdr,
+                            hdr_histogram,
                         },
                     );
                 }

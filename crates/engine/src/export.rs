@@ -1284,6 +1284,8 @@ impl ExportOptions {
     pub fn effective_depth(&self) -> OutputDepth {
         match (self.format, self.bit_depth) {
             (ExportFormat::Jpeg | ExportFormat::Webp | ExportFormat::Original | ExportFormat::Dng, _) => OutputDepth::U8,
+            // an AVIF gain map: the SDR base (the HDR rendition is rendered beside it)
+            (ExportFormat::Avif, _) if self.avif_gain_map() => OutputDepth::U8,
             (ExportFormat::Png | ExportFormat::Avif, _) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Jxl, _) if self.hdr && !self.hdr_compat => OutputDepth::F32Hdr,
             (ExportFormat::Png, Some(16 | 32)) => OutputDepth::U16,
@@ -1321,15 +1323,22 @@ impl ExportOptions {
             )
     }
 
-    /// Whether these options write an SDR base plus a gain map (HDR JPEG, and HDR JPEG XL with
-    /// Maximize Compatibility).
+    /// Whether these options write an SDR base plus a gain map (HDR JPEG, and HDR JPEG XL or
+    /// AVIF with Maximize Compatibility).
     pub fn gain_map_output(&self) -> bool {
-        self.hdr_output() && (self.format == ExportFormat::Jpeg || (self.format == ExportFormat::Jxl && self.hdr_compat))
+        self.hdr_output() && (self.format == ExportFormat::Jpeg || (self.format == ExportFormat::Jxl && self.hdr_compat) || self.avif_gain_map())
+    }
+
+    /// An HDR AVIF with Maximize Compatibility: SDR base + ISO 21496-1 gain map, written by macOS's
+    /// ImageIO ([`crate::imageio`]); without it (another platform) HDR AVIFs are PQ / HLG.
+    pub fn avif_gain_map(&self) -> bool {
+        self.format == ExportFormat::Avif && self.hdr && self.hdr_compat && crate::imageio::available()
     }
 
     /// The colour space the file is actually written in (AVIF: sRGB, or Rec. 2020 for HDR).
     pub fn effective_space(&self) -> OutputSpace {
         match (self.format, self.color_space) {
+            (ExportFormat::Avif, _) if self.avif_gain_map() => OutputSpace::Srgb,
             (ExportFormat::Avif | ExportFormat::Png, _) if self.hdr => OutputSpace::Rec2020,
             (ExportFormat::Jxl, _) if self.hdr && !self.hdr_compat => OutputSpace::Rec2020,
             (ExportFormat::Avif, _) => OutputSpace::Srgb,
@@ -1599,6 +1608,12 @@ pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, met
     let em = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     if o.format == ExportFormat::Jxl {
         return lightcraft_codecs::encode_jxl_gain_map(&EncodeImage::rgba8(&base), &em, &jxl_options(o), &map, &gm).map_err(|e| e.to_string());
+    }
+    if o.format == ExportFormat::Avif {
+        // a near-lossless gain-map JPEG, re-encoded by ImageIO as an AVIF with the same base,
+        // metadata and gain map
+        let jpeg = gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, 100, ChromaSubsampling::S444, &em).map_err(|e| e.to_string())?;
+        return crate::imageio::avif_gain_map(&jpeg, o.quality);
     }
     let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
     gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, o.quality, sub, &em).map_err(|e| e.to_string())

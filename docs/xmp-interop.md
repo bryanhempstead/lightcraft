@@ -110,7 +110,7 @@ names are read (e.g. `Exposure2012`, not the older `Exposure`).
 | `Contrast2012`, `Highlights2012`, `Shadows2012`, `Whites2012`, `Blacks2012` | `light.contrast` … `light.blacks` | −100..100, 1:1 |
 | `HDREditMode` | `hdr.enabled` | `1` = edited in HDR (Lightroom's HDR button) |
 | `HDRMaxValue` | `hdr.max_ev` (HDR Limit) | stops above SDR white (Lightroom writes 4, or the display's headroom, e.g. 2.3 on a 600-nit Studio Display); read only for HDR edits |
-| `SDRBrightness`, `SDRContrast`, `SDRClarity`, `SDRHighlights`, `SDRShadows`, `SDRWhites`, `SDRBlend` | `hdr.sdr_*` (SDR Settings) | −100..100; Brightness ±100 = ±1 EV on the SDR rendition; Blend is kept for the round trip, not rendered |
+| `SDRBrightness`, `SDRContrast`, `SDRClarity`, `SDRHighlights`, `SDRShadows`, `SDRWhites`, `SDRBlend` | `hdr.sdr_*` (SDR Settings) | −100..100; Brightness ±100 = ±1 EV on the SDR rendition; Blend is Camera Raw's highlight saturation of the SDR rendition (luminance kept, chroma ×(1 ± 0.25) faded in from half of SDR white; `finish::highlight_saturation`), dormant while HDR is off |
 | `WhiteBalance` | `wb.mode` | `As Shot`, `Auto`, `Daylight`, `Cloudy`, `Shade`, `Tungsten`, `Fluorescent`, `Flash`; other names → custom |
 | `Temperature`, `Tint` | `wb.temp`, `wb.tint` | Kelvin / tint for raw files (and presets) |
 | `IncrementalTemperature`, `IncrementalTint` | `wb.temp`, `wb.tint` | rendered files: −100..100 on our relative scale (mired shift around 6500 K, same as the Temp slider) |

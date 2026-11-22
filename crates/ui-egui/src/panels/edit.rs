@@ -623,7 +623,26 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
         .filter(|t| t.photo == id)
         .and_then(|t| t.histogram.clone())
         .or_else(|| app.renderer.textures.get(&Slot::Thumb(id)).and_then(|t| t.histogram.clone()));
-    if let Some(h) = hist {
+    // a photo edited in HDR: Lightroom's split SDR | HDR histogram (once its HDR rendition is in)
+    if let Some(hh) = super::hdr_histogram::current(app, id) {
+        register(ui.ctx(), "histogram:hdr", plot);
+        let display = super::hdr_histogram::display_stops(app);
+        super::hdr_histogram::draw(p, plot, &hh, display, t.button);
+        let total = hh.total.max(1) as f32;
+        let hi = if super::hdr_histogram::warns(&hh, display) {
+            super::hdr_histogram::BEYOND
+        } else if hh.above_white() > 0 {
+            super::hdr_histogram::WITHIN
+        } else {
+            Color32::from_gray(130)
+        };
+        let lo = if hh.shadows as f32 / total > 0.003 { Color32::WHITE } else { Color32::from_gray(130) };
+        for (c, x) in [(lo, plot.left() + 12.0), (hi, plot.right() - 12.0)] {
+            let tri = Rect::from_center_size(pos2(x, plot.top() + 10.0), vec2(14.0, 12.0));
+            p.rect_filled(tri, 2.0, if app.ui.show_clipping { t.hover } else { Color32::from_gray(60) });
+            paint(p, tri.shrink(2.0), Icon::ChevronDown, c);
+        }
+    } else if let Some(h) = hist {
         let smooth = |v: &[u32]| -> Vec<f32> {
             (0..256)
                 .map(|i| {
@@ -1360,7 +1379,7 @@ fn hdr_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         let vis = app.ui.hdr_visualize;
         if text_button(ui, "hdrVisualize", "vis.hdr.", vis)
             .on_hover_text(crate::i18n::tr(
-                "Visualize HDR: grey up to SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it",
+                "Visualize HDR: cyan, blue, purple, magenta up to 1, 2, 3 and over 3 stops above SDR white; red beyond what this display can show",
             ))
             .clicked()
         {
@@ -1378,7 +1397,7 @@ fn hdr_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     });
     if app.ui.hdr_sdr_preview {
         sub_title(ui, crate::i18n::tr("SDR Settings"));
-        for c in ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrClarity", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites"] {
+        for c in ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrClarity", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites", "hdr.sdrBlend"] {
             control(app, ui, d, c, true);
         }
     }

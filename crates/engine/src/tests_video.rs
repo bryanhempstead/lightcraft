@@ -93,22 +93,61 @@ fn poster_time_travels_with_the_path() {
 }
 
 #[test]
-fn video_settings_keep_what_classic_applies_to_video() {
+fn video_settings_keep_the_edit_panel_but_not_geometry() {
     let mut s = lightcraft_develop::DevelopSettings::default();
     assert!(!video::has_edits(&s));
+    // the whole Edit panel applies to video (LR-VID-EDIT)
     s.effects.clarity = 50.0;
     s.light.highlights = -40.0;
-    assert!(!video::has_edits(&s), "clarity and highlights don't apply to video");
+    assert!(video::has_edits(&s), "clarity and highlights apply to video");
     s.light.exposure = 1.0;
     s.color.vibrance = 20.0;
+    s.mixer.blue.sat = -30.0;
+    s.grading.shadows.sat = 25.0;
+    s.grading.shadows.hue = 210.0;
+    // ...but not what changes a frame's geometry or belongs to one photo
+    s.crop.flip_h = true;
+    s.geometry.vertical = 20.0;
+    s.spots.push(lightcraft_develop::Spot::default());
+    s.hdr.enabled = true;
+    s.hdr.sdr_brightness = 50.0;
     let v = video::video_settings(&s);
-    assert!(video::has_edits(&s));
-    assert_eq!((v.light.exposure, v.color.vibrance, v.effects.clarity, v.light.highlights), (1.0, 20.0, 0.0, 0.0));
+    assert_eq!((v.light.highlights, v.effects.clarity, v.color.vibrance, v.mixer.blue.sat), (-40.0, 50.0, 20.0, -30.0));
+    assert_eq!(v.grading, s.grading);
+    assert_eq!((v.crop, v.geometry.vertical, v.spots.len(), v.hdr.enabled), (lightcraft_develop::Crop::default(), 0.0, 0, false));
+    // an HDR edit's frames are its SDR rendition (Brightness +50 = +0.5 EV)
+    assert!((v.light.exposure - 1.5).abs() < 1e-9, "{}", v.light.exposure);
     // an edited frame is brighter, same size
     let img = lightcraft_raster::Rgba8::filled(16, 8, [90, 90, 90, 255]);
     let out = video::develop_frame(&img, &s, lightcraft_pipeline::Quality::Full);
     assert_eq!((out.width, out.height), (16, 8));
     assert!(out.data[0][1] > 110, "{:?}", out.data[0]);
+}
+
+/// Clarity on a frame changes it (it was ignored before LR-VID-EDIT), and playback, Capture
+/// Frame and export share one render: the same frame developed twice is identical.
+#[test]
+fn clarity_renders_on_frames_and_the_render_is_shared() {
+    let img = lightcraft_raster::Rgba8 {
+        width: 64,
+        height: 48,
+        data: (0..64 * 48)
+            .map(|i| {
+                let (x, y) = (i % 64, i / 64);
+                let v = (60 + (x * 2) + if (x / 8 + y / 8) % 2 == 0 { 40 } else { 0 }) as u8;
+                [v, v.saturating_sub(10), v.saturating_add(5), 255]
+            })
+            .collect(),
+    };
+    let mut s = lightcraft_develop::DevelopSettings::default();
+    let plain = video::develop_frame(&img, &s, lightcraft_pipeline::Quality::Full);
+    s.effects.clarity = 80.0;
+    s.light.shadows = 60.0;
+    let a = video::develop_frame(&img, &s, lightcraft_pipeline::Quality::Full);
+    let b = video::develop_frame(&img, &s, lightcraft_pipeline::Quality::Full);
+    assert_eq!(a.data, b.data);
+    let changed = a.data.iter().zip(&plain.data).filter(|(p, q)| (0..3).any(|c| p[c].abs_diff(q[c]) > 2)).count();
+    assert!(changed > a.data.len() / 4, "clarity / shadows changed only {changed} pixels");
 }
 
 /// Import a clip: a video with its length and date; its poster renders (frame 0, then the poster
