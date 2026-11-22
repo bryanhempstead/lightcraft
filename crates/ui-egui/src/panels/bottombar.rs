@@ -264,6 +264,14 @@ fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("File Name", FileName, "fileName"),
         ("Rating", Rating, "rating"),
         ("File Size", FileSize, "fileSize"),
+        ("Pick", Pick, "pick"),
+        ("Label Color", LabelColor, "labelColor"),
+        ("Label Text", LabelText, "labelText"),
+        ("Edit Count", EditCount, "editCount"),
+        ("Aspect Ratio", AspectRatio, "aspectRatio"),
+        ("File Type", FileType, "fileType"),
+        ("File Extension", Extension, "extension"),
+        ("Pixel Dimensions", PixelCount, "pixelCount"),
         ("Random", Random, "random"),
     ] {
         if ui.selectable_label(cur.key == key, crate::i18n::tr(label)).clicked() {

@@ -439,7 +439,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort",
             ["View", "Sort"],
             None,
-            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|random, ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
+            "{key?: captureDate|importDate|editDate|fileName|rating|fileSize|pick|labelColor|labelText|editCount|aspectRatio|fileType|extension|pixelCount|random, ascending?: bool, group?: auto|none|day|month|year, seed?: u64 (the shuffle `random` gives)}",
             always,
             |s, p| {
                 let key: SortKey = match p.get("key") {

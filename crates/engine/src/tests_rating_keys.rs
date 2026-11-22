@@ -331,3 +331,24 @@ fn collection_extras() {
     assert!(s.execute("album.saveQuick", &json!({})).is_err(), "empty now");
     assert!(s.execute("album.fromFolder", &json!({"path": "/nowhere"})).is_err());
 }
+
+/// L17: Lightroom's other sort orders.
+#[test]
+fn more_sort_orders() {
+    let mut s = Session::with_demo();
+    let v = s.visible_cloned();
+    s.execute("photo.flag", &json!({"ids": [v[0].0], "flag": "reject"})).unwrap();
+    s.execute("photo.flag", &json!({"ids": [v[1].0], "flag": "pick"})).unwrap();
+    s.execute("photo.label", &json!({"ids": [v[2].0], "label": "purple"})).unwrap();
+    for key in ["pick", "labelColor", "labelText", "editCount", "aspectRatio", "fileType", "extension", "pixelCount"] {
+        s.execute("library.sort", &json!({"key": key, "ascending": true})).unwrap();
+        assert_eq!(s.visible_cloned().len(), v.len(), "{key}");
+    }
+    s.execute("library.sort", &json!({"key": "pick", "ascending": false})).unwrap();
+    let first = s.visible_cloned()[0];
+    assert_eq!(s.catalog.photo(first).unwrap().flag, Flag::Pick, "flagged first, descending");
+    s.execute("library.sort", &json!({"key": "pixelCount", "ascending": true})).unwrap();
+    let px: Vec<u64> = s.visible_cloned().iter().map(|id| s.catalog.photo(*id).unwrap()).map(|p| u64::from(p.width) * u64::from(p.height)).collect();
+    assert!(px.windows(2).all(|w| w[0] <= w[1]));
+    assert!(s.execute("library.sort", &json!({"key": "colour"})).is_err());
+}

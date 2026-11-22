@@ -99,6 +99,17 @@ pub enum SortKey {
     /// A shuffle fixed by [`Sort::seed`]: the same seed always gives the same order, and photos
     /// added or edited later never reshuffle the others. Pick a new seed to reshuffle.
     Random,
+    /// Lightroom's other sort orders (L17): colour label (red … purple, none first), label name,
+    /// edit count (history steps), aspect ratio, file type, extension, pixel count, pick flag
+    /// (rejected, unflagged, flagged).
+    LabelColor,
+    LabelText,
+    EditCount,
+    AspectRatio,
+    FileType,
+    Extension,
+    PixelCount,
+    Pick,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -401,6 +412,28 @@ impl Catalog {
                 SortKey::Rating => a.rating.cmp(&b.rating),
                 SortKey::FileSize => a.file_size.cmp(&b.file_size),
                 SortKey::Random => shuffle_rank(sort.seed, a.id).cmp(&shuffle_rank(sort.seed, b.id)),
+                SortKey::LabelColor => a.label.map(|l| l as u8).cmp(&b.label.map(|l| l as u8)),
+                SortKey::LabelText => {
+                    let name = |p: &Photo| p.label.map(|l| self.label_name(l).to_lowercase()).unwrap_or_default();
+                    name(a).cmp(&name(b))
+                }
+                SortKey::EditCount => a.history.len().cmp(&b.history.len()),
+                // w₁/h₁ vs w₂/h₂ without division (a zero height sorts as the widest)
+                SortKey::AspectRatio => (u64::from(a.width) * u64::from(b.height.max(1))).cmp(&(u64::from(b.width) * u64::from(a.height.max(1)))),
+                SortKey::FileType => a.format.to_lowercase().cmp(&b.format.to_lowercase()),
+                SortKey::Extension => {
+                    let ext = |p: &Photo| p.file_name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
+                    ext(a).cmp(&ext(b))
+                }
+                SortKey::PixelCount => (u64::from(a.width) * u64::from(a.height)).cmp(&(u64::from(b.width) * u64::from(b.height))),
+                SortKey::Pick => {
+                    let rank = |p: &Photo| match p.flag {
+                        Flag::Reject => 0u8,
+                        Flag::None => 1,
+                        Flag::Pick => 2,
+                    };
+                    rank(a).cmp(&rank(b))
+                }
             }
             .then(a.id.cmp(&b.id));
             if sort.ascending { o } else { o.reverse() }
