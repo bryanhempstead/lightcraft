@@ -660,6 +660,7 @@ impl Session {
             sam3: true,
             models: self.segmenter.models.clone(),
             crop: None,
+            focus: None,
             tag,
             reply,
         })
@@ -704,6 +705,13 @@ impl Session {
             auto::Auto::Parts { region, .. } => Some(self.region_job(id, *region, 2 * INPUT_EDGE).ok_or("no such photo")?),
             _ => None,
         };
+        // Select Subject: the camera's focus point picks the subject (read from the file on the worker)
+        let focus = match (&a, &p.source) {
+            (auto::Auto::Subject, lightcraft_catalog::Source::File { path }) if missing.is_none() => {
+                Some(worker::FocusSource { path: path.clone(), orientation: d.orientation })
+            }
+            _ => None,
+        };
         Ok(worker::Job {
             dir: self.segmenter.dir.clone().unwrap_or_default(),
             key,
@@ -713,6 +721,7 @@ impl Session {
             sam3: self.segmenter.installed(),
             models: self.segmenter.models.clone(),
             crop,
+            focus,
             tag,
             reply,
         })

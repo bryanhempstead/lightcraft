@@ -84,6 +84,8 @@ pub enum Icon {
     Chat,
     /// Face boxes on/off: four corner brackets round a small face.
     FaceBox,
+    /// Draw Face Region: a dashed box being drawn, a small face in it and a plus at its corner.
+    FaceDraw,
 }
 
 struct Pen<'a> {
@@ -435,6 +437,16 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.line(&[(13.0, 17.5), (17.5, 17.5), (17.5, 13.0)]);
             pen.circle(10.0, 8.5, 2.4);
             pen.arc(10.0, 16.0, 4.5, 215.0, 325.0);
+        }
+        FaceDraw => {
+            for (a, b) in [((2.5, 2.5), (5.5, 2.5)), ((8.5, 2.5), (11.5, 2.5)), ((2.5, 2.5), (2.5, 5.5)), ((2.5, 8.5), (2.5, 11.5))] {
+                pen.line(&[a, b]);
+            }
+            pen.line(&[(14.5, 2.5), (14.5, 9.0)]);
+            pen.line(&[(2.5, 14.5), (9.0, 14.5)]);
+            pen.circle(9.0, 8.0, 2.2);
+            pen.line(&[(15.0, 12.5), (15.0, 18.5)]);
+            pen.line(&[(12.0, 15.5), (18.0, 15.5)]);
         }
         Picker => {
             pen.line(&[(4.0, 16.0), (11.5, 8.5)]);

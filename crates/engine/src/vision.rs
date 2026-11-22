@@ -13,7 +13,14 @@
 //! A run is planned on the session ([`Session::vision_start`]: the photos not indexed yet, each with what to read
 //! its pixels from), runs on worker threads (the app) or inline (CLI, MCP, tests), and can be cancelled; because
 //! every photo is written to the index as soon as it is done, a quit, a crash or a cancel loses at most the photos
-//! in flight, and the next run starts with the rest. Pixels come from a raw's embedded preview when it has one
+//! in flight, and the next run starts with the rest. Photos can join a running run ([`Session::vision_enqueue`]:
+//! an import's new photos go first).
+//!
+//! **Finding faces on its own** (Lightroom Classic's *Find faces in entire catalog* / *Only find faces as
+//! needed*): [`FaceDetect`] in the library's preferences. [`Session::faces_auto_tick`], called by the app every frame,
+//! plans a run when there is something to do: every photo of the library (newest first), or the photos the People view
+//! shows while it is open. Automatic runs are throttled (half the workers, and they pause while the user is busy:
+//! [`touch`]), stop with `stop.` until the user resumes them, and skip photos that failed once this session. Pixels come from a raw's embedded preview when it has one
 //! (fast: no raw decode), else from the photo's source decoded at the analysis size; decodes run as background work
 //! ([`crate::memory::in_background`]), so the grid and loupe go first.
 
@@ -38,6 +45,67 @@ pub const FACE_EDGE: usize = 1280;
 /// Long edge read for CLIP (it looks at 224 × 224).
 pub const SEARCH_EDGE: usize = 448;
 /// The index files' tags: a change of models or of what is stored starts the index over.
+/// Automatic runs take a breather after each photo while the user worked within this long.
+pub const BUSY_WINDOW_MS: u64 = 1500;
+
+/// When faces are found without being asked (Lightroom Classic: Catalog Settings ▸ Metadata ▸ Face Detection, and
+/// the People view's first-run choice).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FaceDetect {
+    /// Only when asked (`find.`, Assisted Culling).
+    Off,
+    /// The photos the People view shows, while it is open (Lightroom's *Only find faces as needed*).
+    #[default]
+    AsNeeded,
+    /// Every photo of the library, in the background (Lightroom's *Find faces in entire catalog*).
+    All,
+}
+
+impl FaceDetect {
+    pub fn parse(s: &str) -> Option<FaceDetect> {
+        match s {
+            "off" | "never" => Some(FaceDetect::Off),
+            "asNeeded" | "needed" | "people" => Some(FaceDetect::AsNeeded),
+            "all" | "catalog" | "library" => Some(FaceDetect::All),
+            _ => None,
+        }
+    }
+    pub fn key(self) -> &'static str {
+        match self {
+            FaceDetect::Off => "off",
+            FaceDetect::AsNeeded => "asNeeded",
+            FaceDetect::All => "all",
+        }
+    }
+}
+
+/// The library's face preferences (`prefs.json` → `faces`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FacePrefs {
+    pub detect: FaceDetect,
+}
+
+/// Milliseconds since the first call, for [`touch`].
+fn now_ms() -> u64 {
+    static START: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(web_time::Instant::now).elapsed().as_millis() as u64
+}
+
+static LAST_TOUCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The user is doing something (the app calls this on input): automatic runs hold back for a moment.
+pub fn touch() {
+    LAST_TOUCH.store(now_ms().max(1), Ordering::Relaxed);
+}
+
+/// The user worked within the last `window` milliseconds.
+pub fn user_busy(window: u64) -> bool {
+    let t = LAST_TOUCH.load(Ordering::Relaxed);
+    t != 0 && now_ms().saturating_sub(t) < window
+}
+
 pub const FACES_TAG: &str = "faces yunet-2023mar sface-2021dec open-closed-eye-0001 v1";
 pub const SEARCH_TAG: &str = "search clip-vit-b32-laion2b v1";
 
@@ -89,6 +157,8 @@ pub struct Progress {
     /// Photos a second (since the run started).
     pub rate: f64,
     pub cancelled: bool,
+    /// Started by [`Session::faces_auto_tick`] (throttled), not by the user.
+    pub auto: bool,
     /// Why the run stopped early (e.g. the model is missing).
     pub error: Option<String>,
     #[serde(skip)]
@@ -159,23 +229,37 @@ pub struct Item {
     pub id: PhotoId,
     pub key: String,
     pub pixels: PixelSource,
-    /// The photo's named face regions (`[x, y, w, h]`, normalized, upright): they get embeddings even where the
-    /// finder misses them. (Unnamed regions from other apps that the finder doesn't confirm are left alone: phones
-    /// write boxes that don't always sit on a face.)
+    /// The photo's named and hand-drawn face regions (`[x, y, w, h]`, normalized, upright): they get embeddings even
+    /// where the finder misses them. (Unnamed regions from other apps that the finder doesn't confirm are left alone:
+    /// phones write boxes that don't always sit on a face.)
     pub regions: Vec<[f32; 4]>,
 }
 
 /// What a worker sends back.
 pub enum Event {
-    Faces { id: PhotoId, generation: u64, record: FaceRecord },
-    Embedded { id: PhotoId },
+    Faces {
+        id: PhotoId,
+        generation: u64,
+        record: FaceRecord,
+    },
+    Embedded {
+        id: PhotoId,
+    },
+    /// The photo couldn't be analysed (unreadable, …): automatic runs don't try it again this session.
+    Failed {
+        key: String,
+    },
 }
+
+/// The photos waiting for a run's workers (more can join while it runs).
+type Queue = Arc<Mutex<VecDeque<Item>>>;
 
 struct Running {
     kind: Kind,
     cancel: Arc<AtomicBool>,
     progress: Arc<Mutex<Progress>>,
     thread: Option<std::thread::JoinHandle<()>>,
+    queue: Queue,
 }
 
 /// A model download in the background.
@@ -217,6 +301,17 @@ pub struct Vision {
     /// The last search: query, index generation, ranked photos.
     search_cache: Option<(String, u64, Arc<Vec<(PhotoId, f32)>>)>,
     messages: Vec<String>,
+    /// Automatic face finding was stopped by the user (until [`Vision::resume_auto`] or the next library).
+    pub auto_paused: bool,
+    /// What the last automatic planning looked at (catalog revision, index generation, scope) and when, so an
+    /// unchanged library isn't planned again every frame.
+    auto_planned: Option<((u64, u64, bool), web_time::Instant)>,
+    /// Content keys that failed this session (automatic runs skip them).
+    failed: std::collections::HashSet<String>,
+    /// The photos the last automatic run was planned with, in order (tests, `faces.auto`).
+    pub auto_last_plan: Vec<PhotoId>,
+    /// The newest photo the automatic run knows of: newer ones (an import) join its front.
+    auto_newest: PhotoId,
 }
 
 impl Default for Vision {
@@ -235,6 +330,11 @@ impl Default for Vision {
             clip: None,
             search_cache: None,
             messages: Vec::new(),
+            auto_paused: false,
+            auto_planned: None,
+            failed: Default::default(),
+            auto_last_plan: Vec::new(),
+            auto_newest: PhotoId(0),
         }
     }
 }
@@ -257,12 +357,53 @@ impl Vision {
         self.running.iter().any(|r| lock(&r.progress).running)
     }
 
+    /// A run of `kind` is going.
+    pub fn running(&self, kind: Kind) -> bool {
+        self.running.iter().any(|r| r.kind == kind && lock(&r.progress).running)
+    }
+
+    /// Stop the running run(s) (`None`: all). Stopping automatic face finding pauses it until it is resumed.
     pub fn cancel(&mut self, kind: Option<Kind>) {
         for r in &self.running {
             if kind.is_none_or(|k| k == r.kind) {
                 r.cancel.store(true, Ordering::Relaxed);
+                let p = lock(&r.progress);
+                if r.kind == Kind::Faces && p.auto && p.running {
+                    self.auto_paused = true;
+                }
             }
         }
+    }
+
+    /// A run of `kind` that looks busy and has no workers (tests of queueing).
+    #[cfg(test)]
+    pub(crate) fn fake_running(&mut self, kind: Kind, auto: bool) {
+        let progress = Arc::new(Mutex::new(Progress { running: true, auto, ..Default::default() }));
+        self.running.retain(|r| r.kind != kind);
+        self.running.push(Running { kind, cancel: Arc::new(AtomicBool::new(false)), progress, thread: None, queue: Default::default() });
+    }
+
+    /// Mark the fake run of `kind` finished (its workers "ended") and hand back its thread slot for joining.
+    #[cfg(test)]
+    pub(crate) fn fake_finish(&mut self, kind: Kind) {
+        for r in &mut self.running {
+            if r.kind == kind {
+                lock(&r.progress).running = false;
+                r.thread = std::thread::Builder::new().spawn(|| {}).ok();
+            }
+        }
+    }
+
+    /// The photos a run of `kind` still has queued, in order.
+    #[cfg(test)]
+    pub(crate) fn queued(&self, kind: Kind) -> Vec<PhotoId> {
+        self.running.iter().filter(|r| r.kind == kind).flat_map(|r| lock(&r.queue).iter().map(|i| i.id).collect::<Vec<_>>()).collect()
+    }
+
+    /// Let automatic face finding go on again.
+    pub fn resume_auto(&mut self) {
+        self.auto_paused = false;
+        self.auto_planned = None;
     }
 
     /// Messages for the user (failed runs), once.
@@ -334,6 +475,10 @@ impl Vision {
         self.search = None;
         self.search_cache = None;
         self.generation += 1;
+        self.auto_paused = false;
+        self.auto_planned = None;
+        self.auto_newest = PhotoId(0);
+        self.failed.clear();
     }
 }
 
@@ -404,10 +549,12 @@ impl Session {
             Kind::Faces => FACE_EDGE,
             Kind::Search => SEARCH_EDGE,
         };
+        // with the expression model installed, photos analysed before it count as not done
+        let expressions = self.vision.installed(Package::Expressions);
         let have: std::collections::HashSet<String> = match kind {
             Kind::Faces => {
                 let idx = self.faces_index()?;
-                lock(&idx).iter().map(|(k, _)| k.clone()).collect()
+                lock(&idx).iter().filter(|(_, r)| r.expressions || !expressions).map(|(k, _)| k.clone()).collect()
             }
             Kind::Search => {
                 let idx = self.search_index()?;
@@ -429,7 +576,7 @@ impl Session {
                 .meta
                 .regions
                 .iter()
-                .filter(|r| r.kind == lightcraft_meta::RegionKind::Face && r.name.is_some())
+                .filter(|r| r.kind == lightcraft_meta::RegionKind::Face && (r.name.is_some() || r.drawn))
                 .map(|r| [r.rect.x0 as f32, r.rect.y0 as f32, (r.rect.x1 - r.rect.x0) as f32, (r.rect.y1 - r.rect.y0) as f32])
                 .collect();
             let Some(pixels) = self.pixel_source(*id, edge) else { continue };
@@ -444,32 +591,71 @@ impl Session {
         if !self.vision.installed(kind.package()) {
             return Err(crate::EngineError::Other(models::missing_message(&self.vision.root, kind.package())));
         }
+        let items = self.vision_items(kind, ids, force)?;
+        self.vision_run(kind, items, false)
+    }
+
+    /// Queue `ids` (those not done yet) for `kind`: ahead of what a running run still has to do, else in a new run.
+    /// Returns how many photos were queued.
+    pub fn vision_enqueue(&mut self, kind: Kind, ids: &[PhotoId]) -> Result<usize> {
+        if !self.vision.installed(kind.package()) {
+            return Err(crate::EngineError::Other(models::missing_message(&self.vision.root, kind.package())));
+        }
+        let items = self.vision_items(kind, ids, false)?;
+        if items.is_empty() {
+            return Ok(0);
+        }
+        if let Some(r) = self.vision.running.iter().find(|r| r.kind == kind) {
+            // under the progress lock: the workers can't be finishing while the photos go in
+            let mut p = lock(&r.progress);
+            if p.running && !r.cancel.load(Ordering::Relaxed) {
+                let mut q = lock(&r.queue);
+                let queued: std::collections::HashSet<PhotoId> = q.iter().map(|i| i.id).collect();
+                let new: Vec<Item> = items.into_iter().filter(|i| !queued.contains(&i.id)).collect();
+                let n = new.len();
+                for item in new.into_iter().rev() {
+                    q.push_front(item);
+                }
+                p.total += n;
+                return Ok(n);
+            }
+        }
+        self.vision_run(kind, items, false)
+    }
+
+    /// Start a run over `items` (`auto`: planned by [`Session::faces_auto_tick`], throttled).
+    fn vision_run(&mut self, kind: Kind, items: Vec<Item>, auto: bool) -> Result<usize> {
+        if !self.vision.installed(kind.package()) {
+            return Err(crate::EngineError::Other(models::missing_message(&self.vision.root, kind.package())));
+        }
         if self.vision.running.iter().any(|r| r.kind == kind && lock(&r.progress).running) {
             return Err(crate::EngineError::Other(format!("{} indexing is already running", if kind == Kind::Faces { "face" } else { "search" })));
         }
-        let items = self.vision_items(kind, ids, force)?;
         let n = items.len();
         let cancel = Arc::new(AtomicBool::new(false));
-        let progress = Arc::new(Mutex::new(Progress { running: true, total: n, started: Some(web_time::Instant::now()), ..Default::default() }));
+        let progress =
+            Arc::new(Mutex::new(Progress { running: true, total: n, auto, started: Some(web_time::Instant::now()), ..Default::default() }));
+        let queue: Queue = Arc::new(Mutex::new(VecDeque::from(items)));
         let dir = models::dir(&self.vision.root, kind.package());
+        let expr_dir = self.vision.installed(Package::Expressions).then(|| models::dir(&self.vision.root, Package::Expressions));
         let tx = self.vision.results.0.clone();
         let generation = self.library_generation();
         #[cfg(not(target_arch = "wasm32"))]
         let work: Box<dyn FnOnce() + Send> = match kind {
             Kind::Faces => {
                 let store = self.faces_index()?;
-                let (c, p) = (cancel.clone(), progress.clone());
-                Box::new(move || worker::faces(items, dir, store, tx, c, p, generation))
+                let (c, p, q) = (cancel.clone(), progress.clone(), queue.clone());
+                Box::new(move || worker::faces(q, dir, expr_dir, store, tx, c, p, generation))
             }
             Kind::Search => {
                 let store = self.search_index()?;
-                let (c, p) = (cancel.clone(), progress.clone());
-                Box::new(move || worker::search(items, dir, store, tx, c, p))
+                let (c, p, q) = (cancel.clone(), progress.clone(), queue.clone());
+                Box::new(move || worker::search(q, dir, store, tx, c, p))
             }
         };
         #[cfg(target_arch = "wasm32")]
         let work: Box<dyn FnOnce() + Send> = {
-            let _ = (items, dir, tx, generation);
+            let _ = (dir, expr_dir, tx, generation);
             let p = progress.clone();
             Box::new(move || {
                 let mut g = lock(&p);
@@ -483,10 +669,10 @@ impl Session {
                 .name(format!("vision-{kind:?}").to_lowercase())
                 .spawn(work)
                 .map_err(|e| crate::EngineError::Other(format!("can't start indexing: {e}")))?;
-            self.vision.running.push(Running { kind, cancel, progress, thread: Some(thread) });
+            self.vision.running.push(Running { kind, cancel, progress, thread: Some(thread), queue });
         } else {
             work();
-            self.vision.running.push(Running { kind, cancel, progress, thread: None });
+            self.vision.running.push(Running { kind, cancel, progress, thread: None, queue });
             self.vision_poll();
             if let Some(e) = self.vision.progress(kind).error {
                 return Err(crate::EngineError::Other(e));
@@ -511,11 +697,21 @@ impl Session {
                     // a photo culled before its faces were known gets its face scores now
                     if let Some(a) = self.catalog.photo(id).and_then(|p| p.analysis) {
                         let f = crate::cmd::cull_scores(&record);
-                        let b = lightcraft_catalog::Analysis { faces: f.faces, eyes_closed: f.eyes_closed, face_focus: f.focus, ..a };
+                        let b = lightcraft_catalog::Analysis {
+                            faces: f.faces,
+                            eyes_closed: f.eyes_closed,
+                            face_focus: f.focus,
+                            smiles: f.smiles,
+                            expression: f.expression,
+                            ..a
+                        };
                         if b != a {
                             ops.push(lightcraft_catalog::Op::SetAnalysis { id, analysis: Some(b) });
                         }
                     }
+                }
+                Event::Failed { key } => {
+                    self.vision.failed.insert(key);
                 }
                 Event::Faces { .. } | Event::Embedded { .. } => {}
             }
@@ -525,7 +721,8 @@ impl Session {
         {
             log::warn!("faces: {e}");
         }
-        // finished runs: join their threads, report errors once
+        // finished runs: join their threads, report errors once; photos queued as a run was ending start a new one
+        let mut leftovers: Vec<(Kind, Vec<PhotoId>)> = Vec::new();
         for r in &mut self.vision.running {
             let p = lock(&r.progress).clone();
             if !p.running
@@ -534,10 +731,21 @@ impl Session {
                 if t.join().is_err() {
                     self.vision.messages.push("indexing stopped unexpectedly".into());
                 }
+                if !p.cancelled && p.error.is_none() {
+                    let left: Vec<PhotoId> = lock(&r.queue).drain(..).map(|i| i.id).collect();
+                    if !left.is_empty() {
+                        leftovers.push((r.kind, left));
+                    }
+                }
                 if let Some(e) = p.error.filter(|_| !p.cancelled) {
                     self.vision.messages.push(e);
                 }
                 changed = true;
+            }
+        }
+        for (kind, ids) in leftovers {
+            if let Err(e) = self.vision_start(kind, &ids, false) {
+                log::warn!("vision: {e}");
             }
         }
         if changed {
@@ -563,6 +771,73 @@ impl Session {
             added = true;
         }
         added.then_some(lightcraft_catalog::Op::SetRegions { id, regions })
+    }
+}
+
+impl Session {
+    /// Find faces without being asked, as [`FacePrefs::detect`] says ([`FaceDetect::All`]: the whole library, newest
+    /// first; [`FaceDetect::AsNeeded`]: the photos in view while the People view is open). Called by the app every
+    /// frame; it plans a run only when the library or the index changed since it last looked (at most every few
+    /// seconds) and nothing is running. Returns how many photos it queued.
+    pub fn faces_auto_tick(&mut self, people_open: bool) -> usize {
+        let active = match self.face_prefs.detect {
+            FaceDetect::Off => false,
+            FaceDetect::AsNeeded => people_open,
+            FaceDetect::All => true,
+        };
+        if !active || self.vision.auto_paused {
+            return 0;
+        }
+        // cheap checks first: this runs every frame
+        let key = (self.catalog.revision, self.vision.generation, people_open);
+        if let Some((k, at)) = &self.vision.auto_planned
+            && (*k == key || at.elapsed() < std::time::Duration::from_secs(3))
+        {
+            return 0;
+        }
+        self.vision.auto_planned = Some((key, web_time::Instant::now()));
+        let newest = self.catalog.photos().map(|p| p.id).max().unwrap_or(PhotoId(0));
+        if self.vision.running(Kind::Faces) {
+            // photos imported while the whole library is being analysed go to the front of the run
+            let p = self.vision.progress(Kind::Faces);
+            if p.auto && self.face_prefs.detect == FaceDetect::All && newest > self.vision.auto_newest {
+                let since = self.vision.auto_newest;
+                let mut new: Vec<PhotoId> = self.catalog.photos().filter(|p| p.in_library() && p.id > since).map(|p| p.id).collect();
+                new.sort_unstable_by(|a, b| b.cmp(a));
+                self.vision.auto_newest = newest;
+                return self.vision_enqueue(Kind::Faces, &new).unwrap_or(0);
+            }
+            return 0;
+        }
+        if !self.vision.installed(Package::Faces) {
+            return 0;
+        }
+        self.vision.auto_newest = newest;
+        let mut ids: Vec<PhotoId> = match self.face_prefs.detect {
+            FaceDetect::All => self.catalog.photos().filter(|p| p.in_library()).map(|p| p.id).collect(),
+            _ => self.visible_cloned(),
+        };
+        // newest first: an import's photos before the backlog
+        ids.sort_unstable_by(|a, b| b.cmp(a));
+        let items = match self.vision_items(Kind::Faces, &ids, false) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("faces: {e}");
+                return 0;
+            }
+        };
+        let items: Vec<Item> = items.into_iter().filter(|i| !self.vision.failed.contains(&i.key)).collect();
+        if items.is_empty() {
+            return 0;
+        }
+        self.vision.auto_last_plan = items.iter().map(|i| i.id).collect();
+        match self.vision_run(Kind::Faces, items, true) {
+            Ok(n) => n,
+            Err(e) => {
+                log::warn!("faces: {e}");
+                0
+            }
+        }
     }
 }
 
@@ -662,6 +937,7 @@ pub fn entry_for<'a>(record: &'a FaceRecord, rect: &lightcraft_meta::Rect) -> Op
 pub fn status_json(s: &mut Session) -> Value {
     let faces = s.faces_index().map(|i| lock(&i).len()).unwrap_or(0);
     let search = s.search_index().map(|i| lock(&i).len()).unwrap_or(0);
+    let (detect, paused) = (s.face_prefs.detect, s.vision.auto_paused);
     let v = &s.vision;
     let pkg = |p: Package| {
         let i = models::info(p);
@@ -672,7 +948,10 @@ pub fn status_json(s: &mut Session) -> Value {
         })
     };
     json!({
-        "faces": {"model": pkg(Package::Faces), "indexed": faces, "progress": v.progress(Kind::Faces)},
+        "faces": {
+            "model": pkg(Package::Faces), "expressions": pkg(Package::Expressions), "indexed": faces, "progress": v.progress(Kind::Faces),
+            "detect": detect.key(), "autoPaused": paused,
+        },
         "search": {"model": pkg(Package::Search), "indexed": search, "progress": v.progress(Kind::Search)},
     })
 }
@@ -683,9 +962,24 @@ pub(crate) mod worker {
     use lightcraft_vision::Face;
     use lightcraft_vision::{eyes::EyeState, sface::SFace, yunet::YuNet};
 
-    /// Workers decoding and analysing photos at once (each analysis is itself parallel).
-    fn threads() -> usize {
-        std::thread::available_parallelism().map(|n| (n.get() / 3).clamp(1, 4)).unwrap_or(2)
+    /// Workers decoding and analysing photos at once (each analysis is itself parallel); automatic runs take half.
+    fn threads(auto: bool) -> usize {
+        let n = std::thread::available_parallelism().map(|n| (n.get() / 3).clamp(1, 4)).unwrap_or(2);
+        if auto { n.div_ceil(2) } else { n }
+    }
+
+    /// An automatic run waits while the user is busy (a frame or two of breathing room, re-checked), at most a few
+    /// seconds a photo, and stops waiting when cancelled.
+    fn pace(auto: bool, cancel: &AtomicBool) {
+        if !auto {
+            return;
+        }
+        for _ in 0..20 {
+            if cancel.load(Ordering::Relaxed) || !user_busy(BUSY_WINDOW_MS) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
     }
 
     fn fail(progress: &Mutex<Progress>, e: impl Into<String>) {
@@ -713,23 +1007,40 @@ pub(crate) mod worker {
         det: YuNet,
         rec: SFace,
         eyes: EyeState,
+        /// The expression network, when installed.
+        expr: Option<lightcraft_vision::expression::ExpressionNet>,
     }
 
-    /// The face indexer: every item through detection, embedding, eyes and focus.
+    /// The face indexer: every queued item through detection, embedding, eyes, expression and focus.
+    #[allow(clippy::too_many_arguments)]
     pub fn faces(
-        items: Vec<Item>,
+        queue: Queue,
         dir: PathBuf,
+        expr_dir: Option<PathBuf>,
         store: Arc<Mutex<Store<FaceRecord>>>,
         tx: mpsc::Sender<Event>,
         cancel: Arc<AtomicBool>,
         progress: Arc<Mutex<Progress>>,
         generation: u64,
     ) {
+        let auto = lock(&progress).auto;
         let load = || -> std::result::Result<FaceModels, String> {
+            let expr = match &expr_dir {
+                Some(d) => match lightcraft_vision::expression::ExpressionNet::load(&d.join(models::EXPRESSION)) {
+                    Ok(e) => Some(e),
+                    Err(e) => {
+                        // the faces still work without it
+                        log::warn!("the expression model couldn't be loaded: {e}");
+                        None
+                    }
+                },
+                None => None,
+            };
             Ok(FaceModels {
                 det: YuNet::load(&dir.join(models::YUNET)).map_err(|e| e.to_string())?,
                 rec: SFace::load(&dir.join(models::SFACE)).map_err(|e| e.to_string())?,
                 eyes: EyeState::load(&dir.join(models::EYES)).map_err(|e| e.to_string())?,
+                expr,
             })
         };
         let m = match std::panic::catch_unwind(load) {
@@ -737,8 +1048,7 @@ pub(crate) mod worker {
             Ok(Err(e)) => return fail(&progress, e),
             Err(_) => return fail(&progress, "the face models couldn't be loaded"),
         };
-        let queue = Arc::new(Mutex::new(VecDeque::from(items)));
-        let handles: Vec<_> = (0..threads())
+        let handles: Vec<_> = (0..threads(auto))
             .filter_map(|_| {
                 let (m, queue, store, tx, cancel, progress) = (m.clone(), queue.clone(), store.clone(), tx.clone(), cancel.clone(), progress.clone());
                 std::thread::Builder::new()
@@ -761,13 +1071,16 @@ pub(crate) mod worker {
                                 }
                                 Ok(Err(e)) => {
                                     log::info!("faces: photo {}: {e}", item.id.0);
+                                    let _ = tx.send(Event::Failed { key: item.key.clone() });
                                     tick(&progress, false, 0);
                                 }
                                 Err(_) => {
                                     log::warn!("faces: photo {}: the analysis panicked", item.id.0);
+                                    let _ = tx.send(Event::Failed { key: item.key.clone() });
                                     tick(&progress, false, 0);
                                 }
                             }
+                            pace(auto, &cancel);
                         }
                     })
                     .ok()
@@ -795,7 +1108,7 @@ pub(crate) mod worker {
         let t_load = t0.elapsed();
         let (w, h) = (img.width as f32, img.height as f32);
         if w < 16.0 || h < 16.0 {
-            return Ok(FaceRecord { faces: Vec::new(), width: img.width as u32, height: img.height as u32 });
+            return Ok(FaceRecord { faces: Vec::new(), width: img.width as u32, height: img.height as u32, expressions: m.expr.is_some() });
         }
         let mut found: Vec<Face> = m.det.detect(&img).map_err(|e| e.to_string())?;
         // the photo's own regions the finder missed: look again around each, else take its box
@@ -836,6 +1149,10 @@ pub(crate) mod worker {
         for f in &found {
             let embedding = m.rec.embed(&img, f).map_err(|e| e.to_string())?;
             let eyes = m.eyes.eyes(&img, f).map_err(|e| e.to_string())?.map(|e| e.closed);
+            let expression = match &m.expr {
+                Some(x) => x.classify(&img, f).map_err(|e| e.to_string())?.map(|e| e.probs),
+                None => None,
+            };
             faces.push(FaceEntry {
                 rect: [f.rect[0] / w, f.rect[1] / h, f.rect[2] / w, f.rect[3] / h],
                 landmarks: f.landmarks.map(|p| [p[0] / w, p[1] / h]),
@@ -843,6 +1160,7 @@ pub(crate) mod worker {
                 embedding,
                 eyes,
                 sharpness: face_sharpness(&img, f),
+                expression,
             });
         }
         if std::env::var_os("LIGHTCRAFT_PROFILE").is_some() {
@@ -857,7 +1175,7 @@ pub(crate) mod worker {
                 (t0.elapsed() - t_load - t_detect).as_secs_f64() * 1e3
             );
         }
-        Ok(FaceRecord { faces, width: img.width as u32, height: img.height as u32 })
+        Ok(FaceRecord { faces, width: img.width as u32, height: img.height as u32, expressions: m.expr.is_some() })
     }
 
     /// The culling focus measure on the face alone (0..100, the scale of `cull::sharpness`).
@@ -872,7 +1190,7 @@ pub(crate) mod worker {
 
     /// The search indexer: CLIP embeddings in batches on the GPU (when there is one).
     pub fn search(
-        items: Vec<Item>,
+        queue: Queue,
         dir: PathBuf,
         store: Arc<Mutex<Store<Embedding>>>,
         tx: mpsc::Sender<Event>,
@@ -888,8 +1206,7 @@ pub(crate) mod worker {
         const BATCH: usize = 16;
         // decoders feed a bounded channel; this thread runs the model
         let (in_tx, in_rx) = mpsc::sync_channel::<(Item, std::result::Result<Vec<f32>, String>)>(BATCH * 2);
-        let queue = Arc::new(Mutex::new(VecDeque::from(items)));
-        let decoders: Vec<_> = (0..threads())
+        let decoders: Vec<_> = (0..threads(false))
             .filter_map(|_| {
                 let (queue, in_tx, cancel, clip) = (queue.clone(), in_tx.clone(), cancel.clone(), clip.clone());
                 std::thread::Builder::new()
@@ -959,6 +1276,7 @@ pub(crate) mod worker {
                 Ok(v) => batch.push((item, v)),
                 Err(e) => {
                     log::info!("search: photo {}: {e}", item.id.0);
+                    let _ = tx.send(Event::Failed { key: item.key.clone() });
                     tick(&progress, false, 0);
                 }
             }

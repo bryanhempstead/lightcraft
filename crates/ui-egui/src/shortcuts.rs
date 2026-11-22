@@ -158,6 +158,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if record(app, ctx) {
         return;
     }
+    // Esc leaves the Draw Face Region tool before it does anything else
+    if app.ui.draw_face && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        app.ui.draw_face = false;
+        return;
+    }
     let mut fire: Vec<String> = Vec::new();
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let natives: std::collections::HashSet<String> = app.native_shortcuts.iter().map(|s| crate::keymap::canonical(s)).collect();

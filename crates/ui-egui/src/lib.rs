@@ -516,6 +516,33 @@ impl LightcraftApp {
         if self.session.vision.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
+        // faces found without being asked (Settings ▸ General ▸ Find faces); automatic runs hold back while the
+        // user works
+        if ctx.input(|i| !i.events.is_empty() || i.pointer.any_down()) {
+            lightcraft_engine::vision::touch();
+        }
+        let people_open = self.ui.view == crate::state::ViewMode::People;
+        if self.session.faces_auto_tick(people_open) > 0 {
+            ctx.request_repaint();
+        }
+        // Assisted Culling measuring on worker threads (the dialog, culling at import)
+        if self.session.cull_job.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(300));
+        }
+        match self.session.cull_poll() {
+            Some(Ok(v)) => {
+                let n = v["photos"].as_array().map_or(0, Vec::len);
+                let mut msg = crate::i18n::tr_format!("Assisted Culling: {n} photos, {g} groups of look-alikes", n = n, g = v["groups"]);
+                let (r, p) = (v["rejected"].as_u64().unwrap_or(0), v["picked"].as_u64().unwrap_or(0));
+                if r + p > 0 {
+                    msg = format!("{msg} · {}", crate::i18n::tr_format!("{r} rejected, {p} picked", r = r, p = p));
+                }
+                self.toast(ctx, msg);
+                ctx.request_repaint();
+            }
+            Some(Err(e)) => self.toast_error(ctx, format!("Assisted Culling: {e}")),
+            None => {}
+        }
         let polled = self.session.segment_poll();
         let now = ctx.input(|i| i.time);
         if polled.changed {

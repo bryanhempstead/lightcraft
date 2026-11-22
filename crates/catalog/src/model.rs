@@ -394,6 +394,13 @@ pub struct Analysis {
     /// analysed or none was found (catalog format v9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub face_focus: Option<f32>,
+    /// Main faces that smile (the expression model's `happy` at least even odds; catalog format v10).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub smiles: u16,
+    /// How pleasant the main faces look, 0..100 (100 × the mean of P(happy) + ½ P(neutral) over them: a smile is
+    /// high, a neutral face about 50, a frown or a grimace low); `None` when expressions weren't read (v10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<f32>,
 }
 
 fn is_zero(v: &u16) -> bool {

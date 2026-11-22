@@ -192,6 +192,8 @@ struct PrefsFile {
     auto_versions: bool,
     /// Named watermarks.
     watermark_presets: Vec<crate::cmd::naming::WatermarkPreset>,
+    /// Face finding (People).
+    faces: crate::vision::FacePrefs,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -385,6 +387,7 @@ impl Session {
         self.naming_counters = prefs.naming_counters;
         self.auto_versions = prefs.auto_versions;
         self.watermark_presets = prefs.watermark_presets;
+        self.face_prefs = prefs.faces;
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
@@ -628,6 +631,7 @@ impl Session {
             naming_counters: self.naming_counters,
             auto_versions: self.auto_versions,
             watermark_presets: self.watermark_presets.clone(),
+            faces: self.face_prefs,
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };

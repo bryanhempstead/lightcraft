@@ -5,6 +5,8 @@
 //! - [`sface`]: SFace face recognition (OpenCV Zoo, Apache-2.0) — a 128-number embedding per aligned face.
 //! - [`eyes`]: open / closed eyes on a detected face (the OpenVINO Open Model Zoo's `open-closed-eye-0001`,
 //!   Apache-2.0).
+//! - [`expression`]: seven basic facial expressions (smiles) on a detected face (OpenCV Zoo's Progressive Teacher
+//!   MobileFaceNet, Apache-2.0).
 //! - [`clip`]: CLIP ViT-B/32 (OpenAI, MIT) image and text embeddings, ported from candle-transformers.
 //! - [`cluster`]: grouping faces into people and matching them to named people.
 //! - [`index`]: the append-only, checksummed side files the embeddings are kept in.
@@ -22,6 +24,8 @@ pub mod models;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod clip;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod expression;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod eyes;
 #[cfg(not(target_arch = "wasm32"))]

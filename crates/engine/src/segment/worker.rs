@@ -64,8 +64,33 @@ pub struct Job {
     pub models: Option<PathBuf>,
     /// A second render: the part of the photo a People parts job zooms into.
     pub crop: Option<RenderJob>,
+    /// Where to read the camera's focus point from (Select Subject): read on the worker, not the UI thread.
+    pub focus: Option<FocusSource>,
     pub tag: Tag,
     pub reply: mpsc::Sender<Outcome>,
+}
+
+/// A photo's file and how its upright frame maps onto the model input (the user's Rotate / Flip), for the focus
+/// point the camera recorded.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FocusSource {
+    pub path: String,
+    pub orientation: lightcraft_geom::Orientation,
+}
+
+impl FocusSource {
+    /// The focus point's centre in the model input's normalized frame, `None` when the file records none.
+    pub fn read(&self) -> Option<(f64, f64)> {
+        let len = std::fs::metadata(&self.path).ok()?.len();
+        if len > lightcraft_meta::focus::MAX_FILE as u64 {
+            return None;
+        }
+        let bytes = crate::memory::in_background(|| std::fs::read(&self.path)).ok()?;
+        let f = lightcraft_meta::focus::read_file(&bytes)?;
+        let r = self.orientation.map_norm_rect(f.rect);
+        let c = ((r.x0 + r.x1) / 2.0, (r.y0 + r.y1) / 2.0);
+        (c.0.is_finite() && c.1.is_finite()).then_some(c)
+    }
 }
 
 /// A finished request: the segmentation (`None`: nothing selected / nothing to report).
@@ -426,15 +451,20 @@ fn run_auto(state: &mut State, shared: &Shared, job: &mut Job, auto: Auto) -> Re
             Err(no_model(&auto))
         }
         Auto::Subject => {
+            // the camera's focus point picks the subject among several
+            let focus = job.focus.as_ref().and_then(FocusSource::read);
+            if let Some(f) = focus {
+                log::info!("subject: the camera focused at {:.3}, {:.3}", f.0, f.1);
+            }
             if job.sam3 {
                 let (m, enc) = encoded(state, shared, job)?;
                 let mut models = auto::Models { sam: Some((m, enc)), scene: None };
-                if let Some(s) = auto::subject(&mut models)? {
+                if let Some(s) = auto::subject(&mut models, focus)? {
                     return Ok(AutoOut::Seg(s));
                 }
             }
             if let (true, Some((_, p)), Some(labels)) = (have_scene, state.scene.as_ref(), scene_labels.as_deref()) {
-                return auto::scene_subject(p, labels).map(AutoOut::Seg).ok_or_else(|| "No subject was found in this photo.".to_string());
+                return auto::scene_subject(p, labels, focus).map(AutoOut::Seg).ok_or_else(|| "No subject was found in this photo.".to_string());
             }
             if job.sam3 { Err("No subject was found in this photo.".into()) } else { Err(no_model(&auto)) }
         }
@@ -593,7 +623,19 @@ mod tests {
     fn job(tag: Tag, reply: &mpsc::Sender<Outcome>) -> Job {
         // an empty folder: loading fails with an error (no model files)
         let dir = std::env::temp_dir().join(format!("lc-sam3-worker-none-{}", std::process::id()));
-        Job { dir, key: 1, render: None, missing: None, kind: Kind::Prepare, sam3: true, models: None, crop: None, tag, reply: reply.clone() }
+        Job {
+            dir,
+            key: 1,
+            render: None,
+            missing: None,
+            kind: Kind::Prepare,
+            sam3: true,
+            models: None,
+            crop: None,
+            focus: None,
+            tag,
+            reply: reply.clone(),
+        }
     }
 
     #[test]

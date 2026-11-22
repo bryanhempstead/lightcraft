@@ -48,8 +48,38 @@ fn kind_param(p: &Value, c: &str, default: Kind) -> Result<Kind> {
 }
 
 fn package_param(p: &Value, c: &str) -> Result<Package> {
-    let k = str_param(p, "model").ok_or_else(|| bad(c, "missing `model`: faces or search"))?;
-    models::by_key(k).ok_or_else(|| bad(c, format!("unknown model `{k}` (faces, search)")))
+    let k = str_param(p, "model").ok_or_else(|| bad(c, "missing `model`: faces, expressions or search"))?;
+    models::by_key(k).ok_or_else(|| bad(c, format!("unknown model `{k}` (faces, expressions, search)")))
+}
+
+/// `faces.auto`: when faces are found without being asked, and pausing / resuming the automatic run.
+fn faces_auto(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.auto";
+    if let Some(m) = str_param(p, "mode") {
+        let mode = crate::vision::FaceDetect::parse(m).ok_or_else(|| bad(C, "mode is `off`, `asNeeded` or `all`"))?;
+        if mode != s.face_prefs.detect {
+            s.face_prefs.detect = mode;
+            if mode == crate::vision::FaceDetect::Off && s.vision.progress(Kind::Faces).auto {
+                s.vision.cancel(Some(Kind::Faces));
+                s.vision.auto_paused = false;
+            }
+            s.vision.resume_auto();
+            s.save_prefs().map_err(|e| bad(C, e.to_string()))?;
+        }
+    }
+    match p.get("paused").and_then(Value::as_bool) {
+        Some(true) => {
+            if s.vision.progress(Kind::Faces).auto {
+                s.vision.cancel(Some(Kind::Faces));
+            }
+            s.vision.auto_paused = true;
+        }
+        Some(false) => s.vision.resume_auto(),
+        None => {}
+    }
+    // `tick`: plan now (scripts and tests; the app plans every frame)
+    let queued = if bool_or(p, "tick", false) { s.faces_auto_tick(bool_or(p, "peopleOpen", false)) } else { 0 };
+    Ok(json!({"mode": s.face_prefs.detect.key(), "paused": s.vision.auto_paused, "queued": queued, "progress": s.vision.progress(Kind::Faces)}))
 }
 
 fn index_run(s: &mut Session, p: &Value, kind: Kind) -> Result<Value> {
@@ -132,6 +162,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             |s, p| index_run(s, p, Kind::Faces)
         ),
+        cmd!(
+            "faces.auto",
+            "Face Detection",
+            [],
+            None,
+            "{mode?: off|asNeeded|all, paused?: bool, tick?: bool, peopleOpen?: bool} — when faces are found without being asked (Lightroom's Find faces in entire catalog = all, Only find faces as needed = asNeeded: the photos the People view shows while it is open; off). Saved with the library. Automatic runs use half the workers, wait while you work, and paused: true stops them until paused: false; tick: true plans a run now → {mode, paused, queued, progress}",
+            always,
+            faces_auto
+        ),
         cmd!(query "vision.status", "Recognition Status", [], None, "{} → the face and search models (installed, size, licence, folder, download) and indexes (photos indexed, run progress: done / total / failed / faces / rate)", always, |s, _| {
             s.vision_poll();
             Ok(crate::vision::status_json(s))
@@ -157,7 +196,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Download Recognition Models",
             [],
             None,
-            "{model: faces|search, acknowledged: true} — download a model package (faces: YuNet + SFace + open-closed-eye, 39 MB, MIT / Apache-2.0; search: CLIP ViT-B/32 LAION-2B, 607 MB, MIT) after the user has seen its size and licence; size- and SHA-256-checked, resumes",
+            "{model: faces|expressions|search, acknowledged: true} — download a model package (faces: YuNet + SFace + open-closed-eye, 39 MB, MIT / Apache-2.0; expressions: OpenCV Zoo's facial expression network for culling's smiles, 4.8 MB, Apache-2.0; search: CLIP ViT-B/32 LAION-2B, 607 MB, MIT) after the user has seen its size and licence; size- and SHA-256-checked, resumes",
             always,
             |s, p| {
                 const C: &str = "vision.model.download";
@@ -179,7 +218,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"download": s.vision.download_state(pkg), "installed": s.vision.installed(pkg)}))
             }
         ),
-        cmd!("vision.model.cancel", "Stop Model Download", [], None, "{model: faces|search}", always, |s, p| {
+        cmd!("vision.model.cancel", "Stop Model Download", [], None, "{model: faces|expressions|search}", always, |s, p| {
             let pkg = package_param(p, "vision.model.cancel")?;
             s.vision.cancel_download(pkg);
             Ok(json!({"cancelled": true}))

@@ -146,6 +146,22 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if check(ui, "settings.autoVersions", &mut autos, "Keep an automatic version when leaving an edited photo (Lightroom doesn't)") {
         let _ = app.run("library.preferences", json!({"autoVersions": autos}));
     }
+    // Lightroom Classic: Catalog Settings ▸ Metadata ▸ Face Detection, and the People view's first-run choice
+    heading(ui, t, crate::i18n::tr("People"));
+    row(ui, t, crate::i18n::tr("Find faces"), |ui| {
+        use lightcraft_engine::vision::FaceDetect;
+        let mut mode = app.session.face_prefs.detect;
+        if choices(ui, "settingsFaces", &[(FaceDetect::Off, "off."), (FaceDetect::AsNeeded, "view."), (FaceDetect::All, "all.")], &mut mode) {
+            let _ = app.run("faces.auto", json!({"mode": mode.key()}));
+        }
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "view.: in the photos the People view shows, while it is open (Lightroom's Only find faces as needed). all.: in every photo of the library, in the background, new imports first (Find faces in entire catalog). Needs the face finder (People ▸ get.).",
+        ),
+    );
     heading(ui, t, crate::i18n::tr("External Editor"));
     row(ui, t, crate::i18n::tr("Application"), |ui| {
         let r = ui
