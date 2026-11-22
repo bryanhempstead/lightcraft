@@ -939,12 +939,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let gx = pf(F_GRAIN_AFF) * px + pf(F_GRAIN_AFF + 2u) * py + pf(F_GRAIN_AFF + 4u);
             let gy = pf(F_GRAIN_AFF + 1u) * px + pf(F_GRAIN_AFF + 3u) * py + pf(F_GRAIN_AFF + 5u);
             let sc = pf(F_GRAIN_SC);
-            let rough = pf(F_GRAIN_ROUGH);
             let seed = pu(F_GRAIN_SEED);
-            var g = grain_noise(gx * sc, gy * sc, seed);
-            g = g * (1.0 - rough * GRAIN_FINE_DROP) + grain_noise(gx * sc / GRAIN_COARSE, gy * sc / GRAIN_COARSE, seed ^ 0x55u) * rough * GRAIN_COARSE_WEIGHT;
+            let u = gx * sc;
+            let v = gy * sc;
+            let g = grain_noise(GRAIN_ROT_C * u - GRAIN_ROT_S * v, GRAIN_ROT_S * u + GRAIN_ROT_C * v, seed);
             let lum = dot(e, STYLE_LUMA);
-            let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
+            // `finish::grain_tone`
+            let lo = pow(clamp(lum / GRAIN_KNEE, 0.0, 1.0), 0.75);
+            let k = pf(F_GRAIN_AMT) * g * lo * (1.0 - GRAIN_HI * clamp(lum - GRAIN_HI0, 0.0, 1.0));
             e = e + k;
         }
         d = mul3(sb, vec3<f32>(decode_srgb(e.x), decode_srgb(e.y), decode_srgb(e.z)));

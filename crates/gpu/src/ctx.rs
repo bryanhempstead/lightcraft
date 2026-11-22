@@ -257,9 +257,11 @@ fn constants() -> String {
     s += &format!("const SHADOW_TINT_K: f32 = {:?};\n", lightcraft_pipeline::colorops::SHADOW_TINT);
     s += &format!("const SHARPEN_GAIN: f32 = {:?};\n", lightcraft_pipeline::finish::SHARPEN_GAIN);
     for (name, v) in [
-        ("GRAIN_COARSE", lightcraft_pipeline::finish::GRAIN_COARSE),
-        ("GRAIN_COARSE_WEIGHT", lightcraft_pipeline::finish::GRAIN_COARSE_WEIGHT),
-        ("GRAIN_FINE_DROP", lightcraft_pipeline::finish::GRAIN_FINE_DROP),
+        ("GRAIN_ROT_C", lightcraft_pipeline::finish::GRAIN_ROT[0]),
+        ("GRAIN_ROT_S", lightcraft_pipeline::finish::GRAIN_ROT[1]),
+        ("GRAIN_KNEE", lightcraft_pipeline::finish::GRAIN_KNEE),
+        ("GRAIN_HI0", lightcraft_pipeline::finish::GRAIN_HI0),
+        ("GRAIN_HI", lightcraft_pipeline::finish::GRAIN_HI),
     ] {
         s += &format!("const {name}: f32 = {v:?};\n");
     }

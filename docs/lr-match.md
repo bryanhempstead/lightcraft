@@ -646,3 +646,43 @@ Summer Fields on an M262 DNG (2.5 MP preview of the 24 MP file, Apple M3 Pro,
 
 GPU vs CPU on that photo: max 1 LSB, mean 0.0002 LSB. Exports keep the CPU path (16-bit /
 float); the acceptance gate (CPU) is unchanged by construction.
+
+### The Camera Raw detail oracle (R06, R07, R24)
+
+`oracle/make_detail.py SET grain|grain6000|sharp|nr` writes synthetic LinearRaw DNGs (R6 colour):
+grey flats at five levels (1,024, 3,072 and 6,000 px wide), an edge / line / grating / texture
+chart, and noisy flats, each with one Detail or Effects setting in its XMP; `ps.sh` renders them
+with Camera Raw, `oracle_render` with LightCraft (full size), and `grain_ana.py` /
+`sharp_ana.py` / `nr_ana.py` compare grain strength / correlation, sharpening overshoot / halo
+width / gains and the noise left. (The DNG SDK must be built in: without it LightCraft's tone
+on these files differs by up to 8 L*.)
+
+### Grain (R06)
+
+Camera Raw's grain, measured (L* standard deviation of the grain field, mid grey, 6,000 px):
+its cells are sized in the frame and follow the long edge less than in proportion (×
+(long / 6000)^0.7: at Size 25 lag-1 autocorrelation −0.12 / 0.18 / 0.49 at 1,024 / 3,072 / 6,000
+px); finer grain is *stronger* per pixel (Size 0 / 11 / 25 / 50 / 100: 9.3 / 6.4 / 3.7 / 2.8 /
+2.4 at Amount 50); Roughness 0 and 100 are both stronger than 50 (×1.51 / ×1.32) and finer /
+coarser; Amount is linear; and in L* the grain stays nearly flat from L* 20 to 95, fading only in
+the deep shadows (0.42× at L* 2). The fork's value noise had the opposite size trend (too strong
+when coarse, too weak when fine), a lattice aligned with the pixels (its statistics jumped at
+whole-pixel cells) and a `lum(1 − lum)` tone weight that left highlights at 0.37×. Upstream's
+crystal grain matches Lightroom at mid grey but fades towards black and white, unlike Camera
+Raw, and needs emulsion tiles drawn per setting on a thread pool, so it was not merged.
+
+Now (`finish::grain_params`, `grain_tone`, CPU + GPU): one octave of value noise on a lattice
+turned by atan ½, cells and strength by Size from the 6,000 px measurements (`GRAIN_CELL_REF`,
+`GRAIN_SD_REF`), Roughness as a cell factor `1 + 0.58d + 0.4d²` and a strength factor
+`1 − 0.19d + 1.66d²` (d = Roughness/100 − ½), strength by the cell's size when the long edge
+differs, and Camera Raw's tone weight. LightCraft / Camera Raw grain strength (per setting and
+band; mean |log ratio|; the 1,024 / 3,072 px sizes were not used to fit):
+
+| set | before | after |
+|---|---|---|
+| 6,000 px, 10 settings × 5 bands | 0.467 (median ratio 0.94, 0.37–2.6) | **0.046** (0.94–1.05) |
+| Bryan's 31 / 11 / 43 at 6,000 px, by band | 0.97 / 0.65 / 0.83 / 0.71 / 0.48 | 0.96 / 1.01 / 1.02 / 1.03 / 1.00 |
+| 1,024 + 3,072 px (held out) | 0.502 (lag-1 autocorrelation +0.33 too high) | **0.109** (+0.08) |
+
+Previews keep the downscaled full-size grain (fewer, weaker cells per pixel), so the acceptance
+gate (Lightroom's previews, ≤ 2,560 px) is unchanged: 4.00 ΔE, 25 pass, every cell within 0.01.

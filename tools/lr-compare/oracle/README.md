@@ -18,3 +18,7 @@ matrix; `hslproto.py` fits the HSL / Saturation / Vibrance tables (`hslfit.py`, 
 `combo.py` checks combinations, `gen_colortab.py` packs `crates/pipeline/src/colortab.bin`.
 White balance: `make_wb.py` (synthetic Temp / Tint sweep), `make_rwb.py` + `rwbcmp.py` (real raws).
 Scripts that read Bryan's renders (`make_real.py`, `make_rwb.py`) hold the scratch path in `L`.
+Detail and Effects (round 8): `make_detail.py SET grain|grain6000|sharp|nr` (grey flats at three
+sizes, an edge / grating / texture chart, noisy flats), then `grain_ana.py` / `sharp_ana.py` /
+`nr_ana.py SET [LCDIR]`. Lateral CA on real raws: `make_ca.py SET sample.json` (profile × Remove
+CA sidecars, full size) and `ca_ana.py SET [LCDIR]`.
