@@ -272,16 +272,6 @@ fn basic(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, raw: b
                 let _ = app.run("develop.treatment", json!({"bw": key == "bw"}));
             }
         }
-        // Lightroom's HDR button, at the right of the Treatment row
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let on = d.hdr.enabled;
-            if text_button(ui, "hdr", "hdr.", on)
-                .on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, shown on HDR (EDR) displays and kept in HDR exports"))
-                .clicked()
-            {
-                let _ = app.run("develop.hdr", json!({"enabled": !on}));
-            }
-        });
     });
     padded_row(ui, |ui| {
         label(ui, "Profile:");
@@ -335,6 +325,14 @@ fn basic(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, raw: b
             if text_button(ui, "auto", crate::i18n::tr("Auto"), false).on_hover_text(crate::i18n::tr("Auto Tone (⌘U)")).clicked() {
                 let _ = app.run("develop.auto", json!({}));
                 app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
+            }
+            // Lightroom's HDR button (in this narrow panel: next to Auto, not on the Treatment row)
+            let on = d.hdr.enabled;
+            if text_button(ui, "hdr", "hdr.", on)
+                .on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, shown on HDR (EDR) displays and kept in HDR exports"))
+                .clicked()
+            {
+                let _ = app.run("develop.hdr", json!({"enabled": !on}));
             }
         });
     });

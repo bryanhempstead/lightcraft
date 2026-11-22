@@ -10,6 +10,7 @@ pub mod control;
 pub mod credits;
 pub mod display_p3;
 pub mod export_task;
+pub mod hdr_view;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
@@ -213,6 +214,8 @@ pub struct LightcraftApp {
     /// Rect of the photo canvas and the displayed image (screen points) from the last frame.
     pub canvas_rect: Option<egui::Rect>,
     pub image_rect: Option<egui::Rect>,
+    /// HDR (EDR) display output, when the app's window can show it ([`hdr_view::HdrView`]).
+    pub hdr_view: Option<Box<dyn hdr_view::HdrView>>,
     /// Scroll offsets (points) of the photo grid (vertical) and the filmstrip (horizontal) as
     /// drawn last (`ui.inspect` → `scroll`).
     pub grid_scroll: Option<f32>,
@@ -292,6 +295,7 @@ impl LightcraftApp {
             last_time: 0.0,
             canvas_rect: None,
             image_rect: None,
+            hdr_view: None,
             grid_scroll: None,
             film_scroll: None,
             widgets: vec![],
@@ -791,7 +795,9 @@ impl LightcraftApp {
     fn apply_settings(&mut self, ctx: &egui::Context) {
         // photos in the display's colour space (P3 on a Mac): re-upload when it changes; the
         // headless host keeps sRGB (its screenshots are sRGB files)
-        let p3 = self.ui.settings.view_space.is_p3() && !self.headless_host;
+        // (an HDR window is colour-managed by the system: photos go to it as sRGB)
+        let managed = self.hdr_view.as_ref().is_some_and(|v| v.color_managed());
+        let p3 = self.ui.settings.view_space.is_p3() && !self.headless_host && !managed;
         if self.renderer.display_p3 != p3 {
             self.renderer.display_p3 = p3;
             self.renderer.forget_all();

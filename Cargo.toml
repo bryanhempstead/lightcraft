@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+# patched third-party crates used through [patch.crates-io] (not LightCraft code)
+exclude = ["patches"]
 
 [workspace.package]
 version = "0.4.0"
@@ -149,3 +151,8 @@ jpeg-decoder = { opt-level = 3 }
 jpeg-encoder = { opt-level = 3 }
 png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
+
+# HDR (EDR) display output: egui-wgpu with a half-float, extended-range window surface on request
+# (patches/egui-wgpu/README.md). MIT OR Apache-2.0, upstream's code plus small marked changes.
+[patch.crates-io]
+egui-wgpu = { path = "patches/egui-wgpu" }

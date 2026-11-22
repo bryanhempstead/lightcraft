@@ -24,6 +24,7 @@
 
 mod alloc_release;
 mod control_server;
+mod edr;
 mod logging;
 mod midi_in;
 mod monogram_server;
@@ -569,6 +570,8 @@ fn main() -> eframe::Result {
     let gpu_crash = gpu_crash_check(in_memory);
     let gpu_on = prefs.as_ref().is_none_or(|u| u.settings.gpu) && gpu_crash.is_none();
     lightcraft_engine::gpu::set_enabled(gpu_on);
+    // HDR photos on an HDR (EDR) display: a half-float window surface (edr.rs)
+    eframe::egui_wgpu::request_hdr_surface(edr::request());
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("LightCraft")
@@ -596,6 +599,8 @@ fn main() -> eframe::Result {
             // the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
             session.segmenter.mirrors_file = config_dir().map(|d| d.join("models").join("sam3-mirrors.txt"));
             let mut app = LightcraftApp::new(session, services());
+            app.hdr_view =
+                cc.wgpu_render_state.clone().and_then(edr::EdrView::new).map(|v| Box::new(v) as Box<dyn lightcraft_ui_egui::hdr_view::HdrView>);
             // shortcuts, mouse buttons and MIDI mappings (Settings ▸ shrt. / ctrl.): <config>/keymap.json,
             // or LIGHTCRAFT_KEYMAP; LIGHTCRAFT_NO_PREFS alone keeps them in memory (tests, scripts)
             if std::env::var_os("LIGHTCRAFT_KEYMAP").is_some() || std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none() {
