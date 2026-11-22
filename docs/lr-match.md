@@ -528,3 +528,28 @@ white, or "level minus its value at the key") fits all fields; LightCraft's per-
 (level relative to the key) cannot express it. Next: port an edge-aware local Laplacian operator
 (darktable's `local_laplacian`, GPL, allowed in the fork) and fit its remapping to these fields,
 then refit the Basic-tone tables with the exact point and parametric curves underneath.
+
+### Custom white balance (R05)
+
+Not resolved: the per-camera strength (`WB_STRENGTH`, k = 2, Leica 1) stays. All three cameras'
+Adobe Standard DCPs are dual-illuminant (17 / 21), so the Leica's k = 1 isn't a single-illuminant
+profile; the M262 and GR III are both DNGs, so it isn't the file format either.
+
+### Parametric curve (R08): measured, not switched on
+
+Camera Raw's parametric curve on the oracle ramp (`make_curve.py`, `parafit.py`, every region at
+±50 / ±100, Bryan's preset, two split settings): with the default splits each region is a fixed
+bump in sRGB-curve encoding (Shadows 0–128 peak ~48, Darks 0–255 peak ~100 (+55 levels at +100),
+Lights peak ~160 (+71), Highlights 128–255 peak ~208), not symmetric in the sign (clipping at 0 /
+255), and regions add: per-region tables interpolated in the slider value and summed reproduce
+Bryan's preset to 0.31 of a level (max 1.0) and every single-region stop exactly; moving the splits
+is only approximated by warping the input (2–6 levels). LightCraft's preview-fitted model
+(amount 0.11) is 10.5 levels off on average over the sweep (1.65 on his preset); the table
+(`gen_para.py` → a 4 × 4 × 65 table) brings LightCraft's ramps to ΔE 0.05–0.1 against Camera Raw.
+
+But on his photos the exact curve makes things worse: with it the acceptance set went 3.85 →
+4.04 (edited 4.62 → 4.89, Summer Fields M262 +0.6, ΔL* +1.4): Summer Fields photos carry
+Lights +48 / Darks +20, which Camera Raw applies at full strength, and LightCraft's Basic-tone
+tables (`tone::lr::ADOBE_*`, fitted on previews) had absorbed the weak old curve. The Camera Raw
+oracle shows those tables are what's wrong (below), so the table stays out until Basic tone is
+refitted on top of it; the generator and the measured data are in `tools/lr-compare/oracle`.
