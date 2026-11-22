@@ -112,6 +112,9 @@ pub struct Renderer {
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
+    /// Photo textures are converted from sRGB to Display P3 values (macOS shows the window
+    /// untagged, i.e. in the display's space; see [`crate::display_p3`]).
+    pub display_p3: bool,
     /// Per-view intermediate results (loupe and "before"), so slider drags redo only what changed.
     stages: HashMap<Slot, Arc<StageCache>>,
     /// Slot → key of the last quick job requested for it (each is tried once).
@@ -166,6 +169,7 @@ impl Renderer {
             last_main_ms: 0.0,
             completed: 0,
             keep_pixels: false,
+            display_p3: false,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
             failed: HashMap::new(),
@@ -501,8 +505,16 @@ impl Renderer {
                 self.textures.remove(&Slot::ThumbQuick(id));
             }
             let img = &rendered.image;
-            let color = std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.as_bytes()));
-            let pixels = self.keep_pixels.then(|| color.clone());
+            let srgb = std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.as_bytes()));
+            // screenshots / pixel probes keep the sRGB values; the screen gets the display's
+            let pixels = self.keep_pixels.then(|| srgb.clone());
+            let color = if self.display_p3 {
+                let mut bytes = img.as_bytes().to_vec();
+                crate::display_p3::srgb_to_p3(&mut bytes);
+                std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &bytes))
+            } else {
+                srgb
+            };
             let name = format!("{slot:?}");
             match self.textures.get_mut(&slot) {
                 Some(t) => {

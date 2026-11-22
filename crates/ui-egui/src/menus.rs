@@ -96,6 +96,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.cropOverlayOrientation", "Cycle Crop Overlay Orientation", None, "View"),
     ("view.cropOverlaysToCycle", "Choose Crop Overlays to Cycle", None, ""),
     ("view.beforeAfterCycle", "Cycle Before/After Layouts", None, "View"),
+    ("app.viewSpace", "Photo Color Space", None, ""),
     ("view.back", "Back to Grid", Some("Escape"), ""),
     ("tool.done", "Done", Some("Enter"), ""),
     ("view.filterBar", "Filter Bar", Some("Shift+F"), "View"),
@@ -925,6 +926,19 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 }
                 Some(Err(e)) => Err(format!("view.cropOverlaysToCycle: `overlays`: {e}")),
                 None => Ok(json!({"overlays": app.ui.crop_overlay_cycle})),
+            }
+        }
+        "app.viewSpace" => {
+            // {space?: auto|displayP3|srgb} — the colour space photos are shown in
+            match p.get("space") {
+                Some(v) => match serde_json::from_value::<crate::display_p3::ViewSpace>(v.clone()) {
+                    Ok(space) => {
+                        app.ui.settings.view_space = space;
+                        Ok(json!({"space": space.id(), "displayP3": space.is_p3()}))
+                    }
+                    Err(e) => Err(format!("app.viewSpace: `space`: {e}")),
+                },
+                None => Ok(json!({"space": app.ui.settings.view_space.id(), "displayP3": app.ui.settings.view_space.is_p3()})),
             }
         }
         "view.beforeAfterCycle" => {

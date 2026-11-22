@@ -259,6 +259,9 @@ pub struct AppSettings {
     pub film_badges: bool,
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
+    /// The colour space photos are shown in (`app.viewSpace`): Display P3 on a Mac so the loupe
+    /// matches the export, or sRGB for an sRGB monitor.
+    pub view_space: crate::display_p3::ViewSpace,
 }
 
 impl Default for AppSettings {
@@ -274,6 +277,7 @@ impl Default for AppSettings {
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
+            view_space: crate::display_p3::ViewSpace::Auto,
         }
     }
 }

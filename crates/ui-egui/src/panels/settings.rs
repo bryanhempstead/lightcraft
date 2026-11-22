@@ -545,6 +545,16 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         use crate::state::InfoOverlay as I;
         choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "File & date"), (I::Exposure, "Exposure")], &mut app.ui.info_overlay);
     });
+    row(ui, t, crate::i18n::tr("Photo colours"), |ui| {
+        use crate::display_p3::ViewSpace as V;
+        choices(ui, "settingsViewSpace", &[(V::Auto, "Auto"), (V::DisplayP3, "Display P3"), (V::Srgb, "sRGB")], &mut app.ui.settings.view_space);
+    });
+    ui.label(
+        egui::RichText::new(crate::i18n::tr(
+            "Display P3 for Apple displays (Studio Display, MacBook, iMac) so photos look as they export; sRGB for an sRGB monitor. Auto: Display P3 on a Mac.",
+        ))
+        .color(t.text_dim),
+    );
 }
 
 // ------------------------------------------------------------------------------- Open Library…

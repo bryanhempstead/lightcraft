@@ -239,6 +239,8 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   the Before & After button cycles the layouts.
 - 2026-11-21 (fork): content-aware Fill spots (PatchMatch, `crates/inpaint` from upstream); Lightroom's content-aware
   remove spots map to it.
+- 2026-11-21 (fork): photos on a P3 display (Studio Display) are shown in Display P3 values, so the loupe matches the
+  export instead of looking more saturated (Settings ▸ Interface ▸ Photo colours).
 
 ## Chinese and Japanese interfaces, and text watermarks
 

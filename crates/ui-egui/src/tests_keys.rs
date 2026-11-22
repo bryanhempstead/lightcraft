@@ -570,3 +570,28 @@ fn crop_overlays_cycle_the_chosen_ones_and_before_after_cycles_layouts() {
         assert_eq!(h.app.ui.before_after, want);
     }
 }
+
+/// R29: photos are shown in Display P3 values on a Mac window (Auto), sRGB when asked; the
+/// headless host (screenshots) stays sRGB; switching re-renders.
+#[test]
+fn view_space_follows_the_setting_and_skips_the_headless_host() {
+    let mut h = demo();
+    let r = exec(&mut h, "app.viewSpace", json!({}));
+    assert_eq!(r["space"], "auto");
+    assert_eq!(r["displayP3"], cfg!(target_os = "macos"));
+    h.step();
+    assert!(!h.app.renderer.display_p3, "the headless host keeps sRGB");
+    // as the desktop app (not headless)
+    h.app.headless_host = false;
+    exec(&mut h, "app.viewSpace", json!({"space": "displayP3"}));
+    h.step();
+    assert!(h.app.renderer.display_p3);
+    exec(&mut h, "app.viewSpace", json!({"space": "srgb"}));
+    h.step();
+    assert!(!h.app.renderer.display_p3);
+    let r = h.request("engine.execute", json!({"command": "app.viewSpace", "params": {"space": "adobeRgb"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    // remembered with the UI state
+    let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&h.app.ui).unwrap()).unwrap();
+    assert_eq!(back.settings.view_space, crate::display_p3::ViewSpace::Srgb);
+}

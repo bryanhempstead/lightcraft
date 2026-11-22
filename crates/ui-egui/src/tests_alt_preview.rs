@@ -24,6 +24,8 @@ fn detail(section: &str) -> Headless {
     }
     h.app.renderer.keep_pixels = true;
     h.settle(SETTLE);
+    // under load the first loupe render can land after the queue looks idle
+    h.step_until(SETTLE, |h| h.app.renderer.textures.get(&crate::render::Slot::Main).is_some_and(|t| t.pixels.is_some()));
     h
 }
 

@@ -194,6 +194,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-VIEW-SECONDWINDOW | Second display window [Classic] | P2 | ✅ | `cmd:view.secondWindow`, `crates/ui-egui/src/panels/second.rs` | Window ▸ Second Window (⌘F11): the active photo fitted in its own native window with its own render (a floating panel where there are no native windows); loupe view only (no grid / compare / survey there) |
 | LR-VIEW-CLIPPING | Clipping indicators | P0 | ✅ | `cmd:view.clipping` | |
 | LR-VIEW-HISTOGRAM | Histogram | P0 | ✅ | `cmd:view.histogram`, `crates/ui-egui/src/panels/edit.rs` | no drag-to-adjust on the histogram |
+| LR-VIEW-COLORMANAGED | Colour-managed photo view (wide-gamut display) | P0 | 🟡 | `cmd:app.viewSpace`, `crates/ui-egui/src/display_p3.rs`, `crates/ui-egui/src/render.rs` | macOS shows the window untagged (in the display's own space), so sRGB photos looked more saturated than their export on a P3 screen (Studio Display): photo textures are now converted sRGB → Display P3 before upload (Settings ▸ Interface ▸ Photo colours: Auto = P3 on a Mac / Display P3 / sRGB); screenshots and pixel probes stay sRGB. Not yet: reading the monitor's ICC profile (calibrated or non-P3 wide-gamut screens), a tagged surface for the whole UI |
 | LR-VIEW-HDR-DISPLAY | HDR display output | P2 | ⬜ | | |
 
 ## D. Search & filter (FILT)
