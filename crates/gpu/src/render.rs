@@ -43,6 +43,9 @@ struct Planes {
     base: Option<(u32, Arc<Buf>)>,
     clarity: Option<(u32, Arc<Buf>)>,
     texture: Option<(u32, Arc<Buf>)>,
+    /// Camera Raw's Texture detail (`texture_cr::detail_rgb`, made on the CPU), tagged with its
+    /// pyramid level.
+    texture_detail: Option<(u32, Arc<Buf>)>,
     dark: Option<(u32, Arc<Buf>, f32)>,
     chroma: Option<(u32, Arc<Buf>)>,
     /// The tone statistics of `log_l` (`tone::lr::image_stats`).
@@ -106,6 +109,7 @@ impl GpuStages {
             p.base.iter().for_each(|(_, b)| add(b));
             p.clarity.iter().for_each(|(_, b)| add(b));
             p.texture.iter().for_each(|(_, b)| add(b));
+            p.texture_detail.iter().for_each(|(_, b)| add(b));
             p.dark.iter().for_each(|(_, b, _)| add(b));
         }
         if let Some((_, b)) = &*self.source.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -582,7 +586,7 @@ pub fn render(
         Some(p) if p.key == plan.lin_key => p,
         _ => Planes { key: plan.lin_key, ..Default::default() },
     };
-    let prep = prepare(&mut cx, &lin, &plan, req, &mut planes);
+    let prep = prepare(&mut cx, &lin, &plan, req, info.native_long, &mut planes);
     lap("planes", &mut t, &mut cx);
     if let Some(c) = stages {
         c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), planes });
@@ -596,7 +600,9 @@ pub fn render(
     let fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, prep.tone_stats, req.space);
     let present = Present {
         clarity: prep.clarity.is_some(),
-        texture: prep.texture.is_some(),
+        texture: prep.texture_gauss,
+        texture_detail: prep.texture_detail,
+        tex_g_off: prep.tex_g_off,
         dark: prep.dark.is_some(),
         chroma: masks.is_some() && prep.chroma.is_some(),
     };
@@ -742,7 +748,11 @@ struct Prep {
     log_l: Arc<Buf>,
     base: Arc<Buf>,
     clarity: Option<Arc<Buf>>,
+    /// The `tex` binding: Camera Raw's Texture detail and / or the Gaussian band (see `Present`).
     texture: Option<Arc<Buf>>,
+    texture_gauss: bool,
+    texture_detail: bool,
+    tex_g_off: u32,
     dark: Option<Arc<Buf>>,
     /// Blurred chromaticity (local Moiré / Noise).
     chroma: Option<Arc<Buf>>,
@@ -762,7 +772,7 @@ fn plane_at(slot: &mut Option<(u32, Arc<Buf>)>, sigma: f32, f: impl FnOnce() -> 
 }
 
 /// The spatial planes (`local::prepare`), reusing those in `planes`.
-fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, planes: &mut Planes) -> Prep {
+fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, native_long: f32, planes: &mut Planes) -> Prep {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let sig = local::plane_sigmas(&plan.settings, plan.px_per_long, req.quality);
@@ -796,7 +806,29 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
         (_, k) => k,
     };
     let clarity = sig.clarity.map(|sg| plane_at(&mut planes.clarity, sg, || guided_fast(cx, &log_l, w, h, sg, local::CLARITY_EPS)));
-    let texture = sig.texture.map(|sg| plane_at(&mut planes.texture, sg, || gaussian(cx, &log_l, w, h, 1, sg)));
+    let gauss = sig.texture.map(|sg| plane_at(&mut planes.texture, sg, || gaussian(cx, &log_l, w, h, 1, sg)));
+    // Camera Raw's Texture: the pyramid runs on the CPU (once per image and level, then cached)
+    let detail = local::texture_level(&plan.settings, plan.px_per_long, native_long).map(|lv| match &planes.texture_detail {
+        Some((k, b)) if *k == lv as u32 => b.clone(),
+        _ => {
+            let img = cx.read_rgb(lin, w, h);
+            let d = lightcraft_pipeline::texture_cr::detail_rgb(&img, lv);
+            let b = Arc::new(cx.gpu.upload(rgb_words(&d)));
+            planes.texture_detail = Some((lv as u32, b.clone()));
+            b
+        }
+    });
+    let (texture_gauss, texture_detail, tex_g_off) = (gauss.is_some(), detail.is_some(), if detail.is_some() { (3 * n) as u32 } else { 0 });
+    let texture = match (detail, gauss) {
+        (Some(d), Some(g)) => {
+            let b = cx.gpu.buffer(4 * n);
+            cx.copy_into(&d, &b, 0);
+            cx.copy_into(&g, &b, 3 * n);
+            Some(Arc::new(b))
+        }
+        (Some(d), None) => Some(d),
+        (None, g) => g,
+    };
     let (dark, air) = match sig.dark {
         None => (None, 1.0),
         Some(sg) => match &planes.dark {
@@ -824,7 +856,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
             gaussian(cx, &ch, w, h, 3, sg)
         })
     });
-    Prep { log_l, base, clarity, texture, dark, chroma, air, tone_stats }
+    Prep { log_l, base, clarity, texture, texture_gauss, texture_detail, tex_g_off, dark, chroma, air, tone_stats }
 }
 
 /// Most brush dabs the mask kernel evaluates per pixel (more: the CPU rasterizes the brush).

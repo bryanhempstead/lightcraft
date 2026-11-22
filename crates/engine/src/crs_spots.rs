@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use crate::crs_masks::Values;
 
 /// The containers this module reads.
-pub const CONTAINERS: [&str; 3] = ["crs:RetouchAreas", "crs:RetouchInfo", "crs:PointColors"];
+pub const CONTAINERS: [&str; 4] = ["crs:RetouchAreas", "crs:RetouchInfo", "crs:PointColors", "crs:ColorVariance"];
 /// Spots read per photo at most (hostile input stays bounded).
 const MAX_SPOTS: usize = 2000;
 /// Path points kept per spot at most.
@@ -159,49 +159,128 @@ pub fn spots(values: &Values) -> (Vec<Value>, usize) {
     (out, skipped)
 }
 
-/// Point Color samples (`crs:PointColors`): the sampled colour (`SrcHue` in radians, `SrcSat`,
-/// `SrcLum` 0..1), its shifts (`HueShift`, `SatScale`, `LumScale`, −1..1), `RangeAmount` and the
-/// hue / saturation / luminance ranges (`LowerNone`…`UpperNone`). Approximate: the sample is read
-/// as an sRGB HSL colour and placed in our OkLCh terms.
+/// Point Color samples (`crs:PointColors`). Two forms carry the same numbers (RAWmakase's reading
+/// of Camera Raw 18.7, confirmed on our oracle): XMP sidecars and presets write each swatch as 19
+/// comma-separated values — the sample as HSV of linear ProPhoto (hue in sixths of a turn 0..6,
+/// saturation, value), the Hue / Saturation / Luminance shifts (−1..1), Range (0..1), then the hue,
+/// saturation and luminance ranges (outer, inner, inner, outer points) — with one Variance per
+/// swatch in `crs:ColorVariance`; Lightroom's catalog stores the same fields by name (`SrcHue`,
+/// `HueRange = { LowerNone, LowerFull, UpperFull, UpperNone }`, `Variance`). Lightroom's empty
+/// selection (all −1) and samples outside what Camera Raw accepts are left out. The sample keeps
+/// Lightroom's own values (`lr`, rendered with Camera Raw's model) and is also placed in our
+/// OkLCh terms for the panel.
 pub fn point_colors(values: &Values) -> Vec<Value> {
     let Some(list) = values.get("crs:PointColors") else { return Vec::new() };
+    let variances: Vec<f64> =
+        values.get("crs:ColorVariance").map(|v| items(v).iter().map(|i| i.text().and_then(parse_num).unwrap_or(0.0)).collect()).unwrap_or_default();
     let mut out = Vec::new();
-    for p in items(list).iter().take(64) {
-        let get = |k: &str| num(p, &format!("crs:{k}"));
-        let (Some(h), Some(sat), Some(lum)) = (get("SrcHue"), get("SrcSat"), get("SrcLum")) else { continue };
-        let deg = h.to_degrees().rem_euclid(360.0);
-        let rgb = lightcraft_color::perceptual::hsl_to_rgb(deg as f32, sat.clamp(0.0, 1.0) as f32, lum.clamp(0.0, 1.0) as f32);
-        let lin = rgb.map(lightcraft_color::transfer::srgb_to_linear);
-        let lab = lightcraft_color::perceptual::oklab_from_2020(lin);
-        let chroma = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt() as f64;
-        let hue = (lab[2] as f64).atan2(lab[1] as f64).to_degrees().rem_euclid(360.0);
-        let width = |k: &str| -> f64 {
-            let r = p.field(&format!("crs:{k}"));
-            match r.map(|r| (num(r, "crs:LowerNone"), num(r, "crs:UpperNone"))) {
-                Some((Some(lo), Some(hi))) => ((hi - lo) * 50.0).clamp(0.0, 100.0),
-                _ => 50.0,
-            }
+    for (i, p) in items(list).iter().take(64).enumerate() {
+        let swatch = match p.text() {
+            Some(t) => from_numbers(t, variances.get(i).copied().unwrap_or(0.0)),
+            None => from_fields(p),
         };
-        let pct = |k: &str| (get(k).unwrap_or(0.0) * 100.0).clamp(-100.0, 100.0);
-        out.push(json!({
-            "lum": (lab[0] as f64).clamp(0.0, 1.0),
-            "chroma": chroma.clamp(0.0, 0.4),
-            "hue": hue,
-            "hue_shift": pct("HueShift"),
-            "sat_shift": pct("SatScale"),
-            "lum_shift": pct("LumScale"),
-            "range": (get("RangeAmount").unwrap_or(0.5) * 100.0).clamp(0.0, 100.0),
-            "hue_range": width("HueRange"),
-            "sat_range": width("SatRange"),
-            "lum_range": width("LumRange"),
-        }));
+        if let Some(v) = swatch {
+            out.push(v);
+        }
     }
     out
+}
+
+fn parse_num(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let s = s.strip_prefix('+').unwrap_or(s);
+    s.parse::<f64>().ok().filter(|x| x.is_finite())
+}
+
+/// One swatch as the 19 numbers of the XMP form.
+fn from_numbers(t: &str, variance: f64) -> Option<Value> {
+    let n: Vec<f64> = t.split(',').filter(|v| !v.trim().is_empty()).map(parse_num).collect::<Option<Vec<_>>>()?;
+    let r = |k: usize| -> Option<[f64; 4]> { Some([*n.get(k)?, *n.get(k + 1)?, *n.get(k + 2)?, *n.get(k + 3)?]) };
+    let g = |k: usize| n.get(k).copied();
+    swatch([g(0)?, g(1)?, g(2)?], [g(3)?, g(4)?, g(5)?], g(6)?, r(7)?, r(11)?, r(15)?, variance)
+}
+
+/// One swatch as named fields (the catalog's form).
+fn from_fields(p: &XmpValue) -> Option<Value> {
+    let get = |k: &str| num(p, &format!("crs:{k}"));
+    let range = |k: &str, d: [f64; 4]| -> [f64; 4] {
+        let f = p.field(&format!("crs:{k}"));
+        let g = |n: &str, d: f64| f.and_then(|f| num(f, &format!("crs:{n}"))).unwrap_or(d);
+        [g("LowerNone", d[0]), g("LowerFull", d[1]), g("UpperFull", d[2]), g("UpperNone", d[3])]
+    };
+    let src = [get("SrcHue")?, get("SrcSat")?, get("SrcLum")?];
+    let around = |c: f64| [c - 0.73, c - 0.18, c + 0.18, c + 0.73].map(|v| v.clamp(0.0, 1.0));
+    let enc = lightcraft_color::transfer::linear_to_srgb(src[2].clamp(0.0, 1.0) as f32) as f64;
+    swatch(
+        src,
+        [get("HueShift").unwrap_or(0.0), get("SatScale").unwrap_or(0.0), get("LumScale").unwrap_or(0.0)],
+        get("RangeAmount").unwrap_or(0.5),
+        range("HueRange", [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]),
+        range("SatRange", around(src[1])),
+        range("LumRange", around(enc)),
+        get("Variance").unwrap_or(0.0),
+    )
+}
+
+fn swatch(src: [f64; 3], shift: [f64; 3], range: f64, hue_r: [f64; 4], sat_r: [f64; 4], lum_r: [f64; 4], variance: f64) -> Option<Value> {
+    // Lightroom's empty selection, and samples outside what Camera Raw accepts
+    if !(0.0..6.0).contains(&src[0]) || !(0.0..=1.0).contains(&src[1]) || !(0.0..=1.0).contains(&src[2]) {
+        return None;
+    }
+    // the sample in our OkLCh terms (the panel's swatch and LightCraft's own model)
+    let h = (src[0] / 6.0 * 360.0) as f32;
+    let pp = lightcraft_color::perceptual::hsv_to_rgb(h, src[1] as f32, src[2] as f32);
+    let lin = lightcraft_color::PROPHOTO.to_space(&lightcraft_color::REC2020).apply_f32(pp);
+    let lab = lightcraft_color::perceptual::oklab_from_2020(lin);
+    let chroma = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt() as f64;
+    let hue = (lab[2] as f64).atan2(lab[1] as f64).to_degrees().rem_euclid(360.0);
+    let pct = |v: f64| (v * 100.0).clamp(-100.0, 100.0);
+    let width = |r: [f64; 4]| ((r[3] - r[0]) * 50.0).clamp(0.0, 100.0);
+    Some(json!({
+        "lum": (lab[0] as f64).clamp(0.0, 1.0),
+        "chroma": chroma.clamp(0.0, 0.4),
+        "hue": hue,
+        "hue_shift": pct(shift[0]),
+        "sat_shift": pct(shift[1]),
+        "lum_shift": pct(shift[2]),
+        "variance": pct(variance),
+        "range": (range * 100.0).clamp(0.0, 100.0),
+        "hue_range": width(hue_r),
+        "sat_range": width(sat_r),
+        "lum_range": width(lum_r),
+        "lr": {"source": src, "hue_range": hue_r, "sat_range": sat_r, "lum_range": lum_r},
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R19: Camera Raw's XMP Point Color (19 numbers + `crs:ColorVariance`) keeps Lightroom's
+    /// sample and ranges; the empty selection (all −1) and malformed lists are left out.
+    #[test]
+    fn xmp_point_colors_keep_lightrooms_sample() {
+        let x = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <crs:PointColors><rdf:Seq>
+            <rdf:li>4.000000, 0.600000, 0.250000, 0.000000, -1.000000, 0.500000, 0.500000, 0.000000, 0.333333, 0.666667, 1.000000, 0.000000, 0.420000, 0.780000, 1.000000, 0.000000, 0.357000, 0.717000, 1.000000</rdf:li>
+            <rdf:li>-1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000, -1.000000</rdf:li>
+            <rdf:li>1, 2, nan</rdf:li>
+          </rdf:Seq></crs:PointColors>
+          <crs:ColorVariance><rdf:Seq><rdf:li>-0.300000</rdf:li><rdf:li>0</rdf:li></rdf:Seq></crs:ColorVariance>
+          </rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let d = lightcraft_meta::parse_xmp(x).unwrap();
+        let p = point_colors(&d.values);
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert_eq!(p[0]["sat_shift"], json!(-100.0));
+        assert_eq!(p[0]["lum_shift"], json!(50.0));
+        assert_eq!(p[0]["variance"], json!(-30.0));
+        assert_eq!(p[0]["lr"]["source"], json!([4.0, 0.6, 0.25]));
+        let pc: lightcraft_develop::PointColor = serde_json::from_value(p[0].clone()).unwrap();
+        assert!(pc.lr.is_some_and(|l| (l.sat_range[1] - 0.42).abs() < 1e-9));
+        // a blue sample (HSV hue 4 sixths of a turn of ProPhoto) sits at a blue OkLCh hue
+        assert!((200.0..300.0).contains(&pc.hue), "{}", pc.hue);
+    }
 
     /// R17: Lightroom's content-aware remove (`heal_patchmatch`) becomes a content-aware Fill spot.
     #[test]

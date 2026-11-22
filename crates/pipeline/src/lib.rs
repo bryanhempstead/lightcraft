@@ -40,6 +40,7 @@ pub mod masks;
 pub mod optics;
 pub mod output;
 pub mod parametric_adobe;
+pub mod point_color_cr;
 pub mod profiles;
 pub mod redeye;
 pub mod spots;
@@ -604,10 +605,10 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
     b
 }
 
-/// Settings the GPU kernel doesn't render yet (Bryan's fork, round 10: Camera Raw's measured
-/// Texture): such renders take the CPU pipeline.
-pub fn cpu_only(s: &DevelopSettings) -> bool {
-    local::texture_level(s, 1.0, 1.0).is_some() || grading_cr::Curves::for_settings(s).is_some() || (bw_cr::MEASURED && is_bw(s))
+/// Settings the GPU kernel doesn't render yet: such renders take the CPU pipeline (none at the
+/// moment; round 10's measured operators all have a kernel path).
+pub fn cpu_only(_s: &DevelopSettings) -> bool {
+    false
 }
 
 pub(crate) fn is_bw(s: &DevelopSettings) -> bool {

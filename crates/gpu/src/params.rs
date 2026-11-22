@@ -38,6 +38,9 @@ const FIELDS: &[(&str, usize)] = &[
     ("SHARP_GN", 1),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
+    // Camera Raw's Texture detail first in `tex` (3 words per pixel), the Gaussian band after it
+    ("HAS_TEXD", 1),
+    ("TEX_G_OFF", 1),
     ("HAS_DARK", 1),
     ("HAS_CHROMA", 1),
     ("OPS_IDENTITY", 1),
@@ -60,6 +63,17 @@ const FIELDS: &[(&str, usize)] = &[
     ("BALANCE", 1),
     ("SKIN", 1),
     ("BANDH", 8),
+    // Camera Raw's measured Color Grading and B&W mix (Bryan's fork, round 10:
+    // `lightcraft_pipeline::grading_cr` channel curves, `bw_cr` grey grid) in aux, and the linear
+    // Rec.2020 ↔ ProPhoto matrices they work through
+    ("PC_CR_N", 1),
+    ("PC_CR_OFF", 1),
+    ("GRADE_CR", 1),
+    ("GRADE_CR_OFF", 1),
+    ("BW_CR", 1),
+    ("BW_CR_OFF", 1),
+    ("PP_TO", 9),
+    ("PP_FROM", 9),
     ("VIG", 1),
     ("VIG_AMOUNT", 1),
     ("VIG_START", 1),
@@ -175,6 +189,10 @@ impl Block {
 pub struct Present {
     pub clarity: bool,
     pub texture: bool,
+    /// `tex` starts with Camera Raw's Texture detail (`texture_cr::detail_rgb`); the Gaussian
+    /// band (when `texture`) follows at `tex_g_off`.
+    pub texture_detail: bool,
+    pub tex_g_off: u32,
     pub dark: bool,
     /// The blurred chromaticity follows the mask planes in the `masks` buffer.
     pub chroma: bool,
@@ -220,6 +238,18 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     if let Some((l, _)) = lut {
         aux.extend(l.data.iter().flatten());
     }
+    let pc_cr_off = aux.len();
+    for w in fp.ops.points_cr.iter().take(8) {
+        aux.extend_from_slice(&w.words());
+    }
+    let grade_cr_off = aux.len();
+    if let Some(g) = &fp.ops.grading_cr {
+        aux.extend(g.words());
+    }
+    let bw_cr_off = aux.len();
+    if let Some(m) = &fp.ops.bw_cr {
+        aux.extend_from_slice(&m.grid);
+    }
     let mask_off = aux.len();
     for m in masks {
         aux.extend_from_slice(m);
@@ -255,6 +285,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("SHARP_GN", fp.sharp.gn);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
+    p.b("HAS_TEXD", present.texture_detail);
+    p.u("TEX_G_OFF", present.tex_g_off);
     p.b("HAS_DARK", present.dark);
     p.b("HAS_CHROMA", present.chroma);
 
@@ -281,6 +313,15 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.f("BALANCE", *balance);
     }
     p.f("SKIN", ops.skin);
+    p.u("PC_CR_N", ops.points_cr.len().min(8) as u32);
+    p.u("PC_CR_OFF", pc_cr_off as u32);
+    p.b("GRADE_CR", ops.grading_cr.is_some());
+    p.u("GRADE_CR_OFF", grade_cr_off as u32);
+    p.b("BW_CR", ops.bw_cr.is_some());
+    p.u("BW_CR_OFF", bw_cr_off as u32);
+    let (to_pp, from_pp) = lightcraft_pipeline::colorops::pp_matrices();
+    p.fs("PP_TO", to_pp.as_flattened());
+    p.fs("PP_FROM", from_pp.as_flattened());
     p.fs("BANDH", lightcraft_pipeline::colorops::band_hues());
 
     if let Some(v) = &fp.vig {

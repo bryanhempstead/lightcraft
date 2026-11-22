@@ -71,15 +71,24 @@ def point_struct(src_h, src_s, src_l, hue=0.0, sat=0.0, lum=0.0, rng=0.5, ranges
 
 
 def point_string(src_h, src_s, src_l, hue=0.0, sat=0.0, lum=0.0, rng=0.5, ranges=None):
-    r = ranges or {}
+    """Camera Raw's XMP form: 19 numbers (sample as linear-ProPhoto HSV, hue in sixths of a turn;
+    shifts −1..1; Range 0..1; hue / sat / lum ranges as outer, inner, inner, outer points). The
+    defaults are Lightroom's for a fresh sample (RAWmakase `PointColor::sampled`); -1 ranges are
+    Lightroom's empty selection, which Camera Raw drops."""
+    around = lambda c: [min(max(v, 0.0), 1.0) for v in (c - 0.73, c - 0.18, c + 0.18, c + 0.73)]
+    enc = lambda v: 12.92 * v if v <= 0.0031308 else 1.055 * v ** (1 / 2.4) - 0.055
+    r = {"HueRange": [0.0, 1 / 3, 2 / 3, 1.0], "SatRange": around(src_s), "LumRange": around(enc(src_l))}
+    r.update(ranges or {})
     vals = [src_h, src_s, src_l, hue, sat, lum, rng]
     for k in ("HueRange", "SatRange", "LumRange"):
-        vals += list(r.get(k, (-1, -1, -1, -1)))
+        vals += list(r[k])
     return "<rdf:li>" + ", ".join(f"{v:.6f}" for v in vals) + "</rdf:li>"
 
 
-def points_xml(lis):
-    return "<crs:PointColors><rdf:Seq>" + "".join(lis) + "</rdf:Seq></crs:PointColors>"
+def points_xml(lis, variances=None):
+    v = variances if variances is not None else [0.0] * len(lis)
+    return ("<crs:PointColors><rdf:Seq>" + "".join(lis) + "</rdf:Seq></crs:PointColors><crs:ColorVariance><rdf:Seq>"
+            + "".join(f"<rdf:li>{x:.6f}</rdf:li>" for x in v) + "</rdf:Seq></crs:ColorVariance>")
 
 
 def mask_xml(locals_, comp):
@@ -171,6 +180,23 @@ if "pc" in WHAT:
     for s, l in ((0.3, 0.3), (0.9, 0.6)):
         sw.append((f"pcT_s{s}l{l}", {}, points_xml([point_string(1.0, s, l, sat=-1.0)])))
         sw.append((f"pcS_s{s}l{l}", {}, points_xml([point_struct(1.0, s, l, sat=-1.0)])))
+    jobs.append(("grid", scenes.grid()[0], sw))
+if "pc2" in WHAT:
+    # valid swatches: hue (sixths of a turn) × shift kinds, range, variance, sample saturation / value
+    sw = [("base", {}, "")]
+    for h in (0.0, 1.0, 2.0, 3.0, 4.0, 5.0):
+        sw.append((f"pc_h{h:g}_s-1", {}, points_xml([point_string(h, 0.6, 0.25, sat=-1.0)])))
+    for k, kw in (("hue+1", dict(hue=1.0)), ("hue-1", dict(hue=-1.0)), ("lum+1", dict(lum=1.0)), ("lum-1", dict(lum=-1.0)), ("sat+1", dict(sat=1.0)),
+                  ("lum+0.5", dict(lum=0.5)), ("sat-0.5", dict(sat=-0.5))):
+        sw.append((f"pc_h1_{k}", {}, points_xml([point_string(1.0, 0.6, 0.25, **kw)])))
+    for r in (0.0, 0.25, 1.0):
+        sw.append((f"pc_h1_s-1_rng{r:g}", {}, points_xml([point_string(1.0, 0.6, 0.25, sat=-1.0, rng=r)])))
+    for v in (-1.0, 1.0):
+        sw.append((f"pc_h4_var{v:+g}", {}, points_xml([point_string(4.0, 0.6, 0.25)], [v])))
+    for s_, l in ((0.3, 0.05), (0.9, 0.6)):
+        sw.append((f"pc_h3.5_src{s_:g}_{l:g}", {}, points_xml([point_string(3.5, s_, l, sat=-1.0)])))
+    sw.append(("pc_two", {}, points_xml([point_string(0.3, 0.6, 0.25, hue=0.5), point_string(4.0, 0.6, 0.25, lum=-0.5)])))
+    sw.append(("pc_narrow", {}, points_xml([point_string(2.0, 0.6, 0.25, sat=-1.0, ranges={"HueRange": [0.3, 0.45, 0.55, 0.7]})])))
     jobs.append(("grid", scenes.grid()[0], sw))
 if "look" in WHAT:
     sw = [("base", {}, "")]

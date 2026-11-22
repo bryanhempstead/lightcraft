@@ -143,6 +143,9 @@ pub struct ColorOps {
     pub mixer: bool,
     /// Point Color samples that change something (applied after the mixer).
     pub points: Vec<PointK>,
+    /// Lightroom's own Point Color swatches, rendered with Camera Raw's model
+    /// ([`crate::point_color_cr`]; linear ProPhoto HSV, after the mixer, before `points`).
+    pub points_cr: Vec<crate::point_color_cr::Swatch>,
     pub bw: Option<[f32; 8]>,
     /// Camera Raw's measured B&W mix ([`crate::bw_cr`]), used in place of `bw`'s band mix.
     pub bw_cr: Option<std::sync::Arc<crate::bw_cr::Mix>>,
@@ -178,7 +181,17 @@ impl ColorOps {
             points: if crate::is_bw(s) {
                 Vec::new()
             } else {
-                s.point_colors.iter().take(lightcraft_develop::MAX_POINT_COLORS).filter(|p| !p.is_neutral()).map(PointK::new).collect()
+                s.point_colors
+                    .iter()
+                    .take(lightcraft_develop::MAX_POINT_COLORS)
+                    .filter(|p| !p.is_neutral() && !(crate::point_color_cr::MEASURED && p.lr.is_some()))
+                    .map(PointK::new)
+                    .collect()
+            },
+            points_cr: if crate::is_bw(s) || !crate::point_color_cr::MEASURED {
+                Vec::new()
+            } else {
+                s.point_colors.iter().take(lightcraft_develop::MAX_POINT_COLORS).filter_map(crate::point_color_cr::Swatch::new).collect()
             },
             bw: crate::is_bw(s).then(|| s.bw_mix.bands().map(|v| (v / 100.0) as f32)),
             bw_cr: (crate::bw_cr::MEASURED && crate::is_bw(s))
@@ -216,6 +229,7 @@ impl ColorOps {
             && !self.mixer
             && self.table.is_none()
             && self.points.is_empty()
+            && self.points_cr.is_empty()
             && self.bw.is_none()
             && self.grading.is_none()
             && self.grading_cr.is_none()
@@ -230,7 +244,7 @@ impl ColorOps {
         let lab = oklab_from_2020(rgb);
         // only chroma changes (vibrance / saturation, maybe grading): scale a, b directly — the same
         // result as the OkLCh round trip without its sin / cos (and atan2 unless vibrance needs the hue)
-        if !self.mixer && self.table.is_none() && self.points.is_empty() && self.bw.is_none() && local_hue == 0.0 {
+        if !self.mixer && self.table.is_none() && self.points.is_empty() && self.points_cr.is_empty() && self.bw.is_none() && local_hue == 0.0 {
             let mut lab = lab;
             let c0 = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
             let mut c = c0;
@@ -280,6 +294,14 @@ impl ColorOps {
             h += dh * chroma_w;
             c *= (1.0 + ds).max(0.0);
             l += dl * chroma_w * l.max(0.05).sqrt();
+        }
+        if !self.points_cr.is_empty() {
+            let m = pp_matrices();
+            let mut p = mul3(&m.0, oklab_to_2020(lch_to_lab([l, c, h])));
+            for w in &self.points_cr {
+                p = w.apply(p);
+            }
+            [l, c, h] = lab_to_lch(oklab_from_2020(mul3(&m.1, p)));
         }
         for p in &self.points {
             [l, c, h] = p.apply([l, c, h]);
