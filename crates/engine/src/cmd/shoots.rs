@@ -200,6 +200,15 @@ fn sort(s: &mut Session, p: &Value) -> Result<Value> {
 fn show(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "shoot.show";
     let r = find(s, C, p)?;
+    // narrowed to some of its folders or cameras (shoot.parts), else all of it
+    let part = match crate::album_parts::part_param(C, p)? {
+        Some((by, keys)) => {
+            let of = crate::album_parts::PartOf::Shoot { path: r.shoot.path.clone(), deep: r.shoot.deep };
+            crate::album_parts::make_part(C, &s.catalog, of, by, keys)?
+        }
+        None => None,
+    };
+    s.album_part = part;
     s.library_folder = Some(r.shoot.path.clone());
     s.library_folder_subfolders = Some(r.shoot.deep);
     s.filter.library_folder = None;
@@ -227,9 +236,22 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Shoot",
             [],
             None,
-            "{path} — show a shoot's photos (all of its folder, the folders inside it included; a container's loose photos only its own) → {path, count}",
+            "{path, folders? | cameras?: [key]} — show a shoot's photos (all of its folder, the folders inside it included; a container's loose photos only its own); with folders / cameras only those rows of shoot.parts, together → {path, count}",
             always,
             show
+        ),
+        cmd!(
+            query "shoot.parts",
+            "Shoot Folders and Cameras",
+            [],
+            None,
+            "{path, by?: folder|camera, scanDisk?: bool} → {rows: [{key, label, name, count, cameras}], picked: [key], beside?: [{path, name, count}]} the folders a shoot's photos are in (`raw/M262 · LEICA M (Typ 262)`) or the cameras that took them, with photo counts; `picked`: the rows the view is narrowed to (shoot.show {path, folders | cameras}). scanDisk: also the folders beside them on disk holding photos not in the library (`count`: photos — a raw + JPEG pair once, sidecars never); library.import {paths: [path], mode: add} brings them in",
+            always,
+            |s, p| {
+                const C: &str = "shoot.parts";
+                let r = find(s, C, p)?;
+                crate::album_parts::parts_json(C, s, &crate::album_parts::PartOf::Shoot { path: r.shoot.path, deep: r.shoot.deep }, p)
+            }
         ),
         cmd!(
             "shoot.pin",

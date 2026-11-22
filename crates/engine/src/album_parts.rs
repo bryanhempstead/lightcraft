@@ -1,16 +1,18 @@
-//! LRC-LIB-COLL-PARTS: a collection split by the folders its photos come from or the cameras that
-//! took them — the rows under a Collections row's disclosure triangle (beyond Lightroom Classic,
-//! whose collections only list photos). A wedding imported as `raw/M262`, `raw/R6`, `jpg` shows
-//! those three folders under its collection; a click (`library.source {kind: album, id, folders}`)
-//! shows the collection narrowed to them, so one camera can be worked on at a time.
+//! LRC-LIB-COLL-PARTS: a shoot or a collection split by the folders its photos come from or the
+//! cameras that took them — the rows under a shoots. or Collections row's disclosure triangle
+//! (beyond Lightroom Classic). A wedding imported as `raw/M262`, `raw/GR3`, `raw/X-T2` shows those
+//! three folders under its row; a click (`shoot.show {path, folders}`, `library.source {kind:
+//! album, id, folders}`) shows it narrowed to them, so one camera can be worked on at a time.
 //!
-//! Folder rows are named relative to the folder all of the collection's photos share (the shoot),
-//! with the camera after the name when the folder holds one camera whose name the folder's does not
-//! already say (`M262 · LEICA M (Typ 262)`, but just `R6` for a Canon EOS R6).
+//! Folder rows are named relative to the shoot's folder (a collection: the folder all its photos
+//! share), with the camera after the name when the folder holds one camera whose name the
+//! folder's does not already say (`raw/M262 · LEICA M (Typ 262)`, but `raw/R6` for a Canon EOS R6).
+//! Folders beside them on disk whose photos never came into the library are listed too
+//! ([`beside`]).
 
 use std::collections::BTreeMap;
 
-use lightcraft_catalog::{AlbumId, Catalog, Photo};
+use lightcraft_catalog::{AlbumId, Catalog, Photo, PhotoId};
 use serde::{Deserialize, Serialize};
 
 /// What a collection's photos are split by.
@@ -34,12 +36,49 @@ impl PartBy {
     }
 }
 
-/// A collection narrowed to some of its folders or cameras ([`crate::Session::album_part`]); it
-/// applies only while [`crate::LibrarySource::Album`] shows that same collection.
+/// What is split: a collection, or a shoot (its folder, the folders inside it with `deep`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PartOf {
+    Album { id: AlbumId },
+    Shoot { path: String, deep: bool },
+}
+
+impl PartOf {
+    /// Its photos (deleted ones too; [`parts`] leaves them out).
+    pub fn photos(&self, cat: &Catalog) -> Vec<PhotoId> {
+        match self {
+            PartOf::Album { id } => {
+                if cat.album(*id).is_none_or(|a| a.folder) {
+                    return Vec::new();
+                }
+                cat.album_photos(*id)
+            }
+            PartOf::Shoot { path, deep } => {
+                if lightcraft_catalog::query::folder_key(path).is_empty() {
+                    return Vec::new();
+                }
+                let f = lightcraft_catalog::Filter { library_folder: Some(path.clone()), library_folder_only: !deep, ..Default::default() };
+                cat.query(&f, &lightcraft_catalog::Sort::default())
+            }
+        }
+    }
+
+    /// The folder its rows are named from: a shoot's own; a collection's, the one its photos share.
+    fn root(&self) -> Option<String> {
+        match self {
+            PartOf::Album { .. } => None,
+            PartOf::Shoot { path, .. } => Some(lightcraft_catalog::query::folder_key(path)),
+        }
+    }
+}
+
+/// A shoot or collection narrowed to some of its folders or cameras
+/// ([`crate::Session::album_part`]); it applies only while that shoot or collection is shown.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumPart {
-    pub album: AlbumId,
+    pub of: PartOf,
     pub by: PartBy,
     /// [`part_key`]s of the rows picked (folder keys or camera names).
     pub keys: Vec<String>,
@@ -85,15 +124,12 @@ pub fn part_key(p: &Photo, by: PartBy) -> String {
 /// The deepest that a relative folder name goes before it is shortened to its last two folders.
 const MAX_LABEL_DEPTH: usize = 3;
 
-/// The rows of collection `album` (none for a set or an album that is gone): its photos that are
-/// not deleted, by folder (by relative name) or by camera (by name).
-pub fn parts(cat: &Catalog, album: AlbumId, by: PartBy) -> Vec<PartRow> {
-    if cat.album(album).is_none_or(|a| a.folder) {
-        return Vec::new();
-    }
+/// The rows of a shoot or collection (none for a set or an album that is gone): its photos that
+/// are not deleted, by folder (by relative name) or by camera (by name).
+pub fn parts(cat: &Catalog, of: &PartOf, by: PartBy) -> Vec<PartRow> {
     // key → (photos, camera → photos)
     let mut groups: BTreeMap<String, (usize, BTreeMap<String, usize>)> = BTreeMap::new();
-    for id in cat.album_photos(album) {
+    for id in of.photos(cat) {
         let Some(p) = cat.photo(id).filter(|p| !p.deleted) else { continue };
         let g = groups.entry(part_key(p, by)).or_default();
         g.0 = g.0.saturating_add(1);
@@ -101,7 +137,7 @@ pub fn parts(cat: &Catalog, album: AlbumId, by: PartBy) -> Vec<PartRow> {
         *c = c.saturating_add(1);
     }
     let names = match by {
-        PartBy::Folder => relative_names(&groups.keys().cloned().collect::<Vec<_>>()),
+        PartBy::Folder => names_from(&groups.keys().cloned().collect::<Vec<_>>(), of.root().as_deref()),
         PartBy::Camera => groups.keys().map(|k| if k.is_empty() { "Unknown camera".to_string() } else { k.clone() }).collect(),
     };
     let mut rows: Vec<PartRow> = groups
@@ -132,6 +168,26 @@ pub fn title(rows: &[PartRow], part: &AlbumPart) -> Option<String> {
         [a, b] => Some(format!("{a} + {b}")),
         many => Some(format!("{} {}", many.len(), if part.by == PartBy::Folder { "folders" } else { "cameras" })),
     }
+}
+
+/// Folder keys named from `root` (a shoot's folder: `raw/M262`; the folder itself by its name),
+/// else from the folder they all share ([`relative_names`]).
+fn names_from(keys: &[String], root: Option<&str>) -> Vec<String> {
+    let Some(root) = root.map(|r| r.trim_end_matches('/')).filter(|r| !r.is_empty()) else { return relative_names(keys) };
+    keys.iter()
+        .map(|k| {
+            let k = k.trim_end_matches('/');
+            match k.strip_prefix(root).and_then(|rest| rest.strip_prefix('/')) {
+                Some(rest) if !rest.is_empty() => {
+                    let parts: Vec<&str> = rest.split('/').collect();
+                    let tail = if parts.len() > MAX_LABEL_DEPTH { parts.get(parts.len() - 2..).unwrap_or(&parts) } else { &parts };
+                    tail.join("/")
+                }
+                _ if k.is_empty() => "no folder".to_string(),
+                _ => k.rsplit('/').next().unwrap_or(k).to_string(),
+            }
+        })
+        .collect()
 }
 
 /// Folder keys named from the folder they all share: `raw/M262`, `raw/R6`, `jpg` under one shoot
@@ -213,28 +269,45 @@ pub struct BesideRow {
     pub count: usize,
 }
 
-/// The parents of collection `album`'s folders: where [`scan_beside`] looks.
-pub fn beside_parents(cat: &Catalog, album: AlbumId) -> Vec<String> {
-    parents_of(&parts(cat, album, PartBy::Folder))
-}
-
-/// The parents of the folders of a collection's folder rows ([`parts`] by [`PartBy::Folder`]).
-pub fn parents_of(rows: &[PartRow]) -> Vec<String> {
+/// Where [`scan_beside`] looks: the parents of the folder rows' folders ([`parts`] by
+/// [`PartBy::Folder`]) that lie in one of `roots` (the shoots they belong to: never a disk's
+/// top, whose folders are other shoots).
+pub fn parents_of(rows: &[PartRow], roots: &[String]) -> Vec<String> {
     let mut v: Vec<String> = rows
         .iter()
         .filter(|r| !r.key.is_empty())
         .filter_map(|r| r.key.rsplit_once('/').map(|(p, _)| if p.is_empty() { "/".to_string() } else { p.to_string() }))
+        .filter(|p| roots.iter().any(|r| lightcraft_catalog::query::folder_within(p, r)))
         .collect();
     v.sort();
     v.dedup();
     v
 }
 
-/// The folders in `scans` (beside collection `album`'s folders) that hold photos not in the
-/// library, named from the shoot like the collection's rows.
-pub fn beside(cat: &Catalog, album: AlbumId, scans: &[Scanned]) -> Vec<BesideRow> {
+/// The roots a shoot's or collection's folders are looked beside in ([`parents_of`]): a shoot's
+/// own folder (when it takes the folders inside it); for a collection, the shoots its folders lie in.
+pub fn roots_of(of: &PartOf, rows: &[PartRow], shoots: &[lightcraft_catalog::Shoot]) -> Vec<String> {
+    match of {
+        PartOf::Shoot { path, deep: true } => vec![lightcraft_catalog::query::folder_key(path)],
+        PartOf::Shoot { .. } => Vec::new(),
+        PartOf::Album { .. } => {
+            let mut v: Vec<String> = shoots
+                .iter()
+                .filter(|s| s.deep && rows.iter().any(|r| !r.key.is_empty() && lightcraft_catalog::query::folder_within(&r.key, &s.path)))
+                .map(|s| lightcraft_catalog::query::folder_key(&s.path))
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        }
+    }
+}
+
+/// The folders in `scans` (beside the folders of a shoot or collection, `of`) that hold photos
+/// not in the library, named like its rows.
+pub fn beside(cat: &Catalog, of: &PartOf, scans: &[Scanned]) -> Vec<BesideRow> {
     use std::collections::HashSet;
-    let own: Vec<String> = parts(cat, album, PartBy::Folder).into_iter().map(|r| r.key).filter(|k| !k.is_empty()).collect();
+    let own: Vec<String> = parts(cat, of, PartBy::Folder).into_iter().map(|r| r.key).filter(|k| !k.is_empty()).collect();
     // a folder of the collection, or one holding one (`raw` beside `jpg`), is no candidate
     let candidates: Vec<(&String, String, &Vec<String>)> = scans
         .iter()
@@ -263,7 +336,7 @@ pub fn beside(cat: &Catalog, album: AlbumId, scans: &[Scanned]) -> Vec<BesideRow
     }
     let mut all: Vec<String> = own.clone();
     all.extend(candidates.iter().map(|(_, k, _)| k.clone()));
-    let names = relative_names(&all);
+    let names = names_from(&all, of.root().as_deref());
     candidates
         .iter()
         .enumerate()
@@ -273,6 +346,57 @@ pub fn beside(cat: &Catalog, album: AlbumId, scans: &[Scanned]) -> Vec<BesideRow
             (!missing.is_empty()).then(|| BesideRow { path: (*path).clone(), name, count: missing.len() })
         })
         .collect()
+}
+
+// ---------------------------------------------------------------- commands
+
+/// `folders` / `cameras` of a command's params: the rows to narrow to.
+pub(crate) fn part_param(c: &str, p: &serde_json::Value) -> crate::Result<Option<(PartBy, Vec<String>)>> {
+    let (by, v) = match (p.get("folders").filter(|v| !v.is_null()), p.get("cameras").filter(|v| !v.is_null())) {
+        (Some(_), Some(_)) => return Err(crate::cmd::bad(c, "narrow by `folders` or by `cameras`, not both")),
+        (Some(v), None) => (PartBy::Folder, v),
+        (None, Some(v)) => (PartBy::Camera, v),
+        (None, None) => return Ok(None),
+    };
+    let keys: Option<Vec<String>> = v.as_array().and_then(|a| a.iter().map(|k| k.as_str().map(str::to_string)).collect());
+    let keys = keys.ok_or_else(|| crate::cmd::bad(c, "`folders` / `cameras` is a list of keys from album.parts / shoot.parts"))?;
+    Ok(Some((by, keys)))
+}
+
+/// `of` narrowed to rows `keys` (checked against its rows: an unknown one is an error, not an
+/// empty grid under a name that says something); `None` for no keys.
+pub(crate) fn make_part(c: &str, cat: &Catalog, of: PartOf, by: PartBy, mut keys: Vec<String>) -> crate::Result<Option<AlbumPart>> {
+    keys.sort();
+    keys.dedup();
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    let rows = parts(cat, &of, by);
+    if let Some(k) = keys.iter().find(|k| !rows.iter().any(|r| r.key == **k)) {
+        return Err(crate::cmd::bad(c, format!("`{k}`: no such row (see album.parts / shoot.parts)")));
+    }
+    let mut part = AlbumPart { of, by, keys, title: String::new() };
+    part.title = title(&rows, &part).unwrap_or_default();
+    Ok(Some(part))
+}
+
+/// What album.parts and shoot.parts answer: the rows, those picked, and with `scanDisk` the
+/// folders beside them holding photos not in the library (read from disk here).
+pub(crate) fn parts_json(c: &str, s: &crate::Session, of: &PartOf, p: &serde_json::Value) -> crate::Result<serde_json::Value> {
+    let by = match crate::cmd::str_param(p, "by") {
+        None => PartBy::Folder,
+        Some(b) => PartBy::parse(b).ok_or_else(|| crate::cmd::bad(c, "`by` is folder or camera"))?,
+    };
+    let rows = parts(&s.catalog, of, by);
+    let picked: Vec<String> = s.active_album_part().filter(|x| x.of == *of && x.by == by).map(|x| x.keys.clone()).unwrap_or_default();
+    let mut out = serde_json::json!({"rows": rows, "picked": picked});
+    if crate::cmd::bool_or(p, "scanDisk", false) {
+        let folders = parts(&s.catalog, of, PartBy::Folder);
+        let roots = roots_of(of, &folders, &s.catalog.shoots(&s.empty_folders));
+        let scans: Vec<Scanned> = parents_of(&folders, &roots).iter().flat_map(|parent| scan_beside(parent).as_ref().clone()).collect();
+        out["beside"] = serde_json::json!(beside(&s.catalog, of, &scans));
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -307,7 +431,7 @@ mod tests {
     #[test]
     fn folders_are_named_from_the_shoot_with_their_camera_when_the_name_does_not_say_it() {
         let (cat, a) = library();
-        let rows = parts(&cat, a, PartBy::Folder);
+        let rows = parts(&cat, &PartOf::Album { id: a }, PartBy::Folder);
         let got: Vec<(&str, usize)> = rows.iter().map(|r| (r.label.as_str(), r.count)).collect();
         assert_eq!(got, vec![("jpg", 2), ("raw/M262 · LEICA M (Typ 262)", 2), ("raw/R6", 1)]);
         assert_eq!(rows[0].cameras.len(), 2, "two cameras: none named on the row");
@@ -316,7 +440,7 @@ mod tests {
     #[test]
     fn cameras_are_one_row_each_across_folders() {
         let (cat, a) = library();
-        let rows = parts(&cat, a, PartBy::Camera);
+        let rows = parts(&cat, &PartOf::Album { id: a }, PartBy::Camera);
         let got: Vec<(&str, usize)> = rows.iter().map(|r| (r.label.as_str(), r.count)).collect();
         assert_eq!(got, vec![("Canon EOS R6", 2), ("LEICA M (Typ 262)", 3)]);
     }
@@ -324,8 +448,8 @@ mod tests {
     #[test]
     fn a_part_matches_only_its_rows() {
         let (cat, a) = library();
-        let rows = parts(&cat, a, PartBy::Folder);
-        let part = AlbumPart { album: a, by: PartBy::Folder, keys: vec![rows[1].key.clone()], title: String::new() };
+        let rows = parts(&cat, &PartOf::Album { id: a }, PartBy::Folder);
+        let part = AlbumPart { of: PartOf::Album { id: a }, by: PartBy::Folder, keys: vec![rows[1].key.clone()], title: String::new() };
         assert_eq!(cat.photos().filter(|p| part.matches(p)).count(), 2);
         assert_eq!(title(&rows, &part).as_deref(), Some("raw/M262"));
         let both = AlbumPart { keys: vec![rows[1].key.clone(), rows[2].key.clone()], ..part };
@@ -345,7 +469,7 @@ mod tests {
     #[test]
     fn a_set_or_a_missing_album_has_no_rows() {
         let (cat, _) = library();
-        assert!(parts(&cat, AlbumId(9999), PartBy::Folder).is_empty());
+        assert!(parts(&cat, &PartOf::Album { id: AlbumId(9999) }, PartBy::Folder).is_empty());
     }
 
     #[test]
@@ -382,13 +506,23 @@ mod tests {
         let mut album = Album::new(a, "Erika and Connor");
         album.photos = vec![ids[0]];
         cat.apply(Op::AddAlbum { album }).unwrap();
-        let parents = beside_parents(&cat, a);
+        let of = PartOf::Album { id: a };
+        let shoots = cat.shoots(&[]);
+        let roots = roots_of(&of, &parts(&cat, &of, PartBy::Folder), &shoots);
+        assert_eq!(roots, vec![lightcraft_catalog::query::folder_key(&path(""))], "the shoot: {shoots:?}");
+        let parents = parents_of(&parts(&cat, &of, PartBy::Folder), &roots);
         assert_eq!(parents, vec![lightcraft_catalog::query::folder_key(&path("raw"))]);
         let scans = scan_beside(&parents[0]);
-        let rows = beside(&cat, a, &scans);
+        let rows = beside(&cat, &of, &scans);
         let got: Vec<(&str, usize)> = rows.iter().map(|r| (r.name.as_str(), r.count)).collect();
         // GR3: x (raw + JPEG once, sidecars never) and y; X-T2: w (z is in the library); empty: none
         assert_eq!(got, vec![("GR3", 2), ("X-T2", 1)], "named like the collection's own row (M262: all under raw/)");
+        // the shoot: named from its folder
+        let shoot = PartOf::Shoot { path: path(""), deep: true };
+        let rows = parts(&cat, &shoot, PartBy::Folder);
+        assert_eq!(rows.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), vec!["raw/M262", "raw/X-T2"]);
+        let got: Vec<(String, usize)> = beside(&cat, &shoot, &scans).into_iter().map(|r| (r.name, r.count)).collect();
+        assert_eq!(got, vec![("raw/GR3".to_string(), 2)], "X-T2 is the shoot's own folder now");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

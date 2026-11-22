@@ -320,20 +320,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(_) => return Err(bad("library.source", "`subfolders` is true or false")),
                 };
                 // a collection narrowed to some of its folders or cameras (album.parts)
-                let part_by = match (p.get("folders"), p.get("cameras")) {
-                    (Some(_), Some(_)) => return Err(bad("library.source", "narrow by `folders` or by `cameras`, not both")),
-                    (Some(v), None) if !v.is_null() => Some((crate::album_parts::PartBy::Folder, v)),
-                    (None, Some(v)) if !v.is_null() => Some((crate::album_parts::PartBy::Camera, v)),
-                    _ => None,
-                };
-                let part_keys = match part_by {
-                    Some((by, v)) => {
-                        let keys: Option<Vec<String>> = v.as_array().and_then(|a| a.iter().map(|k| k.as_str().map(str::to_string)).collect());
-                        let keys = keys.ok_or_else(|| bad("library.source", "`folders` / `cameras` is a list of keys from album.parts"))?;
-                        Some((by, keys))
-                    }
-                    None => None,
-                };
+                let part_keys = crate::album_parts::part_param("library.source", p)?;
                 if part_keys.is_some() && kind != "album" {
                     return Err(bad("library.source", "`folders` / `cameras` narrow a collection (kind: album)"));
                 }
@@ -360,17 +347,9 @@ pub fn specs() -> Vec<CommandSpec> {
                         if s.catalog.album(a).is_none_or(|a| a.folder) {
                             return Err(bad("library.source", "no such album"));
                         }
-                        if let Some((by, mut keys)) = part_keys {
-                            keys.sort();
-                            keys.dedup();
-                            // a key no row has would show nothing under a name that says something
-                            let rows = crate::album_parts::parts(&s.catalog, a, by);
-                            if let Some(k) = keys.iter().find(|k| !rows.iter().any(|r| r.key == **k)) {
-                                return Err(bad("library.source", format!("`{k}`: no such row in album.parts")));
-                            }
-                            let mut part = crate::album_parts::AlbumPart { album: a, by, keys, title: String::new() };
-                            part.title = crate::album_parts::title(&rows, &part).unwrap_or_default();
-                            s.album_part = Some(part).filter(|p| !p.keys.is_empty());
+                        if let Some((by, keys)) = part_keys {
+                            s.album_part =
+                                crate::album_parts::make_part("library.source", &s.catalog, crate::album_parts::PartOf::Album { id: a }, by, keys)?;
                         }
                         LibrarySource::Album(a)
                     }
@@ -416,21 +395,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if s.catalog.album(a).is_none_or(|a| a.folder) {
                     return Err(bad(C, "no such album (a set has no photos of its own)"));
                 }
-                let by = match str_param(p, "by") {
-                    None => crate::album_parts::PartBy::Folder,
-                    Some(b) => crate::album_parts::PartBy::parse(b).ok_or_else(|| bad(C, "`by` is folder or camera"))?,
-                };
-                let rows = crate::album_parts::parts(&s.catalog, a, by);
-                let picked: Vec<String> = s.active_album_part().filter(|x| x.album == a && x.by == by).map(|x| x.keys.clone()).unwrap_or_default();
-                let mut out = json!({"rows": rows, "picked": picked});
-                if bool_or(p, "scanDisk", false) {
-                    let scans: Vec<crate::album_parts::Scanned> = crate::album_parts::beside_parents(&s.catalog, a)
-                        .iter()
-                        .flat_map(|parent| crate::album_parts::scan_beside(parent).as_ref().clone())
-                        .collect();
-                    out["beside"] = json!(crate::album_parts::beside(&s.catalog, a, &scans));
-                }
-                Ok(out)
+                crate::album_parts::parts_json(C, s, &crate::album_parts::PartOf::Album { id: a }, p)
             }
         ),
         cmd!(

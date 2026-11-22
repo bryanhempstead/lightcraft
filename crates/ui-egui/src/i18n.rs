@@ -228,7 +228,11 @@ pub fn source_label(source: lightcraft_engine::LibrarySource, catalog: &lightcra
 /// two names (`photos/travel`; the folder's name is the user's and stays verbatim).
 pub fn source_title(session: &lightcraft_engine::Session) -> String {
     match (session.source, session.library_folder.as_deref()) {
-        (lightcraft_engine::LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
+        // a shoot narrowed to some of its folders or cameras says which (`Erika › raw/M262`)
+        (lightcraft_engine::LibrarySource::LibraryFolder, Some(path)) => match session.active_album_part().filter(|p| !p.title.is_empty()) {
+            Some(p) => format!("{} › {}", lightcraft_catalog::folders::folder_label(path), p.title),
+            None => lightcraft_catalog::folders::folder_label(path),
+        },
         // a collection narrowed to some of its folders or cameras says which (`Erika › raw/M262`)
         (source @ lightcraft_engine::LibrarySource::Album(_), _) => match session.active_album_part().filter(|p| !p.title.is_empty()) {
             Some(p) => format!("{} › {}", source_label(source, &session.catalog), p.title),

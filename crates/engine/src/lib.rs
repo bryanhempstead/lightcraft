@@ -977,9 +977,22 @@ impl Session {
         f
     }
 
-    /// [`Self::album_part`] while it applies: its collection is the source and a row is picked.
+    /// [`Self::album_part`] while it applies: its collection or shoot is shown and a row is picked.
     pub fn active_album_part(&self) -> Option<&album_parts::AlbumPart> {
-        self.album_part.as_ref().filter(|p| self.source == LibrarySource::Album(p.album) && !p.keys.is_empty())
+        self.album_part.as_ref().filter(|p| {
+            !p.keys.is_empty()
+                && match &p.of {
+                    album_parts::PartOf::Album { id } => self.source == LibrarySource::Album(*id),
+                    album_parts::PartOf::Shoot { path, deep } => {
+                        self.source == LibrarySource::LibraryFolder
+                            && self.library_folder_subfolders == Some(*deep)
+                            && self
+                                .library_folder
+                                .as_deref()
+                                .is_some_and(|f| lightcraft_catalog::query::folder_key(f) == lightcraft_catalog::query::folder_key(path))
+                    }
+                }
+        })
     }
 
     /// Whether the library still holds a photo imported from the folder a `LibraryFolder` source

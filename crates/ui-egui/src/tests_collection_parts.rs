@@ -164,13 +164,18 @@ fn a_collection_opens_into_its_folders_and_a_click_shows_one_camera() {
     shot(&mut h, "parts-1-closed.png");
     click(&mut h, &toggle);
     assert_eq!(part_rows(&h, erika), vec![folder("jpg"), folder("raw/GR3"), folder("raw/M262"), folder("raw/R6")]);
-    assert!(h.app.ui.collections_open.contains(&erika.0));
+    assert!(h.app.ui.parts_open.contains(&format!("album:{}", erika.0)));
     let back: crate::state::UiState = serde_json::from_value(serde_json::to_value(&h.app.ui).unwrap()).unwrap();
-    assert!(back.collections_open.contains(&erika.0), "stays open after a restart");
+    assert!(back.parts_open.contains(&format!("album:{}", erika.0)), "stays open after a restart");
     // the row says the camera of a one-camera folder whose name doesn't, the count is its photos
     let m262 = format!("albumPart:{}:{}", erika.0, folder("raw/M262"));
     let r6 = format!("albumPart:{}:{}", erika.0, folder("raw/R6"));
-    let rows = crate::panels::left::album_parts(&h.app, &h.view.ctx, erika, lightcraft_engine::album_parts::PartBy::Folder);
+    let rows = crate::panels::left::album_parts(
+        &h.app,
+        &h.view.ctx,
+        &lightcraft_engine::album_parts::PartOf::Album { id: erika },
+        lightcraft_engine::album_parts::PartBy::Folder,
+    );
     let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
     assert_eq!(labels, vec!["jpg", "raw/GR3 · RICOH GR III", "raw/M262 · LEICA M (Typ 262)", "raw/R6"]);
     // rows: one height, indented under the collection, the count 8 px or more from the name
@@ -259,7 +264,12 @@ fn photos_dropped_on_a_folder_row_join_the_collection() {
     h.settle(SETTLE);
     assert!(h.app.ui.dragging_photos.is_none(), "the drag ended");
     assert!(h.app.session.catalog.album(erika).unwrap().photos.contains(&loose));
-    let rows = crate::panels::left::album_parts(&h.app, &h.view.ctx, erika, lightcraft_engine::album_parts::PartBy::Folder);
+    let rows = crate::panels::left::album_parts(
+        &h.app,
+        &h.view.ctx,
+        &lightcraft_engine::album_parts::PartOf::Album { id: erika },
+        lightcraft_engine::album_parts::PartBy::Folder,
+    );
     assert_eq!(rows.iter().find(|r| r.key == folder("raw/R6")).map(|r| r.count), Some(3), "the row counts it (new revision, new rows)");
 }
 
@@ -273,14 +283,14 @@ fn arrow_keys_over_a_collection_open_and_close_it() {
     h.request("ui.key", json!({"key": "right"}), T);
     h.step();
     h.step();
-    assert!(h.app.ui.collections_open.contains(&erika.0), "→ opens");
+    assert!(h.app.ui.parts_open.contains(&format!("album:{}", erika.0)), "→ opens");
     assert_eq!(h.app.session.selection.active, active, "and moves no photo");
     h.request("ui.hoverWidget", json!({"id": format!("source:album:{}", erika.0)}), T);
     h.step();
     h.request("ui.key", json!({"key": "left"}), T);
     h.step();
     h.step();
-    assert!(!h.app.ui.collections_open.contains(&erika.0), "← closes");
+    assert!(!h.app.ui.parts_open.contains(&format!("album:{}", erika.0)), "← closes");
 }
 
 #[test]
@@ -373,5 +383,104 @@ fn camera_folders_not_in_the_library_show_beside_and_add_brings_them_in() {
     assert!(has(&h, &format!("source:albumPart:{}:{}", erika.0, lightcraft_catalog::query::folder_key(&gr3))), "GR3 is one of its folders now");
     assert!(std::path::Path::new(&path("raw/GR3/x.png")).exists(), "added in place: nothing moved");
     shot(&mut h, "parts-7-added.png");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Bryan's real case: the shoots. row "Erika and Connor wedding" (/Volumes/BONUSBOY/Erika and
+/// Connor wedding/raw/{M262,GR3,X-T2}) opens into its camera folders; one click works on one
+/// camera, ⌘-click adds another; a camera folder never imported shows with add.
+#[test]
+fn a_shoot_opens_into_its_camera_folders() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-shoot-parts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let shoot = dir.join("Erika and Connor wedding");
+    let files = [
+        ("raw/M262/a.png", "LEICA M (Typ 262)", true),
+        ("raw/M262/b.png", "LEICA M (Typ 262)", true),
+        ("raw/X-T2/c.png", "FUJIFILM X-T2", true),
+        ("raw/GR3/d.png", "", false),
+        ("raw/GR3/e.png", "", false),
+    ];
+    let path = |f: &str| shoot.join(f).to_string_lossy().to_string();
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    for (i, (f, cam, in_library)) in files.iter().enumerate() {
+        let img = lightcraft_raster::Rgba8 { width: 8, height: 8, data: vec![[90, 3 + 40 * i as u8, 9, 255]; 64] };
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let p = shoot.join(f);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, &png).unwrap();
+        if *in_library {
+            let id = session.catalog.alloc_photo_id();
+            let mut ph = Photo::new(id, Source::File { path: path(f) }, "x.png", "PNG", 8, 8, &format!("2026-03-0{}T10:00:00", 1 + i));
+            ph.meta.camera = cam.to_string();
+            session.catalog.apply(Op::AddPhoto { photo: Box::new(ph) }).unwrap();
+        }
+    }
+    // sidecars are no photos (Finder counts them, LightCraft doesn't)
+    std::fs::write(shoot.join("raw/GR3/d.xmp"), b"<x:xmpmeta/>").unwrap();
+    let services = Services {
+        png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
+            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+        })),
+        write: Some(Box::new(|p: &str, b: &[u8]| std::fs::write(p, b).map_err(|e| e.to_string()))),
+        ..Default::default()
+    };
+    let mut h = Headless::new(LightcraftApp::new(session, services), [1400.0, 1000.0], 1.0);
+    h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
+    for s in ["navigator", "catalog", "folders"] {
+        h.app.ui.toggle_sidebar_section(s);
+    }
+    h.settle(SETTLE);
+    let r = h.request("engine.execute", json!({"id": "library.shoots", "params": {}}), T);
+    let shoots = r["result"]["shoots"].as_array().cloned().unwrap_or_default();
+    assert_eq!(shoots.len(), 1, "{r}");
+    let sp = shoots[0]["path"].as_str().unwrap().to_string();
+    assert_eq!(shoots[0]["name"], "Erika and Connor wedding");
+    let toggle = format!("shootPartsToggle:{sp}");
+    assert!(has(&h, &toggle), "the shoot row has a triangle");
+    assert!(has(&h, "button:shootsPartsBy"), "fldr. / cam. in the shoots. header");
+    // the header: fldr. 8 px or more before sort.
+    assert!(widget(&h, "button:shootsSort").left() - widget(&h, "button:shootsPartsBy").right() >= 8.0 - 0.5);
+    click(&mut h, &toggle);
+    h.settle(SETTLE);
+    let key = |rel: &str| lightcraft_catalog::query::folder_key(&path(rel));
+    let rows = |h: &Headless| {
+        let prefix = format!("source:shootPart:{sp}:");
+        let mut v: Vec<(f32, String)> = h.app.widgets.iter().filter_map(|(w, r)| w.strip_prefix(&prefix).map(|k| (r.top(), k.to_string()))).collect();
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        v.into_iter().map(|(_, k)| k).collect::<Vec<_>>()
+    };
+    assert_eq!(rows(&h), vec![key("raw/M262"), key("raw/X-T2")]);
+    let m262 = format!("source:shootPart:{sp}:{}", key("raw/M262"));
+    let xt2 = format!("source:shootPart:{sp}:{}", key("raw/X-T2"));
+    assert!(h.app.widgets.iter().any(|(w, _)| w == &format!("label:shootPart:{sp}:{}", key("raw/M262"))));
+    // one camera
+    click(&mut h, &m262);
+    assert_eq!(h.app.session.visible().len(), 2);
+    assert!(crate::panels::filmstrip::source_breadcrumb(&h.app).ends_with("› raw/M262"), "{}", crate::panels::filmstrip::source_breadcrumb(&h.app));
+    assert!(has(&h, &format!("highlight:shootPart:{sp}:{}", key("raw/M262"))));
+    assert!(!has(&h, &format!("highlight:shoot:{sp}")), "the folder is chosen, not the whole shoot");
+    // ⌘-click: two cameras
+    click_with(&mut h, &xt2, json!({"cmd": true}));
+    assert_eq!(h.app.session.visible().len(), 3);
+    // the camera folder that never came in: full strength, its photos counted (the sidecar not), add.
+    let beside = format!("shootBeside:{sp}:{}", path("raw/GR3"));
+    assert!(has(&h, &format!("source:{beside}")), "{:?}", h.app.widgets.iter().map(|(w, _)| w).filter(|w| w.contains("shoot")).collect::<Vec<_>>());
+    assert!(!has(&h, &format!("dim:{beside}")));
+    let r = h.request("engine.execute", json!({"id": "shoot.parts", "params": {"path": sp, "scanDisk": true}}), T);
+    assert_eq!(r["result"]["beside"], json!([{"path": path("raw/GR3"), "name": "raw/GR3", "count": 2}]), "{r}");
+    assert_eq!(r["result"]["picked"].as_array().map(Vec::len), Some(2), "{r}");
+    shot(&mut h, "parts-8-shoot.png");
+    // by camera
+    click(&mut h, "button:shootsPartsBy");
+    assert_eq!(rows(&h), vec!["FUJIFILM X-T2".to_string(), "LEICA M (Typ 262)".to_string()]);
+    assert_eq!(h.app.session.visible().len(), 3, "back to the whole shoot");
+    click(&mut h, "button:shootsPartsBy");
+    // add.: imported in place, the shoot holds them, the row becomes one of its folders
+    click(&mut h, &format!("button:shootBesideAdd-{sp}-{}", path("raw/GR3")));
+    h.settle(SETTLE);
+    assert!(!has(&h, &format!("source:{beside}")));
+    assert_eq!(rows(&h), vec![key("raw/GR3"), key("raw/M262"), key("raw/X-T2")]);
+    shot(&mut h, "parts-9-shoot-added.png");
     let _ = std::fs::remove_dir_all(&dir);
 }
