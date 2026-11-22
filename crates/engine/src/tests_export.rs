@@ -5,7 +5,7 @@ use serde_json::json;
 use crate::Session;
 use crate::export::{ExportFormat, ExportOptions, export_photo};
 use crate::tests_xmp::{synthetic_dng_with, temp_dir};
-use lightcraft_pipeline::OutputSpace;
+use lightcraft_pipeline::{OutputDepth, OutputSpace};
 
 #[test]
 fn full_size_export_of_a_cropped_photo_is_not_upscaled() {
@@ -428,8 +428,8 @@ fn hdr_float_tiff_keeps_highlights_above_white() {
 fn hdr_avif_export_is_pq_rec2020() {
     let mut s = Session::with_demo();
     let id = sunset(&mut s);
-    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "avif", "hdr": true, "quality": 70}));
-    assert!(o.hdr_output());
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "avif", "hdr": true, "hdrCompat": false, "quality": 70}));
+    assert!(o.hdr_output() && !o.gain_map_output());
     let sdr = export_photo(&mut s, id, &o, 1).unwrap();
     s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
     let hdr = export_photo(&mut s, id, &o, 1).unwrap();
@@ -442,13 +442,43 @@ fn hdr_avif_export_is_pq_rec2020() {
     assert!(nclx(&sdr.bytes).is_none_or(|c| c[3] != 16));
 }
 
+/// HDR AVIF with Maximize Compatibility (the default) on macOS: SDR base + ISO 21496-1 gain map
+/// (AVIF `tmap` item, written by ImageIO), which ImageIO reads back with its gain map.
+#[test]
+fn hdr_avif_with_maximize_compatibility_carries_a_gain_map() {
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "avif", "hdr": true, "quality": 80}));
+    if !crate::imageio::available() {
+        assert!(!o.gain_map_output(), "elsewhere HDR AVIFs stay PQ / HLG");
+        return;
+    }
+    assert!(o.gain_map_output() && o.avif_gain_map());
+    assert_eq!((o.effective_depth(), o.effective_space()), (OutputDepth::U8, OutputSpace::Srgb));
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
+    let f = export_photo(&mut s, id, &o, 1).unwrap();
+    assert_eq!(f.bytes.get(4..12), Some(&b"ftypavif"[..]));
+    for b in [&b"tmap"[..], b"altr", b"dimg"] {
+        assert!(f.bytes.windows(4).any(|w| w == b), "{} box", String::from_utf8_lossy(b));
+    }
+    // (LIGHTCRAFT_TEST_SHOTS=<dir>: keep it, e.g. to open it in Preview on an HDR display)
+    if let Some(dir) = std::env::var_os("LIGHTCRAFT_TEST_SHOTS") {
+        let _ = std::fs::write(std::path::Path::new(&dir).join("hdr-gainmap.avif"), &f.bytes);
+    }
+    // a photo without an HDR edit: an ordinary AVIF
+    s.execute("develop.hdr", &json!({"enabled": false})).unwrap();
+    let f = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(!f.bytes.windows(4).any(|w| w == b"tmap"));
+}
+
 #[test]
 fn hdr_avif_png_and_jxl_take_pq_or_hlg_and_jxl_can_carry_a_gain_map() {
     let mut s = Session::with_demo();
     let id = sunset(&mut s);
     s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
     // HLG AVIF: nclx BT.2020 (9), HLG (18), BT.2020 NCL (9), full range; no content light level
-    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "avif", "hdr": true, "hdrTransfer": "hlg", "quality": 70}));
+    let o =
+        ExportOptions::from_json(&json!({"longEdge": 160, "format": "avif", "hdr": true, "hdrCompat": false, "hdrTransfer": "hlg", "quality": 70}));
     assert_eq!(o.hdr_transfer, crate::export::HdrCurve::Hlg);
     assert_eq!(o.to_json()["hdrTransfer"], "hlg");
     let f = export_photo(&mut s, id, &o, 1).unwrap();

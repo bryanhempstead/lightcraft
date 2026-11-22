@@ -846,17 +846,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         opts.bit_depth = Some(bd);
                     }
                     if matches!(opts.format, F::Jpeg | F::Tiff | F::Avif | F::Png | F::Jxl) {
-                        let tip = "Photos edited in HDR (Lightroom's HDR Output): JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays); AVIF, PNG and JPEG XL as Rec. 2020 PQ or HLG, JPEG XL with Maximize Compatibility as SDR + gain map; TIFF needs 32-bit float. Photos without an HDR edit export as usual";
+                        let tip = "Photos edited in HDR (Lightroom's HDR Output): JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays); AVIF, PNG and JPEG XL as Rec. 2020 PQ or HLG, AVIF (macOS) and JPEG XL with Maximize Compatibility as SDR + gain map; TIFF needs 32-bit float. Photos without an HDR edit export as usual";
                         ui.checkbox(&mut opts.hdr, crate::i18n::tr("HDR Output")).on_hover_text(tip);
                         if opts.hdr && !opts.hdr_output() {
                             ui.label(egui::RichText::new(crate::i18n::tr("HDR TIFF needs 32-bit float.")).color(t.text_dim));
                         }
-                        if opts.hdr && opts.format == F::Jxl {
+                        if opts.hdr && (opts.format == F::Jxl || (opts.format == F::Avif && lightcraft_engine::imageio::available())) {
                             ui.checkbox(&mut opts.hdr_compat, crate::i18n::tr("Maximize Compatibility")).on_hover_text(crate::i18n::tr(
                                 "An SDR image plus a gain map: right in every viewer, HDR where the viewer supports it. Off: a PQ / HLG file (HDR viewers only)",
                             ));
                         }
-                        if opts.hdr && (matches!(opts.format, F::Avif | F::Png) || (opts.format == F::Jxl && !opts.hdr_compat)) {
+                        if opts.hdr && matches!(opts.format, F::Avif | F::Png | F::Jxl) && !opts.gain_map_output() {
                             use lightcraft_engine::export::HdrCurve as H;
                             choices(ui, "HDR curve", "exportHdrCurve", &[(H::Pq, "pq."), (H::Hlg, "hlg.")], &mut opts.hdr_transfer);
                         }
