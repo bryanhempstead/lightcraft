@@ -585,3 +585,57 @@ these stay measured only:
 Bryan runs: reopening the catalog in Lightroom Classic rebuilds `Previews.lrdata`; then
 `lr_compare.py prepare --spec tools/lr-compare/acceptance.json --seed 1122` gives the full recipe
 set (Nautica × iPhone, PV5 R6, Monochrome, X-T2) for the next round.
+
+## Round 7 (2026-11-21): Highlights / Shadows on Bryan's raws, calibration before the hue/sat map
+
+### Highlights / Shadows (R02): what Camera Raw does on real photos
+
+New oracle sets (`oracle/make_rhs.py`: 26 of Bryan's split-A raws — M262, R6, GR III — with
+single-slider and combined sidecars, one neutral ramp per camera to read every render back as
+scene EV, plus synthetic gradients / three-level fields / a small bright square / a blob):
+
+- **Linear in the slider, and the sliders add**: S+50 is half of S+100, H+50 ≈ −½·H−100, and
+  H+30 S+69 is the sum of the two (to the fit noise).
+- **Before Exposure, Contrast, Whites and Blacks**: with his tone sliders (E −1.1 … −1.75,
+  C −65 / −72, W, B) Camera Raw's render is the H/S render at default tone passed through the
+  sliders' own global curve (`oracle/make_hsorder.py` + `hsorder.py`, error 0.02–0.5 L* against a map noise of
+  0.03–0.15) — so H/S see the photo before Exposure and are exposure-invariant.
+- **Region-flat, edge-sharp, photo-dependent**: the Shadows map is a crisp, smooth "mask" of the
+  dark regions (texture rides on it), not a per-level curve and not a local Laplacian halo (a
+  full-depth fast local Laplacian, tried in numpy with level-dependent remaps, decays away from
+  edges; Camera Raw's two-level fields move as flat regions). How far a region moves depends on the whole photo:
+  around a pivot near log2 of the photo's mean *linear* luminance (−0.5 EV), Shadows lifts what
+  lies below it by ~0.7 EV per EV of depth, saturating at the darkest ~13 % (S+100: +0.6 … +2.4
+  EV on real photos, +0.45 on a flat two-level field); Highlights − pulls what lies above it
+  (~0.5 EV per EV), up to the brightest ~5 %. Synthetic flat fields move less than textured photos
+  of the same histogram, so a curve alone can't be exact.
+
+LightCraft now has that model (`tone::lr::adobe_hs_lut`, `ToneStats` from every 7th log-luminance
+value on CPU and from the same read-back on the GPU; the table runs through the existing
+base / halo path, so CPU and GPU stay equivalent and the cost is one O(n) selection per photo:
+prepare 7–9 ms at 2.5 MP either way). Fitted with `oracle/hsfit_rhs.py` (mean |ΔEV| of the move
+0.385 → 0.104 on the 26 photos). Against Camera Raw on the oracle photos (ΔE2000, LightCraft's old
+tables → the model): S+100 5.24 → 2.16–2.98, H−100 2.95 → 2.21–2.38, H+30 S+69 4.06 → 1.99–2.54,
+his whole tone recipe 3.88 → 2.67 (tone without H/S 1.48 either way).
+
+**But it is not switched on** (`finish::ADOBE_HS_MEASURED`): on the acceptance set (Lightroom's
+previews) every variant is worse — 4.01 / 10.9 / 25 (b0) → 4.33 / 10.9 / 25 with the measured
+parametric curve, 4.39 / 10.9 / 27 without it; Summer Fields M262 4.45 → 5.04–5.27, R6 5.88 →
+6.56–6.78 — and stronger slopes are worse still (5.04). Why the oracle and the previews disagree:
+
+- The previews include Bryan's **masks** (R16: radial / linear components with local Exposure /
+  Shadows on 376 photos), the oracle renders (`oracle/make_full.py`: his full settings and the
+  Summer Fields look, no geometry/detail) do not: on 8 Summer Fields photos Camera Raw without
+  masks is 10–15 L* brighter in the shadows than the preview, LightCraft (with its mask model)
+  is within ~3. Comparing only the H/S *effect* (full − full without H/S), the model is closer
+  to Camera Raw on 6 of 8 photos (mean error 4.42 → 3.62 L*), worst on BHM_8476 (H −100, S +65:
+  +12 L* vs +3).
+- With his negative Exposure the highlights move into the mid-tones, where the model's weak
+  spot shows: above the 95th percentile it stops, Camera Raw keeps pulling (L1009426 at 0 EV:
+  −0.4 vs −1.0 EV), and S lifts mid-darks ~25 % short.
+- The mask model, the look, `WB_STRENGTH` and the old preview-fitted H/S tables were tuned
+  together on the previews; replacing one piece moves the balance.
+
+Next: a richer H/S model (the top end; texture-dependent lift), then R16 masks against the oracle
+(local Exposure / Shadows sidecars), then switch R02 + R08 on together and refit on split A.
+

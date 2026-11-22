@@ -249,8 +249,9 @@ pub(crate) struct Prepared {
     /// Log2 luminance relative to middle grey (before exposure: add `ev`).
     pub log_l: Arc<Plane>,
     pub base: Arc<Plane>,
-    /// The image key ([`tone::lr::image_key`], before exposure) when the base plane was needed.
-    pub tone_key: Option<f32>,
+    /// The photo's tone statistics ([`tone::lr::image_stats`], before exposure) when the base
+    /// plane was needed.
+    pub tone_stats: Option<tone::lr::ToneStats>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,

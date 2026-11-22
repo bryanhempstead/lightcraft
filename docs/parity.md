@@ -26,7 +26,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | C. Views & navigation (VIEW) | 15 | 1 | 1 | 0 | 8/9 (89%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 42 | 1 | 5 | 1 | 28/28 (100%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 39 | 4 | 5 | 1 | 26/28 (93%) | 12/14 (86%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 7 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -48,9 +48,9 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
 | Lightroom Classic extras | 38 | 10 | 39 | 9 | — | 28/29 (97%) |
-| **Total** | 397 | 35 | 86 | 36 | 193/200 (97%) | 148/157 (94%) |
+| **Total** | 394 | 38 | 86 | 36 | 191/200 (96%) | 147/157 (94%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.0%** of 518 in-scope rows — P0 98.2% of 200 · P1 96.2% of 157 · P2 41.6% of 160.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **79.7%** of 518 in-scope rows — P0 97.8% of 200 · P1 95.9% of 157 · P2 41.6% of 160.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -234,8 +234,8 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-EDIT-HDR-MODE | HDR editing | P2 | ⬜ | | |
 | LR-EDIT-LIGHT-EXPOSURE | Exposure | P0 | ✅ | `ctl:light.exposure` | |
 | LR-EDIT-LIGHT-CONTRAST | Contrast | P0 | ✅ | `ctl:light.contrast` | |
-| LR-EDIT-LIGHT-HIGHLIGHTS | Highlights | P0 | ✅ | `ctl:light.highlights` | |
-| LR-EDIT-LIGHT-SHADOWS | Shadows | P0 | ✅ | `ctl:light.shadows` | |
+| LR-EDIT-LIGHT-HIGHLIGHTS | Highlights | P0 | 🟡 | `ctl:light.highlights` | works, but not as Lightroom renders it: the tables are fitted on Lightroom previews and are 3–5× too weak at −100 against Camera Raw; Camera Raw's photo-dependent model is measured and in the code (`tone::lr::adobe_hs_lut`, `docs/lr-match.md` → Round 7) but off until the rest is refitted |
+| LR-EDIT-LIGHT-SHADOWS | Shadows | P0 | 🟡 | `ctl:light.shadows` | works, but 2–3× too strong against Camera Raw on flat regions and moves uniform images; the measured model (`tone::lr::adobe_hs_lut`) is off until the rest is refitted (`docs/lr-match.md` → Round 7) |
 | LR-EDIT-LIGHT-WHITES | Whites | P0 | ✅ | `ctl:light.whites` | |
 | LR-EDIT-LIGHT-BLACKS | Blacks | P0 | ✅ | `ctl:light.blacks` | |
 | LR-EDIT-LIGHT-CURVE-PARAM | Parametric curve | P0 | ✅ | `ctl:curve.highlights`, `ctl:curve.lights`, `ctl:curve.darks`, `ctl:curve.shadows`, `ctl:curve.split*` | |

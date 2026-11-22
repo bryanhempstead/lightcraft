@@ -216,6 +216,42 @@ pub mod lr {
         key_of(log_l.iter().step_by(KEY_STEP).copied())
     }
 
+    /// What Camera Raw's Highlights / Shadows read from the whole photo (R02, measured with the
+    /// Camera Raw oracle, `docs/lr-match.md` → *Highlights / Shadows (R02)*), in log2 luminance
+    /// before exposure, from every [`KEY_STEP`]-th value.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct ToneStats {
+        /// [`image_key`] (Contrast's pivot).
+        pub key: f32,
+        /// Log2 of the mean linear luminance.
+        pub lin_mean: f32,
+        /// The [`HsParams::q_lo`]-th percentile.
+        pub lo: f32,
+        /// The [`HsParams::q_hi`]-th percentile.
+        pub hi: f32,
+    }
+
+    /// [`ToneStats`] of a log-luminance plane (every [`KEY_STEP`]-th value). `None` when there are
+    /// no finite values.
+    pub fn image_stats(log_l: &[f32]) -> Option<ToneStats> {
+        stats_of(log_l.iter().step_by(KEY_STEP).copied())
+    }
+
+    /// [`image_stats`] of values already taken every [`KEY_STEP`]-th (the GPU reads them back so).
+    pub fn stats_of(values: impl Iterator<Item = f32>) -> Option<ToneStats> {
+        let mut v: Vec<f32> = values.filter(|v| v.is_finite()).map(|v| v.clamp(-14.0, 10.0)).collect();
+        let key = key_of(v.iter().copied())?;
+        let lin = v.iter().map(|&x| f64::from(x).exp2()).sum::<f64>() / v.len() as f64;
+        let lin_mean = (lin.log2() as f32).clamp(-14.0, 10.0);
+        let n = v.len();
+        let mut at = |q: f32| {
+            let i = ((q / 100.0 * n as f32).max(0.0) as usize).min(n - 1);
+            *v.select_nth_unstable_by(i, f32::total_cmp).1
+        };
+        let p = HS_PARAMS;
+        Some(ToneStats { key, lin_mean, lo: at(p.q_lo), hi: at(p.q_hi) })
+    }
+
     /// [`image_key`] of values already taken every [`KEY_STEP`]-th (the GPU reads them back so).
     pub fn key_of(values: impl Iterator<Item = f32>) -> Option<f32> {
         let (mut sum, mut n) = (0.0f64, 0usize);
@@ -249,8 +285,91 @@ pub mod lr {
         hs_lut_with(&HIGHLIGHTS, &SHADOWS, highlights, shadows, key_offset)
     }
 
-    /// [`hs_lut`] over an Adobe base ([`ADOBE_HIGHLIGHTS`], [`ADOBE_SHADOWS`]).
-    pub fn adobe_hs_lut(highlights: f32, shadows: f32, key_offset: f32) -> Vec<f32> {
+    /// Camera Raw's Highlights / Shadows (R02, measured with the oracle on Bryan's raws and
+    /// synthetic scenes) as a table of EV changes by local base EV (quarter stops from `EV0`,
+    /// after exposure): a curve on the edge-aware base that depends on the whole photo. Around a
+    /// pivot `P` ([`ToneStats::lin_mean`] + `pivot`), Shadows lifts the levels below `P` by
+    /// `S · s_slope` per EV below it, down to the `q_lo`-th percentile (darker levels move with
+    /// it); Highlights moves the levels above `P` by `H · h_slope` (its own slope for each sign)
+    /// per EV, up to the `q_hi`-th percentile. Both sliders add; the corners are rounded
+    /// (`s_round`, `h_round` EV) and a photo of a single tone (range `hi − lo` under 1 EV) moves
+    /// less, a uniform one not at all. `ev`: exposure (the stats are before it).
+    pub fn adobe_hs_lut(highlights: f32, shadows: f32, stats: Option<ToneStats>, ev: f32) -> Vec<f32> {
+        let Some(st) = stats else { return vec![0.0; HS_N] };
+        let p = HS_PARAMS;
+        let ev = if ev.is_finite() { ev.clamp(-12.0, 12.0) } else { 0.0 };
+        let pivot = st.lin_mean + ev + p.pivot;
+        let (lo, hi) = ((st.lo + ev).min(pivot), (st.hi + ev).max(pivot));
+        let range = smoothstep(0.0, 1.0, st.hi - st.lo);
+        if !(pivot.is_finite() && lo.is_finite() && hi.is_finite() && range > 0.0) {
+            return vec![0.0; HS_N];
+        }
+        let h_slope = if highlights < 0.0 { p.h_slope_neg } else { p.h_slope_pos };
+        (0..HS_N)
+            .map(|i| {
+                let x = EV0 + i as f32 * 0.25;
+                let s = shadows * p.s_slope * (round_ramp(pivot - x, p.s_round) - round_ramp(lo - x, p.s_round));
+                let h = highlights * h_slope * (round_ramp(x - pivot, p.h_round) - round_ramp(x - hi, p.h_round));
+                range * (s + h)
+            })
+            .collect()
+    }
+
+    /// The fitted constants of [`adobe_hs_lut`] and [`ToneStats`].
+    #[derive(Clone, Copy, Debug)]
+    pub struct HsParams {
+        /// Pivot relative to the log2 mean linear luminance (EV).
+        pub pivot: f32,
+        pub s_slope: f32,
+        pub h_slope_neg: f32,
+        pub h_slope_pos: f32,
+        /// Percentiles (%) where Shadows' / Highlights' moves stop growing.
+        pub q_lo: f32,
+        pub q_hi: f32,
+        /// Half-widths (EV) of the rounded corners.
+        pub s_round: f32,
+        pub h_round: f32,
+    }
+
+    /// Fitted on 26 of Bryan's raws (`tools/lr-compare/oracle/hsfit_rhs.py`, sets `make_rhs.py`):
+    /// mean |ΔEV| of the move 0.385 (no Highlights / Shadows) → 0.104.
+    pub const HS_PARAMS: HsParams = HsParams {
+        pivot: -0.5356,
+        s_slope: 0.6916,
+        h_slope_neg: 0.4926,
+        h_slope_pos: 0.5901,
+        q_lo: 12.72,
+        q_hi: 95.48,
+        s_round: 1.8001,
+        h_round: 1.3803,
+    };
+
+    /// `max(d, 0)` with the corner rounded over ±`w` (a parabola; C1).
+    #[inline]
+    fn round_ramp(d: f32, w: f32) -> f32 {
+        if w <= 1e-4 || d >= w {
+            d.max(0.0)
+        } else if d <= -w {
+            0.0
+        } else {
+            (d + w) * (d + w) / (4.0 * w)
+        }
+    }
+
+    fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+        let t = if b > a {
+            ((x - a) / (b - a)).clamp(0.0, 1.0)
+        } else if x >= b {
+            1.0
+        } else {
+            0.0
+        };
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    /// [`hs_lut`] over an Adobe base, fitted on Lightroom's previews ([`ADOBE_HIGHLIGHTS`],
+    /// [`ADOBE_SHADOWS`]); Camera Raw's own model is [`adobe_hs_lut`].
+    pub fn adobe_hs_lut_previews(highlights: f32, shadows: f32, key_offset: f32) -> Vec<f32> {
         hs_lut_with(&ADOBE_HIGHLIGHTS, &ADOBE_SHADOWS, highlights, shadows, key_offset)
     }
 
@@ -537,6 +656,39 @@ mod tests {
         assert_eq!(lr::hs_at(&t, f32::NAN), 0.0);
         assert_eq!(lr::hs_at(&[], 1.0), 0.0);
         assert!((lr::hs_at(&t, 100.0) - t[t.len() - 1]).abs() < 1e-6 && (lr::hs_at(&t, -100.0) - t[0]).abs() < 1e-6, "clamped");
+    }
+
+    /// R02 (Camera Raw oracle): a uniform photo never moves; Shadows lifts what lies below the
+    /// photo's pivot, more the further below, and leaves the bright part; Highlights − pulls the
+    /// bright part down; the sliders add; hostile stats give a finite (or empty) table.
+    #[test]
+    fn camera_raw_highlights_shadows_follow_the_whole_photo() {
+        let uniform = lr::stats_of(std::iter::repeat_n(-2.0f32, 700)).unwrap();
+        assert!(lr::adobe_hs_lut(-1.0, 1.0, Some(uniform), 0.0).iter().all(|v| v.abs() < 1e-6), "a uniform photo is never changed");
+        // two halves, 5 EV apart (stats before exposure; the table after it)
+        let field: Vec<f32> = (0..1400).map(|i| if i % 2 == 0 { -6.0 } else { -1.0 }).collect();
+        let st = lr::stats_of(field.iter().copied()).unwrap();
+        assert!(st.lo <= -5.9 && st.hi >= -1.1 && st.lin_mean > -2.0, "{st:?}");
+        let s = lr::adobe_hs_lut(0.0, 1.0, Some(st), 0.0);
+        let (dark, bright) = (lr::hs_at(&s, -6.0), lr::hs_at(&s, -1.0));
+        assert!(dark > 0.5 && bright.abs() < 0.05, "Shadows: dark {dark} bright {bright}");
+        assert!(lr::hs_at(&s, -8.0) >= dark - 1e-4, "darker tones move with the darkest ones");
+        let h = lr::adobe_hs_lut(-1.0, 0.0, Some(st), 0.0);
+        assert!(lr::hs_at(&h, -1.0) < -0.3 && lr::hs_at(&h, -6.0).abs() < 0.05, "Highlights −");
+        // exposure moves the whole table with the photo
+        let e = lr::adobe_hs_lut(0.0, 1.0, Some(st), -1.0);
+        assert!((lr::hs_at(&e, -7.0) - dark).abs() < 1e-4);
+        let both = lr::adobe_hs_lut(-1.0, 1.0, Some(st), 0.0);
+        for x in [-8.0f32, -6.0, -3.5, -1.0, 1.0] {
+            assert!((lr::hs_at(&both, x) - lr::hs_at(&s, x) - lr::hs_at(&h, x)).abs() < 1e-5, "{x}");
+        }
+        assert!(lr::adobe_hs_lut(1.0, 1.0, None, 0.0).iter().all(|v| *v == 0.0));
+        let bad = lr::ToneStats { key: f32::NAN, lin_mean: f32::INFINITY, lo: f32::NAN, hi: -1e30 };
+        for ev in [0.0, f32::NAN, 1e9] {
+            assert!(lr::adobe_hs_lut(-1.0, 1.0, Some(bad), ev).iter().all(|v| v.is_finite()));
+            assert!(lr::adobe_hs_lut(-1.0, 1.0, Some(st), ev).iter().all(|v| v.is_finite()));
+        }
+        assert!(lr::stats_of([f32::NAN, f32::INFINITY].into_iter()).is_none());
     }
 
     #[test]

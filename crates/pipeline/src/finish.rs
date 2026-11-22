@@ -26,6 +26,12 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 const PARAMETRIC_AMOUNT: f32 = 0.11;
 const PARAMETRIC_WIDTH: f32 = 1.05;
 
+/// Camera Raw's measured Highlights / Shadows (R02, [`crate::tone::lr::adobe_hs_lut`]) over an
+/// Adobe base instead of the preview-fitted tables. Off: closer to Camera Raw on Bryan's raws
+/// (oracle ΔE with his tone sliders 3.88 → 2.67) but worse on the acceptance set (4.01 → 4.33)
+/// until the rest is refitted (`docs/lr-match.md` → *Round 7*).
+const ADOBE_HS_MEASURED: bool = false;
+
 /// The tone curves as Lightroom applies them (Camera Raw oracle, `docs/lr-match.md` → *Recipes, curves and the process version*):
 /// the parametric curve, then the point curve (natural cubic spline, clamped), as one *master*
 /// curve applied hue-preserving to the encoded style-space colour (largest and smallest channel
@@ -389,7 +395,7 @@ impl FinishParams {
         h: usize,
         px_per_long: f64,
         air_pre: f32,
-        tone_key: Option<f32>,
+        tone_stats: Option<crate::tone::lr::ToneStats>,
         space: OutputSpace,
     ) -> FinishParams {
         let effects = s.section_enabled("effects");
@@ -409,10 +415,14 @@ impl FinishParams {
         let adobe = crate::adobe::Finish::new(info.adobe, &s.profile.id, s.profile.amount / 100.0);
         let lr_tone = info.camera_tone.is_some() || adobe.is_some();
         let (hl, sh) = ((s.light.highlights / 100.0) as f32, (s.light.shadows / 100.0) as f32);
-        // Lightroom's Highlights / Shadows follow the photo's own key (after exposure)
+        let tone_key = tone_stats.map(|t| t.key);
+        // Lightroom's Highlights / Shadows follow the whole photo (`tone::lr::adobe_hs_lut`)
         let key_offset = tone_key.map_or(0.0, |k| k + s.light.exposure as f32 - crate::tone::lr::KEY_REF);
-        let hs_lut = (lr_tone && (hl != 0.0 || sh != 0.0))
-            .then(|| if adobe.is_some() { crate::tone::lr::adobe_hs_lut(hl, sh, key_offset) } else { crate::tone::lr::hs_lut(hl, sh, key_offset) });
+        let hs_lut = (lr_tone && (hl != 0.0 || sh != 0.0)).then(|| match adobe.as_ref() {
+            Some(_) if ADOBE_HS_MEASURED => crate::tone::lr::adobe_hs_lut(hl, sh, tone_stats, s.light.exposure as f32),
+            Some(_) => crate::tone::lr::adobe_hs_lut_previews(hl, sh, key_offset),
+            None => crate::tone::lr::hs_lut(hl, sh, key_offset),
+        });
         let (hl, sh) = if lr_tone { (0.0, 0.0) } else { (hl, sh) };
         FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
@@ -472,7 +482,7 @@ impl FinishParams {
 
 pub(crate) fn finish(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &SourceInfo, space: OutputSpace, proof: Option<crate::Proof>) -> Rgba8 {
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.tone_key, space);
+    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.tone_stats, space);
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let data = finish_with(p, &fp, false, |e| match trc {
@@ -498,7 +508,7 @@ pub(crate) fn finish_deep(
 ) -> DeepImage {
     use lightcraft_color::transfer::srgb_to_linear;
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.tone_key, space);
+    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.tone_stats, space);
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let samples = match depth {
@@ -843,7 +853,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
         }
     });
     if let Some(d) = dump {
-        let key = p.tone_key.map_or(f32::NAN, |k| k + ev - crate::tone::lr::KEY_REF);
+        let key = p.tone_stats.map_or(f32::NAN, |t| t.key + ev - crate::tone::lr::KEY_REF);
         d.write([fp.ow as f32, fp.oh as f32, ev, key, 0.0, 0.0]);
     }
     out

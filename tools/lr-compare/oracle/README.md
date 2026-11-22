@@ -18,3 +18,8 @@ matrix; `hslproto.py` fits the HSL / Saturation / Vibrance tables (`hslfit.py`, 
 `combo.py` checks combinations, `gen_colortab.py` packs `crates/pipeline/src/colortab.bin`.
 White balance: `make_wb.py` (synthetic Temp / Tint sweep), `make_rwb.py` + `rwbcmp.py` (real raws).
 Scripts that read Bryan's renders (`make_real.py`, `make_rwb.py`) hold the scratch path in `L`.
+
+Highlights / Shadows (R02, round 7): `make_rhs.py` (Bryan's split-A raws with one-slider sidecars + one
+neutral ramp per camera, plus synthetic layouts), `hsfit_rhs.py` (fits `tone::lr::adobe_hs_lut`'s
+constants in scene EV), `make_full.py` (acceptance photos with their own full settings and the Summer
+Fields look), `make_hsorder.py` + `hsorder.py` (H/S come before Exposure / Contrast / Whites / Blacks).
