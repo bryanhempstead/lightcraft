@@ -732,6 +732,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     );
                     if !matches!(opts.metadata, M::None | M::Copyright) {
                         ui.checkbox(&mut opts.remove_location, crate::i18n::tr("Remove location info"));
+                        let r = ui.checkbox(&mut opts.remove_people, crate::i18n::tr("Remove person info"));
+                        crate::widgets::register(ui.ctx(), "check:exportRemovePeople", r.rect);
+                        let r = ui.checkbox(&mut opts.keyword_hierarchy, crate::i18n::tr("Write keywords as Lightroom hierarchy"));
+                        crate::widgets::register(ui.ctx(), "check:exportKeywordHierarchy", r.rect);
                     }
                     let mut wm_on = opts.watermark.is_some();
                     if ui.checkbox(&mut wm_on, crate::i18n::tr("Watermark")).changed() {

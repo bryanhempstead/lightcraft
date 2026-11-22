@@ -190,3 +190,25 @@ fn watermark_text_tokens_are_per_photo() {
     let text = items[0].watermark_text().unwrap_or_default();
     assert_eq!(text, "© Ann Lee · Harbour 1/1");
 }
+
+/// E06: exported keywords — parents included as words, people as keywords unless removed, the
+/// Lightroom hierarchy on request.
+#[test]
+fn export_keywords_follow_the_metadata_options() {
+    let mut p = sample_photo();
+    p.meta.keywords = vec!["Places|Portugal|Lisbon".into(), "dawn".into()];
+    p.meta.regions = vec![lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.3 },
+        kind: lightcraft_meta::RegionKind::Face,
+        name: Some("Ann Lee".into()),
+        description: None,
+    }];
+    let o = crate::export::ExportOptions::default();
+    let (flat, hier) = crate::export::export_keywords(&p, &o);
+    assert_eq!(flat, ["Places", "Portugal", "Lisbon", "dawn", "Ann Lee"]);
+    assert!(hier.is_empty());
+    let o = crate::export::ExportOptions::from_params(&json!({"removePeople": true, "keywordHierarchy": true})).unwrap();
+    let (flat, hier) = crate::export::export_keywords(&p, &o);
+    assert!(!flat.iter().any(|k| k == "Ann Lee"));
+    assert_eq!(hier, ["Places|Portugal|Lisbon", "dawn"]);
+}

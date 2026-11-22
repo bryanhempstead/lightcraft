@@ -592,6 +592,11 @@ pub struct ExportOptions {
     pub metadata: MetadataPolicy,
     /// Strip GPS / location even when the policy would include it.
     pub remove_location: bool,
+    /// Lightroom's Remove Person Info: the names of the people tagged in the photo are not
+    /// written as keywords.
+    pub remove_people: bool,
+    /// Write Keywords as Lightroom Hierarchy (`lr:hierarchicalSubject`, full `a|b|c` paths).
+    pub keyword_hierarchy: bool,
     /// Text watermark (none when absent or the text is empty).
     pub watermark: Option<Watermark>,
     /// Output colour space (AVIF is always sRGB: its muxer cannot embed a profile).
@@ -803,6 +808,8 @@ impl Default for ExportOptions {
             dng_compression: DngCompression::Lossless,
             metadata: MetadataPolicy::All,
             remove_location: false,
+            remove_people: false,
+            keyword_hierarchy: false,
             watermark: None,
             color_space: OutputSpace::Srgb,
             bit_depth: None,
@@ -845,6 +852,8 @@ pub const OPTION_PARAMS: &[&str] = &[
     "dngCompression",
     "metadata",
     "removeLocation",
+    "removePeople",
+    "keywordHierarchy",
     "watermark",
     "colorSpace",
     "bitDepth",
@@ -979,7 +988,7 @@ impl ExportOptions {
                     }
                     serde_json::from_value::<Resize>(v.clone()).map_err(|e| bad(format!("`{k}`: {e}")))?;
                 }
-                "dontEnlarge" | "removeLocation" | "background" => {
+                "dontEnlarge" | "removeLocation" | "removePeople" | "keywordHierarchy" | "background" => {
                     boolean(k, v)?;
                 }
                 "extCase" => one_of(k, v, &["keep", "lower", "upper"])?,
@@ -1121,6 +1130,8 @@ impl ExportOptions {
             dng_compression: enm(p, "dngCompression").unwrap_or(d.dng_compression),
             metadata: enm(p, "metadata").unwrap_or(d.metadata),
             remove_location: p.get("removeLocation").and_then(Value::as_bool).unwrap_or(d.remove_location),
+            remove_people: p.get("removePeople").and_then(Value::as_bool).unwrap_or(d.remove_people),
+            keyword_hierarchy: p.get("keywordHierarchy").and_then(Value::as_bool).unwrap_or(d.keyword_hierarchy),
             watermark: match p.get("watermark") {
                 Some(Value::String(t)) => Some(Watermark { text: t.clone(), ..Default::default() }),
                 Some(v @ Value::Object(_)) => serde_json::from_value(v.clone()).ok(),
@@ -1534,7 +1545,7 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> 
         out.state = text(&m.state);
         out.country = text(&m.country);
     }
-    out.keywords = m.keywords.clone();
+    (out.keywords, out.hierarchical_keywords) = export_keywords(photo, o);
     out.capture_time = photo.captured.as_deref().and_then(DateTime::parse_iso);
     out.rating = (photo.rating > 0).then_some(photo.rating as i8);
     // Pixels are exported upright: orientation is baked in.
@@ -1551,6 +1562,33 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> 
         out.iso = m.iso;
     }
     Some(out)
+}
+
+/// The keywords an export writes (E06): each `a|b|c` keyword as its own words `a`, `b`, `c`
+/// (Lightroom includes the parents on export), the named people unless Remove Person Info, and
+/// the full paths as `lr:hierarchicalSubject` when Write Keywords as Lightroom Hierarchy is on.
+pub fn export_keywords(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> (Vec<String>, Vec<String>) {
+    let mut flat: Vec<String> = Vec::new();
+    let mut push = |k: &str| {
+        let k = k.trim();
+        if !k.is_empty() && !flat.iter().any(|x| x.eq_ignore_ascii_case(k)) {
+            flat.push(k.to_string());
+        }
+    };
+    for k in &photo.meta.keywords {
+        for part in k.split('|') {
+            push(part);
+        }
+    }
+    if !o.remove_people {
+        for r in photo.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+            if let Some(n) = r.name.as_deref() {
+                push(n);
+            }
+        }
+    }
+    let hier = if o.keyword_hierarchy { photo.meta.keywords.iter().filter(|k| !k.trim().is_empty()).cloned().collect() } else { Vec::new() };
+    (flat, hier)
 }
 
 /// One exported file.
