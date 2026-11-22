@@ -119,3 +119,49 @@ fn map_module_live_tiles() {
     assert!(h.app.map.status()["inMemory"].as_u64().unwrap_or(0) > 0, "{}", h.app.map.status());
     shot(&mut h, "map-live.png");
 }
+
+/// LRC-MAP-FILTER: the bar above the map narrows the filmstrip (visible. follows the view as it
+/// moves), leaves the pins alone, and belongs to the Map module (the Library grid shows all).
+#[test]
+fn map_location_filter_bar() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
+    s.execute("photo.setMeta", &json!({"ids": [ids[0], ids[1]], "gps": [38.7223, -9.1393]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[2]], "gps": [35.6762, 139.6503]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": &ids[3..], "gps": null})).unwrap();
+    let mut h = headless(s);
+    h.app.map.offline = true;
+    click(&mut h, "module:map");
+    let n = |h: &mut Headless| h.app.session.visible_cloned().len();
+    for b in ["visible", "tagged", "untagged", "saved", "none"] {
+        assert!(rect(&mut h, &format!("button:mapFilter-{b}")).is_some(), "{b}. in the bar");
+    }
+    // the bar sits on the right of the button row, clear of the left group
+    let (fx, ..) = rect(&mut h, "button:mapFilter-visible").unwrap();
+    let (nx, _, nw, _) = rect(&mut h, "button:mapNone").unwrap();
+    assert!(fx > nx + nw + 8.0, "visible. starts after none.");
+    click(&mut h, "button:mapFilter-tagged");
+    assert_eq!(n(&mut h), 3);
+    assert!(rect(&mut h, &format!("map:pin-{}", ids[2])).is_some(), "pins stay");
+    shot(&mut h, "map-filter-tagged.png");
+    click(&mut h, "button:mapFilter-untagged");
+    assert_eq!(n(&mut h), ids.len() - 3);
+    // Visible on Map: the whole world, then zoomed on Lisbon (Tokyo leaves the filmstrip)
+    h.app.run("view.map", json!({"lat": 20.0, "lon": 60.0, "zoom": 2})).unwrap();
+    settle(&mut h);
+    click(&mut h, "button:mapFilter-visible");
+    assert_eq!(n(&mut h), 3);
+    h.app.run("view.map", json!({"lat": 38.72, "lon": -9.14, "zoom": 11})).unwrap();
+    settle(&mut h);
+    let mut v: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    v.sort();
+    assert_eq!(v, vec![ids[0], ids[1]]);
+    shot(&mut h, "map-filter-visible.png");
+    // the Library grid: no location filter there; back on the map it is on again
+    click(&mut h, "module:library");
+    assert_eq!(n(&mut h), ids.len());
+    click(&mut h, "module:map");
+    assert_eq!(n(&mut h), 2);
+    click(&mut h, "button:mapFilter-none");
+    assert_eq!(n(&mut h), ids.len());
+}

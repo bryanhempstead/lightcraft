@@ -379,6 +379,39 @@ pub struct AppSettings {
     /// Square Grid cells: compact (name and format) or expanded (L18: a second line with the
     /// dimensions and capture date, rotate buttons in the footer).
     pub grid_expanded: bool,
+    /// Grid View Options ▸ Cell Icons (LRC-LIB-GRIDOPTIONS): pick / reject flags, the edited
+    /// badge, and Tint grid cells with label colors; Expanded Cell Extras ▸ Include Rotation
+    /// Buttons; Show Image Info Tooltips.
+    pub grid_flags: bool,
+    pub grid_edit_badge: bool,
+    pub grid_tint: bool,
+    pub grid_rotate: bool,
+    pub grid_tooltips: bool,
+    /// Library View Options ▸ Show message when loading or rendering photos (the loupe's
+    /// "Loading…" note while a sharper render is on its way).
+    pub loading_message: bool,
+    /// LRC-DEV-VIEWOPTIONS: Develop's own View Options (⌘J in Develop).
+    pub develop_view: DevelopView,
+}
+
+/// Develop View Options (LRC-DEV-VIEWOPTIONS): Develop's loupe has its own Info 1 / Info 2 lines,
+/// Show Briefly and loading message (the overlay itself is [`UiState::develop_info_overlay`]),
+/// plus the Video options.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DevelopView {
+    pub loupe_info: LoupeInfo,
+    pub loading_message: bool,
+    /// Show frame number when displaying video time (`m:ss:ff`).
+    pub video_frames: bool,
+    /// Play HD video at draft quality (frames at most 1280 px while playing; off: up to 3840).
+    pub video_draft: bool,
+}
+
+impl Default for DevelopView {
+    fn default() -> Self {
+        DevelopView { loupe_info: LoupeInfo::default(), loading_message: true, video_frames: false, video_draft: true }
+    }
 }
 
 impl Default for AppSettings {
@@ -399,6 +432,13 @@ impl Default for AppSettings {
             view_space: crate::display_p3::ViewSpace::Auto,
             loupe_info: LoupeInfo::default(),
             grid_expanded: false,
+            grid_flags: true,
+            grid_edit_badge: true,
+            grid_tint: true,
+            grid_rotate: true,
+            grid_tooltips: false,
+            loading_message: true,
+            develop_view: DevelopView::default(),
         }
     }
 }
@@ -718,8 +758,11 @@ pub struct UiState {
     /// time), paused.
     #[serde(skip)]
     pub slideshow: Option<(f64, f64, bool)>,
-    /// Info overlay on the loupe.
+    /// Info overlay on the loupe (Library; Develop has its own, `develop_info_overlay`).
     pub info_overlay: InfoOverlay,
+    /// Develop View Options ▸ Show Info Overlay (LRC-DEV-VIEWOPTIONS).
+    #[serde(default)]
+    pub develop_info_overlay: InfoOverlay,
     /// The Metadata panel's view (L20): `default`, `all`, `exif`, `iptc`, `location`,
     /// `largeCaption`, `minimal`, `quickDescribe`, `custom` (see `panels::right::METADATA_VIEWS`).
     #[serde(default)]
@@ -1145,6 +1188,7 @@ impl Default for UiState {
             keyword_painter: None,
             painter: None,
             info_overlay: InfoOverlay::Off,
+            develop_info_overlay: InfoOverlay::Off,
             brief_info: BriefInfo::default(),
             metadata_view: String::new(),
             metadata_custom: Vec::new(),
@@ -1169,6 +1213,30 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// The loupe belongs to Develop (its View Options apply) rather than Library.
+    pub fn develop_loupe(&self) -> bool {
+        self.module == Module::Develop
+    }
+
+    /// The info overlay the loupe shows now (each module has its own, as in Lightroom Classic).
+    pub fn info_mode(&self) -> InfoOverlay {
+        if self.develop_loupe() { self.develop_info_overlay } else { self.info_overlay }
+    }
+
+    pub fn info_mode_mut(&mut self) -> &mut InfoOverlay {
+        if self.develop_loupe() { &mut self.develop_info_overlay } else { &mut self.info_overlay }
+    }
+
+    /// The current module's Loupe Info 1 / 2 lines and Show Briefly.
+    pub fn loupe_info(&self) -> &LoupeInfo {
+        if self.develop_loupe() { &self.settings.develop_view.loupe_info } else { &self.settings.loupe_info }
+    }
+
+    /// Show message when loading or rendering photos, for the current module.
+    pub fn loading_message(&self) -> bool {
+        if self.develop_loupe() { self.settings.develop_view.loading_message } else { self.settings.loading_message }
+    }
+
     pub fn section_open(&self, id: &str) -> bool {
         self.open_sections.iter().any(|s| s == id)
     }

@@ -74,7 +74,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.beforeAfterTopBottom", "Before/After Top/Bottom", Some("Alt+Y"), "View"),
     ("view.beforeAfterSplitTopBottom", "Before/After Split Top/Bottom", Some("Alt+Shift+Y"), "View"),
     ("view.showOriginal", "Show Original", Some("\\"), "View"),
-    ("view.zoomFit", "Zoom to Fit", Some("Cmd+0"), "View"),
+    ("view.zoomFit", "Zoom to Fit", Some("Cmd+Shift+0"), "View"),
     ("view.zoom100", "Zoom 100%", Some("Cmd+Alt+0"), "View"),
     ("view.zoomToggle", "Toggle Zoom", Some("Z"), "View"),
     // the ratio a click (and Z / Space) zooms to
@@ -87,7 +87,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.sdrPreview", "Preview for SDR Display", None, "View"),
     // in grids S expands/collapses stacks (the engine command it shadows)
     ("view.softProof", "Soft Proofing", Some("S"), "View"),
-    ("view.histogram", "Histogram", Some("Cmd+Shift+H"), "View"),
+    ("view.histogram", "Histogram", Some("Cmd+0"), "View"),
     ("view.maskOverlay", "Show Mask Overlay", Some("O"), "View"),
     // Shift+O in the Masking panel (elsewhere it cycles the crop overlay)
     ("view.maskOverlayMode", "Cycle Mask Overlay Mode", None, "View"),
@@ -189,7 +189,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.findMissing", "Find Missing Photos…", None, "File"),
     ("dialog.deleteRejected", "Delete Rejected Photos…", Some("Cmd+Delete"), "Photo"),
     ("tool.painter", "Painter", None, ""),
-    ("view.gridOptions", "Grid View Options…", Some("Cmd+J"), "View"),
+    ("view.gridOptions", "View Options…", Some("Cmd+J"), "View"),
     // the Import window's Import Preset popup ({name})
     ("import.presets", "Import Presets", None, ""),
     ("import.savePreset", "Save Import Preset", None, ""),
@@ -795,20 +795,22 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(json!({"windowFullscreen": app.ui.window_fullscreen}))
         }
         "view.infoOverlay" => {
-            app.ui.info_overlay = match p.get("mode").and_then(Value::as_str) {
+            // the current module's overlay (Library and Develop each keep their own)
+            let mode = match p.get("mode").and_then(Value::as_str) {
                 Some(m) => match serde_json::from_value(json!(m)) {
                     Ok(v) => v,
                     Err(_) => return Some(Err(format!("unknown info overlay `{m}` (off|basic|exposure)"))),
                 },
-                None => app.ui.info_overlay.next(),
+                None => app.ui.info_mode().next(),
             };
-            let label = match app.ui.info_overlay {
+            *app.ui.info_mode_mut() = mode;
+            let label = match mode {
                 crate::state::InfoOverlay::Off => "Info Overlay Off",
                 crate::state::InfoOverlay::Basic => "Info Overlay: File",
                 crate::state::InfoOverlay::Exposure => "Info Overlay: Exposure",
             };
             app.toast(&ctx, label);
-            Ok(json!({"infoOverlay": app.ui.info_overlay}))
+            Ok(json!({"infoOverlay": mode, "module": app.ui.module}))
         }
         "view.navigator" => {
             app.ui.navigator = !app.ui.navigator;
@@ -817,16 +819,20 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.settings" => {
             let tab = p.get("tab").and_then(Value::as_str).unwrap_or("general");
             if !crate::panels::settings::TABS.iter().any(|(id, _)| *id == tab) {
-                return Some(Err(format!("unknown settings tab `{tab}` (general|import|performance|backup|interface|shortcuts|controllers)")));
+                return Some(Err(format!(
+                    "unknown settings tab `{tab}` (general|import|performance|backup|interface|develop|shortcuts|controllers|cameras)"
+                )));
             }
             app.ui.dialog = Some(Dialog::Settings { tab: tab.into() });
             Ok(Value::Null)
         }
         "app.openLibrary" => crate::panels::settings::open_library(app, p),
         "dialog.deleteRejected" => delete_rejected(app),
-        // Lightroom's View Options (⌘J): the grid's options live on Settings ▸ Interface
+        // Lightroom's View Options (⌘J): the grid's and Library loupe's options live on Settings ▸
+        // Interface; in Develop, Develop's own View Options (LRC-DEV-VIEWOPTIONS)
         "view.gridOptions" => {
-            app.ui.dialog = Some(Dialog::Settings { tab: "interface".into() });
+            let tab = if app.ui.module == Module::Develop { "develop" } else { "interface" };
+            app.ui.dialog = Some(Dialog::Settings { tab: tab.into() });
             Ok(Value::Null)
         }
         "import.presets" | "import.savePreset" | "import.applyPreset" | "import.deletePreset" => crate::import::preset_command(app, id, p),

@@ -47,6 +47,21 @@ pub fn timecode(secs: f64) -> String {
     if h > 0 { format!("{h}:{m:02}:{sec:02}.{frac:02}") } else { format!("{m}:{sec:02}.{frac:02}") }
 }
 
+/// `m:ss:ff` (`h:mm:ss:ff` past an hour): the time with the frame number in its second, at `fps`
+/// frames per second (View Options ▸ Show frame number when displaying video time). A rate that
+/// isn't a positive number counts 25.
+pub fn frame_timecode(secs: f64, fps: f64) -> String {
+    let s = if secs.is_finite() { secs.max(0.0) } else { 0.0 };
+    let fps = if fps.is_finite() && fps > 0.0 { fps.min(1000.0) } else { 25.0 };
+    let per = fps.round().max(1.0) as u64;
+    let total = (s * fps + 1e-6).floor() as u64;
+    // frames counted on the rounded rate (29.97 fps counts 0…29 in each second)
+    let whole = (total as f64 / fps).floor() as u64;
+    let frame = (total.saturating_sub((whole as f64 * fps).ceil() as u64)).min(per - 1);
+    let (h, m, sec) = (whole / 3600, (whole / 60) % 60, whole % 60);
+    if h > 0 { format!("{h}:{m:02}:{sec:02}:{frame:02}") } else { format!("{m}:{sec:02}:{frame:02}") }
+}
+
 fn info(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "video.info";
     let (id, photo) = the_video(s, C, p)?;

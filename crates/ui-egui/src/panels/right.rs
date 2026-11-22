@@ -856,6 +856,8 @@ pub const METADATA_VIEWS: &[(&str, &str, &[&str])] = &[
     ("largeCaption", "Large Caption", &["largeCaption"]),
     ("minimal", "Minimal", &["fileName", "rating", "caption"]),
     ("quickDescribe", "Quick Describe", &["fileName", "rating", "describe", "rights", "location"]),
+    ("dng", "DNG", &["fileName", "camera", "dng", "file"]),
+    ("video", "Video", &["fileName", "rating", "video", "file"]),
     ("custom", "Custom", &[]),
 ];
 
@@ -870,6 +872,8 @@ pub const METADATA_GROUPS: &[(&str, &str)] = &[
     ("gps", "GPS"),
     ("exif", "EXIF"),
     ("iptcExt", "IPTC Extension"),
+    ("dng", "DNG header"),
+    ("video", "Video"),
 ];
 
 /// The groups the current view shows.
@@ -1072,6 +1076,12 @@ pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         if has("iptcExt") {
             iptc_ext_rows(app, ui, &p);
         }
+        if has("dng") {
+            dng_rows(app, ui, &p);
+        }
+        if has("video") {
+            video_rows(app, ui, &p);
+        }
         if !has("file") && !has("location") && !has("gps") {
             return;
         }
@@ -1108,11 +1118,29 @@ pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 });
             }
         });
+        // the folder's arrow: every photo of that folder (Lightroom's field arrow)
+        let folder = lightcraft_catalog::columns::values(&p, &app.session.catalog, "folder").into_iter().find(|f| !f.is_empty());
+        if let Some(f) = folder {
+            ui.horizontal(|ui| {
+                field_arrow(
+                    app,
+                    ui,
+                    "folder",
+                    "folder. →",
+                    "Show the photos of this folder",
+                    json!({"columns": [{"column": "folder", "values": [f]}]}),
+                );
+            });
+        }
         ui.add_space(4.0);
         small(ui, "Captured");
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if crate::widgets::icon_button(ui, "editCaptureTime", Icon::Pencil, vec2(20.0, 20.0), false, true, "Edit Capture Time…").clicked() {
                 let _ = app.run("dialog.captureTime", json!({}));
+            }
+            // the capture date's arrow: that day's photos (Lightroom's field arrow)
+            if let Some(day) = p.captured.as_deref().and_then(|c| c.get(..10)) {
+                field_arrow(app, ui, "date", "day. →", "Show the photos taken that day", json!({"date": day}));
             }
             let cap = p.captured.as_deref().map(crate::i18n::display_time).unwrap_or_else(|| "—".into());
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -1209,6 +1237,112 @@ fn exif_rows(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
     ui.add_space(8.0);
 }
 
+/// Label / value rows (a Metadata view's read-only section).
+fn kv_rows(ui: &mut egui::Ui, grid: &str, rows: &[(&str, Option<String>)]) {
+    let t = Tokens::get(ui.ctx());
+    let r = egui::Grid::new(grid).num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
+        for (k, v) in rows {
+            ui.label(egui::RichText::new(crate::i18n::tr(k)).size(11.5).color(t.text_dim));
+            ui.add(egui::Label::new(egui::RichText::new(v.clone().unwrap_or_else(|| "—".into())).size(12.0).color(t.text)).truncate());
+            ui.end_row();
+        }
+    });
+    register(ui.ctx(), format!("metadata:{grid}"), r.response.rect);
+    ui.add_space(8.0);
+}
+
+/// LRC-LIB-METAVIEWS ▸ DNG: the file's DNG header (`photo.dngInfo`, read once per photo and
+/// catalog revision).
+fn dng_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
+    let key = egui::Id::new(("dng-info", p.id.0, app.session.catalog.revision));
+    let info: serde_json::Value = match ui.data(|d| d.get_temp::<serde_json::Value>(key)) {
+        Some(v) => v,
+        None => {
+            let v = app.session.execute("photo.dngInfo", &json!({"id": p.id.0})).unwrap_or_else(|e| json!({"error": e.to_string()}));
+            ui.data_mut(|d| d.insert_temp(key, v.clone()));
+            v
+        }
+    };
+    if let Some(e) = info["error"].as_str() {
+        kv_rows(ui, "metadata-dng", &[("DNG", Some(e.to_string()))]);
+        return;
+    }
+    if info["dng"] != true {
+        kv_rows(ui, "metadata-dng", &[("DNG", Some(crate::i18n::tr("Not a DNG file").to_string()))]);
+        return;
+    }
+    let s = |k: &str| info[k].as_str().map(str::to_string);
+    let size = match (info["rawWidth"].as_u64(), info["rawHeight"].as_u64()) {
+        (Some(w), Some(h)) => Some(format!("{w} × {h}")),
+        _ => None,
+    };
+    let previews: Vec<String> = info["previews"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|x| {
+                    format!(
+                        "{} × {}{}",
+                        x["width"].as_u64().unwrap_or(0),
+                        x["height"].as_u64().unwrap_or(0),
+                        if x["jpeg"] == true { " JPEG" } else { "" }
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let data = info["mosaic"].as_bool().map(|m| if m { "Mosaic (raw)" } else { "Linear (demosaiced)" }.to_string());
+    kv_rows(
+        ui,
+        "metadata-dng",
+        &[
+            ("DNG Version", s("version")),
+            ("Backward Version", s("backwardVersion")),
+            ("Camera Model", s("uniqueCameraModel")),
+            ("Original Raw File", s("originalRawFileName")),
+            ("Profile", s("profileName")),
+            ("Raw Data", data),
+            ("Raw Size", size),
+            ("Compression", s("compression")),
+            ("Previews", Some(if previews.is_empty() { crate::i18n::tr("none").to_string() } else { previews.join(", ") })),
+        ],
+    );
+}
+
+/// LRC-LIB-METAVIEWS ▸ Video: the clip's length, frame size, rate and trim.
+fn video_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
+    use lightcraft_engine::cmd::video_timecode as tc;
+    if p.kind != lightcraft_catalog::MediaKind::Video {
+        kv_rows(ui, "metadata-video", &[("Video", Some(crate::i18n::tr("Not a video").to_string()))]);
+        return;
+    }
+    let key = egui::Id::new(("video-info", p.id.0, app.session.catalog.revision));
+    let info: serde_json::Value = match ui.data(|d| d.get_temp::<serde_json::Value>(key)) {
+        Some(v) => v,
+        None => {
+            let v = app.session.execute("video.info", &json!({"id": p.id.0})).unwrap_or_else(|e| json!({"error": e.to_string()}));
+            ui.data_mut(|d| d.insert_temp(key, v.clone()));
+            v
+        }
+    };
+    let n = |k: &str| info[k].as_f64();
+    let edit = p.video.unwrap_or_default();
+    let (a, b) = edit.range(p.duration);
+    kv_rows(
+        ui,
+        "metadata-video",
+        &[
+            ("Duration", p.duration.or(n("duration")).map(tc)),
+            ("Frame Size", Some(format!("{} × {}", p.width, p.height))),
+            ("Frame Rate", n("fps").map(|f| format!("{f:.3} fps").replace(".000", ""))),
+            ("Codec", info["codec"].as_str().map(str::to_string)),
+            ("Audio", info["audio"].as_bool().map(|x| crate::i18n::tr(if x { "Yes" } else { "No" }).to_string())),
+            ("Trim", (a > 0.0 || b.is_some()).then(|| format!("{} – {}", tc(a), b.map(tc).unwrap_or_else(|| "end".into())))),
+            ("Poster Frame", edit.poster.map(tc)),
+        ],
+    );
+}
+
 /// The Location fields and the GPS field.
 fn location_and_gps(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalog::Photo, location: bool, gps_on: bool) {
     let t = Tokens::get(ui.ctx());
@@ -1217,6 +1351,27 @@ fn location_and_gps(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_c
         for (label, key) in [("Location", "location"), ("City", "city"), ("State / Province", "state"), ("Country", "country")] {
             let v = shared_text(app, key, &m);
             meta_field_mixed(app, ui, label, key, v.as_deref(), 1);
+        }
+        // the location fields' arrows: the library's photos from the same place
+        let arrows: Vec<(&str, &str, &str, String)> = [
+            ("location", "loc. →", "Show the photos from this location"),
+            ("city", "city. →", "Show the photos from this city"),
+            ("country", "ctry. →", "Show the photos from this country"),
+        ]
+        .into_iter()
+        .filter_map(|(col, label, tip)| {
+            let v = lightcraft_catalog::columns::values(p, &app.session.catalog, col).into_iter().find(|x| !x.is_empty())?;
+            Some((col, label, tip, v))
+        })
+        .collect();
+        if !arrows.is_empty() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                for (col, label, tip, v) in arrows {
+                    field_arrow(app, ui, col, label, tip, json!({"columns": [{"column": col, "values": [v]}]}));
+                }
+            });
+            ui.add_space(6.0);
         }
     }
     if !gps_on {

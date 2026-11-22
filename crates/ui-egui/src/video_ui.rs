@@ -22,6 +22,8 @@ use crate::widgets::register;
 
 /// Longest edge of playback frames (decoding and developing more is wasted on a loupe).
 const PLAY_EDGE: f64 = 1280.0;
+/// Longest edge of playback frames with draft quality off.
+const FULL_PLAY_EDGE: f64 = 3840.0;
 /// Longest edge of a scrubbed still.
 const STILL_EDGE: f64 = 1600.0;
 /// The bar's height and its distance from the canvas edges.
@@ -78,6 +80,18 @@ fn path_of(p: &Photo) -> Option<String> {
     match &p.source {
         Source::File { path } => Some(path.clone()),
         Source::Demo { .. } => None,
+    }
+}
+
+/// The bar's `position / length`: `m:ss.cc`, or `m:ss:ff` with View Options ▸ Show frame number
+/// when displaying video time (frames at the clip's rate).
+pub(crate) fn time_label(app: &LightcraftApp, pos: f64, dur: f64) -> String {
+    use lightcraft_engine::cmd::{video_frame_timecode, video_timecode};
+    if app.ui.settings.develop_view.video_frames {
+        let fps = app.video.info.as_ref().and_then(|i| i.as_ref().ok()).map_or(25.0, |i| i.fps);
+        format!("{} / {}", video_frame_timecode(pos, fps), video_frame_timecode(dur, fps))
+    } else {
+        format!("{} / {}", video_timecode(pos), video_timecode(dur))
     }
 }
 
@@ -220,7 +234,9 @@ fn start(app: &mut LightcraftApp, ctx: &egui::Context, p: &Photo) -> Result<(), 
         app.video.pos = a;
     }
     let develop = video::has_edits(&p.develop).then(|| p.develop.clone());
-    let player = Player::start(&path, &info, app.video.pos, end, frame_size(p, PLAY_EDGE), develop, !app.video.muted)?;
+    // View Options ▸ Play HD video at draft quality (off: frames up to 4K)
+    let edge = if app.ui.settings.develop_view.video_draft { PLAY_EDGE } else { FULL_PLAY_EDGE };
+    let player = Player::start(&path, &info, app.video.pos, end, frame_size(p, edge), develop, !app.video.muted)?;
     app.video.player = Some(player);
     app.video.playing = true;
     app.video.moved = true;
@@ -333,7 +349,7 @@ pub fn loupe(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, img: Rect
     if bar_button(&mut child, "videoPlay", play_label, app.video.playing).clicked() {
         clicked = Some("video.playPause");
     }
-    let time = format!("{} / {}", lightcraft_engine::cmd::video_timecode(app.video.pos), lightcraft_engine::cmd::video_timecode(dur));
+    let time = time_label(app, app.video.pos, dur);
     child.label(egui::RichText::new(time).font(t.font(11.5)).color(t.text_label).monospace());
     // the right-hand buttons are laid out first (right to left) so the scrubber takes what's left
     let rest = child.available_rect_before_wrap();

@@ -19,11 +19,15 @@
 #include "dng_exceptions.h"
 #include "dng_host.h"
 #include "dng_hue_sat_map.h"
+#include "dng_date_time.h"
 #include "dng_image.h"
+#include "dng_image_writer.h"
 #include "dng_info.h"
 #include "dng_memory.h"
+#include "dng_memory_stream.h"
 #include "dng_negative.h"
 #include "dng_pixel_buffer.h"
+#include "dng_preview.h"
 #include "dng_reference.h"
 #include "dng_render.h"
 #include "dng_spline.h"
@@ -463,6 +467,117 @@ int lc_render_dng(const uint8_t *dng, size_t dng_len, const uint8_t *dcp, size_t
         *w = iw;
         *h = ih;
         *out = o;
+        return LC_OK;
+    });
+}
+
+// An 8-bit RGB image from interleaved caller pixels (w*h*3).
+static dng_image *rgb8_image(dng_host &host, const uint8_t *rgb, uint32_t w, uint32_t h) {
+    AutoPtr<dng_image> img(host.Make_dng_image(dng_rect(h, w), 3, ttByte));
+    dng_pixel_buffer buffer(dng_rect(h, w), 0, 3, ttByte, pcInterleaved, nullptr);
+    AutoPtr<dng_memory_block> block(host.Allocate(buffer.fRowStep * h));
+    buffer.fData = block->Buffer();
+    for (uint32 y = 0; y < h; y++) {
+        memcpy(buffer.DirtyPixel_uint8(y, 0, 0), rgb + (size_t)y * w * 3, (size_t)w * 3);
+    }
+    img->Put(buffer);
+    return img.Release();
+}
+
+// One preview of the list: uncompressed (the IFD0 thumbnail) or JPEG.
+static void add_preview(dng_host &host, dng_preview_list &list, AutoPtr<dng_image> &image, bool jpeg, int32 quality) {
+    AutoPtr<dng_preview> preview(jpeg ? (dng_preview *)new dng_jpeg_preview : (dng_preview *)new dng_image_preview);
+    preview->fInfo.fApplicationName.Set("LightCraft");
+    preview->fInfo.fApplicationVersion.Set("1");
+    preview->fInfo.fSettingsName.Set("Default");
+    preview->fInfo.fColorSpace = previewColorSpace_sRGB;
+    dng_date_time_info now;
+    CurrentDateTimeAndZone(now);
+    preview->fInfo.fDateTime = now.Encode_ISO_8601();
+    if (jpeg) {
+        dng_jpeg_preview *jp = dynamic_cast<dng_jpeg_preview *>(preview.Get());
+        if (!jp) ThrowProgramError("jpeg preview");
+        dng_image_writer writer;
+        writer.EncodeJPEGPreview(host, *image, *jp, quality);
+    } else {
+        dng_image_preview *ip = dynamic_cast<dng_image_preview *>(preview.Get());
+        if (!ip) ThrowProgramError("image preview");
+        ip->SetImage(host, image);
+    }
+    list.Append(preview);
+}
+
+// An SDK render of the negative (its defaults), 8-bit sRGB, at most `size` px on the long edge.
+static dng_image *sdk_render8(dng_host &host, dng_negative &negative, uint32_t size) {
+    dng_render render(host, negative);
+    render.SetFinalSpace(negative.IsMonochrome() ? dng_space_GrayGamma22::Get() : dng_space_sRGB::Get());
+    render.SetFinalPixelType(ttByte);
+    render.SetMaximumSize(size);
+    return render.Render();
+}
+
+int lc_dng_finish(const uint8_t *dng, size_t dng_len, const uint8_t *thumb, uint32_t tw, uint32_t th, const uint8_t *prev, uint32_t pw,
+                  uint32_t ph, uint32_t sdk_preview, int mode, uint32_t lossy_size, uint8_t **out, size_t *out_len) {
+    const bool lossy = mode == 1, uncompressed = mode == 2;
+    if (!dng || !out || !out_len || dng_len < 16 || dng_len > 0x7fffffff) return LC_ERR_BAD_ARG;
+    const uint32_t kMaxSide = 65000;
+    if ((thumb && (tw == 0 || th == 0 || tw > kMaxSide || th > kMaxSide)) || (prev && (pw == 0 || ph == 0 || pw > kMaxSide || ph > kMaxSide)))
+        return LC_ERR_BAD_ARG;
+    *out = nullptr;
+    *out_len = 0;
+    return guarded([&] {
+        dng_stream stream(dng, (uint32)dng_len);
+        dng_host host;
+        host.SetSaveDNGVersion(lossy ? dngVersion_1_4_0_0 : dngVersion_SaveDefault);
+        host.SetSaveLinearDNG(false);
+        host.SetKeepOriginalFile(false);
+        AutoPtr<dng_negative> negative;
+        {
+            dng_info info;
+            info.Parse(host, stream);
+            info.PostParse(host);
+            if (!info.IsValidDNG()) return LC_ERR_PARSE;
+            negative.Reset(host.Make_dng_negative());
+            negative->Parse(host, stream, info);
+            negative->PostParse(host, stream, info);
+            negative->ReadStage1Image(host, stream, info);
+        }
+        negative->SynchronizeMetadata();
+        if (negative->Stage1Image()) negative->BuildStage2Image(host);
+        if (negative->Stage2Image()) negative->BuildStage3Image(host);
+        if (!negative->Stage3Image()) return LC_ERR_SDK;
+        if (lossy) {
+            // Lightroom's "Use Lossy Compression": the demosaiced image, 8-bit with a
+            // linearization table, in lossy JPEG tiles (the SDK's proxy DNG; DNG 1.4 = no JPEG XL)
+            dng_image_writer writer;
+            negative->ConvertToProxy(host, writer, lossy_size, 0);
+        }
+        dng_preview_list previews;
+        {
+            AutoPtr<dng_image> t(thumb ? rgb8_image(host, thumb, tw, th) : sdk_render8(host, *negative, 256));
+            if (!t.Get()) return LC_ERR_SDK;
+            // a lossy file keeps its thumbnail small too (JPEG), as dng_validate does
+            add_preview(host, previews, t, lossy, 8);
+        }
+        if (prev || sdk_preview) {
+            AutoPtr<dng_image> p(prev ? rgb8_image(host, prev, pw, ph) : sdk_render8(host, *negative, sdk_preview));
+            if (!p.Get()) return LC_ERR_SDK;
+            add_preview(host, previews, p, true, 8);
+        }
+        dng_memory_stream mem(host.Allocator());
+        {
+            dng_image_writer writer;
+            writer.WriteDNG(host, mem, *negative.Get(), &previews, lossy ? dngVersion_1_4_0_0 : dngVersion_SaveDefault, uncompressed);
+        }
+        mem.Flush();
+        uint64 len = mem.Length();
+        if (len == 0 || len > 0xffffffffull) return LC_ERR_SDK;
+        uint8_t *buf = (uint8_t *)malloc((size_t)len);
+        if (!buf) return LC_ERR_SDK;
+        mem.SetReadPosition(0);
+        mem.Get(buf, (uint32)len);
+        *out = buf;
+        *out_len = (size_t)len;
         return LC_OK;
     });
 }

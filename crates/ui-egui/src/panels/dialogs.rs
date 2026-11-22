@@ -1075,6 +1075,24 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if opts.format == F::Dng {
                         use lightcraft_engine::export::DngCompression as Z;
                         choices(ui, "Compression", "exportDngCompression", &[(Z::Lossless, "Lossless"), (Z::Deflate, "ZIP"), (Z::Uncompressed, "None")], &mut opts.dng_compression);
+                        // LR-EXP-DNGOPT: Lightroom's JPEG Preview and Use Lossy Compression
+                        use lightcraft_engine::export::DngPreview as P;
+                        choices(ui, "JPEG preview", "exportDngPreview", &[(P::None, "none."), (P::Medium, "med."), (P::Full, "full.")], &mut opts.dng_preview);
+                        field(ui, "", |ui| {
+                            let r = ui.checkbox(&mut opts.dng_lossy, crate::i18n::tr("Use lossy compression"));
+                            crate::widgets::register(ui.ctx(), "check:exportDngLossy", r.rect);
+                        });
+                        if (opts.dng_preview != P::None || opts.dng_lossy) && !lightcraft_engine::dng_sdk_available() {
+                            ui.label(
+                                egui::RichText::new(crate::i18n::tr("The preview and lossy DNG need Adobe's DNG SDK, which this build doesn't have: written without."))
+                                    .color(Tokens::get(ui.ctx()).text_dim),
+                            );
+                        } else if opts.dng_preview != P::None && opts.dng_compression == Z::Deflate && !opts.dng_lossy {
+                            ui.label(
+                                egui::RichText::new(crate::i18n::tr("With a JPEG preview the raw data is stored as lossless JPEG (the DNG SDK has no ZIP for it)."))
+                                    .color(Tokens::get(ui.ctx()).text_dim),
+                            );
+                        }
                     }
                     let naming_id = egui::Id::new("export-naming");
                     let tags_open = field(ui, "File name", |ui| {

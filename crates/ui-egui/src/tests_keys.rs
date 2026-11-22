@@ -41,6 +41,48 @@ fn scratch(name: &str) -> std::path::PathBuf {
     d
 }
 
+/// KEY-HIDEPINS, KEY-HISTOGRAM, KEY-PICK, KEY-PHOTOSPANEL: H hides the mask pins while masking
+/// (Remove elsewhere), ⌘0 shows / hides the histogram, and the `desktop` profile picks with Z and
+/// toggles the photos panel with P, as Lightroom desktop does.
+#[test]
+fn lightroom_desktop_keys() {
+    let mut h = demo();
+    exec(&mut h, "view.detail", json!({}));
+    h.step();
+    let hist = h.app.ui.histogram;
+    key(&mut h, "0", json!({"cmd": true}));
+    assert_eq!(h.app.ui.histogram, !hist, "⌘0 = histogram");
+    // H while masking: pins; outside it: the Remove tool
+    exec(&mut h, "panel.masking", json!({}));
+    h.step();
+    assert_eq!(h.app.ui.right, RightPanel::Masking);
+    assert!(h.app.ui.mask_pins);
+    key(&mut h, "h", json!({}));
+    assert!(!h.app.ui.mask_pins, "H hides the pins");
+    assert_eq!(h.app.ui.right, RightPanel::Masking, "and stays in Masking");
+    key(&mut h, "h", json!({}));
+    assert!(h.app.ui.mask_pins);
+    exec(&mut h, "panel.edit", json!({}));
+    h.step();
+    key(&mut h, "h", json!({}));
+    assert_eq!(h.app.ui.right, RightPanel::Remove, "H = Remove outside Masking");
+    // the desktop profile: Z picks, P shows / hides the photos (left) panel
+    exec(&mut h, "keys.set", json!({"profile": "desktop"}));
+    let id = h.app.session.active().expect("active photo");
+    exec(&mut h, "photo.flag", json!({"flag": "none"}));
+    key(&mut h, "z", json!({}));
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().flag, lightcraft_engine::catalog::Flag::Pick, "Z = pick");
+    let left = h.app.ui.left_panel;
+    key(&mut h, "p", json!({}));
+    assert_eq!(h.app.ui.left_panel, !left, "P = photos panel");
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().flag, lightcraft_engine::catalog::Flag::Pick, "P didn't flag");
+    // the built-ins keep P = pick
+    exec(&mut h, "keys.set", json!({"profile": "lightroom"}));
+    exec(&mut h, "photo.flag", json!({"flag": "none"}));
+    key(&mut h, "p", json!({}));
+    assert_eq!(h.app.session.catalog.photo(id).unwrap().flag, lightcraft_engine::catalog::Flag::Pick);
+}
+
 #[test]
 fn classic_keys_do_the_classic_thing() {
     let mut h = demo();

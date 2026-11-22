@@ -42,7 +42,7 @@ mod preset_files;
 pub mod previews;
 mod publish;
 mod video;
-pub use video::{seconds as video_seconds, timecode as video_timecode};
+pub use video::{frame_timecode as video_frame_timecode, seconds as video_seconds, timecode as video_timecode};
 mod query;
 pub mod recheck;
 pub mod shoot;

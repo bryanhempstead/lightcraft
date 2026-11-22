@@ -960,6 +960,8 @@ impl LightcraftApp {
         // (module picker) and the filmstrip span the window; the side panels run between them; the
         // toolbar sits under the photo, between the side panels.
         self.ui.sync_module();
+        // LRC-MAP-FILTER: the location filter bar is the Map module's (the filmstrip there)
+        self.session.location_filter_on = self.ui.view == state::ViewMode::Map;
         if self.ui.top_panel {
             panels::topbar::show(self, ui);
         }

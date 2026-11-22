@@ -208,6 +208,21 @@ mod ffi {
         ) -> i32;
         pub fn lc_free(ptr: *mut std::ffi::c_void);
         pub fn lc_validate_dng(dng: *const u8, dng_len: usize, result: *mut i32) -> i32;
+        pub fn lc_dng_finish(
+            dng: *const u8,
+            dng_len: usize,
+            thumb: *const u8,
+            tw: u32,
+            th: u32,
+            prev: *const u8,
+            pw: u32,
+            ph: u32,
+            sdk_preview: u32,
+            mode: i32,
+            lossy_size: u32,
+            out: *mut *mut u8,
+            out_len: *mut usize,
+        ) -> i32;
     }
 }
 
@@ -703,6 +718,78 @@ pub fn render_dng(dng: &[u8], dcp: Option<&[u8]>, max_size: u32, prophoto: bool)
     #[cfg(not(lc_dng_sdk))]
     {
         let _ = (dng, dcp, max_size, prophoto);
+        Err(Error::Unavailable)
+    }
+}
+
+/// An 8-bit sRGB image for [`finish_dng`]: `rgb` holds `width × height × 3` interleaved samples.
+#[derive(Clone, Copy, Debug)]
+pub struct Rgb8<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub rgb: &'a [u8],
+}
+
+impl Rgb8<'_> {
+    fn valid(&self) -> bool {
+        self.width > 0 && self.height > 0 && (self.width as usize).saturating_mul(self.height as usize).saturating_mul(3) == self.rgb.len()
+    }
+}
+
+/// What [`finish_dng`] does to a DNG.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DngFinish<'a> {
+    /// The IFD0 thumbnail (≤ 256 px); `None`: the SDK renders one with its defaults.
+    pub thumbnail: Option<Rgb8<'a>>,
+    /// The JPEG preview; `None` with `sdk_preview` > 0: the SDK renders one that size.
+    pub preview: Option<Rgb8<'a>>,
+    pub sdk_preview: u32,
+    /// Lossy DNG (Lightroom's "Use Lossy Compression"): demosaiced, 8-bit lossy JPEG tiles.
+    pub lossy: bool,
+    /// Long edge of the lossy image (0 = full size).
+    pub lossy_size: u32,
+    /// Raw data uncompressed (otherwise lossless JPEG); ignored with `lossy`.
+    pub uncompressed: bool,
+}
+
+/// LR-EXP-DNGOPT: re-save a DNG through the SDK with embedded previews and optionally as a
+/// lossy DNG. The SDK here is built without XMP, so the result carries no XMP packet: put it back
+/// (e.g. `lightcraft_tiff::set_ifd0_tag`).
+#[allow(unsafe_code)]
+pub fn finish_dng(dng: &[u8], o: &DngFinish) -> Result<Vec<u8>> {
+    if o.thumbnail.is_some_and(|t| !t.valid()) || o.preview.is_some_and(|p| !p.valid()) || dng.len() < 16 || dng.len() > 0x7fff_ffff {
+        return Err(Error::BadArgument);
+    }
+    #[cfg(lc_dng_sdk)]
+    {
+        let img = |i: Option<Rgb8>| i.map_or((std::ptr::null(), 0, 0), |i| (i.rgb.as_ptr(), i.width, i.height));
+        let (tp, tw, th) = img(o.thumbnail);
+        let (pp, pw, ph) = img(o.preview);
+        let (mut out, mut len) = (std::ptr::null_mut::<u8>(), 0usize);
+        let mode = if o.lossy {
+            1
+        } else if o.uncompressed {
+            2
+        } else {
+            0
+        };
+        // SAFETY: `dng` and the images are live slices; each image's buffer holds exactly
+        // width × height × 3 bytes (checked by `valid` above) or is null with 0 × 0; on success
+        // the shim mallocs `len` bytes at `out`, copied here and then freed once with `lc_free`.
+        status(unsafe {
+            ffi::lc_dng_finish(dng.as_ptr(), dng.len(), tp, tw, th, pp, pw, ph, o.sdk_preview, mode, o.lossy_size, &mut out, &mut len)
+        })?;
+        if out.is_null() || len == 0 {
+            return Err(Error::Sdk);
+        }
+        // SAFETY: the shim allocated and filled exactly `len` bytes at `out`.
+        let v = unsafe { std::slice::from_raw_parts(out, len) }.to_vec();
+        // SAFETY: `out` came from the shim's malloc and is freed once.
+        unsafe { ffi::lc_free(out.cast()) };
+        Ok(v)
+    }
+    #[cfg(not(lc_dng_sdk))]
+    {
         Err(Error::Unavailable)
     }
 }
