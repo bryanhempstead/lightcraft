@@ -711,6 +711,12 @@ texture 1.00–1.05 vs 1.10–1.13 (was 1.17–1.31). Left: Masking 100 keeps mo
 (0.6 EV edge 0.22 vs 0.09), Radius 3 kernels are truncated at 4 taps, and strong unmasked amounts
 stay ~20 % under. No Alt-drag mask / detail preview yet.
 
+At preview size the two rows barely move the ratios to Lightroom's previews (`lr_compare.py
+detail`, 28 photos ≥ 1,800 px, 1 = Lightroom; before → after R06 + R07): fine texture 0.29 →
+0.36, edge sharpness 0.31 → 0.33, halos 0.66 → 0.66, chroma noise 0.54 → 0.55, mid-scale mottle
+1.21 → 1.31 (grain on the M262 files: Lightroom's previews are its 1:1 render scaled down, ours
+renders at preview size).
+
 ### ProRAW: the photo's profile picks the source (round 7 follow-up)
 
 Round 7 left the choice per photo open: a source is decoded once per file, so in Bryan's library
@@ -732,3 +738,25 @@ Bryan's setup (mean ΔE2000 / p95):
 (The Adobe Standard photos decode exactly as before; their +0.2, on the Summer Fields photos
 only, comes from other render changes since round 7, not isolated here.) Left: those 15 still need
 Lightroom's per-lens `Apple iPhone14,2 back camera` Adobe Standard DCP (not matched by Exif model).
+
+### Lens-profile chromatic aberration and Remove CA (R13): measured, nothing to change
+
+`oracle/make_ca.py` + `ca_ana.py`: two of Bryan's R6 photos whose Lightroom lens profile carries
+`ChromaticRedGreenModel` / `ChromaticBlueGreenModel` (Canon EF 24 mm f/1.4L II, EF 50 mm f/1.2L;
+the 5D Mark II profiles Lightroom picks for them), rendered by Camera Raw at full size with profile
+corrections off / on × Remove Chromatic Aberration off / on; red and blue registration against
+green measured per 96 px tile and fitted radially (the measurement finds a synthetic 0.05 %
+magnification, 1.48 px at r = 0.9, as 1.32 px).
+
+- Uncorrected, both photos are already registered (|shift| ≤ 0.02 px at r = 0.9), although the
+  EF 24 mm profile's model predicts +0.45 px red and +1.24 px blue there.
+- **Enable Profile Corrections leaves the colour planes alone** (identical to profile off, both
+  photos): Camera Raw does not apply the profile's chromatic model on its own.
+- Remove CA is image-based with or without the profile: it moves red by −0.10 to −0.32 px and
+  blue by ≤ 0.3 px; LightCraft's estimator (`optics::estimate_lateral_ca`) moves them by
+  ≤ 0.06 px on the same files.
+
+So applying the profile's model would have added the 1.2 px the model predicts; LightCraft keeps
+ignoring it, and "Remove CA" stays its own estimator (both within 0.3 px of Camera Raw here).
+Not settled: lenses with real lateral CA (none of Bryan's profiled lenses showed any).
+
