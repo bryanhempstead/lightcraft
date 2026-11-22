@@ -579,6 +579,13 @@ pub struct UiState {
     pub slideshow: Option<(f64, f64, bool)>,
     /// Info overlay on the loupe.
     pub info_overlay: InfoOverlay,
+    /// The Metadata panel's view (L20): `default`, `all`, `exif`, `iptc`, `location`,
+    /// `largeCaption`, `minimal`, `quickDescribe`, `custom` (see `panels::right::METADATA_VIEWS`).
+    #[serde(default)]
+    pub metadata_view: String,
+    /// The groups the `custom` view shows (Customize…).
+    #[serde(default)]
+    pub metadata_custom: Vec<String>,
     /// Show Briefly When Photo Changes: when the loupe changed photo (not saved).
     #[serde(skip)]
     pub brief_info: BriefInfo,
@@ -905,6 +912,8 @@ impl Default for UiState {
             painter: None,
             info_overlay: InfoOverlay::Off,
             brief_info: BriefInfo::default(),
+            metadata_view: String::new(),
+            metadata_custom: Vec::new(),
             navigator: true,
             settings: AppSettings::default(),
             window_fullscreen: None,

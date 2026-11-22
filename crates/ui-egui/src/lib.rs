@@ -57,6 +57,8 @@ mod tests_loupe_info;
 #[cfg(test)]
 mod tests_masking;
 #[cfg(test)]
+mod tests_metadata_views;
+#[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
 mod tests_panels;
