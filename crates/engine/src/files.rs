@@ -215,13 +215,38 @@ pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usi
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge))
+    let own = own_profile();
+    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, own))
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
 pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge))
+    let own = own_profile();
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, own))
+}
+
+thread_local! {
+    static OWN_PROFILE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` (a [`crate::media::FileLoader`] call on this thread) decoding raws that carry a
+/// `ProfileGainTableMap` on their own profile, not a Lightroom-matched one
+/// ([`crate::media::own_profile_source`]).
+pub fn with_own_profile<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    let before = OWN_PROFILE.with(|c| c.replace(on));
+    let r = f();
+    OWN_PROFILE.with(|c| c.set(before));
+    r
+}
+
+fn own_profile() -> bool {
+    OWN_PROFILE.with(|c| c.get())
+}
+
+#[cfg(test)]
+pub(crate) fn own_profile_for_tests() -> bool {
+    own_profile()
 }
 
 /// A synthetic target "photographed" by a raw file's camera ([`chart_source`], `camera_match`):
@@ -263,12 +288,12 @@ pub fn chart_source(bytes: &[u8], chart: &ChartShot) -> Result<(Rgb32f, SourceIn
     if lightcraft_raw::probe(bytes).is_none() {
         return Err("not a raw file".into());
     }
-    load_raw(std::borrow::Cow::Borrowed(bytes), usize::MAX, Some(chart))
+    load_raw(std::borrow::Cow::Borrowed(bytes), usize::MAX, Some(chart), false)
 }
 
-fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
+fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize, own: bool) -> Result<(Rgb32f, SourceInfo), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
-        return load_raw(bytes, max_edge, None).map(|(img, info, _)| (img, info));
+        return load_raw(bytes, max_edge, None, own).map(|(img, info, _)| (img, info));
     }
     load_rendered(bytes, max_edge)
 }
@@ -277,6 +302,7 @@ fn load_raw(
     bytes: std::borrow::Cow<'_, [u8]>,
     max_edge: usize,
     chart: Option<&ChartShot>,
+    own: bool,
 ) -> Result<(Rgb32f, SourceInfo, lightcraft_color::Xy), String> {
     {
         let mut raw = match lightcraft_raw::decode(&bytes).map_err(|e| preview_reason(&bytes, e)) {
@@ -300,11 +326,16 @@ fn load_raw(
         }
         let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
         let t = lightcraft_raw::color::camera_transform(&raw, xy);
+        // a photo on the file's own profile whose profile carries a gain table map (iPhone
+        // ProRAW): that profile and its map, as Lightroom renders "Embedded" (measured:
+        // docs/lr-match.md → Round 8); a Lightroom-matched or Adobe profile would replace both
+        let own = own && chart.is_none() && raw.color.profile.gain_table_map.is_some();
         // Bryan's fork: the camera's Adobe Standard profile, through Adobe's DNG SDK
         let adobe = raw
             .metadata
             .model
             .as_deref()
+            .filter(|_| !own)
             .and_then(|m| crate::adobe::standard_for(raw.metadata.make.as_deref(), m))
             .and_then(|cam| crate::adobe::decode_color(&cam, &raw).map(|c| (cam, c)));
         if let Some((cam, color)) = adobe {
@@ -321,7 +352,7 @@ fn load_raw(
             };
             return load_adobe(raw, lens, max_edge, &cam, color, chart.map(|c| (c, lit))).map(|(img, info)| (img, info, xy));
         }
-        let lightroom = crate::camera_preview::lightroom_look(&raw, &t);
+        let lightroom = if own { None } else { crate::camera_preview::lightroom_look(&raw, &t) };
         let from_lightroom = lightroom.is_some();
         let camera_look = lightroom.or_else(|| crate::camera_preview::fit_preview(&raw, &bytes, &t));
         drop(bytes);

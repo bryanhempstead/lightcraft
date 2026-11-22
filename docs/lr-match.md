@@ -710,3 +710,25 @@ when Masking > 0.
 texture 1.00–1.05 vs 1.10–1.13 (was 1.17–1.31). Left: Masking 100 keeps more than Camera Raw
 (0.6 EV edge 0.22 vs 0.09), Radius 3 kernels are truncated at 4 taps, and strong unmasked amounts
 stay ~20 % under. No Alt-drag mask / detail preview yet.
+
+### ProRAW: the photo's profile picks the source (round 7 follow-up)
+
+Round 7 left the choice per photo open: a source is decoded once per file, so in Bryan's library
+the Lightroom-matched `iPhone 13 Pro` camera profile (transferred from the Leica) rendered every
+ProRAW and the file's own `ProfileGainTableMap` never applied. Lightroom renders a ProRAW on
+"Embedded" / "Apple ProRAW" with the file's profile and its map, and on Adobe Standard without
+them (round 7's measurements). Now the photo's profile decides how its source is decoded: a DNG
+developed with `lc.color` (what those profiles migrate to) loads with the file's own colour model
+and map (`media::own_profile_source` → `SourceRef::File { own_profile }` → `files::load_raw`;
+only files that carry a map are affected), every other profile keeps the matched one; a cached
+source decoded the other way is not reused. On the 23 ProRAW photos with Lightroom renders,
+Bryan's setup (mean ΔE2000 / p95):
+
+| | embedded (8) | Adobe Standard (15) | all (23) |
+|---|---|---|---|
+| before (matched profile for all) | 9.87 / 17.1 | 6.43 / 17.4 | 7.63 / 17.3 |
+| **now** | **3.00 / 6.5** | 6.64 / 17.8 | **5.37 / 13.8** |
+
+(The Adobe Standard photos decode exactly as before; their +0.2, on the Summer Fields photos
+only, comes from other render changes since round 7, not isolated here.) Left: those 15 still need
+Lightroom's per-lens `Apple iPhone14,2 back camera` Adobe Standard DCP (not matched by Exif model).
