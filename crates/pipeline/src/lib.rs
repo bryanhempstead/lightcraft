@@ -41,6 +41,7 @@ pub mod parametric_adobe;
 pub mod profiles;
 pub mod redeye;
 pub mod spots;
+pub mod texture_cr;
 pub mod tone;
 pub mod tone_adobe;
 pub mod transform;
@@ -255,6 +256,9 @@ pub(crate) struct Prepared {
     pub tone_stats: Option<tone::lr::ToneStats>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
+    /// Camera Raw's Texture detail ([`texture_cr`]): each channel's log2 change per unit of
+    /// strength.
+    pub texture_detail: Option<Arc<Rgb32f>>,
     pub dark: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
@@ -529,7 +533,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if p.key == lin_key => p,
         _ => local::Planes { key: lin_key, ..Default::default() },
     };
-    let prep = local::prepare(lin.clone(), s, frame, px_per_long, req.quality, &mut planes);
+    let prep = local::prepare(lin.clone(), s, frame, px_per_long, info.native_long, req.quality, &mut planes);
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });
@@ -596,6 +600,12 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
     let mut b = DevelopSettings { crop: s.crop, orientation: s.orientation, ..DevelopSettings::default() };
     b.wb = lightcraft_develop::WhiteBalance { mode: lightcraft_develop::WbMode::AsShot, ..b.wb };
     b
+}
+
+/// Settings the GPU kernel doesn't render yet (Bryan's fork, round 10: Camera Raw's measured
+/// Texture): such renders take the CPU pipeline.
+pub fn cpu_only(s: &DevelopSettings) -> bool {
+    local::texture_level(s, 1.0, 1.0).is_some()
 }
 
 pub(crate) fn is_bw(s: &DevelopSettings) -> bool {

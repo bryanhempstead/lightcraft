@@ -838,7 +838,17 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
             }
             let tx = tex + l_tex;
-            if tx != 0.0
+            // Camera Raw's Texture (`texture_cr`): each channel's pyramid detail, scaled
+            let tex_gain = match &p.texture_detail {
+                Some(d) if tx != 0.0 => {
+                    let k = crate::texture_cr::strength(tx);
+                    let dd = d.data[i];
+                    Some([(k * dd[0]).exp2(), (k * dd[1]).exp2(), (k * dd[2]).exp2()])
+                }
+                _ => None,
+            };
+            if tex_gain.is_none()
+                && tx != 0.0
                 && let Some(b) = &p.texture_blur
             {
                 let det = l_pre - b.data[i];
@@ -863,6 +873,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             if delta != 0.0 {
                 let g = delta.exp2();
                 c = c.map(|v| v * g);
+            }
+            if let Some(g) = tex_gain {
+                c = [c[0] * g[0], c[1] * g[1], c[2] * g[2]];
             }
 
             let tone_in = c;

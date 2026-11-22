@@ -260,6 +260,8 @@ pub(crate) struct Planes {
     pub base: Option<(u32, Arc<Plane>)>,
     pub clarity: Option<(u32, Arc<Plane>)>,
     pub texture: Option<(u32, Arc<Plane>)>,
+    /// Camera Raw's Texture detail ([`crate::texture_cr::detail`]), tagged with its pyramid level.
+    pub texture_detail: Option<(u32, Arc<Rgb32f>)>,
     /// Dark channel and its airlight.
     pub dark: Option<(u32, Arc<Plane>, f32)>,
     /// Blurred chromaticity (local Moiré / Noise).
@@ -317,9 +319,10 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
         if q == Quality::Draft { sigma.min(24.0) } else { sigma }
     });
     let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity)).then(|| (0.012 * ppl).max(1.0));
-    // local Noise and Defringe read the fine detail band too
-    let texture = (s.effects.texture != 0.0 || local_any(|a| a.texture) || local_any(|a| a.noise) || s.masks.iter().any(|m| m.adjust.defringe > 0.0))
-        .then(|| (0.0018 * ppl).max(0.6));
+    // local Noise and Defringe read the fine detail band (and Texture, unless Camera Raw's
+    // measured operator renders it: `texture_cr`)
+    let texture_old = !crate::texture_cr::MEASURED && (s.effects.texture != 0.0 || local_any(|a| a.texture));
+    let texture = (texture_old || local_any(|a| a.noise) || s.masks.iter().any(|m| m.adjust.defringe > 0.0)).then(|| (0.0018 * ppl).max(0.6));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
     let chroma = (local_any(|a| a.moire) || s.masks.iter().any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
     PlaneSigmas { base, clarity, texture, dark, chroma }
@@ -328,8 +331,32 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
 /// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
 /// reusing whatever `planes` already holds for it. Missing planes are computed side by side (each
 /// one alone scales poorly: the guided filters work on small subsampled grids).
-pub(crate) fn prepare(img: Arc<Rgb32f>, s: &DevelopSettings, frame: &Frame, px_per_long: f64, q: Quality, planes: &mut Planes) -> Prepared {
+/// The pyramid level Camera Raw's Texture detail starts at for this render (`None`: not
+/// needed, or Texture renders with the older band).
+pub fn texture_level(s: &DevelopSettings, px_per_long: f64, native_long: f32) -> Option<usize> {
+    let used = s.effects.texture != 0.0 || s.masks.iter().any(|m| m.adjust.texture != 0.0);
+    (crate::texture_cr::MEASURED && used).then(|| crate::texture_cr::level_offset(px_per_long, native_long))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare(
+    img: Arc<Rgb32f>,
+    s: &DevelopSettings,
+    frame: &Frame,
+    px_per_long: f64,
+    native_long: f32,
+    q: Quality,
+    planes: &mut Planes,
+) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
+    let texture_detail = texture_level(s, px_per_long, native_long).map(|lv| match &planes.texture_detail {
+        Some((k, p)) if *k == lv as u32 => p.clone(),
+        _ => {
+            let p = Arc::new(timed("texture detail", || crate::texture_cr::detail_rgb(&img, lv)));
+            planes.texture_detail = Some((lv as u32, p.clone()));
+            p
+        }
+    });
     let PlaneSigmas { base: base_sigma, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma } =
         plane_sigmas(s, px_per_long, q);
 
@@ -382,7 +409,7 @@ pub(crate) fn prepare(img: Arc<Rgb32f>, s: &DevelopSettings, frame: &Frame, px_p
     };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev));
-    Prepared { img, log_l, base, tone_stats, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
+    Prepared { img, log_l, base, tone_stats, clarity_blur, texture_blur, texture_detail, dark, chroma_blur, air, masks, px_per_long }
 }
 
 /// The airlight is estimated from every `AIRLIGHT_STEP`-th value of the dark channel.

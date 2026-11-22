@@ -11,7 +11,7 @@ meta = json.load(open(f"{S}/meta.json"))
 R = meta.get("rects"); valid = np.array(meta.get("valid", []))
 tot = {}
 for n in sorted(meta["items"]):
-    if f not in n or not os.path.exists(f"{S}/{L}/{n}.f32"):
+    if f not in n or not os.path.exists(f"{S}/{L}/{n}.f32") or not os.path.exists(f"{S}/acr/{n}.tif"):
         continue
     a = acr(S, n)
     b = np.fromfile(f"{S}/{L}/{n}.f32", "<f4"); w, h = b[:2].view("<u4"); b = b[2:].reshape(h, w, 3).astype(np.float64)

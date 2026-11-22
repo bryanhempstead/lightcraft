@@ -298,7 +298,8 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
         // the kernel writes 8-bit output: high-bit-depth exports (and soft proofs) render on the CPU
-        if !enabled() || req.depth != lightcraft_pipeline::OutputDepth::U8 || req.proof.is_some() {
+        // (and operators the kernel doesn't have yet: `lightcraft_pipeline::cpu_only`)
+        if !enabled() || req.depth != lightcraft_pipeline::OutputDepth::U8 || req.proof.is_some() || lightcraft_pipeline::cpu_only(s) {
             return None;
         }
         let gpu = device()?;
