@@ -189,7 +189,11 @@ Dehaze, the Highlights / Shadows rule) is measured on the CPU from the GPU's rea
 512 px map, once per image) and read by the kernel from the aux table; `crates/gpu/tests/scene_cr.rs`
 checks it with the same bounds, except that positive Dehaze may differ by 5 LSB where it takes a
 channel to almost 0 (the subtraction of the airlight keeps the last bits of the GPU's own image;
-mean < 0.15 LSB).
+mean < 0.15 LSB). Round 12: every render on an Adobe base reads that map too, for Camera Raw's
+default black at the photo's dark key (`lightcraft_pipeline::black_cr`, moved by Shadows); it is
+folded into the tone LUT on the CPU, so the kernel is unchanged (one read-back per image and
+geometry, cached with the other planes). Texture's colour detail (`texture_cr::CHROMA_GAIN`) is
+made on the CPU as before.
 
 ## Measurements
 `render_bench` on `corpus/raw/arw-sony-a7m3-compressed.arw` (24 MP; loupe = 2560 px preview →
