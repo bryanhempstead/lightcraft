@@ -825,6 +825,11 @@ pub struct UiState {
     /// Folders rows opened or closed by hand (folder key → open); the rest keep their default
     /// (a disk open, a folder closed).
     pub folders_open: std::collections::BTreeMap<String, bool>,
+    /// shoots. and Collections rows whose folders / cameras are listed under them (`album:<id>`,
+    /// `shoot:<folder key>`); the rest are closed.
+    pub parts_open: std::collections::BTreeSet<String>,
+    /// The rows under a collection are its cameras (`cam.`), not its folders (`fldr.`).
+    pub collection_parts_by_camera: bool,
     /// Local sidebar locations hidden with “Remove from Local” (folders on disk are untouched).
     pub hidden_locations: Vec<String>,
     /// Copies opened in an external editor this session (reloaded when the window is focused
@@ -1366,6 +1371,8 @@ impl Default for UiState {
             search_ai: false,
             collapsed_sidebar: Vec::new(),
             folders_open: Default::default(),
+            parts_open: Default::default(),
+            collection_parts_by_camera: false,
             hidden_locations: Vec::new(),
             dragging_control: None,
             alt_down: false,

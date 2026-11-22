@@ -877,6 +877,16 @@ pub fn start_paths_then(app: &mut LightcraftApp, paths: Vec<String>, then: Optio
     Ok(json!({"importing": total}))
 }
 
+/// [`start_paths`] into collection `album`: the photos join it as they arrive (a collection's
+/// folders not in the library, `add.` under its row).
+pub fn start_paths_into(app: &mut LightcraftApp, paths: Vec<String>, album: u64) -> Result<Value, String> {
+    let r = start_paths_then(app, paths, None)?;
+    if let Some(t) = app.import.as_mut() {
+        t.params["album"] = json!(album);
+    }
+    Ok(r)
+}
+
 /// Advance the import in progress (called every frame): start its worker, then add the batches it
 /// has readied to the catalog.
 pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {

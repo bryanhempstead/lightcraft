@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adobe;
+pub mod album_parts;
 pub mod apple_photos;
 pub mod availability;
 pub mod backup;
@@ -211,6 +212,10 @@ pub struct Session {
     /// show, whatever Show Photos in Subfolders says (`None`: the setting). Shoots set it: a shoot
     /// is everything in its folder, a container's loose photos only its own.
     pub library_folder_subfolders: Option<bool>,
+    /// A collection narrowed to some of its folders or cameras (the rows under its Collections
+    /// row; `library.source {kind: album, folders | cameras}`): applies only while that collection
+    /// is the source.
+    pub album_part: Option<album_parts::AlbumPart>,
     /// Library ▸ Shoots: pinned and removed shoots, names of their own, the sort (prefs.json).
     pub shoot_prefs: cmd::shoots::ShootPrefs,
     /// Catalog backup settings (prefs.json; see [`backup`]).
@@ -377,6 +382,7 @@ impl Session {
             empty_folders: Vec::new(),
             folder_parents: Vec::new(),
             library_folder_subfolders: None,
+            album_part: None,
             shoot_prefs: Default::default(),
             backup: Default::default(),
             naming_templates: Vec::new(),
@@ -866,8 +872,15 @@ impl Session {
         let mut key = (
             self.catalog.revision,
             format!(
-                "{:?}|{:?}|{:?}|{:?}|{:?}|{}|{:?}",
-                self.source, self.filter, self.sort, self.browse, self.library_folder, self.library_subfolders, self.library_folder_subfolders
+                "{:?}|{:?}|{:?}|{:?}|{:?}|{}|{:?}|{:?}",
+                self.source,
+                self.filter,
+                self.sort,
+                self.browse,
+                self.library_folder,
+                self.library_subfolders,
+                self.library_folder_subfolders,
+                self.active_album_part()
             ),
         );
         if self.filter.exported.is_some() {
@@ -887,6 +900,11 @@ impl Session {
             lightcraft_catalog::rules::set_now(Some((self.clock)()));
             let f = self.view_filter();
             let mut visible = self.catalog.query(&f, &self.sort);
+            // a collection narrowed to some of its folders or cameras
+            if let Some(part) = self.active_album_part() {
+                let cat = &self.catalog;
+                visible.retain(|id| cat.photo(*id).is_some_and(|p| part.matches(p)));
+            }
             // Exported / not exported: the export record is the library's, not the catalog's
             if let Some(e) = self.filter.exported {
                 visible.retain(|id| self.export_log.contains_key(&id.0) == e);
@@ -960,6 +978,24 @@ impl Session {
         f
     }
 
+    /// [`Self::album_part`] while it applies: its collection or shoot is shown and a row is picked.
+    pub fn active_album_part(&self) -> Option<&album_parts::AlbumPart> {
+        self.album_part.as_ref().filter(|p| {
+            !p.keys.is_empty()
+                && match &p.of {
+                    album_parts::PartOf::Album { id } => self.source == LibrarySource::Album(*id),
+                    album_parts::PartOf::Shoot { path, deep } => {
+                        self.source == LibrarySource::LibraryFolder
+                            && self.library_folder_subfolders == Some(*deep)
+                            && self
+                                .library_folder
+                                .as_deref()
+                                .is_some_and(|f| lightcraft_catalog::query::folder_key(f) == lightcraft_catalog::query::folder_key(path))
+                    }
+                }
+        })
+    }
+
     /// Whether the library still holds a photo imported from the folder a `LibraryFolder` source
     /// shows.
     fn folder_holds_photos(&self) -> bool {
@@ -975,7 +1011,15 @@ impl Session {
         }
         let key = (
             self.catalog.revision,
-            format!("{:?}|{:?}|{:?}|{}|{:?}", self.source, self.browse, self.library_folder, self.library_subfolders, self.library_folder_subfolders),
+            format!(
+                "{:?}|{:?}|{:?}|{}|{:?}|{:?}",
+                self.source,
+                self.browse,
+                self.library_folder,
+                self.library_subfolders,
+                self.library_folder_subfolders,
+                self.active_album_part()
+            ),
         );
         if self.total.as_ref().map(|t| &t.0) != Some(&key) {
             let mut f = self.source.to_filter(&Filter::default(), &self.catalog);
@@ -988,7 +1032,12 @@ impl Session {
                 f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
                 f.library_folder_only = !self.library_folder_subfolders.unwrap_or(self.library_subfolders);
             }
-            let n = self.catalog.query(&f, &self.sort).len();
+            let mut ids = self.catalog.query(&f, &self.sort);
+            if let Some(part) = self.active_album_part() {
+                let cat = &self.catalog;
+                ids.retain(|id| cat.photo(*id).is_some_and(|p| part.matches(p)));
+            }
+            let n = ids.len();
             self.total = Some((key, n));
         }
         self.total.as_ref().map(|t| t.1)

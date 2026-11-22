@@ -158,6 +158,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if record(app, ctx) {
         return;
     }
+    // ← / → over a Collections row close / open its folders instead of moving the photo
+    if crate::panels::left::collection_keys(app, ctx) {
+        return;
+    }
     // Esc leaves the Draw Face Region tool before it does anything else
     if app.ui.draw_face && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
         app.ui.draw_face = false;

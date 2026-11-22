@@ -479,7 +479,7 @@ pub fn left(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         ui.painter().hline(hr.x_range(), hr.bottom(), Stroke::new(1.0, t.divider));
         let list = locations(app);
-        egui::ScrollArea::vertical().id_salt("map-locations").auto_shrink([false, false]).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("map-locations").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
             ui.add_space(6.0);
             if list.is_empty() {
                 let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 64.0), Sense::hover());
@@ -494,6 +494,10 @@ pub fn left(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             for l in &list {
                 location_row(app, ui, l, &t);
             }
+            // Classic's Map module lists Collections under Saved Locations: a click (or one of a
+            // collection's folders / cameras) shows its photos on the map
+            crate::panels::left::map_collections(app, ui, viewport);
+            ui.add_space(12.0);
         });
     });
     if let Some(w) = resized {

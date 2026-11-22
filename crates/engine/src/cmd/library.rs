@@ -310,7 +310,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Source",
             [],
             None,
-            "{kind: all|recentlyAdded|previousImport|album|recentlyDeleted|picks|missing|libraryFolder|published, id?: albumId (published: a published collection id), path?: a path from library.folders (for libraryFolder), subfolders?: bool (libraryFolder: show the folders inside it or not, whatever Show Photos in Subfolders says)}",
+            "{kind: all|recentlyAdded|previousImport|album|recentlyDeleted|picks|missing|libraryFolder|published, id?: albumId (published: a published collection id), path?: a path from library.folders (for libraryFolder), subfolders?: bool (libraryFolder: show the folders inside it or not, whatever Show Photos in Subfolders says), folders? | cameras?: [key] (album: only the photos of these rows of album.parts — folders or cameras — together)}",
             always,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("all");
@@ -319,6 +319,12 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(Value::Bool(b)) => Some(*b),
                     Some(_) => return Err(bad("library.source", "`subfolders` is true or false")),
                 };
+                // a collection narrowed to some of its folders or cameras (album.parts)
+                let part_keys = crate::album_parts::part_param("library.source", p)?;
+                if part_keys.is_some() && kind != "album" {
+                    return Err(bad("library.source", "`folders` / `cameras` narrow a collection (kind: album)"));
+                }
+                s.album_part = None;
                 s.source = match kind {
                     "all" => LibrarySource::All,
                     "recentlyAdded" => LibrarySource::RecentlyAdded,
@@ -340,6 +346,10 @@ pub fn specs() -> Vec<CommandSpec> {
                         let a = album_param(p, "id", "library.source")?;
                         if s.catalog.album(a).is_none_or(|a| a.folder) {
                             return Err(bad("library.source", "no such album"));
+                        }
+                        if let Some((by, keys)) = part_keys {
+                            s.album_part =
+                                crate::album_parts::make_part("library.source", &s.catalog, crate::album_parts::PartOf::Album { id: a }, by, keys)?;
                         }
                         LibrarySource::Album(a)
                     }
@@ -370,6 +380,22 @@ pub fn specs() -> Vec<CommandSpec> {
                     s.selection = vis.first().map(|f| Selection::single(*f)).unwrap_or_default();
                 }
                 Ok(json!({"count": vis.len()}))
+            }
+        ),
+        cmd!(
+            query "album.parts",
+            "Collection Folders and Cameras",
+            [],
+            None,
+            "{id: albumId, by?: folder|camera, scanDisk?: bool} → {rows: [{key, label, name, count, cameras}], picked: [key], beside?: [{path, name, count}]} the folders a collection's photos come from (named from the folder they share, the camera after it when the folder holds one) or the cameras that took them, with photo counts; `picked`: the rows the view is narrowed to. Show some with library.source {kind: album, id, folders | cameras: [key]}. scanDisk: also the folders beside them on disk (`<shoot>/raw/*`) holding photos not in the library (`count`: photos — a raw + JPEG pair once, sidecars never); library.import {paths: [path], mode: add, album: id} brings them in",
+            always,
+            |s, p| {
+                const C: &str = "album.parts";
+                let a = album_param(p, "id", C)?;
+                if s.catalog.album(a).is_none_or(|a| a.folder) {
+                    return Err(bad(C, "no such album (a set has no photos of its own)"));
+                }
+                crate::album_parts::parts_json(C, s, &crate::album_parts::PartOf::Album { id: a }, p)
             }
         ),
         cmd!(

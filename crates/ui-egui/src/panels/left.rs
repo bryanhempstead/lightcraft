@@ -68,6 +68,8 @@ struct RowExtra {
     dot: Option<egui::Color32>,
     /// The icon in the accent colour (a pinned shoot).
     accent: bool,
+    /// Room kept free at the right edge for a control the caller puts there (a folder's add.).
+    reserve: f32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -138,6 +140,7 @@ fn row_ex(
         None => count.filter(|_| app.ui.show_counts).map(|n| ui.painter().layout_no_wrap(n.to_string(), t.font(12.5), t.text_dim)),
     };
     let label_left = r.left() + 42.0 + indent;
+    let edge = edge - extra.reserve;
     let count_left = count_galley.as_ref().map_or(edge - 18.0, |g| edge - 18.0 - g.size().x);
     // the disk dot sits 8 px before the count, the name ends 8 px before the dot
     const DOT_R: f32 = 3.5;
@@ -158,7 +161,7 @@ fn row_ex(
     let resp = if shown != label { resp.on_hover_text(label) } else { resp };
     // a row asks for room for its name up to a share of a panel, so one very long name does not
     // make everything scroll: depth does that
-    let mut needed = 42.0 + indent + full_w.min(MAX_NAME_NEED) + 18.0 + if extra.dot.is_some() { 15.0 } else { 0.0 };
+    let mut needed = 42.0 + indent + full_w.min(MAX_NAME_NEED) + 18.0 + extra.reserve + if extra.dot.is_some() { 15.0 } else { 0.0 };
     if let Some(galley) = count_galley {
         let rect = Rect::from_min_size(pos2(edge - 18.0 - galley.size().x, r.center().y - galley.size().y / 2.0), galley.size());
         needed += rect.width() + 16.0;
@@ -737,9 +740,12 @@ fn albums_tree_view(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &[Album], p
             let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
             let extra = RowExtra { dot, ..Default::default() };
             let resp = row_ex(app, ui, &format!("folder:{}", a.id.0), Icon::CollectionSet, &shown, Some(&a.name), None, false, indent, &extra);
-            if resp.clicked() {
+            // a set opens and closes from its triangle (as Folders' rows do) or anywhere on it
+            let tri = disclosure(ui, &resp, indent, open, egui::Id::new(("album-set-tri", a.id.0)), &format!("albumSetToggle:{}", a.id.0));
+            if resp.clicked() || tri.clicked() {
                 ui.data_mut(|d| d.insert_temp(open_id, !open));
             }
+            folder_menu(app, &tri, a);
             folder_menu(app, &resp, a);
             if open || !view.needle.is_empty() {
                 albums_tree_view(app, ui, all, Some(a.id), indent + 16.0, view);
@@ -755,19 +761,444 @@ fn albums_tree_view(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &[Album], p
                 app.session.target_album.filter(|t| app.session.catalog.album(*t).is_some()).or_else(|| app.session.catalog.quick_collection());
             let label = if target == Some(a.id) { format!("{shown} +") } else { shown.clone() };
             let extra = RowExtra { dot, ..Default::default() };
+            // narrowed to some of its folders or cameras: those rows are the chosen ones
+            let sel = sel && app.session.active_album_part().is_none();
             let mut resp = row_ex(app, ui, &format!("album:{}", a.id.0), icon, &label, Some(&a.name), Some(n), sel, indent, &extra);
             if !a.is_smart() {
                 drop_target(app, ui, &resp, a);
             }
+            // LRC-LIB-COLL-PARTS: the disclosure triangle opens the folders (or cameras) its photos come from
+            let owner = Owner::Album(a);
+            let parts_open = app.ui.parts_open.contains(&owner.open_key());
+            let mut toggled = false;
+            if n > 0 {
+                let tri = parts_triangle(ui, &resp, &owner, indent, parts_open);
+                toggled = tri.clicked();
+                if !a.is_smart() {
+                    drop_target(app, ui, &tri, a);
+                }
+                folder_menu(app, &tri, a);
+            }
             if let Some(rules) = &a.smart {
                 resp = resp.on_hover_text(crate::i18n::tr_format!("Smart album: {}", crate::i18n::filter_label(rules, &app.session.catalog)));
             }
-            if resp.clicked() {
+            if resp.clicked() && !toggled {
                 let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
             }
             folder_menu(app, &resp, a);
+            if toggled {
+                set_parts_open(app, &owner.open_key(), !parts_open);
+            }
+            if parts_open && n > 0 {
+                part_rows(app, ui, owner, indent + 16.0);
+            }
         }
     }
+}
+
+/// A disclosure triangle left of a row's icon (as on Folders rows): returns its response, which
+/// takes the clicks on it.
+fn disclosure(ui: &mut egui::Ui, row: &egui::Response, indent: f32, open: bool, id: egui::Id, widget: &str) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let c = pos2(row.rect.left() + 10.0 + indent, row.rect.center().y);
+    let tri = Rect::from_center_size(c, vec2(14.0, 14.0));
+    let tr = ui.interact(tri, id, Sense::click());
+    register(ui.ctx(), widget, tri);
+    let col = if tr.hovered() { t.text } else { t.text_dim };
+    let pts = if open {
+        vec![c + vec2(-4.0, -2.0), c + vec2(4.0, -2.0), c + vec2(0.0, 3.0)]
+    } else {
+        vec![c + vec2(-2.0, -4.0), c + vec2(3.0, 0.0), c + vec2(-2.0, 4.0)]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(pts, col, egui::Stroke::NONE));
+    tr.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, if open { crate::i18n::tr("Collapse") } else { crate::i18n::tr("Expand") })
+    });
+    tr
+}
+
+/// Whose folders / cameras a list of rows is: a collection's or a shoot's.
+#[derive(Clone, Copy)]
+enum Owner<'a> {
+    Album(&'a Album),
+    Shoot(&'a lightcraft_catalog::Shoot),
+}
+
+impl Owner<'_> {
+    fn of(&self) -> lightcraft_engine::album_parts::PartOf {
+        match self {
+            Owner::Album(a) => lightcraft_engine::album_parts::PartOf::Album { id: a.id },
+            Owner::Shoot(s) => lightcraft_engine::album_parts::PartOf::Shoot { path: s.path.clone(), deep: s.deep },
+        }
+    }
+    /// Widget ids start with it (`albumPart:…`, `shootPart:…`).
+    fn prefix(&self) -> &'static str {
+        match self {
+            Owner::Album(_) => "album",
+            Owner::Shoot(_) => "shoot",
+        }
+    }
+    /// What names it in widget ids: the album id, the shoot's path.
+    fn tag(&self) -> String {
+        match self {
+            Owner::Album(a) => a.id.0.to_string(),
+            Owner::Shoot(s) => s.path.clone(),
+        }
+    }
+    /// Its key in [`crate::state::UiState::parts_open`].
+    fn open_key(&self) -> String {
+        open_key(self)
+    }
+    fn name(&self) -> &str {
+        match self {
+            Owner::Album(a) => &a.name,
+            Owner::Shoot(s) => &s.name,
+        }
+    }
+    /// A collection photos can be added to (dropped on its rows, add.).
+    fn album(&self) -> Option<&Album> {
+        match self {
+            Owner::Album(a) if !a.is_smart() => Some(a),
+            _ => None,
+        }
+    }
+}
+
+fn open_key(o: &Owner) -> String {
+    match o {
+        Owner::Album(a) => format!("album:{}", a.id.0),
+        Owner::Shoot(s) => format!("shoot:{}", lightcraft_catalog::query::folder_key(&s.path)),
+    }
+}
+
+fn set_parts_open(app: &mut LightcraftApp, key: &str, open: bool) {
+    if open {
+        app.ui.parts_open.insert(key.to_string());
+    } else {
+        app.ui.parts_open.remove(key);
+    }
+}
+
+/// What the rows under a shoot or collection are split by (the `fldr.` / `cam.` toggle).
+fn parts_by(app: &LightcraftApp) -> lightcraft_engine::album_parts::PartBy {
+    if app.ui.collection_parts_by_camera { lightcraft_engine::album_parts::PartBy::Camera } else { lightcraft_engine::album_parts::PartBy::Folder }
+}
+
+/// `fldr.` / `cam.` in a section header, ending at `right`: what the rows under each triangle are.
+fn parts_by_toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, header: Rect, right: f32, id: &str) {
+    let by_cam = app.ui.collection_parts_by_camera;
+    let mut hdr = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_max(pos2(right - 80.0, header.top()), pos2(right, header.bottom())))
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+    );
+    if crate::widgets::text_button(&mut hdr, id, if by_cam { "cam." } else { "fldr." }, false)
+        .on_hover_text(crate::i18n::tr(if by_cam {
+            "Under each shoot and collection (its triangle): the cameras that took its photos. Click for its folders"
+        } else {
+            "Under each shoot and collection (its triangle): the folders its photos are in. Click for its cameras"
+        }))
+        .clicked()
+    {
+        app.ui.collection_parts_by_camera = !by_cam;
+        // a view narrowed the other way shows whole again, not by rows nobody sees
+        if let Some(p) = app.session.active_album_part().cloned() {
+            let _ = match &p.of {
+                lightcraft_engine::album_parts::PartOf::Album { id } => app.run("library.source", json!({"kind": "album", "id": id.0})),
+                lightcraft_engine::album_parts::PartOf::Shoot { path, .. } => app.run("shoot.show", json!({"path": path})),
+            };
+        }
+    }
+}
+
+/// The rows under a shoot or collection ([`lightcraft_engine::album_parts::parts`]), worked out
+/// once per catalog revision: opening, clicking and drawing them reads the cached list.
+pub(crate) fn album_parts(
+    app: &LightcraftApp,
+    ctx: &egui::Context,
+    of: &lightcraft_engine::album_parts::PartOf,
+    by: lightcraft_engine::album_parts::PartBy,
+) -> std::sync::Arc<Vec<lightcraft_engine::album_parts::PartRow>> {
+    type Cached = (u64, std::sync::Arc<Vec<lightcraft_engine::album_parts::PartRow>>);
+    let key = egui::Id::new(("album-parts", of, by));
+    let rev = app.session.catalog.revision;
+    if let Some((r, v)) = ctx.data(|d| d.get_temp::<Cached>(key))
+        && r == rev
+    {
+        return v;
+    }
+    let v = std::sync::Arc::new(lightcraft_engine::album_parts::parts(&app.session.catalog, of, by));
+    ctx.data_mut(|d| {
+        d.insert_temp(key, (rev, v.clone()));
+        let n = d.get_temp_mut_or_insert_with::<u64>(egui::Id::new("album-parts-scans"), || 0);
+        *n += 1;
+    });
+    v
+}
+
+/// How many times [`album_parts`] has gone through a collection's photos (tests: a click reads the cache).
+#[cfg(test)]
+pub(crate) fn album_parts_scans(ctx: &egui::Context) -> u64 {
+    ctx.data(|d| d.get_temp::<u64>(egui::Id::new("album-parts-scans"))).unwrap_or(0)
+}
+
+/// The triangle on a shoot or collection row (one with photos): returns whether it was clicked.
+/// The row's ← / → work while the pointer is on it.
+fn parts_triangle(ui: &mut egui::Ui, resp: &egui::Response, owner: &Owner, indent: f32, open: bool) -> egui::Response {
+    let tri =
+        disclosure(ui, resp, indent, open, egui::Id::new(("parts-tri", owner.open_key())), &format!("{}PartsToggle:{}", owner.prefix(), owner.tag()));
+    if resp.hovered() || tri.hovered() {
+        hover_parts(ui, &owner.open_key());
+    }
+    tri
+}
+
+/// The folders (or cameras) of an open shoot or collection, one row each with its photo count.
+/// Click = just this one, ⌘-click = add / remove it, ⇧-click = the run from the last one clicked;
+/// all. / none. under them. Photos dropped on a collection's row go into the collection. Folders
+/// beside them on disk with photos not in the library follow ([`beside_rows`]).
+fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: Owner, indent: f32) {
+    use lightcraft_engine::album_parts::PartBy;
+    let by = parts_by(app);
+    let of = owner.of();
+    let rows = album_parts(app, ui.ctx(), &of, by);
+    let picked: Vec<String> = app.session.active_album_part().filter(|p| p.of == of && p.by == by).map(|p| p.keys.clone()).unwrap_or_default();
+    let icon = if by == PartBy::Camera { Icon::Camera } else { Icon::Folder };
+    let (prefix, tag) = (owner.prefix(), owner.tag());
+    for (i, r) in rows.iter().enumerate() {
+        let sel = picked.contains(&r.key);
+        let id = format!("{prefix}Part:{tag}:{}", r.key);
+        // the camera after the folder only when both fit (the name is what tells the rows apart)
+        let room = ui.available_width() - 42.0 - indent - 18.0 - 40.0;
+        let font = Tokens::get(ui.ctx()).font(13.5);
+        let fits = ui.painter().layout_no_wrap(r.label.clone(), font, egui::Color32::WHITE).size().x <= room;
+        let label = if fits { &r.label } else { &r.name };
+        let resp = row_named(app, ui, &id, icon, label, Some(&r.label), Some(r.count), sel, indent);
+        if let Some(a) = owner.album() {
+            drop_target(app, ui, &resp, a);
+        }
+        if resp.hovered() {
+            hover_parts(ui, &owner.open_key());
+        }
+        let mut tip = if by == PartBy::Folder { r.key.clone() } else { r.name.clone() };
+        if by == PartBy::Folder && r.cameras.len() > 1 {
+            tip.push('\n');
+            tip.push_str(&r.cameras.join(", "));
+        }
+        tip.push_str(&format!("\n{} photo{}", r.count, if r.count == 1 { "" } else { "s" }));
+        let resp = resp.on_hover_text(tip);
+        if resp.clicked() {
+            let mods = ui.input(|i| i.modifiers);
+            let keys = pick_parts(ui, &owner.open_key(), &rows, &picked, i, mods);
+            show_parts(app, ui.ctx(), &of, by, &keys);
+        }
+        resp.context_menu(|ui| {
+            if ui.button(crate::i18n::tr("Show Only This")).clicked() {
+                show_parts(app, ui.ctx(), &of, by, std::slice::from_ref(&r.key));
+                ui.close();
+            }
+            if ui.button(format!("Show All of “{}”", owner.name())).clicked() {
+                show_parts(app, ui.ctx(), &of, by, &[]);
+                ui.close();
+            }
+        });
+    }
+    if by == PartBy::Folder && !matches!(owner, Owner::Album(a) if a.is_smart()) {
+        beside_rows(app, ui, owner, indent);
+    }
+    if rows.len() > 1 {
+        // all. / none.: every row picked, or none (both show all of it)
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+        let mut bar = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(Rect::from_min_max(pos2(r.left() + 42.0 + indent, r.top() + 3.0), pos2(r.right() - 8.0, r.bottom() - 3.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        bar.spacing_mut().item_spacing.x = 8.0;
+        let all = picked.len() == rows.len();
+        if crate::widgets::text_button(&mut bar, &format!("{prefix}PartsAll-{tag}"), "all.", all)
+            .on_hover_text(crate::i18n::tr("Pick every row"))
+            .clicked()
+        {
+            let keys: Vec<String> = rows.iter().map(|r| r.key.clone()).collect();
+            show_parts(app, ui.ctx(), &of, by, &keys);
+        }
+        if crate::widgets::text_button(&mut bar, &format!("{prefix}PartsNone-{tag}"), "none.", false)
+            .on_hover_text(crate::i18n::tr("Pick no row: all of it"))
+            .clicked()
+        {
+            show_parts(app, ui.ctx(), &of, by, &[]);
+        }
+    }
+}
+
+/// Folders beside a shoot's or collection's folders on disk (`<shoot>/raw/GR3` next to
+/// `raw/M262`) whose photos never came into the library: a full-strength row with a quiet count
+/// and add., which imports them in place (into the collection, for a collection's). The disk is
+/// read on a worker thread at most once a minute per folder ([`fs_cached`]); the count against the
+/// library is worked out once per catalog revision.
+fn beside_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: Owner, indent: f32) {
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
+    use lightcraft_engine::album_parts as ap;
+    let of = owner.of();
+    let rows = album_parts(app, ui.ctx(), &of, ap::PartBy::Folder);
+    let shoots: Vec<lightcraft_catalog::Shoot> = match owner {
+        Owner::Album(_) => app.caches.shoots(&app.session).iter().map(|r| r.shoot.clone()).collect(),
+        Owner::Shoot(_) => Vec::new(),
+    };
+    let roots = ap::roots_of(&of, &rows, &shoots);
+    let parents = ap::parents_of(&rows, &roots);
+    let scans: Vec<std::sync::Arc<Vec<ap::Scanned>>> =
+        parents.iter().take(4).filter_map(|p| fs_cached(ui, "album-beside", p, 60.0, ap::scan_beside)).collect();
+    if scans.is_empty() {
+        return;
+    }
+    type Cached = (u64, Vec<usize>, std::sync::Arc<Vec<ap::BesideRow>>);
+    let key = egui::Id::new(("album-beside-rows", owner.open_key()));
+    let (rev, ptrs) = (app.session.catalog.revision, scans.iter().map(|s| std::sync::Arc::as_ptr(s) as usize).collect::<Vec<_>>());
+    let beside = match ui.data(|d| d.get_temp::<Cached>(key)) {
+        Some((r, p, v)) if r == rev && p == ptrs => v,
+        _ => {
+            let all: Vec<ap::Scanned> = scans.iter().flat_map(|s| s.as_ref().clone()).collect();
+            let v = std::sync::Arc::new(ap::beside(&app.session.catalog, &of, &all));
+            ui.data_mut(|d| d.insert_temp(key, (rev, ptrs, v.clone())));
+            v
+        }
+    };
+    let importing: Option<String> = ui.data(|d| d.get_temp(egui::Id::new("album-beside-importing")));
+    let importing = importing.filter(|_| app.import.is_some());
+    let (prefix, tag) = (owner.prefix(), owner.tag());
+    for b in beside.iter() {
+        let id = format!("{prefix}Beside:{tag}:{}", b.path);
+        let full = format!("{} · {}", b.name, crate::i18n::tr("not in library"));
+        // the folder's name stays whole: "· new" when "· not in library" doesn't fit beside it
+        let room = ui.available_width() - 42.0 - indent - 18.0 - 46.0 - 30.0;
+        let font = Tokens::get(ui.ctx()).font(13.5);
+        let fits = ui.painter().layout_no_wrap(full.clone(), font, egui::Color32::WHITE).size().x <= room;
+        let label = if fits { full } else { format!("{} · {}", b.name, crate::i18n::tr("new")) };
+        let extra = RowExtra { reserve: 46.0, ..Default::default() };
+        let resp = row_ex(app, ui, &id, Icon::Folder, &label, Some(&label), Some(b.count), false, indent, &extra);
+        let into = match owner.album() {
+            Some(a) => format!(" into “{}”", a.name),
+            None => String::new(),
+        };
+        let resp = resp.on_hover_text(format!(
+            "{}\n{} photo{} here are not in the library (a raw + JPEG pair counts once, sidecars never): add. imports them in place{into}",
+            b.path,
+            b.count,
+            if b.count == 1 { "" } else { "s" },
+        ));
+        if resp.hovered() {
+            hover_parts(ui, &owner.open_key());
+        }
+        // add. at the right edge (… while it imports)
+        let visible_right: f32 = ui.data(|d| d.get_temp(egui::Id::new("left-visible-right"))).unwrap_or(f32::MAX);
+        let right = resp.rect.right().min(visible_right) - 12.0;
+        let busy = importing.as_deref() == Some(b.path.as_str());
+        let slot = Rect::from_min_max(pos2(right - 60.0, resp.rect.top() + 2.0), pos2(right, resp.rect.bottom() - 2.0));
+        let mut bar = ui.new_child(egui::UiBuilder::new().max_rect(slot).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        let add = crate::widgets::text_button(&mut bar, &format!("{prefix}BesideAdd-{tag}-{}", b.path), if busy { "…" } else { "add." }, false)
+            .on_hover_text(crate::i18n::tr("Import these photos in place: nothing is copied or moved"));
+        if add.clicked() && !busy {
+            let started = match owner.album() {
+                Some(a) => crate::import::start_paths_into(app, vec![b.path.clone()], a.id.0),
+                None => crate::import::start_paths(app, vec![b.path.clone()]),
+            };
+            match started {
+                Ok(_) => {
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new("album-beside-importing"), b.path.clone()));
+                    app.toast(ui.ctx(), format!("Importing {} photos from {}…", b.count, b.name));
+                }
+                Err(e) => app.toast(ui.ctx(), e),
+            }
+        }
+    }
+}
+
+/// The rows picked after a click on row `i`: just it; with ⌘ it added or taken off; with ⇧ the run
+/// from the row clicked last (added to the others with ⌘ too).
+fn pick_parts(
+    ui: &egui::Ui,
+    owner: &str,
+    rows: &[lightcraft_engine::album_parts::PartRow],
+    picked: &[String],
+    i: usize,
+    mods: egui::Modifiers,
+) -> Vec<String> {
+    let anchor_id = egui::Id::new(("album-part-anchor", owner));
+    let Some(key) = rows.get(i).map(|r| r.key.clone()) else { return picked.to_vec() };
+    let anchor: Option<String> = ui.data(|d| d.get_temp(anchor_id));
+    let from = anchor.and_then(|k| rows.iter().position(|r| r.key == k));
+    let keys = match from {
+        Some(f) if mods.shift => {
+            let (lo, hi) = if f <= i { (f, i) } else { (i, f) };
+            let mut run: Vec<String> = rows.get(lo..=hi).unwrap_or(&[]).iter().map(|r| r.key.clone()).collect();
+            if mods.command {
+                run.extend(picked.iter().cloned());
+            }
+            run
+        }
+        _ if mods.command => {
+            let mut v = picked.to_vec();
+            if let Some(at) = v.iter().position(|k| *k == key) {
+                v.remove(at);
+            } else {
+                v.push(key.clone());
+            }
+            v
+        }
+        _ => vec![key.clone()],
+    };
+    if !mods.shift {
+        ui.data_mut(|d| d.insert_temp(anchor_id, key));
+    }
+    keys
+}
+
+/// Show a shoot or collection narrowed to rows `keys` (none: all of it).
+fn show_parts(
+    app: &mut LightcraftApp,
+    ctx: &egui::Context,
+    of: &lightcraft_engine::album_parts::PartOf,
+    by: lightcraft_engine::album_parts::PartBy,
+    keys: &[String],
+) {
+    let (id, mut p) = match of {
+        lightcraft_engine::album_parts::PartOf::Album { id } => ("library.source", json!({"kind": "album", "id": id.0})),
+        lightcraft_engine::album_parts::PartOf::Shoot { path, .. } => ("shoot.show", json!({"path": path})),
+    };
+    if !keys.is_empty() {
+        p[if by == lightcraft_engine::album_parts::PartBy::Camera { "cameras" } else { "folders" }] = json!(keys);
+    }
+    if let Err(e) = app.run(id, p) {
+        app.toast(ctx, e);
+    }
+}
+
+/// The shoot or collection row (or one of its rows) under the pointer this frame: ← / → close and
+/// open it.
+fn hover_parts(ui: &egui::Ui, key: &str) {
+    let pass = ui.ctx().cumulative_pass_nr();
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("left-hovered-parts"), (pass, key.to_string())));
+}
+
+/// ← closes and → opens the shoot or collection under the pointer (as Folders' triangles do);
+/// `true` when the key was taken (it then moves no photo). Called before the shortcuts.
+pub(crate) fn collection_keys(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
+    let Some((pass, key)) = ctx.data(|d| d.get_temp::<(u64, String)>(egui::Id::new("left-hovered-parts"))) else { return false };
+    // hovered in the last frame drawn
+    if ctx.cumulative_pass_nr().saturating_sub(pass) > 2 || !app.ui.left_panel {
+        return false;
+    }
+    let open = app.ui.parts_open.contains(&key);
+    let k = if open { egui::Key::ArrowLeft } else { egui::Key::ArrowRight };
+    if !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k)) {
+        return false;
+    }
+    set_parts_open(app, &key, !open);
+    true
 }
 
 /// An album row while photos are dragged from the grid: highlighted under the pointer; a
@@ -943,6 +1374,12 @@ fn catalog_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, total: usize, picks:
     }
 }
 
+/// The Collections section in another module's left panel (the Map's), inside its scroll area.
+pub(crate) fn map_collections(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("left-visible-right"), ui.cursor().left() + viewport.max.x));
+    collections_section(app, ui, viewport);
+}
+
 /// A section header's "+" button, kept at the visible right edge when the sidebar scrolls
 /// sideways; returns its response (the caller hangs a menu on it).
 fn header_plus(ui: &mut egui::Ui, header: Rect, viewport: Rect, id: &str, tip: &str) -> egui::Response {
@@ -961,6 +1398,8 @@ fn collections_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rec
     ui.add_space(10.0);
     let (ar, open) = sidebar_section_header(app, ui, "collections", "Collections");
     let plus = header_plus(ui, ar, viewport, "albumNew", "Create Collection");
+    // fldr. / cam.: what the rows under each collection's triangle are, 8 px before the +
+    parts_by_toggle(app, ui, ar, plus.rect.left() - 8.0, "collectionsPartsBy");
     egui::Popup::menu(&plus).show(|ui| {
         if ui.button(crate::i18n::tr("Create Collection…")).clicked() {
             app.ui.dialog = Some(crate::state::Dialog::NewAlbum { name: String::new(), folder: false });
@@ -1439,6 +1878,8 @@ fn shoots_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
     ui.add_space(10.0);
     let (hr, open) = sidebar_section_header(app, ui, "shoots", "shoots.");
     let sort = header_text_button(ui, hr, viewport, "shootsSort", "sort.");
+    // fldr. / cam.: what the rows under each shoot's triangle are, 8 px before sort.
+    parts_by_toggle(app, ui, hr, sort.rect.left() - 8.0, "shootsPartsBy");
     let removed: Vec<&lightcraft_engine::cmd::shoots::ShootRow> = all.iter().filter(|r| r.hidden).collect();
     egui::Popup::menu(&sort).show(|ui| {
         let by = app.session.shoot_prefs.sort;
@@ -1486,8 +1927,11 @@ fn shoots_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
         // (checked off the UI thread, every few seconds: a disk can be asleep or gone)
         let gone = !cfg!(target_arch = "wasm32") && fs_cached(ui, "is-dir", &s.path, 10.0, is_dir) == Some(false);
         let disk_gone = gone && s.disk != "/" && fs_cached(ui, "is-dir", &s.disk, 10.0, is_dir) == Some(false);
-        let sel = chosen.as_deref().is_some_and(|c| same_folder(c, &s.path)) && app.session.library_folder_subfolders == Some(s.deep);
-        let extra = RowExtra { dim: gone, badge: None, dot: Some(disk_color(&tree, &s.disk)), accent: r.pinned };
+        // narrowed to some of its folders or cameras: those rows are the chosen ones
+        let sel = chosen.as_deref().is_some_and(|c| same_folder(c, &s.path))
+            && app.session.library_folder_subfolders == Some(s.deep)
+            && app.session.active_album_part().is_none();
+        let extra = RowExtra { dim: gone, badge: None, dot: Some(disk_color(&tree, &s.disk)), accent: r.pinned, reserve: 0.0 };
         let resp = row_ex(app, ui, &format!("shoot:{}", s.path), Icon::GridPhoto, &s.name, Some(&s.name), Some(s.count), sel, 0.0, &extra);
         let disk = disk_label(ui, &s.disk, &s.disk_name);
         let mut tip = format!("{}\n{disk} · {} photo{}", s.name, s.count, if s.count == 1 { "" } else { "s" });
@@ -1507,13 +1951,29 @@ fn shoots_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
         } else if gone {
             tip.push_str("\nNot found: right-click ▸ Find Missing Folder… to point the library at where it went");
         }
+        // LRC-LIB-COLL-PARTS: the triangle opens the folders (or cameras) of the shoot
+        let owner = Owner::Shoot(s);
+        let parts_open = app.ui.parts_open.contains(&owner.open_key());
+        let mut toggled = false;
+        if s.count > 0 {
+            let tri = parts_triangle(ui, &resp, &owner, 0.0, parts_open);
+            toggled = tri.clicked();
+            shoot_menu(app, &tri, r, gone);
+        }
         let resp = resp.on_hover_text(tip);
         if resp.clicked()
+            && !toggled
             && let Err(e) = app.run("shoot.show", json!({"path": s.path}))
         {
             app.toast(ui.ctx(), e);
         }
         shoot_menu(app, &resp, r, gone);
+        if toggled {
+            set_parts_open(app, &owner.open_key(), !parts_open);
+        }
+        if parts_open && s.count > 0 {
+            part_rows(app, ui, owner, 16.0);
+        }
     }
 }
 
@@ -1695,7 +2155,7 @@ fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, tree: &[FolderNode], 
                     .flatten()
                     .map(|(tot, av)| lightcraft_engine::disks::space_label(tot, av))
             };
-            (Icon::Disk, name, RowExtra { dim: gone, badge, dot: Some(disk_color(tree, &n.path)), accent: false }, Some(n.count))
+            (Icon::Disk, name, RowExtra { dim: gone, badge, dot: Some(disk_color(tree, &n.path)), accent: false, reserve: 0.0 }, Some(n.count))
         } else {
             // a root folder (right under its disk) named only by its camera carries its shoot's name
             let first = if indent <= 16.0 { lightcraft_catalog::shoots::context_label(&n.path, &n.name) } else { n.name.clone() };

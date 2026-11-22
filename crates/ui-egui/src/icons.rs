@@ -53,6 +53,8 @@ pub enum Icon {
     Folder,
     /// A disk (the Folders panel's volume rows).
     Disk,
+    /// A camera body (a collection's camera rows).
+    Camera,
     /// A collection set: a box that holds collections.
     CollectionSet,
     /// Edit (a pencil).
@@ -352,6 +354,12 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.closed(&[(5.5, 8.5), (12.5, 8.5), (10.0, 11.5), (10.0, 14.5), (8.0, 13.5), (8.0, 11.5)]);
         }
         Folder => pen.closed(&[(2.5, 5.0), (8.0, 5.0), (9.5, 7.0), (17.5, 7.0), (17.5, 15.5), (2.5, 15.5)]),
+        Camera => {
+            // body with the viewfinder hump, the lens, the shutter button
+            pen.closed(&[(2.5, 7.0), (6.5, 7.0), (8.0, 4.5), (12.0, 4.5), (13.5, 7.0), (17.5, 7.0), (17.5, 16.0), (2.5, 16.0)]);
+            pen.circle(10.0, 11.5, 3.0);
+            pen.dot(15.0, 9.3, 0.8);
+        }
         Disk => {
             pen.rect(2.5, 6.0, 17.5, 14.0, 2.0);
             pen.line(&[(5.0, 11.5), (10.0, 11.5)]);
