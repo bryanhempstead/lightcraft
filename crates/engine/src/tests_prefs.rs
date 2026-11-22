@@ -422,3 +422,58 @@ fn relative_paste_and_merge_or_replace_masks() {
     assert_eq!(names, ["Sky"]);
     assert!(s.execute("develop.paste", &json!({"maskMode": "blend"})).is_err());
 }
+
+/// U04: local adjustment ("Effect") presets: a Lightroom local preset folder imports in place
+/// (titles delocalised, values scaled), applying sets the mask's sliders, new masks of that kind
+/// start with it, saved / deleted effects persist with the library.
+#[test]
+fn mask_effects_import_lightroom_presets_apply_and_persist() {
+    let lib = temp_dir("effects");
+    let presets = lib.join("lr").join("Local Adjustment Presets");
+    std::fs::create_dir_all(&presets).unwrap();
+    // synthetic presets in the shape Lightroom writes (our own values)
+    std::fs::write(
+        presets.join("Burn.lrtemplate"),
+        "s = {\n\tid = \"1\",\n\tinternalName = \"Burn\",\n\ttitle = ZSTR \"$$$/AgDevelop/Localized/Preset/Burn=Burn (Darken)\",\n\ttype = \"LocalizedAdjustmentPreset\",\n\tvalue = {\n\t\texposure2012 = -0.075,\n\t\tsaturation = 0,\n\t\ttoningHue = 240,\n\t},\n\tversion = 1,\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        presets.join("Teeth.lrtemplate"),
+        "s = { title = \"Teeth Whitening\", type = \"LocalizedAdjustmentPreset\", value = { exposure2012 = 0.1, saturation = -0.6 } }",
+    )
+    .unwrap();
+    std::fs::write(presets.join("Develop.lrtemplate"), "s = { title = \"X\", type = \"Develop\", value = { settings = { Exposure2012 = 1 } } }")
+        .unwrap();
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, true).unwrap();
+        let r = s.execute("mask.importEffects", &json!({"path": presets.to_string_lossy()})).unwrap();
+        let names: Vec<&str> = r["imported"].as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();
+        assert_eq!(names, ["Burn (Darken)", "Teeth Whitening"], "{r}");
+        assert!(r["failed"].as_array().unwrap().is_empty(), "a develop preset is skipped, not failed: {r}");
+        let burn = s.mask_effects.iter().find(|e| e.name == "Burn (Darken)").unwrap();
+        assert!((burn.adjust.exposure + 0.3).abs() < 1e-9, "exposure2012 is a quarter of the stops: {}", burn.adjust.exposure);
+        // apply to a mask: its sliders
+        s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
+        s.execute("mask.applyEffect", &json!({"name": "teeth whitening"})).unwrap();
+        let id = s.active().unwrap();
+        let m = s.develop_of(id).unwrap().masks[0].clone();
+        assert!((m.adjust.exposure - 0.4).abs() < 1e-9 && (m.adjust.saturation + 60.0).abs() < 1e-9, "{:?}", m.adjust);
+        assert_eq!(s.execute("mask.effects", &json!({})).unwrap()["current"], "Teeth Whitening");
+        // the next brush mask starts with it (as Lightroom carries the effect over)
+        s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
+        assert!((s.develop_of(id).unwrap().masks[1].adjust.saturation + 60.0).abs() < 1e-9);
+        // save one of our own, delete an imported one
+        s.execute("mask.adjust", &json!({"values": {"clarity": 30}})).unwrap();
+        s.execute("mask.saveEffect", &json!({"name": "Crisp", "fields": "changed"})).unwrap();
+        s.execute("mask.deleteEffect", &json!({"name": "Burn (Darken)"})).unwrap();
+        assert!(s.execute("mask.applyEffect", &json!({"name": "nope"})).is_err());
+        s.close_library().unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let names: Vec<String> = s.mask_effects.iter().map(|e| e.name.clone()).collect();
+    assert_eq!(names, ["Teeth Whitening", "Crisp"], "saved with the library preferences");
+    assert_eq!(s.mask_tool_effects.get("brush").map(String::as_str), Some("Teeth Whitening"));
+    let _ = std::fs::remove_dir_all(&lib);
+}

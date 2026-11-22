@@ -233,6 +233,8 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   on paste, as Lightroom asks.
 - 2026-11-21 (fork): Alt/Option-drag previews (clipping on the Light sliders, greyscale / detail band / sharpening
   mask on Detail), ported from upstream.
+- 2026-11-21 (fork): local adjustment ("Effect") presets ported from upstream; his Lightroom local presets import in
+  place (Masking ▸ Effect ▸ import.).
 
 ## Chinese and Japanese interfaces, and text watermarks
 

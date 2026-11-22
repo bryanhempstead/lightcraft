@@ -196,6 +196,10 @@ pub struct Session {
     pub copy_groups: Vec<lightcraft_develop::SettingsGroup>,
     /// Saved Copy / Sync / Paste checklists (`develop.saveSubset`), persisted in prefs.json.
     pub copy_subsets: Vec<cmd::copy_subsets::CopySubset>,
+    /// Mask effect presets (Lightroom's local adjustment presets), persisted in prefs.json.
+    pub mask_effects: Vec<cmd::mask_effects::MaskEffect>,
+    /// Mask kind (`brush`, `linear`, …) → the effect a new mask of that kind starts with.
+    pub mask_tool_effects: std::collections::BTreeMap<String, String>,
     pub presets: Vec<lightcraft_develop::Preset>,
     /// Favourite profile ids (persisted with the library, like preset favourites).
     pub profile_favorites: Vec<String>,
@@ -300,6 +304,8 @@ impl Session {
             previous_active: None,
             copy_groups: lightcraft_develop::SettingsGroup::default_copy(),
             copy_subsets: Vec::new(),
+            mask_effects: Vec::new(),
+            mask_tool_effects: Default::default(),
             presets: presets::builtin(),
             profile_favorites: Vec::new(),
             profile_recent: Vec::new(),

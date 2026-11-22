@@ -21,6 +21,8 @@ pub mod library;
 pub mod lightroom;
 pub mod lut_profiles;
 pub mod manage;
+pub mod mask_effect_files;
+pub mod mask_effects;
 mod masks;
 mod merge;
 pub mod metadata;
@@ -128,6 +130,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(color::specs());
         v.extend(curves::specs());
         v.extend(masks::specs());
+        v.extend(mask_effects::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());
