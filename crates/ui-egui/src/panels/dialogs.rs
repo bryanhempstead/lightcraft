@@ -741,6 +741,40 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if ui.checkbox(&mut wm_on, crate::i18n::tr("Watermark")).changed() {
                         opts.watermark = wm_on.then(|| lightcraft_engine::export::Watermark { text: "© ".into(), ..Default::default() });
                     }
+                    if opts.watermark.is_some() {
+                        // named watermarks (E09): pick one, save the current one
+                        field(ui, "Watermark", |ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            let saved = app.session.watermark_presets.clone();
+                            let r = egui::ComboBox::from_id_salt("export-watermark-preset").selected_text(crate::i18n::tr("Saved…")).width(160.0).show_ui(ui, |ui| {
+                                for (i, w) in saved.iter().enumerate() {
+                                    let r = ui.selectable_label(opts.watermark.as_ref() == Some(&w.watermark), &w.name);
+                                    crate::widgets::register(ui.ctx(), format!("button:watermarkPreset-{i}"), r.rect);
+                                    if r.clicked() {
+                                        opts.watermark = Some(w.watermark.clone());
+                                    }
+                                }
+                                if saved.is_empty() {
+                                    ui.label(crate::i18n::tr("No saved watermarks yet"));
+                                }
+                            });
+                            crate::widgets::register(ui.ctx(), "button:watermarkPresets", r.response.rect);
+                            let nid = egui::Id::new("watermark-preset-name");
+                            let mut name = ui.data(|d| d.get_temp::<String>(nid)).unwrap_or_default();
+                            let f = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("name")).desired_width(110.0));
+                            crate::widgets::register(ui.ctx(), "field:watermarkPresetName", f.rect);
+                            let s = ui.add_enabled(!name.trim().is_empty(), egui::Button::new("save."));
+                            crate::widgets::register(ui.ctx(), "button:watermarkPresetSave", s.rect);
+                            if s.clicked() {
+                                let w = serde_json::to_value(&opts.watermark).unwrap_or_default();
+                                match app.run("watermark.save", json!({"name": name.trim(), "watermark": w})) {
+                                    Ok(_) => name.clear(),
+                                    Err(e) => app.toast(ui.ctx(), e),
+                                }
+                            }
+                            ui.data_mut(|d| d.insert_temp(nid, name));
+                        });
+                    }
                     if let Some(wm) = &mut opts.watermark {
                         // text, or a graphic (a logo with transparency)
                         let mut graphic = !wm.image.is_empty() || ui.data(|d| d.get_temp::<bool>(egui::Id::new("wm-graphic"))).unwrap_or(false);

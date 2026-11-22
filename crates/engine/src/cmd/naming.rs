@@ -9,6 +9,14 @@ use super::{CommandSpec, always, bad, cmd, str_param};
 use crate::rename::{BUILTIN_TEMPLATES, Batch, ExtCase, NamingTemplate};
 use crate::{Result, Session};
 
+/// A named watermark (E09).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatermarkPreset {
+    pub name: String,
+    pub watermark: crate::export::Watermark,
+}
+
 /// Imports made and photos imported so far (Import # / Image #).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -125,8 +133,49 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": name}))
 }
 
+fn watermarks(s: &mut Session, p: &Value, id: &str) -> Result<Value> {
+    let name = str_param(p, "name").map(str::trim).unwrap_or("").to_string();
+    match id {
+        "watermark.save" => {
+            if name.is_empty() || name.chars().count() > 80 {
+                return Err(bad(id, "give the watermark a name (up to 80 characters)"));
+            }
+            let w = p.get("watermark").ok_or_else(|| bad(id, "missing `watermark` (text or an object)"))?;
+            crate::export::ExportOptions::validate(id, &json!({"watermark": w}))?;
+            let wm = crate::export::ExportOptions::from_json(&json!({"watermark": w})).watermark.ok_or_else(|| bad(id, "the watermark is empty"))?;
+            match s.watermark_presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
+                Some(x) => x.watermark = wm,
+                None => s.watermark_presets.push(WatermarkPreset { name: name.clone(), watermark: wm }),
+            }
+            s.save_prefs()?;
+            Ok(json!({"saved": name}))
+        }
+        "watermark.delete" => {
+            let n = s.watermark_presets.len();
+            s.watermark_presets.retain(|x| !x.name.eq_ignore_ascii_case(&name));
+            if s.watermark_presets.len() == n {
+                return Err(bad(id, format!("no watermark `{name}`")));
+            }
+            s.save_prefs()?;
+            Ok(json!({"deleted": name}))
+        }
+        _ => Ok(json!(s.watermark_presets)),
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(query "watermark.presets", "Watermarks", [], None, "{} — the saved watermarks → [{name, watermark}]", always, |s, p| watermarks(s, p, "watermark.presets")),
+        cmd!(
+            "watermark.save",
+            "Save Watermark",
+            [],
+            None,
+            "{name, watermark: text | {text, size, opacity, anchor, …} (app.export's watermark)} — saves a named watermark (the Export dialog's Watermark ▸ preset list) → {saved}",
+            always,
+            |s, p| watermarks(s, p, "watermark.save")
+        ),
+        cmd!("watermark.delete", "Delete Watermark", [], None, "{name}", always, |s, p| watermarks(s, p, "watermark.delete")),
         cmd!(
             query "naming.templates",
             "File-Name Templates",

@@ -182,6 +182,8 @@ struct PrefsFile {
     naming_counters: crate::cmd::naming::Counters,
     /// Automatic versions when leaving an edited photo (off = Lightroom's behaviour).
     auto_versions: bool,
+    /// Named watermarks.
+    watermark_presets: Vec<crate::cmd::naming::WatermarkPreset>,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -367,6 +369,7 @@ impl Session {
         self.naming_templates = prefs.naming_templates;
         self.naming_counters = prefs.naming_counters;
         self.auto_versions = prefs.auto_versions;
+        self.watermark_presets = prefs.watermark_presets;
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
@@ -604,6 +607,7 @@ impl Session {
             naming_templates: self.naming_templates.clone(),
             naming_counters: self.naming_counters,
             auto_versions: self.auto_versions,
+            watermark_presets: self.watermark_presets.clone(),
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };

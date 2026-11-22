@@ -212,3 +212,25 @@ fn export_keywords_follow_the_metadata_options() {
     assert!(!flat.iter().any(|k| k == "Ann Lee"));
     assert_eq!(hier, ["Places|Portugal|Lisbon", "dawn"]);
 }
+
+/// E09: named watermarks — saved with the library, listed, deleted; bad ones refused.
+#[test]
+fn named_watermarks() {
+    let dir = std::env::temp_dir().join(format!("lc-watermarks-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = Session::new();
+    s.open_library(&dir, false).unwrap();
+    s.execute("watermark.save", &json!({"name": "Studio", "watermark": {"text": "© hempstead.studio", "opacity": 0.6}})).unwrap();
+    assert!(s.execute("watermark.save", &json!({"name": "", "watermark": "x"})).is_err());
+    assert!(s.execute("watermark.save", &json!({"name": "Bad", "watermark": {"nope": 1}})).is_err());
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new();
+    s.open_library(&dir, false).unwrap();
+    let list = s.execute("watermark.presets", &json!({})).unwrap();
+    assert_eq!(list[0]["name"], "Studio", "{list}");
+    assert_eq!(list[0]["watermark"]["text"], "© hempstead.studio");
+    s.execute("watermark.delete", &json!({"name": "studio"})).unwrap();
+    assert!(s.watermark_presets.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

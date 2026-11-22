@@ -193,6 +193,8 @@ pub struct Session {
     pub auto_versions: bool,
     /// When each photo was last exported (photo id → ISO time; the library's `exports.json`).
     pub export_log: std::collections::BTreeMap<u64, String>,
+    /// Named watermarks (Lightroom's Watermark Editor presets; prefs.json).
+    pub watermark_presets: Vec<cmd::naming::WatermarkPreset>,
     /// Delete from Disk moves files into this folder instead of the system Trash (tests, scripts;
     /// also `LIGHTCRAFT_TRASH_DIR`).
     pub trash_dir: Option<std::path::PathBuf>,
@@ -307,6 +309,7 @@ impl Session {
             naming_counters: Default::default(),
             auto_versions: false,
             export_log: Default::default(),
+            watermark_presets: Vec::new(),
             trash_dir: None,
             previous_active: None,
             copy_groups: lightcraft_develop::SettingsGroup::default_copy(),
