@@ -248,7 +248,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         egui::RichText::new(crate::i18n::tr_format!("Creates {} stacks from {} of {scope}", preview["stacks"], preview["photos"], scope = crate::i18n::tr(scope))).color(t.text_dim),
                     );
                 }
-                Dialog::Cull { reject_below, pick_best } => {
+                Dialog::Cull { reject_below, pick_best, reject_eyes, reject_face_below } => {
                     let n = app.session.selection.ids.len();
                     let scope = if n > 1 { crate::i18n::tr_format!("the {n} selected photos", n = n) } else { crate::i18n::tr_format!("the {} photos in view", app.session.visible_cloned().len()) };
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).", scope = scope)).color(t.text_label));
@@ -258,7 +258,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label(egui::RichText::new(crate::i18n::tr(if *reject_below > 0.0 { "Blurry photos below the score are flagged as rejects." } else { "0: nothing is rejected." })).color(t.text_dim));
                     let r = ui.checkbox(pick_best, crate::i18n::tr("Pick the sharpest photo of each burst"));
                     crate::widgets::register(ui.ctx(), "check:cullPick", r.rect);
-                    ui.label(egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots.")).color(t.text_dim));
+                    ui.add_space(6.0);
+                    if app.session.vision.installed(lightcraft_engine::vision::models::Package::Faces) {
+                        let r = ui.checkbox(reject_eyes, crate::i18n::tr("Reject photos where someone blinks"));
+                        crate::widgets::register(ui.ctx(), "check:cullEyes", r.rect);
+                        let r = ui.add(egui::Slider::new(reject_face_below, 0.0..=80.0).text(crate::i18n::tr("Reject below face focus")).step_by(1.0));
+                        crate::widgets::register(ui.ctx(), "field:cullFace", r.rect);
+                        ui.label(egui::RichText::new(crate::i18n::tr("Faces are found first where needed (in the background); a burst's best is the one where nobody blinks and the face is sharpest.")).color(t.text_dim));
+                    } else {
+                        ui.label(egui::RichText::new(crate::i18n::tr("Eyes-closed and face-focus checks need the face finder: People view ▸ get.")).color(t.text_dim));
+                    }
+                    ui.label(egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus, Face Focus, Eyes Closed and Best of Similar Shots.")).color(t.text_dim));
                 }
                 Dialog::WhatsNew => {
                     egui::ScrollArea::vertical().max_height(460.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -1558,10 +1568,13 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::MergeKeywords { from, into } => app.run("keyword.merge", json!({"from": from, "into": into})),
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),
         Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
-        Dialog::Cull { reject_below, pick_best } => {
-            let mut p = json!({"pickBest": pick_best});
+        Dialog::Cull { reject_below, pick_best, reject_eyes, reject_face_below } => {
+            let mut p = json!({"pickBest": pick_best, "rejectEyesClosed": reject_eyes});
             if *reject_below > 0.0 {
                 p["rejectBelow"] = json!(reject_below);
+            }
+            if *reject_face_below > 0.0 {
+                p["rejectFaceBelow"] = json!(reject_face_below);
             }
             app.run("photo.analyze", p)
         }

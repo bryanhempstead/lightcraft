@@ -77,6 +77,20 @@ pub struct LrImage {
     /// Work done ahead (on a worker thread) by [`prepare`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prepared: Option<Prepared>,
+    /// Face regions (`AgLibraryFace`), with the people confirmed on them (`AgLibraryKeywordFace`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<LrFace>,
+}
+
+/// A face region of Lightroom's catalog: its box in the photo as Lightroom shows it (turned by the photo's
+/// orientation), normalized, and the person confirmed on it / people rejected for it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LrFace {
+    /// `[x0, y0, x1, y1]`.
+    pub rect: [f64; 4],
+    pub name: Option<String>,
+    pub rejected: Vec<String>,
 }
 
 /// What [`prepare`] works out per photo without the session: is the file there, how its own
@@ -531,6 +545,11 @@ const SQL_KEYWORDS: &str = "SELECT id_local AS id, parent, name FROM AgLibraryKe
 const SQL_IMAGE_KEYWORDS: &str = "SELECT image, tag FROM AgLibraryKeywordImage";
 const SQL_COLLECTIONS: &str = "SELECT id_local AS id, name, parent, creationId AS kind, systemOnly AS system FROM AgLibraryCollection";
 const SQL_COLLECTION_IMAGES: &str = "SELECT collection, image FROM AgLibraryCollectionImage ORDER BY collection, positionInCollection, id_local";
+/// Faces with the person keyword on each (confirmed: `userPick`; rejected: `userReject`; suggestions are left out).
+const SQL_FACES: &str = "SELECT f.id_local AS id, f.image AS image, f.tl_x AS x0, f.tl_y AS y0, f.br_x AS x1, f.br_y AS y1, \
+ k.name AS name, kf.userPick AS pick, kf.userReject AS reject \
+ FROM AgLibraryFace f LEFT JOIN AgLibraryKeywordFace kf ON kf.face = f.id_local LEFT JOIN AgLibraryKeyword k ON k.id_local = kf.tag \
+ ORDER BY f.image, f.id_local";
 const SQL_SMART: &str = "SELECT collection, content FROM AgLibraryCollectionContent WHERE owningModule = 'ag.library.smart_collection'";
 
 /// Join the catalog's rows (each query's `sqlite3 -json` result) into [`Records`].
@@ -616,6 +635,7 @@ pub fn records_from_rows(
                 width: number(r, "width").unwrap_or(0.0).clamp(0.0, 1e6) as u32,
                 height: number(r, "height").unwrap_or(0.0).clamp(0.0, 1e6) as u32,
                 prepared: None,
+                faces: Vec::new(),
             })
         })
         .collect();
@@ -706,7 +726,46 @@ pub fn records_from_db(db: &Path, catalog: &str) -> Result<Records, String> {
     let collections = query(db, SQL_COLLECTIONS)?;
     let collection_images = query(db, SQL_COLLECTION_IMAGES)?;
     let smart = query(db, SQL_SMART)?;
-    Ok(records_from_rows(catalog, &images, &keywords, &image_keywords, &collections, &collection_images, &smart))
+    let mut r = records_from_rows(catalog, &images, &keywords, &image_keywords, &collections, &collection_images, &smart);
+    // older catalogs have no face tables: no faces
+    if let Ok(faces) = query(db, SQL_FACES) {
+        attach_faces(&mut r, &faces);
+    }
+    Ok(r)
+}
+
+/// Put the face rows ([`SQL_FACES`]) on their images: one face per `AgLibraryFace` row id, its confirmed name and
+/// rejected names; boxes clipped to the photo, empty or non-finite ones dropped.
+pub fn attach_faces(r: &mut Records, rows: &[Value]) {
+    let mut faces: BTreeMap<(i64, i64), LrFace> = BTreeMap::new();
+    for row in rows {
+        let (Some(id), Some(image)) = (int(row, "id"), int(row, "image")) else { continue };
+        let c = |k: &str| number(row, k).map(|v| v.clamp(0.0, 1.0));
+        let (Some(x0), Some(y0), Some(x1), Some(y1)) = (c("x0"), c("y0"), c("x1"), c("y1")) else { continue };
+        let rect = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+        if rect[2] - rect[0] < 1e-4 || rect[3] - rect[1] < 1e-4 {
+            continue;
+        }
+        let f = faces.entry((image, id)).or_insert_with(|| LrFace { rect, ..Default::default() });
+        let name = text(row, "name").trim().replace('|', "/");
+        if name.is_empty() {
+            continue;
+        }
+        if number(row, "reject").is_some_and(|v| v != 0.0) {
+            f.rejected.push(name);
+        } else if number(row, "pick").is_some_and(|v| v != 0.0) {
+            f.name = Some(name);
+        }
+    }
+    let mut by_image: HashMap<i64, Vec<LrFace>> = HashMap::new();
+    for ((image, _), f) in faces {
+        by_image.entry(image).or_default().push(f);
+    }
+    for im in &mut r.images {
+        if let Some(f) = by_image.remove(&im.id) {
+            im.faces = f;
+        }
+    }
 }
 
 /// Run `f` on a copy of the catalog `lrcat` (with its `-wal` log, which holds the latest
@@ -1367,6 +1426,8 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
     let mut counts = BTreeMap::<&str, usize>::new();
     let mut touched = Map::new();
     let mut edited_at = Map::new();
+    // people confirmed on faces: their keywords become person keywords
+    let mut people: std::collections::BTreeSet<String> = Default::default();
     // (collections only: no photo changes)
     let lr_images: Vec<&LrImage> = if opts.collections_only { Vec::new() } else { masters.iter().copied().chain(copies.iter().copied()).collect() };
     for im in &lr_images {
@@ -1467,6 +1528,44 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
         if !im.keywords.is_empty() {
             *counts.entry("keyworded").or_default() += 1;
         }
+        // faces: Lightroom's boxes are in the photo as it shows it; ours in the file's upright frame
+        if !im.faces.is_empty() {
+            let extra = lr_quarter_turns(&im.orientation).map(|q| (q + 4 - prep.file_turns % 4) % 4).unwrap_or(0);
+            let back = lightcraft_geom::Orientation::from_parts(false, extra).inverse();
+            let mut added = 0;
+            for f in &im.faces {
+                let r = back.map_norm_rect(lightcraft_geom::Rect { x0: f.rect[0], y0: f.rect[1], x1: f.rect[2], y1: f.rect[3] });
+                let rect = lightcraft_meta::Rect { x0: r.x0.min(r.x1), y0: r.y0.min(r.y1), x1: r.x0.max(r.x1), y1: r.y0.max(r.y1) };
+                // the same face read from XMP already: just its name
+                if let Some(old) = m.regions.iter_mut().find(|g| crate::vision::iou(&g.rect, &rect) >= 0.3) {
+                    if old.name.is_none() {
+                        old.name = f.name.clone();
+                    }
+                    continue;
+                }
+                let mut g = lightcraft_meta::Region::face(rect);
+                g.name = f.name.clone();
+                g.rejected = f.rejected.clone();
+                m.regions.push(g);
+                added += 1;
+            }
+            // a confirmed person is a person keyword on the photo, as in Lightroom
+            for n in im.faces.iter().filter_map(|f| f.name.as_ref()) {
+                match m.keywords.iter().find(|k| k.eq_ignore_ascii_case(n) || k.rsplit('|').next().is_some_and(|l| l.trim().eq_ignore_ascii_case(n)))
+                {
+                    Some(k) => {
+                        people.insert(k.clone());
+                    }
+                    None => {
+                        people.insert(n.clone());
+                        m.keywords.push(n.clone());
+                    }
+                }
+            }
+            if added > 0 {
+                *counts.entry("faces").or_default() += added;
+            }
+        }
         if m != p.meta {
             ops.push(Op::SetMeta { id, meta: Box::new(m) });
         }
@@ -1493,6 +1592,14 @@ pub fn migrate(s: &mut Session, rec: &Records, opts: &MigrateOptions) -> crate::
         if d != *p.develop {
             let at = if applied { Some(im.last_edit.clone().unwrap_or_else(|| now.clone())) } else { p.edited.clone() };
             ops.push(Op::SetDevelop { id, settings: Arc::new(d), label: "Lightroom Classic".into(), edited: at });
+        }
+    }
+
+    for n in people {
+        let mut info = s.catalog.keyword_info(&n).cloned().unwrap_or_default();
+        if !info.person {
+            info.person = true;
+            ops.push(Op::SetKeyword { path: n, info: Some(info) });
         }
     }
 

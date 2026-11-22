@@ -384,6 +384,20 @@ pub struct Analysis {
     pub group: Option<u32>,
     /// The best photo of its group.
     pub best: bool,
+    /// Faces found in the photo (0 also when faces weren't analysed: see `face_focus`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub faces: u16,
+    /// Faces whose eyes are both closed (blinks).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub eyes_closed: u16,
+    /// Focus of the photo's main (largest) face, 0..100 like `sharpness`; `None` when faces weren't
+    /// analysed or none was found (catalog format v9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face_focus: Option<f32>,
+}
+
+fn is_zero(v: &u16) -> bool {
+    *v == 0
 }
 
 impl Photo {

@@ -9,6 +9,70 @@ use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
+/// What the search field says in AI mode: what's missing, the indexing, or what to type.
+fn ai_placeholder(app: &LightcraftApp) -> String {
+    use lightcraft_engine::vision::models::{self, Package};
+    let v = &app.session.vision;
+    let i = models::info(Package::Search);
+    if !v.installed(Package::Search) {
+        let dl = v.download_state(Package::Search);
+        if dl.running {
+            return crate::i18n::tr_format!(
+                "downloading the AI search model {d} / {n} MB…",
+                d = format!("{:.0}", dl.done as f64 / 1e6),
+                n = format!("{:.0}", dl.total as f64 / 1e6)
+            );
+        }
+        return crate::i18n::tr_format!(
+            "AI search needs {m} ({mb} MB, {l}): Return downloads it",
+            m = i.name,
+            mb = format!("{:.0}", i.size() as f64 / 1e6),
+            l = i.licence
+        );
+    }
+    let p = v.progress(lightcraft_engine::vision::Kind::Search);
+    if p.running {
+        return crate::i18n::tr_format!("Describe a photo… (indexing {d} / {n})", d = p.done, n = p.total);
+    }
+    crate::i18n::tr("Describe a photo…").into()
+}
+
+/// The search model downloaded (the field said its size and licence) and the library indexed, in the background.
+fn ai_search_prepare(app: &mut LightcraftApp, ctx: &egui::Context) {
+    use lightcraft_engine::vision::models::Package;
+    if !app.session.vision.installed(Package::Search) {
+        return;
+    }
+    let p = app.session.vision.progress(lightcraft_engine::vision::Kind::Search);
+    if !p.running
+        && let Err(e) = app.run("search.index", json!({"scope": "all"}))
+        && !e.contains("already running")
+    {
+        app.toast_error(ctx, e);
+    }
+}
+
+fn ai_search(app: &mut LightcraftApp, ctx: &egui::Context, q: &str) {
+    use lightcraft_engine::vision::models::Package;
+    if !app.session.vision.installed(Package::Search) {
+        if !app.session.vision.download_state(Package::Search).running
+            && let Err(e) = app.run("vision.model.download", json!({"model": "search", "acknowledged": true}))
+        {
+            app.toast_error(ctx, e);
+        }
+        return;
+    }
+    ai_search_prepare(app, ctx);
+    if q.is_empty() {
+        let _ = app.run("library.filter", json!({"semantic": null}));
+        return;
+    }
+    match app.run("search.ai", json!({"query": q})) {
+        Ok(r) => app.toast(ctx, crate::i18n::tr_format!("{n} photos match “{q}”, best first", n = r["matches"].as_u64().unwrap_or(0), q = q)),
+        Err(e) => app.toast_error(ctx, e),
+    }
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let left = if app.integrated_titlebar { 78 } else { 10 };
@@ -68,8 +132,42 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let mut child =
                 ui.new_child(egui::UiBuilder::new().max_rect(sr.shrink2(vec2(10.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
             let empty = app.ui.search.is_empty();
+            // ai.: natural-language search (Lightroom's "search by what's in the photo") instead of text
+            let ai_rect = Rect::from_center_size(pos2(sr.right() - 24.0, sr.center().y), vec2(34.0, 20.0));
+            let ai_resp = ui.interact(ai_rect, egui::Id::new("search-ai"), Sense::click());
+            register(ui.ctx(), "button:searchAi", ai_rect);
+            ui.painter().rect(
+                ai_rect,
+                4.0,
+                if app.ui.search_ai {
+                    t.accent
+                } else if ai_resp.hovered() {
+                    t.hover
+                } else {
+                    t.button
+                },
+                Stroke::new(1.0, t.button_border),
+                StrokeKind::Inside,
+            );
+            ui.painter().text(ai_rect.center(), Align2::CENTER_CENTER, "ai.", t.semibold(11.0), if app.ui.search_ai { t.canvas } else { t.text });
+            let ai_tip = crate::i18n::tr("AI search: describe what's in the photo (“dog on the beach”), Return to search");
+            if ai_resp.on_hover_text(ai_tip).clicked() {
+                app.ui.search_ai = !app.ui.search_ai;
+                // one mode at a time: the text filter or the AI search
+                let q = app.ui.search.clone();
+                let _ = if app.ui.search_ai {
+                    app.run("library.filter", json!({"text": ""}))
+                } else {
+                    app.run("library.filter", json!({"semantic": null, "text": q}))
+                };
+                if app.ui.search_ai {
+                    ai_search_prepare(app, ui.ctx());
+                }
+            }
+            let ai_hint = app.ui.search_ai.then(|| ai_placeholder(app));
             if empty && !focused {
-                let g = child.painter().layout_no_wrap(crate::i18n::tr("Search Photos").into(), t.font(13.5), t.text_dim);
+                let hint = ai_hint.clone().unwrap_or_else(|| crate::i18n::tr("Search Photos").into());
+                let g = child.painter().layout_no_wrap(hint, t.font(13.5), t.text_dim);
                 let w = g.size().x + 24.0;
                 let x0 = sr.center().x - w / 2.0;
                 paint(child.painter(), Rect::from_min_size(pos2(x0, sr.center().y - 8.0), vec2(16.0, 16.0)), Icon::Search, t.text_dim);
@@ -79,11 +177,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 egui::TextEdit::singleline(&mut app.ui.search)
                     .id(id)
                     .frame(egui::Frame::NONE)
-                    .desired_width(sr.width() - 20.0)
+                    .desired_width(sr.width() - 60.0)
                     .font(t.font(13.5))
                     .text_color(t.text),
             );
-            if resp.changed() {
+            if app.ui.search_ai {
+                let q = app.ui.search.trim().to_string();
+                if resp.changed() && q.is_empty() {
+                    let _ = app.run("library.filter", json!({"semantic": null}));
+                }
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    ai_search(app, ui.ctx(), &q);
+                }
+            } else if resp.changed() {
                 let q = app.ui.search.clone();
                 let _ = app.run("library.filter", json!({"text": q}));
             }

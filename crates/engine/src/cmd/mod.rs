@@ -12,6 +12,7 @@ mod color;
 pub(crate) mod convert;
 pub mod copy_subsets;
 mod cull;
+pub(crate) use cull::scores_of as cull_scores;
 pub mod curves;
 mod delete;
 pub(crate) mod develop;
@@ -35,6 +36,7 @@ pub mod metadata;
 pub mod missing;
 pub mod naming;
 mod organize;
+mod people;
 mod prefs;
 mod preset_files;
 pub mod previews;
@@ -175,6 +177,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(map::specs());
         v.extend(publish::specs());
         v.extend(video::specs());
+        v.extend(people::specs());
         v
     })
 }

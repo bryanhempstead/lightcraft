@@ -450,6 +450,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
             None => {}
         }
+        face_names(app, ui, &map, &photo, d.orientation);
     }
     // a fine grid while a transform (geometry) slider is dragged, to judge verticals
     if app.ui.dragging_control.as_deref().is_some_and(|c| c.starts_with("geometry.")) {
@@ -748,6 +749,51 @@ fn region_overlay(
         p.galley(label.min + pad, g, Color32::from_gray(225));
     }
     edit
+}
+
+/// Under each unnamed face box: `?` (Lightroom Classic's name field on a face region); a click opens a field, Enter
+/// names the face (a person keyword, as in the People view).
+fn face_names(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, photo: &lightcraft_catalog::Photo, orient: lightcraft_geom::Orientation) {
+    let t = Tokens::get(ui.ctx());
+    for (index, r) in photo.meta.regions.iter().enumerate() {
+        if r.name.is_some() || r.kind != lightcraft_meta::RegionKind::Face {
+            continue;
+        }
+        let norm = orient.map_norm_rect(r.rect);
+        let rect = Rect::from_two_pos(map.screen(Point::new(norm.x0, norm.y0)), map.screen(Point::new(norm.x1, norm.y1)));
+        let editing = app.ui.face_name_edit.as_ref().is_some_and(|(i, _)| *i == index);
+        if editing {
+            let w = rect.width().max(140.0);
+            let fr = Rect::from_min_size(pos2(rect.center().x - w / 2.0, rect.bottom() + 6.0), vec2(w, 24.0));
+            let Some((_, text)) = app.ui.face_name_edit.as_mut() else { continue };
+            let edit = ui.put(fr, egui::TextEdit::singleline(text).hint_text("name").font(t.font(12.5)).desired_width(w - 8.0));
+            register(ui.ctx(), format!("faceName:{index}"), fr);
+            if !edit.has_focus() && !edit.lost_focus() {
+                edit.request_focus();
+            }
+            if edit.lost_focus() {
+                let name = text.trim().to_string();
+                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                app.ui.face_name_edit = None;
+                if enter
+                    && !name.is_empty()
+                    && let Err(e) = app.run("people.name", json!({"faces": [{"photo": photo.id.0, "index": index}], "name": name}))
+                {
+                    app.toast_error(ui.ctx(), e);
+                }
+            }
+            continue;
+        }
+        let q = Rect::from_center_size(pos2(rect.center().x, rect.bottom() + 16.0), vec2(26.0, 20.0));
+        let resp = ui.interact(q, egui::Id::new(("face-name", index)), Sense::click());
+        register(ui.ctx(), format!("faceNameButton:{index}"), q);
+        let p = ui.painter();
+        p.rect_filled(q, 3.0, Color32::from_rgba_unmultiplied(56, 56, 56, if resp.hovered() { 250 } else { 215 }));
+        p.text(q.center(), Align2::CENTER_CENTER, "?", t.semibold(12.0), Color32::from_gray(225));
+        if resp.on_hover_text(crate::i18n::tr("Name this person")).clicked() {
+            app.ui.face_name_edit = Some((index, String::new()));
+        }
+    }
 }
 
 /// A small pill at the loupe's top left naming the active filters: the filmstrip and Next / Previous

@@ -1862,8 +1862,15 @@ pub fn export_keywords_with(
     let mut flat = ek.flat;
     if !o.remove_people {
         for r in photo.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+            // a person keyword left out of export (its own Include on Export option) keeps its name out too
+            let hidden = |n: &str| {
+                cat.listed_keywords().any(|k| {
+                    k.info.person && !k.info.include_on_export && k.path.rsplit('|').next().is_some_and(|l| l.trim().eq_ignore_ascii_case(n))
+                })
+            };
             if let Some(n) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty())
                 && !flat.iter().any(|x| x.eq_ignore_ascii_case(n))
+                && !hidden(n)
             {
                 flat.push(n.to_string());
             }

@@ -251,7 +251,7 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
         m.keywords = k.clone();
     }
     if let Some(r) = &sc.regions {
-        m.regions = r.clone();
+        m.regions = merge_regions(r, &m.regions);
     }
     let develop = match &sc.develop {
         Some(DevelopPatch::Full(s)) => (**s).clone(),
@@ -270,6 +270,29 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
     p.develop = Arc::new(develop);
     p.edited = Some(now.to_string());
     true
+}
+
+/// The regions of a photo after reading a sidecar's `file` list: the file's regions, each keeping the
+/// rejected suggestions of the catalog region at the same place, plus the catalog's unnamed faces the file
+/// doesn't cover (found by LightCraft's face finder; sidecars hold named faces only).
+pub fn merge_regions(file: &[lightcraft_meta::Region], catalog: &[lightcraft_meta::Region]) -> Vec<lightcraft_meta::Region> {
+    use crate::vision::iou;
+    let mut out: Vec<lightcraft_meta::Region> = file
+        .iter()
+        .map(|r| {
+            let mut r = r.clone();
+            if let Some(c) = catalog.iter().find(|c| c.kind == r.kind && iou(&c.rect, &r.rect) >= 0.3) {
+                r.rejected = c.rejected.clone();
+            }
+            r
+        })
+        .collect();
+    for c in catalog.iter().filter(|c| c.name.is_none() && c.kind == lightcraft_meta::RegionKind::Face) {
+        if !file.iter().any(|r| iou(&r.rect, &c.rect) >= 0.3) {
+            out.push(c.clone());
+        }
+    }
+    out
 }
 
 impl SidecarData {
@@ -308,6 +331,8 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
         capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
         gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
         iptc_ext: p.meta.iptc_ext.clone(),
+        regions: p.meta.regions.clone(),
+        region_dims: Some((p.width, p.height)),
         ..Default::default()
     };
     let settings = serde_json::to_string(&*p.develop).unwrap_or_default();
@@ -328,6 +353,7 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
 /// LightCraft has no value, so clearing a field clears it in the file too). All of them are read
 /// back on import and by Read Metadata from File.
 pub const OWNED: &[&str] = &[
+    "mwg-rs:Regions",
     "xmp:Rating",
     "xmp:Label",
     "dc:title",

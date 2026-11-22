@@ -78,6 +78,8 @@ mod tests_offline;
 #[cfg(test)]
 mod tests_panels;
 #[cfg(test)]
+mod tests_people;
+#[cfg(test)]
 mod tests_publish;
 #[cfg(test)]
 mod tests_quit_unsaved;
@@ -285,6 +287,8 @@ impl LightcraftApp {
         session.segmenter.background = true;
         // Generative Remove makes its pixels on its own worker too
         session.genremove.background = true;
+        // face finding and AI search indexing run on worker threads; frames apply what they found
+        session.vision.background = true;
         Self {
             session,
             ui: UiState::default(),
@@ -502,6 +506,16 @@ impl LightcraftApp {
     /// show their errors; start a zoomed-in detail pass once the clicking stops
     /// (`ui.detail_due`); watch the model download. Never waits for the model.
     fn ai_mask_detail(&mut self, ctx: &egui::Context) {
+        // face finding / AI search indexing: found faces become face regions, errors a toast
+        if self.session.vision_poll() {
+            ctx.request_repaint();
+        }
+        if let Some(e) = self.session.vision.take_messages().into_iter().last() {
+            self.toast_error(ctx, e);
+        }
+        if self.session.vision.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
         let polled = self.session.segment_poll();
         let now = ctx.input(|i| i.time);
         if polled.changed {

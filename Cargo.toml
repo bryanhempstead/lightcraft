@@ -39,6 +39,7 @@ lightcraft-segment = { path = "crates/segment" }
 lightcraft-denoise-core = { path = "crates/denoise-core" }
 lightcraft-rcd = { path = "crates/rcd" }
 lightcraft-enhance = { path = "crates/enhance", default-features = false }
+lightcraft-vision = { path = "crates/vision" }
 
 # foundation
 thiserror = "2"

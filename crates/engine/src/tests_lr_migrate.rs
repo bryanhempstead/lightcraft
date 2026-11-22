@@ -860,3 +860,44 @@ fn lens_profile_choice_is_migrated_and_rematched() {
     assert!(s.render_now(a.id, 24, 16).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Lightroom's face regions (`AgLibraryFace`) and confirmed people (`AgLibraryKeywordFace`) arrive as face
+/// regions, person keywords and rejected suggestions; a photo Lightroom shows turned has its boxes turned back.
+#[test]
+fn faces_and_people_from_the_catalog() {
+    let dir = std::env::temp_dir().join(format!("lc-lrmig-faces-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("shoot")).unwrap();
+    write_png(&dir.join("shoot/a.png"));
+    let root = format!("{}/", dir.display());
+    let images = vec![json!({"id": 1, "root": root, "folder": "shoot/", "base": "a", "ext": "png", "orientation": "BC"})];
+    let mut rec = records_from_rows("t.lrcat", &images, &[], &[], &[], &[], &[]);
+    let faces = vec![
+        json!({"id": 10, "image": 1, "x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4, "name": "Ann", "pick": 1.0}),
+        json!({"id": 10, "image": 1, "x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4, "name": "Bo", "reject": 1.0}),
+        json!({"id": 11, "image": 1, "x0": 0.6, "y0": 0.6, "x1": 0.7, "y1": 0.8}),
+        json!({"id": 12, "image": 1, "x0": "nope", "y0": 0.6, "x1": 0.7, "y1": 0.8}),
+        json!({"id": 13, "image": 99, "x0": 0.1, "y0": 0.1, "x1": 0.2, "y1": 0.2}),
+    ];
+    attach_faces(&mut rec, &faces);
+    assert_eq!(rec.images[0].faces.len(), 2);
+    assert_eq!(rec.images[0].faces[0].name.as_deref(), Some("Ann"));
+    assert_eq!(rec.images[0].faces[0].rejected, vec!["Bo".to_string()]);
+    let rec_path = dir.join("records.json");
+    std::fs::write(&rec_path, serde_json::to_vec(&rec).unwrap()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    s.execute("library.migrateLightroom", &json!({"records": rec_path.to_string_lossy(), "presets": false})).unwrap();
+    let p = s.catalog.photos().next().unwrap().clone();
+    assert_eq!(p.meta.regions.len(), 2);
+    let ann = &p.meta.regions[0];
+    assert_eq!(ann.name.as_deref(), Some("Ann"));
+    assert_eq!(ann.rejected, vec!["Bo".to_string()]);
+    // shown turned a quarter clockwise (the PNG has no EXIF turn): back to the upright frame
+    let want =
+        lightcraft_geom::Orientation::from_parts(false, 1).inverse().map_norm_rect(lightcraft_geom::Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.4 });
+    assert!((ann.rect.x0 - want.x0.min(want.x1)).abs() < 1e-9 && (ann.rect.y1 - want.y0.max(want.y1)).abs() < 1e-9, "{:?} vs {want:?}", ann.rect);
+    assert!(p.meta.keywords.contains(&"Ann".to_string()));
+    assert!(s.catalog.keyword_info("Ann").is_some_and(|i| i.person));
+    let _ = std::fs::remove_dir_all(&dir);
+}
