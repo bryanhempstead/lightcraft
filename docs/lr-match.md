@@ -493,3 +493,38 @@ profile's hue/sat map) with LightCraft in the loop (`calfit_lc.py`) only reaches
 there can't reproduce it. Camera Raw's calibration edits the camera profile, i.e. acts before the
 DCP hue/sat map and look table; moving it there (decode stage, `engine::adobe`) is the fix to try
 next.
+
+### Basic tone on edited photos (R02): what Camera Raw does, measured
+
+Single sliders on synthetic scenes, LightCraft against Camera Raw (`make_pv.py`, `lccmp.py`,
+`hsana.py`; R6 colour, ΔE2000): the global sliders are close (Exposure 0.56–0.65, Whites / Blacks
+0.16–0.63, Contrast 0.6–1.05), the local ones are not — Shadows +69 4.56 (grid) / 1.88 (spatial),
+Highlights −60 2.44 / 1.58, Texture +40 3.18 / 0.61, Clarity +40 1.55 / 1.69, Dehaze +30 0.89 /
+1.31 — and Bryan's whole tone + colour recipe is 3.69 (grid) / 3.19 (spatial).
+`make_hs.py` + `hsprobe.py` then took Highlights / Shadows apart (uniform fields, two-level fields
+whose dark share is 10 / 50 / 90 %, the same field 1–2 EV brighter / darker, a thin probe ramp
+across, and combinations with Exposure / Contrast / his tone sliders):
+
+- **A uniform image is never changed** (Shadows +100, Highlights −100 at −8…0 EV: 0.000);
+  LightCraft moves it by up to +0.76 / −0.41 EV.
+- **The size of the move depends on the whole image, not on the level alone.** Highlights −100
+  pulls a −1.5 EV region by −2.08 EV when it is 90 % of the frame, −3.86 at 50 %, −3.51 at 10 %,
+  and by −2.56 / −4.55 / −4.62 when the whole field is 1 EV brighter / 1 / 2 EV darker; it also
+  pulls the −6 EV half down (−1.07). Shadows +100 lifts a −6 EV region +0.94 / +0.74 / +0.61
+  (10 / 50 / 90 % of the frame) and the bright half by ≤ 0.05. LightCraft: Shadows 2–3× too strong
+  (+1.89 on the dark half, +0.26 on the bright one), Highlights −100 3–5× too weak (−0.83) and
+  lifting deep shadows (+1.5 EV) where Camera Raw darkens them; Highlights +30 / +50 lifts darks too
+  in Camera Raw (+0.34 / +0.57), not in LightCraft.
+- **Edges**: the moves stop sharply at a step edge (no spread, no halo) and fine detail keeps its
+  contrast to its surroundings (the probe ramp rides on its region's move) — an edge-aware,
+  multi-scale operator (consistent with the local Laplacian filters Adobe published for PV2012),
+  with a global, image-dependent part on top.
+- With his sliders (E −1.1, C −72, H +30, S +69, W −36, B +30) on the 50 % field Camera Raw gives
+  dark +1.18 / bright −0.20 EV, LightCraft +1.30 / −0.64; H / S's share: Camera Raw +0.82 / +1.03,
+  LightCraft +1.13 / +0.62.
+
+None of the tried closed forms (a function of level relative to the image's log-mean key, to its
+white, or "level minus its value at the key") fits all fields; LightCraft's per-slider tables
+(level relative to the key) cannot express it. Next: port an edge-aware local Laplacian operator
+(darktable's `local_laplacian`, GPL, allowed in the fork) and fit its remapping to these fields,
+then refit the Basic-tone tables with the exact point and parametric curves underneath.
