@@ -292,8 +292,14 @@ fn player_streams_frames_from_the_in_point() {
         assert!((24..=27).contains(&got.len()), "{b:?}: one second at 25 fps: {}", got.len());
         // the due frame only: with the clock at 1.2 s nothing later is handed out
         let mut p2 = video::Player::start_with(b, &path, &info, 1.0, 2.0, (32, 24), None, false).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let f = p2.frame_at(1.2).expect("a frame is due");
+        // wait for the decoder (a fixed sleep failed under heavy load), then ask once more
+        let t1 = std::time::Instant::now();
+        let mut f = p2.frame_at(1.2);
+        while f.is_none() && t1.elapsed().as_secs() < 30 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            f = p2.frame_at(1.2);
+        }
+        let f = f.expect("a frame is due");
         assert!(f.t <= 1.2 + 1e-6, "{b:?}: {}", f.t);
         drop(p2);
     }
