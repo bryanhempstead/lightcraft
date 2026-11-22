@@ -506,6 +506,36 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Which Defringe range a picked colour falls in ([`fringe_pick`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fringe {
+    Purple,
+    Green,
+}
+
+/// Lightroom's Fringe Color Selector: the most saturated pixel within 3 px of `(cx, cy)` of `img`
+/// (fringes are a few pixels wide; the click rarely lands on the most coloured one) and its hue
+/// as a position (0..100) on the Purple or Green Hue slider. `None` for a near-neutral pixel or a
+/// hue outside both ranges (Lightroom: "the sampled colour is not purple or green").
+pub fn fringe_pick(img: &Rgb32f, cx: isize, cy: isize) -> Option<(Fringe, f64)> {
+    let mut best: Option<(f32, f32)> = None;
+    for dy in -3..=3 {
+        for dx in -3..=3 {
+            let [_, a, b] = oklab_from_2020(img.get_clamped(cx + dx, cy + dy).map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 }));
+            let c = a.hypot(b);
+            if c.is_finite() && best.is_none_or(|(bc, _)| c > bc) {
+                best = Some((c, b.atan2(a).to_degrees().rem_euclid(360.0)));
+            }
+        }
+    }
+    let (c, hue) = best?;
+    if c < 0.02 {
+        return None;
+    }
+    let pos = |(lo, hi): (f32, f32)| (lo..=hi).contains(&hue).then(|| f64::from((hue - lo) / (hi - lo) * 100.0));
+    pos(PURPLE_HUES).map(|p| (Fringe::Purple, p)).or_else(|| pos(GREEN_HUES).map(|p| (Fringe::Green, p)))
+}
+
 /// Membership of hue `h` (deg) in `[lo, hi]` (deg) with soft shoulders.
 fn hue_weight(h: f32, lo: f32, hi: f32) -> f32 {
     let feather = 8.0;
@@ -877,6 +907,29 @@ mod tests {
             }
             assert!(decided * 10 > tiles * 8, "{decided}/{tiles} blocks decided");
         }
+    }
+
+    #[test]
+    fn the_fringe_selector_finds_purple_and_green_fringes() {
+        use lightcraft_color::perceptual::oklab_to_2020;
+        let lab_hue = |deg: f32| {
+            let r = deg.to_radians();
+            oklab_to_2020([0.5, 0.12 * r.cos(), 0.12 * r.sin()]).map(|v| v.max(0.0))
+        };
+        // a grey image with one purple pixel two pixels from the click
+        let mut img = Rgb32f::filled(16, 16, [0.2, 0.2, 0.2]);
+        img.data[6 * 16 + 8] = lab_hue(300.0);
+        let (kind, pos) = fringe_pick(&img, 6, 6).expect("a purple fringe");
+        assert_eq!(kind, Fringe::Purple);
+        assert!((pos - 50.0).abs() < 3.0, "{pos}");
+        img.data[6 * 16 + 8] = lab_hue(150.0);
+        assert_eq!(fringe_pick(&img, 6, 6).map(|p| p.0), Some(Fringe::Green));
+        // neutral, out-of-range hues, hostile pixels and coordinates: no pick, no panic
+        assert_eq!(fringe_pick(&Rgb32f::filled(4, 4, [0.3, 0.3, 0.3]), 1, 1), None);
+        img.data[6 * 16 + 8] = lab_hue(60.0);
+        assert_eq!(fringe_pick(&img, 6, 6), None);
+        img.data[6 * 16 + 8] = [f32::NAN, f32::INFINITY, -1.0];
+        assert_eq!(fringe_pick(&img, -50, 9999), None);
     }
 
     /// A grid of dark lines on white with lateral CA: red magnified by `ar`, blue by `ab` (about the centre).

@@ -153,6 +153,31 @@ fn masks_crop_and_render() {
     s.execute("develop.wbPick", &json!({"x": 0.5, "y": 0.5})).unwrap();
 }
 
+/// R25: the Fringe Color Selector sets the Defringe range of the colour clicked (and an Amount
+/// when there is none), and refuses a neutral spot.
+#[test]
+fn fringe_selector_sets_the_defringe_range() {
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use lightcraft_color::perceptual::oklab_to_2020;
+    let mut s = Session::new();
+    let p = Photo::new(PhotoId(1), Source::File { path: "fringe.dng".into() }, "fringe.dng", "DNG", 64, 64, "2026-01-01");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let purple = oklab_to_2020([0.5, 0.12 * 300f32.to_radians().cos(), 0.12 * 300f32.to_radians().sin()]).map(|v| v.max(0.0));
+    s.media.file_loader = Some(std::sync::Arc::new(move |_, _| {
+        let mut img = lightcraft_raster::Rgb32f::filled(64, 64, [0.2, 0.2, 0.2]);
+        img.data[32 * 64 + 33] = purple;
+        Ok((img, Default::default()))
+    }));
+    s.execute("library.select", &json!({"ids": [1]})).unwrap();
+    let r = s.execute("develop.defringePick", &json!({"x": 0.5, "y": 0.5})).unwrap();
+    assert_eq!(r["fringe"], "purple");
+    let d = active_dev(&s);
+    assert_eq!(d.optics.defringe_purple_amount, 5.0);
+    assert!(d.optics.defringe_purple_hue_lo < 50.0 && d.optics.defringe_purple_hue_hi > 50.0, "{:?}", d.optics);
+    assert!(s.execute("develop.defringePick", &json!({"x": 0.05, "y": 0.05})).is_err(), "a grey spot is no fringe");
+    assert!(s.execute("develop.defringePick", &json!({"x": "left"})).is_err());
+}
+
 #[test]
 fn versions_history_and_reset() {
     let mut s = demo();

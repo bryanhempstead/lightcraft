@@ -760,3 +760,11 @@ So applying the profile's model would have added the 1.2 px the model predicts; 
 ignoring it, and "Remove CA" stays its own estimator (both within 0.3 px of Camera Raw here).
 Not settled: lenses with real lateral CA (none of Bryan's profiled lenses showed any).
 
+### Fringe Color Selector (R25)
+
+`develop.defringePick {x, y}` (the eyedropper next to Defringe in Lens Corrections ▸ Manual): the
+most saturated pixel within 3 px of the click on the preview-level source, its OkLab hue as a
+position on the Purple (240–360°) or Green (90–210°) Hue slider, and a 24-wide hue range centred
+on it; Amount becomes 5 when it was 0; a neutral or other hue is refused with a message. The
+defringe itself (`optics::defringe`, LightCraft's own edge-gated desaturation) was not measured
+against Camera Raw: Bryan uses Purple Amount on 473 photos, at one preset value.
