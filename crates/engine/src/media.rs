@@ -121,11 +121,13 @@ pub struct DecodedSource {
     pub camera_tone: Option<lightcraft_pipeline::tone::CameraTone>,
     /// Decoded for a photo on the file's own profile ([`own_profile_source`]).
     pub own_profile: bool,
+    /// Decoded from this in-place Enhance result ([`crate::enhance::enhanced_source`]).
+    pub enhanced: Option<crate::enhance::Enhanced>,
 }
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, own_profile: false }
+        DecodedSource { image, info, camera_tone: None, own_profile: false, enhanced: None }
     }
 
     /// What to render these pixels against: the decoder's facts, else `header` (the catalog's)
@@ -151,6 +153,8 @@ pub enum SourceRef {
         fallback: Option<std::path::PathBuf>,
         /// Decode on the file's own profile ([`own_profile_source`]).
         own_profile: bool,
+        /// Decode from this in-place Enhance result, when it is there ([`crate::enhance::enhanced_source`]).
+        enhanced: Option<crate::enhance::Enhanced>,
     },
     /// A smart preview standing in for a missing original.
     Smart {
@@ -167,10 +171,17 @@ impl SourceRef {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
             SourceRef::Demo { scene, max_edge } => Arc::new(scene.render_fit(*max_edge)),
-            SourceRef::File { path, max_edge, loader, fallback, own_profile } => {
+            SourceRef::File { path, max_edge, loader, fallback, own_profile, enhanced } => {
                 let r = match loader {
-                    Some(l) => crate::files::with_own_profile(*own_profile, || l(path, *max_edge))
-                        .map(|(image, info)| DecodedSource { own_profile: *own_profile, ..DecodedSource::new(Arc::new(image), Some(info)) }),
+                    Some(l) => {
+                        crate::files::with_own_profile(*own_profile, || crate::enhance::with_enhanced(enhanced.clone(), || l(path, *max_edge))).map(
+                            |(image, info)| DecodedSource {
+                                own_profile: *own_profile,
+                                enhanced: enhanced.clone(),
+                                ..DecodedSource::new(Arc::new(image), Some(info))
+                            },
+                        )
+                    }
                     None => Err(format!("no decoder available for {path}")),
                 };
                 // An offline original renders from its smart preview (no decoder facts: header ones).
@@ -404,12 +415,16 @@ impl MediaCache {
 
     pub fn source_ref(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
         let own = own_profile_source(p);
-        if let Some(a) = self.get_source(p.id, level).filter(|a| a.own_profile == own || !matches!(p.source, Source::File { .. })) {
+        let enh = crate::enhance::enhanced_source(p);
+        if let Some(a) =
+            self.get_source(p.id, level).filter(|a| (a.own_profile == own && a.enhanced == enh) || !matches!(p.source, Source::File { .. }))
+        {
             return SourceRef::Loaded(Box::new(a));
         }
         let mut r = self.source_ref_uncached(p, level);
-        if let SourceRef::File { own_profile, .. } = &mut r {
+        if let SourceRef::File { own_profile, enhanced, .. } = &mut r {
             *own_profile = own;
+            *enhanced = enh;
         }
         r
     }
@@ -450,11 +465,13 @@ impl MediaCache {
                 }
                 match self.scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => SourceRef::Demo { scene: Box::new(s.clone()), max_edge },
-                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, own_profile: false },
+                    None => {
+                        SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, own_profile: false, enhanced: None }
+                    }
                 }
             }
             Source::File { path } => {
-                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, own_profile: false }
+                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, own_profile: false, enhanced: None }
             }
         }
     }
@@ -1284,6 +1301,7 @@ mod tests {
             })),
             fallback: None,
             own_profile: false,
+            enhanced: None,
         };
         job.info = SourceInfo::default(); // Header facts cannot override decoder facts.
         job.settings = Arc::new(DevelopSettings::default());

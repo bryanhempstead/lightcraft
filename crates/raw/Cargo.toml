@@ -15,6 +15,8 @@ lightcraft-raster = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-geom = { workspace = true }
 lightcraft-libraw-sys = { workspace = true }
+# Raw Details demosaic (RCD, GPL-3.0-or-later: this fork links GPL code, Bryan 2026-11-21)
+lightcraft-rcd = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }

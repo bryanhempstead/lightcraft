@@ -13,6 +13,7 @@ pub mod filmstrip;
 pub mod filterbar;
 pub mod grid;
 pub mod left;
+pub mod lens_blur;
 pub mod library_problem;
 pub mod library_right;
 pub mod mask_effects;

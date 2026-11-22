@@ -77,7 +77,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
         ui.add_space(6.0);
         // (Bryan's labels: short, lowercase, with a period)
-        let tiles: [(&str, &str, Icon); 12] = [
+        let tiles: [(&str, &str, Icon); 13] = [
             ("subject", "subj.", Icon::Subject),
             ("sky", "sky.", Icon::Sky),
             ("background", "bg.", Icon::Subject),
@@ -90,6 +90,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ("radial", "rad.", Icon::Radial),
             ("luminanceRange", "lum.", Icon::Sliders),
             ("colorRange", "clr.", Icon::Picker),
+            ("depthRange", "depth.", Icon::Sliders),
         ];
         // four 52 pt tiles a row when they fit, else as many as fit (at least three, shrunk)
         let (cols, tile) = tile_layout(ui.available_width());
@@ -642,9 +643,48 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 app.run("mask.update", json!({"component": comp, "shape": MaskShape::ColorRange { samples: samples.clone(), refine: v }}))
             });
         }
+        MaskShape::DepthRange { lo, hi, feather } => {
+            // Select Depth Range (0 nearest … 100 farthest) over the photo's depth map
+            ui.label(egui::RichText::new(crate::i18n::tr("Select Depth Range")).color(t.text_dim).size(11.5));
+            let (lo, hi, feather) = (*lo, *hi, *feather);
+            for (spec, v) in [(&DEPTH_NEAR, lo), (&DEPTH_FAR, hi), (&DEPTH_SMOOTH, feather)] {
+                let out = crate::widgets::slider(ui, spec, v * 100.0, true, None);
+                let id = spec.id;
+                crate::panels::edit::apply_slider_out(app, spec, out, |app, v| {
+                    let v = v / 100.0;
+                    let s = match id {
+                        "depthRange.near" => MaskShape::DepthRange { lo: v, hi, feather },
+                        "depthRange.far" => MaskShape::DepthRange { lo, hi: v, feather },
+                        _ => MaskShape::DepthRange { lo, hi, feather: v },
+                    };
+                    app.run("mask.update", json!({"component": comp, "shape": s}))
+                });
+            }
+        }
         _ => {}
     }
 }
+
+fn depth_spec(id: &'static str, label: &'static str, default: f64) -> lightcraft_develop::ControlSpec {
+    lightcraft_develop::ControlSpec {
+        id,
+        label,
+        section: lightcraft_develop::Section::LensBlur,
+        min: 0.0,
+        max: 100.0,
+        default,
+        step: 1.0,
+        decimals: 0,
+        track: lightcraft_develop::Track::Gradient { from: "#f0c040", to: "#5040c0" },
+    }
+}
+
+static DEPTH_NEAR: std::sync::LazyLock<lightcraft_develop::ControlSpec> = std::sync::LazyLock::new(|| depth_spec("depthRange.near", "Near", 0.0));
+static DEPTH_FAR: std::sync::LazyLock<lightcraft_develop::ControlSpec> = std::sync::LazyLock::new(|| depth_spec("depthRange.far", "Far", 30.0));
+static DEPTH_SMOOTH: std::sync::LazyLock<lightcraft_develop::ControlSpec> = std::sync::LazyLock::new(|| lightcraft_develop::ControlSpec {
+    track: lightcraft_develop::Track::Plain,
+    ..depth_spec("depthRange.smoothness", "Smoothness", 5.0)
+});
 
 /// The right-click / "…" menu of one component of the selected mask.
 fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: usize, label: &str, count: usize) {
@@ -1042,6 +1082,7 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
         ("subject", "Subject"),
         ("background", "Background"),
         ("luminanceRange", "Luminance Range"),
+        ("depthRange", "Depth Range"),
     ] {
         // painting only adds or erases
         if kind == "brush" && op == "intersect" {

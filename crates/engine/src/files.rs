@@ -210,6 +210,25 @@ pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usi
     [8usize, 6, 4, 3, 2].into_iter().find(|&k| raw.can_bin(k) && (long / k >= need || (k == 3 && !raw.can_bin(2) && long / k >= need3)))
 }
 
+/// A raw's camera RGB for a source of at most `max_edge`: its in-place Enhance result when this load asked for one
+/// ([`crate::enhance::with_enhanced`]), else the mosaic binned straight to about the size needed, or demosaiced.
+fn develop_source(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Result<Rgb32f, String> {
+    if let Some(img) = crate::enhance::product_for_load(max_edge) {
+        return Ok(img);
+    }
+    let binned = match bin_factor(raw, max_edge) {
+        Some(k) => raw.develop_binned(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,
+        None => None,
+    };
+    match binned {
+        Some(img) => Ok(img),
+        None => {
+            let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
+            raw.develop(method).map_err(|e| e.to_string())
+        }
+    }
+}
+
 /// Decode a file into a linear Rec.2020 image no larger than `max_edge`, oriented.
 ///
 /// Runs on a rayon worker: its many short parallel loops then start on the worker's own queue
@@ -217,14 +236,17 @@ pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usi
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
     let own = own_profile();
-    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, own))
+    // (the scope may run on a pool thread: this load's in-place Enhance goes along)
+    let enh = crate::enhance::current_enhanced();
+    rayon::scope(|_| crate::enhance::with_enhanced(enh, || load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, own)))
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
 pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
     let own = own_profile();
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, own))
+    let enh = crate::enhance::current_enhanced();
+    rayon::scope(move |_| crate::enhance::with_enhanced(enh, || load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, own)))
 }
 
 thread_local! {
@@ -376,17 +398,7 @@ fn load_raw(
                 None => ch.camera_image(&m64, wb, gain)?,
             },
             None => {
-                let binned = match bin_factor(&raw, max_edge) {
-                    Some(k) => raw.develop_binned(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,
-                    None => None,
-                };
-                let mut img = match binned {
-                    Some(img) => img,
-                    None => {
-                        let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-                        raw.develop(method).map_err(|e| e.to_string())?
-                    }
-                };
+                let mut img = develop_source(&raw, max_edge)?;
                 stages.push(("develop", t0.elapsed()));
                 lightcraft_raw::highlight::reconstruct(&mut img, t.wb, HIGHLIGHT_CLIP);
                 stages.push(("highlights", t0.elapsed()));
@@ -563,17 +575,7 @@ fn load_adobe(
         Some((ch, Some((lm, lwb, lev)))) => ch.camera_image(&lm, lwb, 2f32.powf(lev as f32))?,
         Some((ch, None)) => ch.camera_image(&color.matrix, wb, gain)?,
         None => {
-            let binned = match bin_factor(&raw, max_edge) {
-                Some(k) => raw.develop_binned(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,
-                None => None,
-            };
-            let mut img = match binned {
-                Some(img) => img,
-                None => {
-                    let method = if max_edge <= 600 { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
-                    raw.develop(method).map_err(|e| e.to_string())?
-                }
-            };
+            let mut img = develop_source(&raw, max_edge)?;
             lightcraft_raw::highlight::reconstruct(&mut img, color.wb, HIGHLIGHT_CLIP);
             img
         }

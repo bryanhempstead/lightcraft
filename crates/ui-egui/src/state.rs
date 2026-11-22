@@ -914,6 +914,10 @@ pub enum Dialog {
     Merge {
         opts: crate::merge::MergeDialog,
     },
+    /// Photo ▸ Enhance… options; the preview lives in the app.
+    Enhance {
+        opts: crate::enhance::EnhanceDialog,
+    },
     /// Settings (preferences): `tab` = general | import | performance | interface.
     Settings {
         tab: String,

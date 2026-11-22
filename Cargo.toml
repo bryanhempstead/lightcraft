@@ -36,6 +36,9 @@ lightcraft-ui-egui = { path = "crates/ui-egui" }
 lightcraft-mcp = { path = "crates/mcp" }
 lightcraft-fetch = { path = "crates/fetch" }
 lightcraft-segment = { path = "crates/segment" }
+lightcraft-denoise-core = { path = "crates/denoise-core" }
+lightcraft-rcd = { path = "crates/rcd" }
+lightcraft-enhance = { path = "crates/enhance", default-features = false }
 
 # foundation
 thiserror = "2"

@@ -31,6 +31,8 @@ pub struct Frame {
     pub flip_v: bool,
     /// Lens corrections / perspective (None = identity).
     pub warp: Option<Warp>,
+    /// The photo's depth map, decoded (Lens Blur, Depth Range masks).
+    pub depth: Option<std::sync::Arc<lightcraft_develop::DepthGrid>>,
 }
 
 impl Frame {
@@ -62,6 +64,7 @@ impl Frame {
             flip_h: apply_crop && s.crop.flip_h,
             flip_v: apply_crop && s.crop.flip_v,
             warp: (!warp.is_identity()).then_some(warp),
+            depth: s.depth.as_ref().and_then(|d| d.grid()).map(std::sync::Arc::new),
         };
         if apply_crop && s.geometry.constrain_crop {
             f.constrain_to_image();

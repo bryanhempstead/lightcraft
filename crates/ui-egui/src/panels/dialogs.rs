@@ -195,6 +195,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::PasteMasks { .. } => "Paste Masks",
         Dialog::Export { .. } => "Export",
         Dialog::Merge { opts } => opts.title(),
+        Dialog::Enhance { .. } => "Enhance",
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::DeletePhotos { rejected: true, .. } => "Delete Rejected Photos",
@@ -1124,6 +1125,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     });
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
+                Dialog::Enhance { opts } => crate::enhance::body(app, ui, opts),
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
                 Dialog::Settings { tab } => crate::panels::settings::body(app, ui, tab),
                 Dialog::SamModel { error, .. } => sam_model_body(app, ui, error.as_deref()),
@@ -1307,6 +1309,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         add_label.as_str()
                     }
                     Dialog::Merge { .. } => "Merge",
+                    Dialog::Enhance { opts } if !opts.options().any() => "",
+                    Dialog::Enhance { .. } => "enh.",
                     Dialog::ConfirmDelete { .. } => "Delete",
                     Dialog::DeletePhotos { count, copies, .. } if count == copies => "remove.",
                     Dialog::DeletePhotos { .. } => "delete.from.disk.",
@@ -1566,6 +1570,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             app.run("app.export", p)
         }
         Dialog::Merge { opts } => crate::merge::start_final(app, opts),
+        Dialog::Enhance { opts } => crate::enhance::start_final(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
         Dialog::DeletePhotos { count, copies, rejected } => {

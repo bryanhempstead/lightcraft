@@ -71,6 +71,8 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
                 .unwrap_or_default();
             MaskShape::ColorRange { samples, refine: f64_or(p, "refine", 50.0) }
         }
+        // Depth Range (0 nearest … 1 farthest; the photo's depth map is estimated when it has none)
+        "depthRange" => MaskShape::DepthRange { lo: f64_or(p, "lo", 0.0), hi: f64_or(p, "hi", 0.3), feather: f64_or(p, "feather", 0.05) },
         "object" => MaskShape::Object { hint: points(p, "points"), exclude: points(p, "exclude"), seg: seg_param(p), detail: vec![], edge: 0.0 },
         "prompt" => {
             MaskShape::Prompt { text: str_param(p, "text").unwrap_or_default().trim().to_string(), seg: seg_param(p), detail: vec![], edge: 0.0 }
@@ -79,7 +81,7 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
             return Err(bad(
                 c,
                 format!(
-                    "unknown mask kind `{other}` (brush|linear|radial|sky|subject|background|landscape|people|luminanceRange|colorRange|object|prompt)"
+                    "unknown mask kind `{other}` (brush|linear|radial|sky|subject|background|landscape|people|luminanceRange|colorRange|depthRange|object|prompt)"
                 ),
             ));
         }
@@ -284,6 +286,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                 }
                 let mut shape = shape_of(p, "radial", "mask.add")?;
+                if matches!(shape, MaskShape::DepthRange { .. })
+                    && let Some(id) = s.active()
+                {
+                    s.ensure_depth(id)?;
+                }
                 let name = str_param(p, "name").map(str::to_string);
                 let to = Target { mask: None, op: "add".into(), name: name.clone() };
                 let later = resolve_ai(s, &mut shape, p, &to, "mask.add")?;
@@ -331,6 +338,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("mask.addComponent", format!("no mask {mid}")));
                 }
                 let mut shape = shape_of(p, "brush", "mask.addComponent")?;
+                if matches!(shape, MaskShape::DepthRange { .. }) {
+                    s.ensure_depth(id)?;
+                }
                 let to = Target { mask: Some(mid), op: p.get("op").and_then(Value::as_str).unwrap_or("add").to_string(), name: None };
                 let later = resolve_ai(s, &mut shape, p, &to, "mask.addComponent")?;
                 if let Later::Queued = later {

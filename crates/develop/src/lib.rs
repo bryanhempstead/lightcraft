@@ -8,11 +8,13 @@
 
 pub mod ai;
 pub mod controls;
+pub mod depth;
 pub mod presets;
 pub mod segmask;
 pub mod settings;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
+pub use depth::{DepthGrid, DepthMap};
 pub use presets::{
     GroupHeading, HEADINGS, Preset, SettingsGroup, apply_merging_masks, apply_partial, apply_relative, extract_groups, relative_patch, retain_masks,
 };

@@ -617,8 +617,17 @@ impl RawImage {
     /// Full "raw → camera RGB" path: normalise, demosaic with `method`, apply `OpcodeList3`, then the default crop.
     /// The result is camera RGB (not white balanced), white level = 1.0, not oriented.
     pub fn develop(&self, method: Method) -> Result<Rgb32f> {
+        self.develop_with(|n| Ok(demosaic(n, method)))
+    }
+
+    /// [`RawImage::develop`] with `demosaic` turning the normalised mosaic into camera RGB of the same size (Enhance:
+    /// AI Denoise demosaics as it denoises).
+    pub fn develop_with(&self, demosaic: impl FnOnce(&Normalized) -> Result<Rgb32f>) -> Result<Rgb32f> {
         let n = self.normalized()?;
-        let mut rgb = demosaic(&n, method);
+        let mut rgb = demosaic(&n)?;
+        if (rgb.width, rgb.height) != (n.width, n.height) {
+            return Err(RawError::Corrupt("the demosaic changed the picture's size".into()));
+        }
         drop(n);
         opcodes::apply_list3(&self.opcodes.list3, &mut rgb);
         let c = self.crop.clipped(rgb.width, rgb.height);

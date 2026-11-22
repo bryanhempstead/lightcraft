@@ -36,6 +36,17 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   Left: Clarity (image-relative, RAWmakase's 4-scale model is the next port), positive Dehaze (RAWmakase `haze.rs`),
   local Highlights / Shadows, Fuji base +0.16 EV (left until R02), Texture's colour-edge effect is ¼ of Camera Raw's.
   The LOT48 SMB share hung mid-session (needs.you #158): the gate ran on the 41 photos not on it.
+- [ ] (enhance agent, 2026-11-22, branch worktree-agent-aca49497fc3d37ff4, not merged) **Enhance + Lens Blur + Depth
+  Range** (rows DENOISE ✅, RAWDETAILS ✅, SUPERRES 🟡, ENH-DIALOG ✅, ENH-INPLACE ✅, MENU-PHOTO-ENHANCE ✅, LENSBLUR ✅,
+  MASK-DEPTHRANGE ✅; `docs/enhance.md`). New crates: `enhance` (candle runners: RawNIND raw denoise via upstream's ONNX
+  reader, Real-ESRGAN general x4v3 SR, Depth Anything V2 Small depth; pinned consented downloads), `denoise-core`
+  (upstream, built-in BM3D + Bayer tiling), `rcd` (RCD demosaic from RawTherapee, GPL). Photo ▸ Enhance… (⌃⌥I) →
+  `<name>-Enhanced-NR.dng` stacked, or in place (cache + `enhance` settings, decoded by `files::load_raw`). Lens Blur
+  panel + `lensBlur.*`, Depth Range masks. Measured on a GR III ISO 4000 DNG (M3 Pro): RawNIND denoise 11.2 s,
+  built-in 37.6 s, RCD 0.34 s. **Found:** candle 0.9.2's CPU conv2d is wrong when channels == width (affects
+  `crates/segment` on non-Metal machines), and candle compiles Metal kernels ~30 s on first use per device (one shared
+  device + warm-up thread here). Left: SR speed, Cat Eye bokeh, on-photo depth overlay, X-Trans denoise (RawNIND's
+  linear model), compare against Lightroom's Denoise (needs.you #157).
 - [ ] (detail agent, 2026-11-21 night, branch worktree-agent-af436a1c05b9b1fde, not merged) **Detail / Effects / Looks rows
   R03 R06 R07 R13 R15 R24 R25** measured with the Camera Raw oracle (`oracle/make_detail.py`, `grain_ana.py`,
   `sharp_ana.py`, `sharpfit.py`, `make_ca.py`, `make_nr_real.py`; docs/lr-match.md → Round 9): Look LUT profiles on the

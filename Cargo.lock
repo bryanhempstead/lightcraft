@@ -2930,6 +2930,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-denoise-core"
+version = "0.4.0"
+dependencies = [
+ "dhat",
+ "lightcraft-raster",
+ "miniz_oxide 0.8.9",
+ "proptest",
+ "rayon",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+ "web-time",
+]
+
+[[package]]
 name = "lightcraft-develop"
 version = "0.4.0"
 dependencies = [
@@ -2959,8 +2975,10 @@ dependencies = [
  "lightcraft-catalog",
  "lightcraft-codecs",
  "lightcraft-color",
+ "lightcraft-denoise-core",
  "lightcraft-develop",
  "lightcraft-dng-sdk-sys",
+ "lightcraft-enhance",
  "lightcraft-geom",
  "lightcraft-gpu",
  "lightcraft-merge",
@@ -2978,6 +2996,25 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "web-time",
+]
+
+[[package]]
+name = "lightcraft-enhance"
+version = "0.4.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "lightcraft-denoise-core",
+ "lightcraft-fetch",
+ "lightcraft-raster",
+ "lightcraft-raw",
+ "log",
+ "png",
+ "proptest",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3121,6 +3158,7 @@ dependencies = [
  "lightcraft-libraw-sys",
  "lightcraft-meta",
  "lightcraft-raster",
+ "lightcraft-rcd",
  "lightcraft-tiff",
  "miniz_oxide 0.8.9",
  "proptest",
@@ -3130,6 +3168,13 @@ dependencies = [
  "thiserror 2.0.21",
  "zune-core",
  "zune-jpeg",
+]
+
+[[package]]
+name = "lightcraft-rcd"
+version = "0.4.0"
+dependencies = [
+ "rayon",
 ]
 
 [[package]]
