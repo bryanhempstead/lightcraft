@@ -220,7 +220,15 @@ pub fn ramp(x: f32, black: f32) -> f32 {
 /// 0..=1), the middle one placed between them in proportion, so hue is kept.
 #[inline]
 pub fn rgb_tone(c: [f32; 3], f: impl Fn(f32) -> f32) -> [f32; 3] {
-    let [r, g, b] = c.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
+    rgb_tone_to(c, f, 1.0)
+}
+
+/// [`rgb_tone`] with the channels clipped to `0..=top` instead of 0..=1: an HDR render
+/// (`top` > 1) keeps scene values above white for a tone function that maps them into the
+/// headroom ([`crate::tone::ToneMap::with_headroom`]).
+#[inline]
+pub fn rgb_tone_to(c: [f32; 3], f: impl Fn(f32) -> f32, top: f32) -> [f32; 3] {
+    let [r, g, b] = c.map(|v| if v.is_finite() { v.clamp(0.0, top) } else { 0.0 });
     // (hi, mid, lo) → (f(hi), interpolated mid, f(lo))
     let tone = |hi: f32, mid: f32, lo: f32| {
         let (th, tl) = (f(hi), f(lo));

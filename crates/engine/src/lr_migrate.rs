@@ -789,6 +789,13 @@ pub fn has_custom_look(props: &crate::crs::Props, values: &crate::crs_masks::Val
     let num = |k: &str| props.get(&format!("crs:{k}")).and_then(|v| v.first()).and_then(|s| s.trim().trim_start_matches('+').parse::<f64>().ok());
     let txt = |k: &str| props.get(&format!("crs:{k}")).and_then(|v| v.first()).map(|s| s.trim().to_ascii_lowercase());
     const ZERO: &[&str] = &[
+        "HDREditMode",
+        "SDRBrightness",
+        "SDRContrast",
+        "SDRClarity",
+        "SDRHighlights",
+        "SDRShadows",
+        "SDRWhites",
         "Exposure2012",
         "Contrast2012",
         "Highlights2012",

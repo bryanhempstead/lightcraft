@@ -36,6 +36,10 @@ modified by the LightCraft contributors (2026); the file says how. The SegFormer
 (nvidia/segformer-b5-finetuned-ade-640-640, sayeed99/segformer_b3_clothes,
 jonathandinu/face-parsing) are not part of LightCraft: a user downloads them only when they choose
 to, under each checkpoint's own terms (see docs/ai-masks.md).
+patches/egui-wgpu is egui-wgpu 0.36.2 (https://github.com/emilk/egui, crates/egui-wgpu), Copyright
+the egui authors, licensed under the MIT License or the Apache License 2.0, at your option. It is
+used through [patch.crates-io] and was modified by the LightCraft contributors (2026) so the window
+can be an HDR (EDR) half-float surface; every change is marked "LightCraft patch".
 
 LibRaw (https://www.libraw.org, Copyright 2008-2025 LibRaw LLC; based on dcraw by Dave Coffin) is
 LightCraft's fallback raw decoder in this fork (crates/libraw-sys). It is not in this repository:

@@ -289,6 +289,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let job = if interacting { job.draft() } else { job };
         app.ui.alt_down = ui.input(|i| i.modifiers.alt);
         let job = job.with_overlay(view_overlay(app, &d)).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
+        // an HDR edit on an HDR display: its HDR rendition (unless previewing the SDR one)
+        let job = match hdr_headroom(app) {
+            Some(h) if !app.ui.soft_proof => job.with_hdr_view(h),
+            _ => job,
+        };
         app.renderer.request(Slot::Main, job, 100);
     }
     // hovering a preset or profile: the photo with that look, shown instead of the loupe render
@@ -335,6 +340,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.renderer.request(Slot::Before, job, 90);
     }
     let p = ui.painter_at(canvas);
+    // the window's HDR output, lent to `draw` (which borrows the rest of `app` immutably)
+    let hdr_shown = std::cell::RefCell::new(app.hdr_view.take());
     // what a view slot shows: its own render of this photo, else the stand-ins (no blank frame
     // between photos, and the full render replaces them in place)
     let draw = |slot: Slot, r: Rect| -> &'static str {
@@ -349,7 +356,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             return "none";
         };
         let image_rect = fit_texture_rect(r, tex.size);
-        p.image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        // the HDR rendition where the window can show it (`hdr_view`), else the 8-bit texture
+        let id = match (&tex.hdr, hdr_shown.borrow_mut().as_mut()) {
+            (Some(px), Some(view)) => view.texture(&format!("{slot:?}"), px).unwrap_or(tex.tex.id()),
+            _ => tex.tex.id(),
+        };
+        p.image(id, image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         what
     };
     // soft proofing: a paper-white surround and the proof's name, as Lightroom shows it
@@ -398,6 +410,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     }
+    app.hdr_view = hdr_shown.into_inner();
     app.loupe_shown = Some((id, shown));
     if app.ui.before_after == BeforeAfter::Split {
         let mid = img_rect.center().x;
@@ -899,6 +912,9 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
     let edit = app.ui.right == RightPanel::Edit;
     if edit && app.ui.point_color_visualize && app.ui.flyout_open("pointColor") && app.ui.point_color < d.point_colors.len() {
         return Overlay::PointColorRange(app.ui.point_color as u8);
+    }
+    if edit && app.ui.hdr_visualize && d.hdr.enabled {
+        return Overlay::HdrRange;
     }
     Overlay::None
 }
@@ -1782,4 +1798,13 @@ mod preview_geometry_tests {
         assert_eq!(image.size(), vec2(100.0, 200.0));
         assert_eq!(image.center(), area.center());
     }
+}
+
+/// The display headroom an HDR edit is shown with in the loupe: the HDR display's current headroom,
+/// unless Preview for SDR Display is on, Visualize HDR draws its bands, or there is no HDR display.
+pub(crate) fn hdr_headroom(app: &LightcraftApp) -> Option<f32> {
+    if app.ui.hdr_sdr_preview || app.ui.hdr_visualize {
+        return None;
+    }
+    app.hdr_view.as_ref().and_then(|v| v.headroom()).filter(|h| h.is_finite() && *h > 1.0)
 }

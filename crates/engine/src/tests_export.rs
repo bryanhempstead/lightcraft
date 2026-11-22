@@ -5,6 +5,7 @@ use serde_json::json;
 use crate::Session;
 use crate::export::{ExportFormat, ExportOptions, export_photo};
 use crate::tests_xmp::{synthetic_dng_with, temp_dir};
+use lightcraft_pipeline::OutputSpace;
 
 #[test]
 fn full_size_export_of_a_cropped_photo_is_not_upscaled() {
@@ -369,4 +370,106 @@ fn exports_are_atomic_without_a_sync() {
     crate::export::write_file_durable(&out.join("edit.tif").to_string_lossy(), b"tiff").unwrap();
     assert!(syncs_on_this_thread() > before, "the durable writer syncs");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The demo library's ocean sunset (a sun far above SDR white), selected and active.
+fn sunset(s: &mut Session) -> lightcraft_catalog::PhotoId {
+    let id = s.catalog.photos().find(|p| p.meta.title == "Golden horizon").map(|p| p.id).unwrap();
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    id
+}
+
+#[test]
+fn hdr_jpeg_export_writes_a_gain_map_and_sdr_edits_stay_plain() {
+    use lightcraft_codecs::gainmap;
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    let o = ExportOptions::from_json(&json!({"longEdge": 320, "hdr": true}));
+    assert!(o.hdr_output());
+    // no HDR edit: an ordinary JPEG even with HDR output asked for
+    let plain = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(!gainmap::is_gain_map_jpeg(&plain.bytes));
+
+    let r = s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 3})).unwrap();
+    assert_eq!(r["enabled"], true);
+    let e = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(gainmap::is_gain_map_jpeg(&e.bytes));
+    let gm = gainmap::read_jpeg(&e.bytes).unwrap();
+    assert!(gm.meta.alternate_headroom > 0.5 && gm.meta.alternate_headroom <= 3.05, "headroom {}", gm.meta.alternate_headroom);
+    // the base is the SDR rendition: the same pixels as the SDR export (the decoders agree)
+    let a = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+    let b = lightcraft_codecs::decode(&plain.bytes, Default::default()).unwrap();
+    assert_eq!((a.width, a.height), (b.width, b.height));
+    let diff = a.image.data.iter().zip(&b.image.data).map(|(p, q)| (p[1] - q[1]).abs()).fold(0.0f32, f32::max);
+    assert!(diff < 0.02, "base differs from the SDR export by {diff}");
+    // HDR off again: the gain map goes away
+    s.execute("develop.hdr", &json!({"enabled": false})).unwrap();
+    assert!(!gainmap::is_gain_map_jpeg(&export_photo(&mut s, id, &o, 1).unwrap().bytes));
+}
+
+#[test]
+fn hdr_float_tiff_keeps_highlights_above_white() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
+    let max_of = |s: &mut Session, hdr: bool| {
+        let o = ExportOptions::from_json(&json!({"longEdge": 240, "format": "tiff", "bitDepth": 32, "hdr": hdr}));
+        let e = export_photo(s, id, &o, 1).unwrap();
+        let d = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
+        d.image.data.iter().flat_map(|p| p.iter().copied()).fold(0.0f32, f32::max)
+    };
+    let hdr = max_of(&mut s, true);
+    let sdr = max_of(&mut s, false);
+    assert!(sdr <= 1.0 + 1e-3, "SDR float TIFF stays in 0..1 ({sdr})");
+    assert!(hdr > 1.2 && hdr <= 4.0 + 1e-3, "HDR float TIFF max {hdr}");
+}
+
+#[test]
+fn hdr_avif_export_is_pq_rec2020() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "avif", "hdr": true, "quality": 70}));
+    assert!(o.hdr_output());
+    let sdr = export_photo(&mut s, id, &o, 1).unwrap();
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
+    let hdr = export_photo(&mut s, id, &o, 1).unwrap();
+    // the `colr` nclx box: BT.2020 primaries (9), PQ (16), BT.2020 NCL (9), full range
+    let nclx = |b: &[u8]| b.windows(4).position(|w| w == b"nclx").map(|i| b[i + 4..i + 11].to_vec());
+    let c = nclx(&hdr.bytes).expect("colr nclx box");
+    assert_eq!(c, vec![0, 9, 0, 16, 0, 9, 0x80]);
+    assert!(hdr.bytes.windows(4).any(|w| w == b"clli"), "content light level box");
+    // a photo without an HDR edit exports as an ordinary (sRGB) AVIF
+    assert!(nclx(&sdr.bytes).is_none_or(|c| c[3] != 16));
+}
+
+#[test]
+fn hdr_avif_png_and_jxl_take_pq_or_hlg_and_jxl_can_carry_a_gain_map() {
+    let mut s = Session::with_demo();
+    let id = sunset(&mut s);
+    s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
+    // HLG AVIF: nclx BT.2020 (9), HLG (18), BT.2020 NCL (9), full range; no content light level
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "avif", "hdr": true, "hdrTransfer": "hlg", "quality": 70}));
+    assert_eq!(o.hdr_transfer, crate::export::HdrCurve::Hlg);
+    assert_eq!(o.to_json()["hdrTransfer"], "hlg");
+    let f = export_photo(&mut s, id, &o, 1).unwrap();
+    let i = f.bytes.windows(4).position(|w| w == b"nclx").expect("colr nclx box");
+    assert_eq!(f.bytes[i + 4..i + 11].to_vec(), vec![0, 9, 0, 18, 0, 9, 0x80]);
+    assert!(!f.bytes.windows(4).any(|w| w == b"clli"));
+    // HDR PNG: 16-bit, cICP BT.2020 + PQ
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "png", "hdr": true}));
+    assert!(o.hdr_output() && !o.gain_map_output());
+    let f = export_photo(&mut s, id, &o, 1).unwrap();
+    let i = f.bytes.windows(4).position(|w| w == b"cICP").expect("cICP chunk");
+    assert_eq!(f.bytes[i + 4..i + 8].to_vec(), vec![9, 16, 0, 1]);
+    // HDR JPEG XL: Maximize Compatibility (default) = SDR base + jhgm gain map; off = PQ
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "jxl", "hdr": true, "quality": 80}));
+    assert!(o.gain_map_output());
+    let f = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(f.bytes.windows(4).any(|w| w == b"jhgm"), "gain map box");
+    let o = ExportOptions::from_json(&json!({"longEdge": 160, "format": "jxl", "hdr": true, "hdrCompat": false, "quality": 80}));
+    assert_eq!(o.effective_space(), OutputSpace::Rec2020);
+    let f = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(!f.bytes.windows(4).any(|w| w == b"jhgm"));
+    let d = lightcraft_codecs::decode(&f.bytes, lightcraft_codecs::DecodeOptions::default()).unwrap();
+    assert_eq!(d.image.width.max(d.image.height), 160);
 }

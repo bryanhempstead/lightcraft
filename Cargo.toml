@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+# patched third-party crates used through [patch.crates-io] (not LightCraft code)
+exclude = ["patches"]
 
 [workspace.package]
 version = "0.4.0"
@@ -53,6 +55,8 @@ quick-xml = "0.38"
 miniz_oxide = "0.8"
 
 # codecs
+# HDR gain maps: ISO 21496-1 and hdrgm metadata, compute and apply (upstream's code, moved to craft-libs#904)
+craft-gainmap = { git = "https://github.com/storytold/craft-libs", rev = "23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }
 zune-jpeg = { version = "0.5", default-features = false, features = ["std", "x86", "neon"] }
 zune-core = { version = "0.5", default-features = false, features = ["std"] }
@@ -65,6 +69,9 @@ image-webp = "0.2"
 moxcms = { version = "0.9", default-features = false, features = ["lut"] }
 jxl-oxide = { version = "0.12", default-features = false }
 ravif = { version = "0.13", default-features = false, features = ["threading"] } # no "asm": it needs nasm (non-Rust)
+# HDR AVIF (PQ): ravif fixes the sRGB transfer curve, so HDR files drive its rav1e + avif-serialize directly
+rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }
+avif-serialize = "0.8.6"
 
 # gpu (crates/gpu; native backends only, no GL: everything stays pure Rust)
 # SAM 3 inference (lightcraft-segment). 0.9.2: later releases pull `tokenizers` with the
@@ -144,3 +151,8 @@ jpeg-decoder = { opt-level = 3 }
 jpeg-encoder = { opt-level = 3 }
 png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
+
+# HDR (EDR) display output: egui-wgpu with a half-float, extended-range window surface on request
+# (patches/egui-wgpu/README.md). MIT OR Apache-2.0, upstream's code plus small marked changes.
+[patch.crates-io]
+egui-wgpu = { path = "patches/egui-wgpu" }

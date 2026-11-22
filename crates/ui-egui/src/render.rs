@@ -60,6 +60,9 @@ pub struct Tex {
     pub quick: Option<QuickSource>,
     /// CPU copy of the pixels (only with [`Renderer::keep_pixels`]; for headless screenshots).
     pub pixels: Option<std::sync::Arc<egui::ColorImage>>,
+    /// The HDR rendition for an HDR display (a float render of an HDR edit,
+    /// [`crate::hdr_view`]); `tex` then holds its clipped 8-bit image.
+    pub hdr: Option<std::sync::Arc<crate::hdr_view::HdrPixels>>,
 }
 
 /// Runs render jobs outside this thread's job pool (the browser build: Web Workers, each with its
@@ -516,10 +519,12 @@ impl Renderer {
                 srgb
             };
             let name = format!("{slot:?}");
+            let hdr = rendered.deep.as_ref().and_then(|d| crate::hdr_view::pixels(d, r.key, self.display_p3)).map(std::sync::Arc::new);
             match self.textures.get_mut(&slot) {
                 Some(t) => {
                     t.tex.set(color, egui::TextureOptions::LINEAR);
                     t.pixels = pixels;
+                    t.hdr = hdr;
                     t.key = r.key;
                     t.photo = r.photo;
                     t.size = [img.width, img.height];
@@ -540,6 +545,7 @@ impl Renderer {
                             ms,
                             quick: r.quick,
                             pixels,
+                            hdr,
                         },
                     );
                 }

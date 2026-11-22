@@ -17,6 +17,7 @@
 mod convert;
 pub mod encode;
 pub mod exif;
+pub mod gainmap;
 pub mod icc;
 mod jpeg;
 pub mod jpeg_par;
@@ -27,7 +28,7 @@ mod other;
 mod png_codec;
 mod psd;
 mod psd_write;
-pub use jxl_encode::{JxlColour, JxlOptions, encode_jxl};
+pub use jxl_encode::{JxlColour, JxlOptions, encode_jxl, encode_jxl_gain_map, encode_jxl_hdr};
 pub use psd_write::encode_psd;
 mod sniff;
 pub mod space;
@@ -35,7 +36,8 @@ mod tiff_codec;
 mod webp;
 
 pub use encode::{
-    ChromaSubsampling, EncodeImage, EncodeMeta, Samples, TiffCompression, encode_avif, encode_jpeg, encode_png, encode_tiff, encode_webp_lossless,
+    ChromaSubsampling, EncodeImage, EncodeMeta, HDR_REFERENCE_WHITE_NITS, HLG_REFERENCE_PEAK_NITS, HdrTransfer, Samples, TiffCompression,
+    encode_avif, encode_avif_hdr, encode_avif_pq, encode_jpeg, encode_png, encode_png_hdr, encode_tiff, encode_webp_lossless, hlg_signal,
 };
 pub use sniff::{Format, sniff};
 pub use space::{NamedSpace, SourceSpace, SpaceOrigin, Trc};

@@ -59,9 +59,11 @@ the only copy of those edits outside that application's catalog. Saving never dr
   can't be read at all (permissions) is left alone and the save fails.
 
 Limits: LightCraft writes keywords to `dc:subject` only, so another application's `lr:hierarchicalSubject` is kept as
-it was and may still list keywords removed in LightCraft. LightCraft doesn't write `crs:`: the other application's
+it was and may still list keywords removed in LightCraft. LightCraft doesn't write `crs:` (one exception below): the other application's
 develop settings stay as that application left them, next to LightCraft's own (`lc:settings`, which LightCraft reads
-first).
+first). The exception is an HDR edit: a photo edited in HDR in LightCraft also gets `crs:HDREditMode`, `crs:HDRMaxValue`
+and the `crs:SDR*` fields (replacing the other application's), so Lightroom / Camera Raw read the HDR edit back; with
+HDR off and nothing changed they aren't written, and the other application's stay.
 
 ## Shared names
 
@@ -106,6 +108,9 @@ names are read (e.g. `Exposure2012`, not the older `Exposure`).
 |---|---|---|
 | `Exposure2012` | `light.exposure` | EV, 1:1 |
 | `Contrast2012`, `Highlights2012`, `Shadows2012`, `Whites2012`, `Blacks2012` | `light.contrast` … `light.blacks` | −100..100, 1:1 |
+| `HDREditMode` | `hdr.enabled` | `1` = edited in HDR (Lightroom's HDR button) |
+| `HDRMaxValue` | `hdr.max_ev` (HDR Limit) | stops above SDR white (Lightroom writes 4, or the display's headroom, e.g. 2.3 on a 600-nit Studio Display); read only for HDR edits |
+| `SDRBrightness`, `SDRContrast`, `SDRClarity`, `SDRHighlights`, `SDRShadows`, `SDRWhites`, `SDRBlend` | `hdr.sdr_*` (SDR Settings) | −100..100; Brightness ±100 = ±1 EV on the SDR rendition; Blend is kept for the round trip, not rendered |
 | `WhiteBalance` | `wb.mode` | `As Shot`, `Auto`, `Daylight`, `Cloudy`, `Shade`, `Tungsten`, `Fluorescent`, `Flash`; other names → custom |
 | `Temperature`, `Tint` | `wb.temp`, `wb.tint` | Kelvin / tint for raw files (and presets) |
 | `IncrementalTemperature`, `IncrementalTint` | `wb.temp`, `wb.tint` | rendered files: −100..100 on our relative scale (mired shift around 6500 K, same as the Temp slider) |

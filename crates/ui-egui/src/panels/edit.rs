@@ -326,10 +326,21 @@ fn basic(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, raw: b
                 let _ = app.run("develop.auto", json!({}));
                 app.toast(ui.ctx(), crate::i18n::tr("Auto settings applied"));
             }
+            // Lightroom's HDR button (in this narrow panel: next to Auto, not on the Treatment row)
+            let on = d.hdr.enabled;
+            if text_button(ui, "hdr", "hdr.", on)
+                .on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, shown on HDR (EDR) displays and kept in HDR exports"))
+                .clicked()
+            {
+                let _ = app.run("develop.hdr", json!({"enabled": !on}));
+            }
         });
     });
     for c in ["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
         control(app, ui, d, c, true);
+    }
+    if d.hdr.enabled {
+        hdr_controls(app, ui, d);
     }
     ui.add_space(4.0);
     padded_row(ui, |ui| {
@@ -1300,6 +1311,40 @@ fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) 
             });
         });
     });
+}
+
+// ------------------------------------------------------------------------------ HDR
+
+/// The Basic panel's HDR controls (HDR on): HDR Limit, Visualize HDR, Preview for SDR Display and,
+/// while previewing, the SDR rendition's settings (Lightroom's "SDR Settings").
+fn hdr_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
+    control(app, ui, d, "hdr.maxEv", true);
+    padded_row(ui, |ui| {
+        let vis = app.ui.hdr_visualize;
+        if text_button(ui, "hdrVisualize", "vis.hdr.", vis)
+            .on_hover_text(crate::i18n::tr(
+                "Visualize HDR: grey up to SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it",
+            ))
+            .clicked()
+        {
+            let _ = app.run("view.visualizeHdr", json!({"on": !vis}));
+        }
+        let sdr = app.ui.hdr_sdr_preview;
+        if text_button(ui, "hdrSdrPreview", "sdr.prev.", sdr)
+            .on_hover_text(crate::i18n::tr(
+                "Preview for SDR Display: show the SDR rendition (what SDR screens and non-HDR exports get) and its settings",
+            ))
+            .clicked()
+        {
+            let _ = app.run("view.sdrPreview", json!({"on": !sdr}));
+        }
+    });
+    if app.ui.hdr_sdr_preview {
+        sub_title(ui, crate::i18n::tr("SDR Settings"));
+        for c in ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrClarity", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites"] {
+            control(app, ui, d, c, true);
+        }
+    }
 }
 
 // ------------------------------------------------------------------------------ colour grading

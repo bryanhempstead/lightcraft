@@ -807,7 +807,26 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         choices(ui, "Bit depth", "exportBitDepth", depths, &mut bd);
                         opts.bit_depth = Some(bd);
                     }
+                    if matches!(opts.format, F::Jpeg | F::Tiff | F::Avif | F::Png | F::Jxl) {
+                        let tip = "Photos edited in HDR (Lightroom's HDR Output): JPEG with an HDR gain map (looks right everywhere, brighter highlights on HDR displays); AVIF, PNG and JPEG XL as Rec. 2020 PQ or HLG, JPEG XL with Maximize Compatibility as SDR + gain map; TIFF needs 32-bit float. Photos without an HDR edit export as usual";
+                        ui.checkbox(&mut opts.hdr, crate::i18n::tr("HDR Output")).on_hover_text(tip);
+                        if opts.hdr && !opts.hdr_output() {
+                            ui.label(egui::RichText::new(crate::i18n::tr("HDR TIFF needs 32-bit float.")).color(t.text_dim));
+                        }
+                        if opts.hdr && opts.format == F::Jxl {
+                            ui.checkbox(&mut opts.hdr_compat, crate::i18n::tr("Maximize Compatibility")).on_hover_text(crate::i18n::tr(
+                                "An SDR image plus a gain map: right in every viewer, HDR where the viewer supports it. Off: a PQ / HLG file (HDR viewers only)",
+                            ));
+                        }
+                        if opts.hdr && (matches!(opts.format, F::Avif | F::Png) || (opts.format == F::Jxl && !opts.hdr_compat)) {
+                            use lightcraft_engine::export::HdrCurve as H;
+                            choices(ui, "HDR curve", "exportHdrCurve", &[(H::Pq, "pq."), (H::Hlg, "hlg.")], &mut opts.hdr_transfer);
+                        }
+                    }
+                    let curve = if opts.hdr_transfer == lightcraft_engine::export::HdrCurve::Hlg { "HLG" } else { "PQ" };
                     if !rendered {
+                    } else if opts.hdr && opts.hdr_output() && opts.effective_space() == lightcraft_engine::export::OutputSpace::Rec2020 && opts.format != F::Tiff {
+                        ui.label(egui::RichText::new(format!("Color space: Rec. 2020 {curve} (HDR)")).color(t.text_dim));
                     } else if opts.format == F::Avif {
                         ui.label(egui::RichText::new(crate::i18n::tr("Color space: sRGB (AVIF)")).color(t.text_dim));
                     } else {

@@ -61,6 +61,8 @@ pub enum SettingsGroup {
     Straighten,
     AspectRatio,
     LensBlur,
+    /// HDR editing: the HDR switch, headroom limit and SDR rendition (`hdr`).
+    Hdr,
 }
 
 /// A heading in the checklist: its id, label and the checkboxes under it.
@@ -75,7 +77,7 @@ use SettingsGroup as G;
 
 /// The checklist's headings in Lightroom's order (a heading with one item is shown as that item).
 pub const HEADINGS: &[GroupHeading] = &[
-    GroupHeading { id: "basic", label: "Basic", items: &[G::Treatment, G::Profile, G::WhiteBalance] },
+    GroupHeading { id: "basic", label: "Basic", items: &[G::Treatment, G::Profile, G::WhiteBalance, G::Hdr] },
     GroupHeading { id: "light", label: "Basic Tone", items: &[G::Exposure, G::Contrast, G::Highlights, G::Shadows, G::Whites, G::Blacks] },
     GroupHeading { id: "presence", label: "Presence", items: &[G::Texture, G::Clarity, G::Dehaze, G::Vibrance, G::Saturation] },
     GroupHeading { id: "toneCurve", label: "Tone Curve", items: &[G::ParametricCurve, G::PointCurve] },
@@ -103,7 +105,7 @@ const LEGACY: &[(&str, &[SettingsGroup])] = &[
 ];
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 43] = [
+    pub const ALL: [SettingsGroup; 44] = [
         G::Treatment,
         G::Profile,
         G::WhiteBalance,
@@ -147,6 +149,7 @@ impl SettingsGroup {
         G::Straighten,
         G::AspectRatio,
         G::LensBlur,
+        G::Hdr,
     ];
 
     /// Groups included by default (Lightroom's "Default" subset: everything but crop, masking,
@@ -240,6 +243,7 @@ impl SettingsGroup {
             G::Straighten => "Straighten Angle",
             G::AspectRatio => "Aspect Ratio",
             G::LensBlur => "Lens Blur",
+            G::Hdr => "HDR",
         }
     }
 
@@ -316,6 +320,7 @@ impl SettingsGroup {
             G::Straighten => &["crop.geometry.angle"],
             G::AspectRatio => &["crop.aspect"],
             G::LensBlur => &["lens_blur"],
+            G::Hdr => &["hdr"],
         }
     }
 

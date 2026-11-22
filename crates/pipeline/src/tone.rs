@@ -16,6 +16,12 @@ pub const LUT_N: usize = 4096;
 /// Nodes of a camera chroma curve, evenly spaced over display luminance 0..=1.
 pub const CHROMA_N: usize = 8;
 const NO_CHROMA: [f32; CHROMA_N] = [1.0; CHROMA_N];
+/// Display level (linear, SDR white = 1) above which [`ToneMap::with_headroom`] opens the SDR
+/// shoulder into the HDR headroom; below it an HDR render is the SDR one.
+pub const HDR_KNEE: f32 = 0.45;
+/// The brightest scene value (linear, raw white = 1) an HDR render's channel-wise tone keeps:
+/// the top of the tone table (`GREY · 2^LUT_MAX_EV`).
+pub const HDR_SCENE_TOP: f32 = 184.0;
 
 /// A file-local camera look, fitted independently of the scene-linear colour transform.
 /// Knots are scene/display-linear luminance pairs. Keeping this in the finish stage preserves
@@ -531,6 +537,26 @@ impl ToneMap {
         ToneMap { lut, chroma: NO_CHROMA }
     }
 
+    /// This (SDR) tone map extended for an HDR render reaching `peak` (linear, SDR white = 1;
+    /// 1 or less, or not finite = this map unchanged), as Camera Raw's HDR mode renders an edit:
+    /// shadows and midtones stay the SDR curve's, and the highlights that the SDR shoulder squeezes
+    /// under white open up into the headroom instead. From the scene EV where the SDR curve reaches
+    /// [`HDR_KNEE`] the output gains up to `peak − 1` more along a smoothstep that ends
+    /// `log2(peak) + 1` stops past the SDR white point (where the curve reaches 0.98), so Whites
+    /// (which move that point) and Highlights (which move the tones) work into the headroom. The
+    /// result is monotone where the SDR curve is, never exceeds `peak` and reaches it in range.
+    pub fn with_headroom(self, peak: f32) -> ToneMap {
+        if !(peak.is_finite() && peak > 1.0) {
+            return self;
+        }
+        let ev_at = |i: usize| LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
+        let first = |level: f32| self.lut.iter().position(|v| *v >= level).map_or(LUT_MAX_EV, ev_at);
+        let from = first(HDR_KNEE);
+        let top = (first(0.98) + peak.log2() + 1.0).max(from + 0.5);
+        let lut = self.lut.iter().enumerate().map(|(i, v)| (v + (peak - 1.0) * smooth(from, top, ev_at(i))).clamp(0.0, peak)).collect();
+        ToneMap { lut, chroma: self.chroma }
+    }
+
     /// The table (`LUT_N` entries, see [`ToneMap::apply`]).
     pub fn lut(&self) -> &[f32] {
         &self.lut
@@ -620,6 +646,48 @@ fn adobe_shift<const V: usize>(values: &[f32; V], tables: &[[f32; crate::tone_ad
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+#[cfg(test)]
+mod tests_headroom {
+    use super::*;
+
+    fn maps() -> Vec<ToneMap> {
+        let mut v =
+            vec![ToneMap::new(0.0, 0.0, 0.0), ToneMap::new(60.0, -40.0, 30.0), ToneMap::display(0.0, 0.0, 0.0), ToneMap::display(-30.0, 50.0, 0.0)];
+        if let Some(c) = rendered_reference() {
+            v.push(ToneMap::camera_lr(&c, 0.5, 20.0, 30.0, -10.0));
+        }
+        v
+    }
+
+    #[test]
+    fn headroom_keeps_midtones_reaches_peak_and_is_monotone() {
+        for sdr in maps() {
+            assert_eq!(sdr.clone().with_headroom(1.0).lut(), sdr.lut());
+            assert_eq!(sdr.clone().with_headroom(f32::NAN).lut(), sdr.lut());
+            for peak in [2.0f32, 4.92, 16.0] {
+                let h = sdr.clone().with_headroom(peak);
+                let mut prev = -1.0;
+                for (a, b) in h.lut().iter().zip(sdr.lut()) {
+                    assert!((0.0..=peak).contains(a) && *a >= prev - 1e-6 && *a >= *b - 1e-6);
+                    if *b < HDR_KNEE * 0.98 {
+                        assert!((a - b).abs() < 1e-3, "midtones moved: {b} -> {a}");
+                    }
+                    prev = *a;
+                }
+                assert!(h.lut().last().copied().unwrap_or(0.0) > peak * 0.99, "{peak}");
+            }
+        }
+    }
+
+    #[test]
+    fn whites_move_where_the_headroom_fills() {
+        let lo = ToneMap::new(0.0, -60.0, 0.0).with_headroom(8.0);
+        let hi = ToneMap::new(0.0, 60.0, 0.0).with_headroom(8.0);
+        let y = GREY * 2f32.powf(4.0);
+        assert!(hi.apply(y) > lo.apply(y));
+    }
 }
 
 #[cfg(test)]

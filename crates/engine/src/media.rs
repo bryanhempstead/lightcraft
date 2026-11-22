@@ -545,6 +545,28 @@ impl RenderJob {
         self
     }
 
+    /// The HDR rendition for an HDR (EDR) display whose headroom right now is `headroom` (peak
+    /// over SDR white): a float render ([`lightcraft_pipeline::OutputDepth::F32Hdr`]) of a photo
+    /// edited in HDR, its highlights fitted to the smaller of its HDR Limit and the display's
+    /// headroom (Lightroom shows an HDR edit so). Photos without an HDR edit, a headroom of 1 or
+    /// less (or not finite), and diagnostic overlays stay SDR. Never cached as the view preview
+    /// (its 8-bit image is the clipped HDR render, not the SDR rendition).
+    pub fn with_hdr_view(mut self, headroom: f32) -> Self {
+        if !(self.settings.hdr.enabled && headroom.is_finite() && headroom > 1.0) || self.request.overlay != lightcraft_pipeline::Overlay::None {
+            return self;
+        }
+        // in tenth-stop steps: the headroom follows the screen's brightness, and each step re-renders
+        let display_ev = (f64::from(headroom.log2()) * 10.0).floor() / 10.0;
+        let mut s = (*self.settings).clone();
+        s.hdr.max_ev = s.hdr.headroom_ev().min(display_ev);
+        self.key ^= Hasher128::new().str("hdrView").u64(s.hdr.max_ev.to_bits()).finish().0 as u64;
+        self.settings = Arc::new(s);
+        self.request.depth = lightcraft_pipeline::OutputDepth::F32Hdr;
+        self.view_cache = None;
+        self.cache = None;
+        self
+    }
+
     /// Draw a diagnostic overlay over the result (e.g. Point Color's visualized range). Gets its
     /// own result key.
     pub fn with_overlay(mut self, overlay: lightcraft_pipeline::Overlay) -> Self {
