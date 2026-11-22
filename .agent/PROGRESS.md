@@ -6,6 +6,16 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (hdr agent, 2026-11-22, branch worktree-agent-a9350ba4bbcf77e05, not merged) **HDR (parity section Q)** —
+  a1cb8f667 HDR edit (upstream's settings / SDR rendition / F32Hdr render, fitted to the fork's tone paths via
+  `ToneMap::with_headroom`), c4816b7a8 gain map JPEG (craft-gainmap), 7336ed84e HDR export + `develop.hdr`, 3e92256db Basic
+  panel hdr. / HDR Limit / vis.hdr. / sdr.prev. + SDR Settings, 7aaa6247c `crs:HDREditMode` / `HDRMaxValue` / `SDR*`
+  read (sidecars, DNG, presets, LR catalogs) and written back, 15d68acdb HDR AVIF PQ, b82320374 PQ/HLG AVIF / PNG / JPEG XL +
+  JXL gain map (Maximize Compatibility), 1aedae0df EDR loupe on macOS (`patches/egui-wgpu` via [patch.crates-io],
+  half-float extended-sRGB surface; extended P3 crashes wgpu-hal 30.0.1), 6bb0fdd5a parity. Exports checked with
+  macOS Core Image (all open as HDR except gain-map JXL = SDR base). needs.you #155 (loupe on the Studio Display),
+  #156 (exports in Preview/Photos). Left: HDR loupe renders on the CPU (slow drags), HDR histogram region,
+  Visualize HDR's beyond-display red, HDR tone not measured vs Lightroom, AVIF gain maps, Windows/Linux HDR.
 - [ ] (detail agent, 2026-11-21 night, branch worktree-agent-af436a1c05b9b1fde, not merged) **Detail / Effects / Looks rows
   R03 R06 R07 R13 R15 R24 R25** measured with the Camera Raw oracle (`oracle/make_detail.py`, `grain_ana.py`,
   `sharp_ana.py`, `sharpfit.py`, `make_ca.py`, `make_nr_real.py`; docs/lr-match.md → Round 9): Look LUT profiles on the

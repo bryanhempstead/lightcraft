@@ -77,8 +77,8 @@ use SettingsGroup as G;
 
 /// The checklist's headings in Lightroom's order (a heading with one item is shown as that item).
 pub const HEADINGS: &[GroupHeading] = &[
-    GroupHeading { id: "basic", label: "Basic", items: &[G::Treatment, G::Profile, G::WhiteBalance] },
-    GroupHeading { id: "light", label: "Basic Tone", items: &[G::Exposure, G::Contrast, G::Highlights, G::Shadows, G::Whites, G::Blacks, G::Hdr] },
+    GroupHeading { id: "basic", label: "Basic", items: &[G::Treatment, G::Profile, G::WhiteBalance, G::Hdr] },
+    GroupHeading { id: "light", label: "Basic Tone", items: &[G::Exposure, G::Contrast, G::Highlights, G::Shadows, G::Whites, G::Blacks] },
     GroupHeading { id: "presence", label: "Presence", items: &[G::Texture, G::Clarity, G::Dehaze, G::Vibrance, G::Saturation] },
     GroupHeading { id: "toneCurve", label: "Tone Curve", items: &[G::ParametricCurve, G::PointCurve] },
     GroupHeading {
