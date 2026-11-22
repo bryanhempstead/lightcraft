@@ -597,3 +597,59 @@ fn profile_gain_table_map_is_read_from_the_raw_ifd() {
         }
     }
 }
+
+/// Lossless JPEG XL tile of `w × h` samples (`cpp` 1 = grey, 3 = RGB).
+fn jxl_tile(px: &[u16], w: usize, h: usize, cpp: usize, bits: u32) -> Vec<u8> {
+    let cs = if cpp == 1 { jixel::ColorSpace::Gray } else { jixel::ColorSpace::Rgb };
+    jixel::encode_fast_lossless_u16(px, w, h, cs, false, bits, &jixel::FlMeta::default()).unwrap()
+}
+
+/// Split `px` (`w × h × cpp`) into `tw × th` tiles (edge tiles padded with zeros), each encoded by `enc`.
+fn tiles_of(px: &[u16], (w, h, cpp): (usize, usize, usize), (tw, th): (usize, usize), enc: impl Fn(&[u16]) -> Vec<u8>) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for ty in (0..h).step_by(th) {
+        for tx in (0..w).step_by(tw) {
+            let mut t = vec![0u16; tw * th * cpp];
+            for y in 0..th.min(h - ty) {
+                for x in 0..tw.min(w - tx) {
+                    for k in 0..cpp {
+                        t[(y * tw + x) * cpp + k] = px[((ty + y) * w + tx + x) * cpp + k];
+                    }
+                }
+            }
+            out.push(enc(&t));
+        }
+    }
+    out
+}
+
+#[test]
+fn jpeg_xl_tiles_decode_bit_exactly() {
+    // DNG 1.7 JPEG XL (Compression 52546), as Lightroom's smart previews (linear RGB, 16 bit) and
+    // JPEG XL DNG exports (Bayer, one channel) store it; these were "unsupported" before
+    let (w, h) = (45, 29);
+    for (cpp, bits, cfa) in [(3usize, 16u32, false), (1, 14, true), (1, 16, true)] {
+        let px = pattern(w, h, cpp, bits);
+        let mut raw = base_ifd(w, h, bits as u16, cpp, cfa);
+        raw.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));
+        let tiles = tiles_of(&px, (w, h, cpp), (16, 16), |t| jxl_tile(t, 16, 16, cpp, bits));
+        raw.set_image(ImageData::Tiles { tile_width: 16, tile_height: 16, tiles });
+        let img = decode(&dng(raw, ByteOrder::Little)).unwrap_or_else(|e| panic!("cpp {cpp} bits {bits}: {e}"));
+        assert_eq!((img.width, img.height, img.cpp), (w, h, cpp));
+        assert_eq!(img.data, RawData::U16(px), "cpp {cpp} bits {bits}");
+    }
+}
+
+#[test]
+fn broken_jpeg_xl_tiles_are_errors() {
+    let (w, h) = (16, 16);
+    let good = jxl_tile(&pattern(w, h, 3, 16), w, h, 3, 16);
+    // a truncated codestream, garbage, and a codestream larger than its tile
+    let big = jxl_tile(&pattern(32, 32, 3, 16), 32, 32, 3, 16);
+    for tile in [good[..good.len() / 2].to_vec(), vec![0xff, 0x0a, 1, 2, 3], big] {
+        let mut raw = base_ifd(w, h, 16, 3, false);
+        raw.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));
+        raw.set_image(ImageData::Tiles { tile_width: 16, tile_height: 16, tiles: vec![tile] });
+        assert!(decode(&dng(raw, ByteOrder::Little)).is_err());
+    }
+}

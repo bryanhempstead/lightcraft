@@ -9,7 +9,7 @@
 //! sensor offsets. The CFA is anchored at the full sensor's origin; cropping shifts its phase later.
 //! Unknown camera metadata versions are ignored rather than assigned a guessed white balance.
 
-use super::{black_from_columns, crx, white_from_data};
+use super::{black_columns, black_from_columns, crx, white_from_data};
 use crate::{BlackLevel, Cfa, ColorData, MAX_SAMPLES, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use lightcraft_meta::cr3::{Cr3ImageArea, Cr3Track, Cr3TrackKind, parse_cr3};
 use lightcraft_tiff::{Ifd, Tiff};
@@ -195,7 +195,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let levels = camera_levels(color_maker, coding.bit_depth);
     let black = match levels.black {
         Some(levels) => black_at_active(levels, coding.cfa_pattern, active),
-        None if active.x >= 8 => black_from_columns(&data, width, 2..active.x - 2, active.y..active.y + active.height, active),
+        None if active.x >= 8 => {
+            let rows = active.y..active.y + active.height;
+            black_from_columns(&data, width, black_columns(&data, width, 2..active.x - 2, rows.clone()), rows, active)
+        }
         None => BlackLevel::uniform(0.0),
     };
     let white = levels.white.unwrap_or_else(|| white_from_data(&data, u32::from(coding.bit_depth)));
