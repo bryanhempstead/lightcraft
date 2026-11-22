@@ -6,6 +6,14 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (captime agent, 2026-11-22, branch worktree-agent-a045d8d9ff069e865, not merged) **LR-LIB-CAPTURETIME: right-click
+  ▸ Adjust Time…** in grid / filmstrip / loupe / Develop / Compare (`dialog.captureTime {anchor}`), anchored on the photo
+  right-clicked; new dialog `crates/ui-egui/src/capture_time_dialog.rs` (thumbnail, big current time, typed time
+  `3:34 pm` / `15:34` / `+1h` / `-1d`, calendar, step buttons, offset + count + before → after, Enter / Esc, apply.);
+  modes adj. shift. zone. same.time. match.cam. orig. file.date.; engine plan `crates/engine/src/capture_time.rs`
+  (`anchor`, `match`, `dryRun`; virtual copies + collapsed-stack members follow; undated photos skipped) and
+  `dates::parse_time_input`. Fix: XMP auto-write now writes capture-time changes. Left: writing the time into
+  JPEG/DNG files, telling two bodies of one model apart.
 - [ ] (export agent, 2026-11-22, branch worktree-agent-a3771648dd17295ab, not merged; main merged in twice, DNG
   preview / lossy options kept) **LR-EXP-DIALOG: Export dialog laid out like Lightroom Classic's** —
   `crates/ui-egui/src/export_dialog.rs` (new), `export_task.rs` (queue, pause), `crates/engine/src/export.rs`

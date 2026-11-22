@@ -18,6 +18,7 @@ pub mod camera_match;
 mod camera_preview;
 pub mod camera_profiles;
 pub mod cameras;
+pub mod capture_time;
 pub mod cmd;
 pub mod crs;
 pub mod crs_masks;
@@ -1046,6 +1047,8 @@ mod tests_ai_masks;
 mod tests_backup;
 #[cfg(test)]
 mod tests_cameras;
+#[cfg(test)]
+mod tests_capture_time;
 #[cfg(test)]
 mod tests_color;
 #[cfg(test)]

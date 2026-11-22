@@ -1395,7 +1395,7 @@ mod tests {
         let before = h.app.session.catalog.photo(id).unwrap().captured.clone().unwrap();
         let r = h.request("ui.clickWidget", json!({"id": "icon:editCaptureTime"}), t);
         assert_eq!(r["ok"], true, "{r}");
-        h.request("ui.clickWidget", json!({"id": "button:captureMode-2"}), t);
+        h.request("ui.clickWidget", json!({"id": "button:captureMode-zone"}), t);
         if let Some(crate::state::Dialog::CaptureTime { zone, .. }) = &mut h.app.ui.dialog {
             *zone = -3.0;
         } else {

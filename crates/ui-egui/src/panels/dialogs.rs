@@ -192,6 +192,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             Dialog::CreatePreset { .. } | Dialog::CopySettings { .. } | Dialog::SyncSettings { .. } | Dialog::PasteSettings { .. } => 640.0,
             Dialog::Export { .. } => crate::export_dialog::DIALOG_W,
             Dialog::ExportExisting { .. } => 460.0,
+            Dialog::CaptureTime { .. } => 520.0,
             _ => 380.0,
         })
         .show(ctx, |ui| {
@@ -347,71 +348,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             .color(t.text_dim),
                     );
                 }
-                Dialog::CaptureTime { mode, time, days, hours, minutes, zone } => {
-                    let n = app.session.targets(&json!({})).len();
-                    field(ui, "Change", |ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        for (i, (label, m)) in
-                            [("Set date & time", "set"), ("Shift by", "shift"), ("Time zone", "zone"), ("original.", "original"), ("file.date.", "file")].iter().enumerate()
-                        {
-                            if crate::widgets::text_button(ui, &format!("captureMode-{i}"), label, mode == m).clicked() {
-                                *mode = m.to_string();
-                            }
-                        }
-                    });
-                    let params = match mode.as_str() {
-                        "set" => {
-                            field(ui, "New time", |ui| {
-                                let r = ui.add(egui::TextEdit::singleline(time).hint_text("2026-09-30 14:05:00").desired_width(f32::INFINITY));
-                                crate::widgets::register(ui.ctx(), "field:captureTime", r.rect);
-                            });
-                            json!({"time": time})
-                        }
-                        "shift" => {
-                            field(ui, "Shift", |ui| {
-                                ui.add(egui::DragValue::new(days).suffix(" d"));
-                                ui.add(egui::DragValue::new(hours).suffix(" h"));
-                                ui.add(egui::DragValue::new(minutes).suffix(" min"));
-                            });
-                            json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60})
-                        }
-                        "original" | "file" => {
-                            ui.label(
-                                egui::RichText::new(crate::i18n::tr(if mode == "original" {
-                                    "Each photo goes back to the capture time its file records."
-                                } else {
-                                    "Each photo takes its file's creation date (UTC)."
-                                }))
-                                .color(t.text_dim),
-                            );
-                            json!({})
-                        }
-                        _ => {
-                            field(ui, "Hours", |ui| ui.add(egui::DragValue::new(zone).range(-26.0..=26.0).speed(0.25).fixed_decimals(2)));
-                            json!({"hours": zone})
-                        }
-                    };
-                    // preview on the active photo (the others move by the same amount)
-                    let active = app.session.active().and_then(|id| app.session.catalog.photo(id)).map(|p| (p.file_name.clone(), p.date().to_string()));
-                    if let Some((name, cur)) = active.filter(|_| !matches!(mode.as_str(), "original" | "file")) {
-                        let delta = match mode.as_str() {
-                            "set" => lightcraft_catalog::dates::normalize_iso(time)
-                                .and_then(|t| Some(lightcraft_catalog::dates::iso_seconds(&t)? - lightcraft_catalog::dates::iso_seconds(&cur)?)),
-                            "shift" => params["shift"].as_i64(),
-                            _ => Some((*zone as f64 * 3600.0).round() as i64),
-                        };
-                        let after = delta.and_then(|d| lightcraft_catalog::dates::shift_iso(&cur, d));
-                        ui.label(
-                            egui::RichText::new(match after {
-                                Some(a) => format!("{name}: {} → {}", cur.replace('T', " "), a.replace('T', " ")),
-                                None => "Enter a date as YYYY-MM-DD HH:MM:SS".into(),
-                            })
-                            .color(t.text_label),
-                        );
-                    }
-                    if n > 1 {
-                        ui.label(egui::RichText::new(crate::i18n::tr_format!("All {n} selected photos move by the same amount.", n = n)).color(t.text_dim));
-                    }
+                Dialog::CaptureTime { .. } => {
+                    confirm |= crate::capture_time_dialog::body(app, ui, &mut dlg);
                 }
                 Dialog::LabelNames { names, save_as } => {
                     names.resize(5, String::new());
@@ -877,6 +815,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     // (nothing to apply until the dry run is in)
                     Dialog::LightroomSync { report: None, .. } | Dialog::LightroomSync { error: Some(_), .. } => "",
                     Dialog::LightroomSync { .. } => "sync.",
+                    Dialog::CaptureTime { .. } => "apply.",
                     _ if informational => "Close",
                     _ => "OK",
                 };
@@ -1089,16 +1028,10 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             p[key.as_str()] = json!(value.trim());
             app.run(command, p)
         }
-        Dialog::CaptureTime { mode, time, days, hours, minutes, zone } => app.run(
-            "photo.setCaptureTime",
-            match mode.as_str() {
-                "set" => json!({"time": time}),
-                "shift" => json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60}),
-                "original" => json!({"revert": true}),
-                "file" => json!({"fileDate": true}),
-                _ => json!({"hours": zone}),
-            },
-        ),
+        Dialog::CaptureTime { .. } => match crate::capture_time_dialog::request(dlg) {
+            Some(r) => app.run("photo.setCaptureTime", r),
+            None => Ok(serde_json::Value::Null),
+        },
         Dialog::LabelNames { names, save_as } => {
             let mut m = serde_json::Map::new();
             for (l, n) in lightcraft_catalog::ColorLabel::ALL.iter().zip(names) {
