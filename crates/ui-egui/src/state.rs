@@ -458,6 +458,11 @@ pub struct UiState {
     /// The keyword painter: clicking a photo in the grid toggles this keyword on it.
     #[serde(skip)]
     pub keyword_painter: Option<String>,
+    /// The Painter's other modes (L12): `(mode, value)` — label, flag, rating, preset (develop
+    /// preset id), metadata (metadata preset name), rotate (left / right / flipH / flipV),
+    /// album (album id). A click on a grid photo applies it (label / album toggle off again).
+    #[serde(skip)]
+    pub painter: Option<(String, String)>,
     /// A running slideshow (full screen): seconds per photo, when the next one is due (egui
     /// time), paused.
     #[serde(skip)]
@@ -765,6 +770,7 @@ impl Default for UiState {
             slideshow: None,
             second_window: false,
             keyword_painter: None,
+            painter: None,
             info_overlay: InfoOverlay::Off,
             navigator: true,
             settings: AppSettings::default(),

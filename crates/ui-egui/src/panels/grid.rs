@@ -640,6 +640,17 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }
     // interaction
+    if let Some((mode, value)) = app.ui.painter.clone() {
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        if resp.clicked()
+            && let Err(e) = crate::menus::paint(app, id, &mode, &value)
+        {
+            app.toast(ui.ctx(), e);
+        }
+        return;
+    }
     if let Some(k) = app.ui.keyword_painter.clone() {
         // painting: a click toggles the keyword on this photo
         if resp.hovered() {

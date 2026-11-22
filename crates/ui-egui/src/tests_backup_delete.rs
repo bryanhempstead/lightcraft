@@ -221,3 +221,36 @@ fn import_presets_save_and_apply() {
         assert!(h.app.widgets.iter().any(|(w, _)| w == "button:importPresets"));
     }
 }
+
+/// L12: the Painter paints labels, ratings and albums onto grid photos; a label comes off again.
+#[test]
+fn painter_modes() {
+    let mut h = headless(lightcraft_engine::Session::with_demo());
+    h.app.ui.view = crate::state::ViewMode::PhotoGrid;
+    let target = h.app.session.visible_cloned()[0];
+    h.app.session.execute("photo.label", &json!({"ids": [target.0], "label": "none"})).unwrap();
+    let paint_click = |h: &mut Headless| {
+        for _ in 0..3 {
+            h.step();
+        }
+        let rect = h.app.widgets.iter().find(|(w, _)| *w == format!("thumb:{}", target.0)).map(|(_, r)| *r).unwrap();
+        let c = rect.center();
+        let r = h.request("ui.drag", json!({"x": c.x, "y": c.y, "toX": c.x, "toY": c.y, "steps": 2}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        for _ in 0..3 {
+            h.step();
+        }
+    };
+    let r = h.app.run("tool.painter", json!({"mode": "label", "value": "red"})).unwrap();
+    assert_eq!(r["painter"]["mode"], "label");
+    paint_click(&mut h);
+    assert_eq!(h.app.session.catalog.photo(target).unwrap().label, Some(lightcraft_catalog::ColorLabel::Red));
+    paint_click(&mut h);
+    assert_eq!(h.app.session.catalog.photo(target).unwrap().label, None, "a second click takes it off");
+    h.app.run("tool.painter", json!({"mode": "rating", "value": "4"})).unwrap();
+    paint_click(&mut h);
+    assert_eq!(h.app.session.catalog.photo(target).unwrap().rating, 4);
+    assert!(h.app.run("tool.painter", json!({"mode": "glitter", "value": "x"})).is_err());
+    h.request("ui.key", json!({"key": "escape"}), T);
+    assert!(h.app.ui.painter.is_none());
+}
