@@ -530,6 +530,9 @@ pub struct FinishParams {
     pub w: usize,
     pub h: usize,
     pub px_per_long: f64,
+    /// Peak linear output relative to SDR white: 1 for SDR renders; `2^max_ev` for an HDR render
+    /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them.
+    pub peak: f32,
 }
 
 impl FinishParams {
@@ -572,7 +575,10 @@ impl FinishParams {
             None => crate::tone::lr::hs_lut(hl, sh, key_offset),
         });
         let (hl, sh) = if lr_tone { (0.0, 0.0) } else { (hl, sh) };
+        // HDR edits (an HDR render only: every SDR render gets the SDR rendition, HDR off)
+        let peak = s.hdr.peak();
         FinishParams {
+            peak,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: if let Some(a) = adobe.as_ref() {
@@ -583,7 +589,8 @@ impl FinishParams {
                 ToneMap::new(s.light.contrast, s.light.whites, s.light.blacks)
             } else {
                 ToneMap::display(s.light.contrast, s.light.whites, s.light.blacks)
-            },
+            }
+            .with_headroom(peak),
             lut: crate::lut::get(&s.profile.id).map(|l| {
                 let k = l.blend((s.profile.amount / 100.0) as f32);
                 (l, k)
@@ -664,6 +671,12 @@ pub(crate) fn finish_deep(
             let v = finish_with(p, &fp, true, |e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
             DeepSamples::F32(v.into_flattened())
         }
+        OutputDepth::F32Hdr => {
+            // the sRGB curve extended past 1 (it is unbounded), so values up to `peak` survive
+            let peak = fp.peak;
+            let v = finish_with(p, &fp, true, |e| e.map(|v| if v.is_finite() { srgb_to_linear(v.max(0.0)).clamp(0.0, peak) } else { 0.0 }));
+            DeepSamples::F32(v.into_flattened())
+        }
         _ => {
             let q = |v: f32| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
             let v = finish_with(p, &fp, true, |e| match trc {
@@ -721,6 +734,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let aspect = w as f32 / h as f32;
 
     let srgb = srgb_lut();
+    let peak = fp.peak;
+    let hdr = peak > 1.0;
     let mut out = vec![T::default(); w * h];
     // measurement hook for tools/lr-compare (`LIGHTCRAFT_LR_DUMP=<file>`, CPU renders only): per
     // pixel the source colour, base, tone input EV, mask weight, encoded result, position, log L
@@ -874,6 +889,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- tone map: an Adobe base's curve channel-wise in ProPhoto (after its look
             // tables), else on luminance with highlight desaturation
             let mut d = match &fp.adobe {
+                Some(a) if hdr => a.post_tone(crate::adobe::rgb_tone_to(a.pre_tone(c), |v| tone.apply(v), crate::tone::HDR_SCENE_TOP)),
                 Some(a) => a.post_tone(crate::adobe::rgb_tone(a.pre_tone(c), |v| tone.apply(v))),
                 None => {
                     let yl = luminance_2020(c);
@@ -884,8 +900,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                         d = d.map(|v| o + (v - o) * k);
                     }
                     let mx = d[0].max(d[1]).max(d[2]);
-                    if mx > 1.0 {
-                        let t = ((mx - 1.0) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+                    if mx > peak {
+                        let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
                         d = d.map(|v| v + (o - v) * t);
                     }
                     d
@@ -920,6 +936,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                         } else {
                             d = d.map(|c| c * f);
                         }
+                    } else if hdr {
+                        // lighten towards SDR white; never pull HDR highlights down to it
+                        d = d.map(|c| c + (1.0 - c).max(0.0) * v.amount * t * 0.85);
                     } else {
                         d = d.map(|c| c + (1.0 - c) * v.amount * t * 0.85);
                     }
@@ -931,7 +950,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // primaries, sRGB curve) whatever the output space, so every export and the screen
             // agree; then back to linear working colour
             let styled = curves.is_some() || profile_lut.is_some() || grain.is_some();
-            if styled {
+            let style = |d: [f32; 3]| -> [f32; 3] {
                 let enc_s = |v: f32| if exact { linear_to_srgb(v.clamp(0.0, 1.0)) } else { encode_srgb(srgb, v) };
                 let mut e = mul3(&fp.to_style, d).map(enc_s);
                 if let Some(l) = curves {
@@ -954,7 +973,16 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     let k = amt * g * grain_tone(lum);
                     e = e.map(|v| v + k);
                 }
-                d = mul3(&fp.from_style, e.map(|v| lightcraft_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0))));
+                mul3(&fp.from_style, e.map(|v| lightcraft_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0))))
+            };
+            if styled && hdr {
+                // HDR: the look acts on the SDR part (up to white, in the style space); what lies
+                // above SDR white is carried over unchanged (the curves continue with slope 1)
+                let q = mul3(&fp.to_style, d);
+                let lq = mul3(&fp.to_style, style(mul3(&fp.from_style, q.map(|v| v.min(1.0)))));
+                d = mul3(&fp.from_style, std::array::from_fn(|k| lq[k] + (q[k] - 1.0).max(0.0)));
+            } else if styled {
+                d = style(d);
             }
 
             // --- gamut map to the output space (desaturate towards luminance until in range);
@@ -971,14 +999,21 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
                 None => mul3(to_out, d),
             };
-            let (mapped, t) = gamut_map(r, *out_luma);
+            let (mapped, t) = gamut_map_to(r, *out_luma, peak);
             if fp.proof.is_some_and(|pp| pp.display_warning) && warn.is_none() && out_of_gamut(r, t) {
                 warn = Some(crate::output::PROOF_DISPLAY_WARNING);
             }
             r = mapped;
 
             // --- encode (sRGB curve; `store` re-encodes with the output's own curve)
-            let e = if exact { r.map(|v| linear_to_srgb(v.clamp(0.0, 1.0))) } else { r.map(|v| encode_srgb(srgb, v)) };
+            let e = if hdr {
+                // HDR: the (unbounded) sRGB curve, so values above SDR white encode above 1
+                r.map(|v| if v > 1.0 { linear_to_srgb(v) } else { linear_to_srgb(v.max(0.0)) })
+            } else if exact {
+                r.map(|v| linear_to_srgb(v.clamp(0.0, 1.0)))
+            } else {
+                r.map(|v| encode_srgb(srgb, v))
+            };
             if let Some(d) = &dump {
                 let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
                 let asum: f32 = p.masks.iter().map(|m| m.alpha.data[i].max(0.0)).sum();
@@ -988,6 +1023,12 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 d.put(i, [l0, hs_delta, local_delta, base, l1, wb, ev_in, asum, e[0], e[1], e[2], n.x as f32, n.y as f32, sat, l_exp, 0.0]);
             }
             let e = match &p_lut {
+                Some((l, k)) if hdr => {
+                    // the LUT sees SDR values; the part above SDR white is carried over
+                    let c = e.map(|v| v.clamp(0.0, 1.0));
+                    let m = l.apply(c);
+                    [e[0] + (m[0] - c[0]) * k, e[1] + (m[1] - c[1]) * k, e[2] + (m[2] - c[2]) * k]
+                }
                 Some((l, k)) => {
                     let m = l.apply(e.map(|v| v.clamp(0.0, 1.0)));
                     [e[0] + (m[0] - e[0]) * k, e[1] + (m[1] - e[1]) * k, e[2] + (m[2] - e[2]) * k]
@@ -1029,13 +1070,19 @@ fn mul3(m: &[[f32; 3]; 3], d: [f32; 3]) -> [f32; 3] {
 /// returns the mapped colour and the chroma scale used (1 = already in gamut).
 #[inline]
 pub fn gamut_map(r: [f32; 3], luma: [f32; 3]) -> ([f32; 3], f32) {
-    let yy = (luma[0] * r[0] + luma[1] * r[1] + luma[2] * r[2]).clamp(0.0, 1.0);
+    gamut_map_to(r, luma, 1.0)
+}
+
+/// [`gamut_map`] into `0..peak` (an HDR render's range; `peak` = 1 is [`gamut_map`]).
+#[inline]
+pub fn gamut_map_to(r: [f32; 3], luma: [f32; 3], peak: f32) -> ([f32; 3], f32) {
+    let yy = (luma[0] * r[0] + luma[1] * r[1] + luma[2] * r[2]).clamp(0.0, peak);
     let mut t = 1.0f32;
     for c in r {
         if c < 0.0 {
             t = t.min(yy / (yy - c).max(1e-9));
-        } else if c > 1.0 {
-            t = t.min((1.0 - yy) / (c - yy).max(1e-9));
+        } else if c > peak {
+            t = t.min((peak - yy) / (c - yy).max(1e-9));
         }
     }
     if t < 1.0 { (r.map(|c| yy + (c - yy) * t), t) } else { (r, 1.0) }
