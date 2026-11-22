@@ -1110,6 +1110,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gainmap"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3#23acc704933a9a5619a5cd1cddc9bb1fb5a9b2d3"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2890,6 +2898,7 @@ name = "lightcraft-codecs"
 version = "0.4.0"
 dependencies = [
  "bytemuck",
+ "craft-gainmap",
  "image",
  "image-webp",
  "jixel",
