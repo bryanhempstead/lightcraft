@@ -592,6 +592,9 @@ fn main() -> eframe::Result {
             .with_title("LightCraft")
             .with_inner_size([1600.0, 1000.0])
             .with_min_inner_size([900.0, 560.0])
+            // Bryan, 2026-11-22: always open filling the screen (zoomed, not macOS full screen: the
+            // menu bar and Dock stay); 1600×1000 is what un-zooming returns to
+            .with_maximized(true)
             .with_drag_and_drop(true)
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
