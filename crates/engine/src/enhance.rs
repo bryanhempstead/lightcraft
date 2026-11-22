@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use lightcraft_catalog::{Photo, PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
-use lightcraft_enhance::Options;
+pub use lightcraft_enhance::Options;
 use lightcraft_raster::Rgb32f;
 use serde_json::{Value, json};
 
@@ -570,6 +570,7 @@ impl Session {
 }
 
 /// Long edge of the picture the depth model looks at (it works at 518 px).
+#[cfg(feature = "enhance")]
 const DEPTH_INPUT_EDGE: usize = 768;
 
 impl Session {
@@ -617,6 +618,23 @@ impl Session {
         }
         Ok(())
     }
+}
+
+/// Compile the GPU kernels the models use on a background thread (once per process), when a model is installed:
+/// the first Enhance, preview or depth map then doesn't wait ~30 s for them.
+pub fn warm_up_in_background(models_root: &Path) {
+    #[cfg(feature = "enhance")]
+    {
+        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let any = lightcraft_enhance::models::MODELS.iter().any(|m| lightcraft_enhance::models::installed(models_root, m.id).is_some());
+        if any && !STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let _ = std::thread::Builder::new().name("enhance-warm-up".into()).spawn(|| {
+                let _ = std::panic::catch_unwind(lightcraft_enhance::warm_up);
+            });
+        }
+    }
+    #[cfg(not(feature = "enhance"))]
+    let _ = models_root;
 }
 
 /// Enhance's state in a session: where the models are, and their downloads.

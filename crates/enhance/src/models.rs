@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 pub enum ModelId {
     /// RawNIND UtNet2: joint denoise + demosaic of the Bayer mosaic (darktable-ai's `rawdenoise-nind`).
     RawDenoise,
-    /// Real-ESRGAN x2plus (RRDBNet): 2× super resolution.
+    /// Real-ESRGAN general x4v3 (SRVGGNetCompact), box-averaged to 2×: Super Resolution.
     SuperResolution,
     /// Depth Anything V2 Small: relative depth for Lens Blur and Depth Range masks.
     Depth,
@@ -56,15 +56,15 @@ pub const MODELS: [ModelInfo; 3] = [
     ModelInfo {
         id: ModelId::SuperResolution,
         key: "super-resolution",
-        name: "Real-ESRGAN x2plus (RRDBNet)",
+        name: "Real-ESRGAN general x4v3 (SRVGGNetCompact)",
         licence: "BSD-3-Clause",
         licence_url: "https://github.com/xinntao/Real-ESRGAN/blob/master/LICENSE",
         source: "https://github.com/xinntao/Real-ESRGAN",
-        url: "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
-        file: "RealESRGAN_x2plus.pth",
-        size: 67_061_725,
-        sha256: "49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb",
-        weights: "RealESRGAN_x2plus.pth",
+        url: "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth",
+        file: "realesr-general-x4v3.pth",
+        size: 4_885_111,
+        sha256: "8dc7edb9ac80ccdc30c3a5dca6616509367f05fbc184ad95b731f05bece96292",
+        weights: "realesr-general-x4v3.pth",
         entry: None,
     },
     ModelInfo {

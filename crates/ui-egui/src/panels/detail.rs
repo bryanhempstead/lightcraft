@@ -922,7 +922,8 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
         return;
     }
     let cursor = match app.ui.tool.as_str() {
-        "wbPicker" | "fringePicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
+        "wbPicker" | "fringePicker" | "colorRange" | "pointColor" | "lensFocus" => egui::CursorIcon::Crosshair,
+        tool if tool.starts_with("lensBrush:") => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {
@@ -946,6 +947,9 @@ fn general_interaction(
     native: [usize; 2],
     aspect: f32,
 ) {
+    if crate::panels::lens_blur::canvas(app, resp, |q| map.norm(q)) {
+        return;
+    }
     if app.ui.tool == "wbPicker" {
         if resp.clicked()
             && let Some(q) = resp.interact_pointer_pos()

@@ -94,7 +94,7 @@ fn rel_to_k(r: f64) -> f64 {
 
 /// Lightroom Classic's Develop panels in its order and naming, and their on/off switch ids
 /// (`develop.sectionEnabled`; Basic has none).
-pub const CLASSIC_PANELS: [(&str, &str, Option<&str>); 9] = [
+pub const CLASSIC_PANELS: [(&str, &str, Option<&str>); 10] = [
     ("basic", "Basic", None),
     ("toneCurve", "Tone Curve", Some("curve")),
     ("hsl", "HSL / Color", Some("hsl")),
@@ -103,6 +103,7 @@ pub const CLASSIC_PANELS: [(&str, &str, Option<&str>); 9] = [
     ("lensCorrections", "Lens Corrections", Some("optics")),
     ("transform", "Transform", Some("geometry")),
     ("effects", "Effects", Some("effects")),
+    ("lensBlur", "Lens Blur", Some("lensBlur")),
     ("calibration", "Calibration", Some("calibration")),
 ];
 
@@ -186,6 +187,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         {
             control(app, ui, d, c, true);
         }
+        denoise_row(app, ui, d, id);
         ui.add_space(6.0);
     });
     section(app, ui, &d, "lensCorrections", |app, ui, d| lens_corrections(app, ui, d, id));
@@ -231,6 +233,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(6.0);
     });
+    section(app, ui, &d, "lensBlur", super::lens_blur::show);
     section(app, ui, &d, "calibration", |app, ui, d| {
         sub_title(ui, crate::i18n::tr("Shadows"));
         control(app, ui, d, "calibration.shadowsTint", true);
@@ -242,6 +245,40 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(6.0);
     });
     ui.add_space(24.0);
+}
+
+/// Detail ▸ Denoise: Lightroom's "Denoise…" (the Enhance dialog), and the in-place amount once applied in place.
+fn denoise_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId) {
+    let t = Tokens::get(ui.ctx());
+    let in_place = lightcraft_engine::enhance::options_of(d);
+    padded_row(ui, |ui| {
+        ui.spacing_mut().item_spacing = vec2(8.0, 10.0);
+        if text_button(ui, "detailDenoise", "denoise.", false)
+            .on_hover_text(crate::i18n::tr("Enhance… (AI Denoise, Raw Details, Super Resolution)"))
+            .clicked()
+            && let Err(e) = crate::enhance::open(app)
+        {
+            app.toast(ui.ctx(), e);
+        }
+        if in_place.any() {
+            let ready =
+                app.session.catalog.photo(id).and_then(|p| lightcraft_engine::enhance::enhanced_source(p)).is_some_and(|e| e.product.is_file());
+            let state = if app.enhance.remaking() {
+                "making…"
+            } else if ready {
+                "in place"
+            } else {
+                "result missing"
+            };
+            ui.label(egui::RichText::new(crate::i18n::tr(state)).color(t.text_dim).size(12.0));
+            if text_button(ui, "detailDenoiseRemove", "rem.", false).on_hover_text(crate::i18n::tr("Remove Enhance")).clicked() {
+                let _ = app.run("enhance.remove", json!({}));
+            }
+        }
+    });
+    if in_place.denoise > 0.0 {
+        control(app, ui, d, "enhance.denoise", true);
+    }
 }
 
 /// A row inside a panel with Classic's margins.

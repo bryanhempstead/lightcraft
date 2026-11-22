@@ -9,6 +9,7 @@
 pub mod control;
 pub mod credits;
 pub mod display_p3;
+pub mod enhance;
 pub mod export_task;
 pub mod headless;
 pub mod i18n;
@@ -226,6 +227,8 @@ pub struct LightcraftApp {
     pub loupe_shown: Option<(lightcraft_catalog::PhotoId, &'static str)>,
     /// Photo Merge dialog previews and background merges.
     pub merge: merge::MergeState,
+    /// Photo ▸ Enhance: its dialog's preview and the running Enhance.
+    pub enhance: enhance::EnhanceState,
     /// An import in progress (the import review dialog's batches).
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
@@ -298,6 +301,7 @@ impl LightcraftApp {
             gesture: None,
             loupe_shown: None,
             merge: merge::MergeState::default(),
+            enhance: enhance::EnhanceState::default(),
             import: None,
             scan: None,
             export: None,
@@ -704,6 +708,7 @@ impl LightcraftApp {
         }
         self.renderer.poll(ctx, &mut self.session);
         merge::poll(self, ctx);
+        enhance::poll(self, ctx);
         import::poll_scan(self, ctx);
         import::tick(self, ctx);
         recheck::tick(self);

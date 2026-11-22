@@ -1,8 +1,6 @@
 //! A [`Net`] (the U-Net denoisers' layers, read from ONNX by [`crate::onnx`]) run on candle: Metal on macOS, else
 //! the CPU. It is a [`TileRunner`], so `lightcraft_denoise_core::denoise_bayer` drives it over a whole mosaic.
 
-use std::sync::Mutex;
-
 use candle_core::{Device, Tensor};
 use lightcraft_denoise_core::run::{Error, TileRunner};
 
@@ -22,8 +20,6 @@ pub struct NetRunner {
     out_channels: usize,
     tile: usize,
     device: Device,
-    /// One tile at a time on the GPU (its queue serialises them anyway).
-    gate: Mutex<()>,
 }
 
 fn rt(e: candle_core::Error) -> Error {
@@ -49,6 +45,8 @@ impl NetRunner {
         if !net.fits_tile(tile) {
             return Err(Error::Load(format!("the network does not run on tiles of {tile} cells")));
         }
+        // (uploads are GPU work too)
+        let _gpu = crate::gpu_lock(&device);
         let mut layers = Vec::with_capacity(net.ops().len());
         for op in net.ops() {
             layers.push(match op {
@@ -71,7 +69,7 @@ impl NetRunner {
                 Op::DepthToSpace2 { src } => Layer::DepthToSpace2 { src: *src },
             });
         }
-        Ok(NetRunner { layers, in_channels: net.in_channels, out_channels: net.out_channels(), tile, device, gate: Mutex::new(()) })
+        Ok(NetRunner { layers, in_channels: net.in_channels, out_channels: net.out_channels(), tile, device })
     }
 
     pub fn device(&self) -> &Device {
@@ -165,7 +163,7 @@ impl TileRunner for NetRunner {
         if input.len() != self.in_channels * t * t {
             return Err(Error::Input("the tile does not fit the network".into()));
         }
-        let _one = if self.device.is_cpu() { None } else { Some(self.gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) };
+        let _gpu = crate::gpu_lock(&self.device);
         let x = Tensor::from_slice(input, (1, self.in_channels, t, t), &self.device).map_err(rt)?;
         let y = self.forward(x).map_err(rt)?;
         let dims = y.dims().to_vec();
@@ -250,9 +248,12 @@ mod tests {
             let x = rnd(cin * side * side, 1);
             let w = rnd(cout * cin * 9, 2);
             for d in devices() {
-                let xt = Tensor::from_slice(&x, (1, cin, side, side), &d).unwrap();
-                let wt = Tensor::from_slice(&w, (cout, cin, 3, 3), &d).unwrap();
-                let got = conv2d(&xt, &wt, 1).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+                let got = {
+                    let _gpu = crate::gpu_lock(&d);
+                    let xt = Tensor::from_slice(&x, (1, cin, side, side), &d).unwrap();
+                    let wt = Tensor::from_slice(&w, (cout, cin, 3, 3), &d).unwrap();
+                    conv2d(&xt, &wt, 1).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap()
+                };
                 let mut worst = 0f32;
                 for co in 0..cout {
                     for y in 0..side {

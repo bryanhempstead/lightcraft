@@ -1,6 +1,7 @@
-//! 2× Super Resolution with Real-ESRGAN x2plus (Wang et al., 2021; BSD-3-Clause), an RRDBNet
-//! (ESRGAN's Residual-in-Residual Dense Blocks) written here on candle, read from the published
-//! PyTorch checkpoint (`params_ema`).
+//! 2× Super Resolution with Real-ESRGAN (Wang et al., 2021; BSD-3-Clause), written here on candle and read from
+//! the published PyTorch checkpoints: `realesr-general-x4v3` (SRVGGNetCompact: 32 convolutions at the input's
+//! resolution and a pixel shuffle, ×4, box-averaged to ×2; the default, ~10× faster) or `RealESRGAN_x2plus` (an
+//! RRDBNet of 23 residual-in-residual dense blocks, ×2).
 //!
 //! The network was trained on display-encoded pictures, so linear camera RGB is put through the sRGB
 //! curve on the way in and back out; values above white (highlights the camera recorded brighter
@@ -18,7 +19,7 @@ use lightcraft_raster::Rgb32f;
 use crate::{Error, Result};
 
 /// Tile side in input pixels (even), and the overlap between tiles.
-pub const TILE: usize = 384;
+pub const TILE: usize = 640;
 pub const OVERLAP: usize = 24;
 const FEAT: usize = 64;
 const GROW: usize = 32;
@@ -82,7 +83,7 @@ impl Rrdb {
 }
 
 /// The loaded network.
-pub struct SuperResolution {
+struct RrdbNet {
     first: Conv2d,
     body: Vec<Rrdb>,
     conv_body: Conv2d,
@@ -90,12 +91,30 @@ pub struct SuperResolution {
     up2: Conv2d,
     hr: Conv2d,
     last: Conv2d,
+}
+
+/// SRVGGNetCompact: convolutions with per-channel PReLU, then a pixel shuffle, plus the nearest-upscaled input.
+struct CompactNet {
+    convs: Vec<Conv2d>,
+    /// `[1, C, 1, 1]` slopes, one per convolution but the last.
+    prelu: Vec<Tensor>,
+    scale: usize,
+}
+
+enum Net {
+    Rrdb(Box<RrdbNet>),
+    Compact(CompactNet),
+}
+
+pub struct SuperResolution {
+    net: Net,
     device: Device,
     dtype: DType,
 }
 
 impl SuperResolution {
     pub fn load(path: &Path, device: Device) -> Result<Self> {
+        let _gpu = crate::gpu_lock(&device);
         let tensors = candle_core::pickle::read_all_with_key(path, Some("params_ema"))
             .or_else(|_| candle_core::pickle::read_all_with_key(path, Some("params")))
             .map_err(|e| Error::Model(format!("{}: {e}", path.display())))?;
@@ -105,6 +124,9 @@ impl SuperResolution {
         let map: HashMap<String, Tensor> = tensors.into_iter().collect();
         // half precision on the GPU: twice the arithmetic for the same memory traffic (the network was trained in it)
         let dtype = if device.is_cpu() || std::env::var_os("LIGHTCRAFT_ESRGAN_F32").is_some() { DType::F32 } else { DType::F16 };
+        if !map.contains_key("conv_first.weight") {
+            return Self::load_compact(map, device, dtype);
+        }
         let vb = VarBuilder::from_tensors(map, dtype, &device);
         let body = (0..BLOCKS)
             .map(|i| {
@@ -112,7 +134,7 @@ impl SuperResolution {
                 Ok(Rrdb { rdb: [Rdb::new(b.pp("rdb1"))?, Rdb::new(b.pp("rdb2"))?, Rdb::new(b.pp("rdb3"))?] })
             })
             .collect::<candle_core::Result<Vec<_>>>()?;
-        Ok(SuperResolution {
+        let net = RrdbNet {
             first: conv(&vb, 12, FEAT, "conv_first")?,
             body,
             conv_body: conv(&vb, FEAT, FEAT, "conv_body")?,
@@ -120,9 +142,38 @@ impl SuperResolution {
             up2: conv(&vb, FEAT, FEAT, "conv_up2")?,
             hr: conv(&vb, FEAT, FEAT, "conv_hr")?,
             last: conv(&vb, FEAT, 3, "conv_last")?,
-            device,
-            dtype,
-        })
+        };
+        Ok(SuperResolution { net: Net::Rrdb(Box::new(net)), device, dtype })
+    }
+
+    /// An SRVGGNetCompact checkpoint (`body.{2i}` convolutions, `body.{2i+1}` PReLUs).
+    fn load_compact(map: HashMap<String, Tensor>, device: Device, dtype: DType) -> Result<Self> {
+        let n = (0..1024).take_while(|i| map.contains_key(&format!("body.{i}.weight"))).count();
+        if n < 3 || n % 2 == 0 {
+            return Err(Error::Model("not a Real-ESRGAN checkpoint".into()));
+        }
+        let vb = VarBuilder::from_tensors(map, dtype, &device);
+        let mut convs = Vec::new();
+        let mut prelu = Vec::new();
+        let mut cin = 3;
+        for i in (0..n).step_by(2) {
+            let w = vb.get_unchecked(&format!("body.{i}.weight"))?;
+            let (cout, wcin, kh, kw) = w.dims4()?;
+            if wcin != cin || (kh, kw) != (3, 3) {
+                return Err(Error::Model(format!("body.{i}: unexpected shape {:?}", w.dims())));
+            }
+            convs.push(Conv2d { w, b: vb.get(cout, &format!("body.{i}.bias"))?.reshape((1, cout, 1, 1))? });
+            if i + 1 < n {
+                prelu.push(vb.get(cout, &format!("body.{}.weight", i + 1))?.reshape((1, cout, 1, 1))?);
+            }
+            cin = cout;
+        }
+        // the last convolution gives 3 · scale² channels
+        let scale = ((cin / 3) as f64).sqrt().round() as usize;
+        if scale < 2 || 3 * scale * scale != cin {
+            return Err(Error::Model("not a Real-ESRGAN checkpoint (output channels)".into()));
+        }
+        Ok(SuperResolution { net: Net::Compact(CompactNet { convs, prelu, scale }), device, dtype })
     }
 
     pub fn device(&self) -> &Device {
@@ -131,6 +182,41 @@ impl SuperResolution {
 
     /// `[1, 3, h, w]` (0..1, display-encoded, `h`, `w` even) → `[1, 3, 2h, 2w]`.
     pub fn forward(&self, x: &Tensor) -> candle_core::Result<Tensor> {
+        match &self.net {
+            Net::Rrdb(n) => n.forward(x),
+            Net::Compact(n) => {
+                let y = n.forward(x)?;
+                // ×4 → ×2: each output pixel the mean of 2 × 2 (supersampled)
+                match n.scale {
+                    2 => Ok(y),
+                    4 => y.avg_pool2d(2),
+                    s => candle_core::bail!("a ×{s} network"),
+                }
+            }
+        }
+    }
+}
+
+impl CompactNet {
+    fn forward(&self, x: &Tensor) -> candle_core::Result<Tensor> {
+        let mut y = x.clone();
+        for (i, c) in self.convs.iter().enumerate() {
+            y = c.forward(&y)?;
+            if let Some(a) = self.prelu.get(i) {
+                let pos = y.relu()?;
+                y = (&pos + (y - &pos)?.broadcast_mul(a)?)?;
+            }
+        }
+        let (n, c, h, w) = y.dims4()?;
+        let s = self.scale;
+        // pixel shuffle: channel c·s² + dy·s + dx → (s·y + dy, s·x + dx)
+        let y = y.reshape((n, c / (s * s), s, s, h, w))?.permute((0, 1, 4, 2, 5, 3))?.contiguous()?.reshape((n, c / (s * s), h * s, w * s))?;
+        y + x.upsample_nearest2d(h * s, w * s)?
+    }
+}
+
+impl RrdbNet {
+    fn forward(&self, x: &Tensor) -> candle_core::Result<Tensor> {
         let (n, c, h, w) = x.dims4()?;
         // pixel unshuffle ×2: channel 4c + 2dy + dx
         let x = x.reshape((n, c, h / 2, 2, w / 2, 2))?.permute((0, 1, 3, 5, 2, 4))?.reshape((n, c * 4, h / 2, w / 2))?;
@@ -145,7 +231,9 @@ impl SuperResolution {
         let feat = lrelu(&self.up2.forward(&feat.upsample_nearest2d(fh * 4, fw * 4)?)?)?;
         self.last.forward(&lrelu(&self.hr.forward(&feat)?)?)
     }
+}
 
+impl SuperResolution {
     /// Upscale linear camera RGB (white = 1) 2×. `progress(done, total)` after each tile; `cancel` stops between
     /// tiles.
     pub fn upscale(&self, img: &Rgb32f, cancel: &AtomicBool, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Rgb32f> {
@@ -182,6 +270,7 @@ impl SuperResolution {
                         }
                     }
                 }
+                let _gpu = crate::gpu_lock(&self.device);
                 let t = Tensor::from_vec(input, (1, 3, th, tw), &self.device)?.to_dtype(self.dtype)?;
                 let out = self.forward(&t)?.to_dtype(DType::F32)?.clamp(0f32, 1f32)?.flatten_all()?.to_vec1::<f32>()?;
                 let (tw2, th2) = (tw * 2, th * 2);
@@ -220,14 +309,13 @@ impl SuperResolution {
     }
 }
 
-/// Tile starts covering `n` with tiles of `tile` overlapping by `overlap` (the last one flush with the end).
+/// Tile starts covering `n` with tiles of `tile` overlapping by at least `overlap`, spread evenly (even starts).
 fn starts(n: usize, tile: usize, overlap: usize) -> Vec<usize> {
-    if n <= tile {
+    if n <= tile || tile <= overlap {
         return vec![0];
     }
-    let step = tile - overlap;
-    let mut v: Vec<usize> = (0..).map(|i| i * step).take_while(|&s| s + tile < n).collect();
-    v.push((n - tile) & !1);
+    let k = (n - overlap).div_ceil(tile - overlap).max(2);
+    let mut v: Vec<usize> = (0..k).map(|i| ((n - tile) * i / (k - 1)) & !1).collect();
     v.dedup();
     v
 }
@@ -279,7 +367,7 @@ mod tests {
         }
     }
 
-    /// Opt-in: `LC_ESRGAN=<RealESRGAN_x2plus.pth> cargo test -p lightcraft-enhance --release -- --ignored esrgan`
+    /// Opt-in: `LC_ESRGAN=<realesr-general-x4v3.pth or RealESRGAN_x2plus.pth> cargo test -p lightcraft-enhance --release -- --ignored esrgan`
     #[test]
     #[ignore]
     fn esrgan_upscales_a_gradient() {

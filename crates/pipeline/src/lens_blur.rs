@@ -86,6 +86,17 @@ pub fn coc_plane(s: &DevelopSettings, frame: &Frame, w: usize, h: usize, img: &R
                 *c = coc_of_depth(s, grid.sample(n.x, n.y));
             }
         });
+        // the depth map is coarse (a few hundred cells): snap its edges to the photo's (guided filter on log
+        // luminance), so the subject's outline is cut where the photo has it, not on the map's grid
+        let cell = (w.max(h) as f32 / grid.width.max(grid.height).max(1) as f32).max(1.0);
+        if cell > 1.5 {
+            let mut log_l = Plane::new(w, h);
+            for (o, p) in log_l.data.iter_mut().zip(&img.data) {
+                *o = (lightcraft_color::luminance_2020(*p).max(0.0) + 1e-4).log2();
+            }
+            let plane = Plane { width: w, height: h, data: coc };
+            coc = crate::masks::guided_cross(&log_l, &plane, 1.5 * cell, 0.02).data;
+        }
     }
     let l = &s.lens_blur;
     let brush = |strokes: &[lightcraft_develop::BrushStroke]| {
@@ -403,6 +414,20 @@ mod tests {
         }
         s.depth = None;
         assert!(!active(&s));
+    }
+
+    #[test]
+    fn a_depth_range_mask_selects_by_depth() {
+        let (w, h) = (80, 40);
+        let s = left_near(0.0);
+        let frame = Frame::new(w, h, &s, true);
+        let img = stripes(w, h);
+        let shape = MaskShape::DepthRange { lo: 0.0, hi: 0.3, feather: 0.05 };
+        let a = crate::masks::shape_alpha(&shape, &frame, w, h, &img, &Plane::new(w, h), 0.0);
+        assert!(a.data[20 * w + 10] > 0.99 && a.data[20 * w + 70] < 0.01, "{} {}", a.data[20 * w + 10], a.data[20 * w + 70]);
+        // without a depth map it selects nothing
+        let bare = Frame::new(w, h, &DevelopSettings::default(), true);
+        assert!(crate::masks::shape_alpha(&shape, &bare, w, h, &img, &Plane::new(w, h), 0.0).data.iter().all(|v| *v == 0.0));
     }
 
     #[test]

@@ -53,7 +53,7 @@ this fork: lightcraft-raw uses it for Raw Details) is distributed under the GPL-
 
 The Enhance models are not part of LightCraft and are never distributed with it. A user downloads each one only
 when they choose to, under its own licence: RawNIND UtNet2 as published by darktable-ai (GPL-3.0), Real-ESRGAN
-x2plus (BSD-3-Clause, Xintao Wang et al.), Depth Anything V2 Small (Apache-2.0, Lihe Yang et al.). See
+general x4v3 (BSD-3-Clause, Xintao Wang et al.), Depth Anything V2 Small (Apache-2.0, Lihe Yang et al.). See
 docs/enhance.md.
 
 The SAM 3 weights are not part of LightCraft and are never distributed with it. A user downloads

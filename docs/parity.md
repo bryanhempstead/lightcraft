@@ -26,17 +26,17 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | C. Views & navigation (VIEW) | 15 | 2 | 1 | 0 | 8/10 (80%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 41 | 4 | 5 | 1 | 26/28 (93%) | 13/15 (87%) |
+| F. Edit panel — global adjustments (EDIT) | 44 | 5 | 1 | 1 | 26/28 (93%) | 13/15 (87%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 9 | 0 | 2 | 2 | 4/4 (100%) | 3/3 (100%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
-| K. Masking (MASK) | 15 | 4 | 5 | 0 | 8/8 (100%) | 6/6 (100%) |
+| K. Masking (MASK) | 16 | 4 | 4 | 0 | 8/8 (100%) | 6/6 (100%) |
 | L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 8 | 0 | 0 | 0 | 3/3 (100%) | 4/4 (100%) |
 | O. Merge (MERGE) | 4 | 0 | 0 | 0 | — | — |
-| P. Enhance (ENH) | 0 | 0 | 2 | 0 | — | — |
+| P. Enhance (ENH) | 2 | 0 | 0 | 0 | — | — |
 | Q. HDR (HDR) | 0 | 0 | 5 | 0 | — | — |
 | R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
 | S. Export (EXP) | 16 | 1 | 2 | 0 | 7/7 (100%) | 8/8 (100%) |
@@ -45,12 +45,12 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | V. Preferences (PREF) | 5 | 0 | 3 | 3 | 1/1 (100%) | 4/4 (100%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 17 | 4 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
-| Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
+| Y. Menus | 82 | 0 | 3 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
 | Lightroom Classic extras | 65 | 18 | 38 | 9 | — | 34/35 (97%) |
-| **Total** | 430 | 46 | 85 | 36 | 191/201 (95%) | 160/169 (95%) |
+| **Total** | 437 | 47 | 77 | 36 | 191/201 (95%) | 160/169 (95%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.7%** of 561 in-scope rows — P0 97.5% of 201 · P1 96.4% of 169 · P2 49.2% of 190.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **82.1%** of 561 in-scope rows — P0 97.5% of 201 · P1 96.4% of 169 · P2 53.2% of 190.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -69,11 +69,13 @@ Take the first one nobody is working on.
    then tune tone, highlights, texture/clarity/dehaze, NR and sharpening against it.
 5. **LR-EDIT-OPTICS-PROFILE** (P1): a lens-profile database of our own (corrections embedded in DNG files and the
    distortion correction Panasonic / Leica cameras record in RW2 / RWL files work today; issue #256).
-6. **AI masks and Enhance** (LR-MASK-SUBJECT / SKY / PEOPLE / OBJECTS, LR-EDIT-DETAIL-DENOISE, SUPERRES, LENSBLUR):
+6. **AI masks and Super Resolution speed** (LR-MASK-SUBJECT / SKY / PEOPLE / OBJECTS, LR-EDIT-DETAIL-SUPERRES):
    Object and Describe masks run SAM 3 in pure Rust (`crates/segment`); the weights (SAM License) are never bundled:
    the app offers a consented, verified download, but **LightCraft's CDN mirrors are not configured yet** (the
    built-in list is empty, so today users need their own mirror or a manual install). Subject / Sky / People could
-   use the same model with fixed prompts; denoise / super-resolution models remain a maintainer decision.
+   use the same model with fixed prompts. Enhance (Denoise, Raw Details, Super Resolution, in place or a new DNG),
+   Lens Blur and Depth Range work (`docs/enhance.md`, open models downloaded on request); Super Resolution takes
+   ~35 s per megapixel on an M3 Pro and needs a faster runner or network.
 7. **HDR** (Q. HDR, LR-EXP-HDR), **video** (R. Video), **Classic output modules** (Map view, Book, Slideshow module,
    Print, publish): large, well understood, lower priority than 1–5.
 8. **LR-VIEW-ZOOM** (P0): pinch zoom and two-finger pan now work, with stable image cursors between gesture events.
@@ -264,9 +266,9 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-EDIT-ALTDRAG | Alt/Option-drag previews | P1 | ✅ | `crates/pipeline/src/visualize.rs` (`Overlay::for_control`), `crates/ui-egui/src/panels/detail.rs` (`view_overlay`) | held while dragging: Exposure / Highlights / Whites → highlight clipping, Shadows / Blacks → shadow clipping, Sharpening Amount and Luminance NR → greyscale, Radius / Detail → the detail band, Masking → the sharpening mask (ported from upstream; the sharpening views are measured on the finished image with the render's kernel) |
 | LR-EDIT-DETAIL-NR | Luminance noise reduction | P0 | ✅ | `ctl:detail.nrLuminance`, `ctl:detail.nrDetail`, `ctl:detail.nrContrast` | strength refitted to Camera Raw on ISO 6400 raws (`docs/lr-match.md` → Round 9) |
 | LR-EDIT-DETAIL-CNR | Colour noise reduction | P0 | ✅ | `ctl:detail.nrColor`, `ctl:detail.nrColorDetail`, `ctl:detail.nrColorSmoothness` | strength refitted to Camera Raw at 1:1; dark high-ISO files keep more fine chroma than Camera Raw (demosaic) |
-| LR-EDIT-DETAIL-DENOISE | AI denoise | P2 | ⬜ | | settings field reserved, not rendered |
-| LR-EDIT-DETAIL-RAWDETAILS | Improved demosaic toggle | P2 | ⬜ | | |
-| LR-EDIT-DETAIL-SUPERRES | Super resolution | P2 | ⬜ | | |
+| LR-EDIT-DETAIL-DENOISE | AI denoise | P2 | ✅ | `cmd:photo.enhance`, `ctl:enhance.denoise`, `crates/enhance/src/job.rs`, `crates/enhance/src/netrun.rs`, `crates/denoise-core/src/run.rs` | on the raw Bayer mosaic, denoising as it demosaics, with an Amount (blend towards the RCD demosaic): RawNIND UtNet2 (darktable-ai's GPL-3.0 weights, consented pinned download) on candle / Metal, 11.2 s on a 24.8 MP ISO 4000 GR III DNG on an M3 Pro (+~25 s Metal warm-up on first use); without the model the built-in BM3D-style denoiser ported from upstream (37.6 s, CPU). Bayer only (X-Trans, ProRAW refused with a message); not measured against Lightroom's Denoise yet (`docs/enhance.md`) |
+| LR-EDIT-DETAIL-RAWDETAILS | Improved demosaic toggle | P2 | ✅ | `cmd:photo.enhance` (`rawDetails`), `crates/rcd/src/lib.rs`, `crates/raw/src/demosaic/mod.rs` (`Method::Rcd`) | RCD (ported from RawTherapee, GPL-3.0+) in parallel bands: 0.34 s for 24.8 MP (AHD 0.91 s); equal to AHD on the synthetic PSNR test (37.2 vs 37.7 dB on the edge scene), visibly less colour noise and zipper on real high-ISO files; Bayer only |
+| LR-EDIT-DETAIL-SUPERRES | Super resolution | P2 | 🟡 | `cmd:photo.enhance` (`superResolution`), `crates/enhance/src/esrgan.rs` | 2× with Real-ESRGAN x2plus (BSD-3-Clause, consented download) on the demosaiced linear picture (sRGB curve in and out, highlights above white from a smooth resize); works end to end but slow: ~35 s per input megapixel on an M3 Pro (a 24 MP photo ~14 min) — needs a faster runner (f16 / channels-last kernels) or a lighter network; a GAN, so fine texture is re-synthesised rather than Lightroom's raw-aware SR |
 | LR-EDIT-DETAIL-AISHARPEN | AI sharpen | OOS | 🚫 | | |
 | LR-EDIT-OPTICS-CA | Remove chromatic aberration | P1 | ✅ | `crates/ui-egui/src/panels/edit.rs` (checkbox), `ctl:optics.caRed`, `ctl:optics.caBlue` | image-based like Lightroom's; Camera Raw does not apply a lens profile's chromatic model either (measured, `docs/lr-match.md` → Round 9) |
 | LR-EDIT-OPTICS-PROFILE | Lens profile corrections | P1 | 🟡 | `ctl:optics.profileDistortion`, `ctl:optics.profileVignetting`, `crates/pipeline/src/optics.rs`, `crates/raw/src/vendor/rw2.rs` | uses corrections embedded in the file: DNG `WarpRectilinear` / `FixVignetteRadial`, and the camera's own distortion correction in Panasonic / Leica RW2 / RWL files (tag `0x0119`, read as the equivalent `WarpRectilinear`; on 79 photos from 13 bodies and 11 lenses the corrected render lines up with the camera JPEG within 0.75 px at 1440 px at the corners, from up to 13 % of the half diagonal uncorrected; issue #256); vignetting and lateral CA data of other raw formats (Olympus, Fujifilm, Sony) not read yet. Bryan's fork: the installed Adobe `.lcp` profiles (`crates/engine/src/lcp.rs`), matched from the lens tag or **named in the settings** (`optics.lens_profile_ref`: Lightroom's `LensProfileName` / `Filename` / `Digest`, carried over by migration, XMP and `cmd:library.rematchLensProfiles`), incl. manual lenses (no focal length in the profile) and **fisheye profiles, de-fished and scaled to fill the frame as Lightroom does** (CPU + GPU); the profiles' lateral-CA models are not used |
@@ -276,7 +278,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-EDIT-GEOM-MANUAL | Manual transform | P1 | ✅ | `ctl:geometry.*` | |
 | LR-EDIT-GEOM-CONSTRAIN | Constrain crop | P1 | ✅ | `crates/ui-egui/src/panels/right.rs` (checkbox → `cmd:develop.merge`) | |
 | LR-EDIT-GEOM-GRID | Grid while transforming | P2 | ✅ | `crates/ui-egui/src/panels/detail.rs` | a fine grid over the photo while a geometry slider is dragged |
-| LR-EDIT-LENSBLUR | Lens blur | P2 | ⬜ | | settings field reserved, not rendered |
+| LR-EDIT-LENSBLUR | Lens blur | P2 | ✅ | `cmd:lensBlur.apply`, `cmd:lensBlur.focusAt`, `cmd:lensBlur.bokeh`, `cmd:lensBlur.brush`, `cmd:lensBlur.clearBrushes`, `cmd:enhance.depth`, `ctl:lensBlur.*`, `crates/pipeline/src/lens_blur.rs`, `crates/ui-egui/src/panels/lens_blur.rs` | depth from Depth Anything V2 Small (Apache-2.0, consented download, ~1.5 s) kept with the photo; circle of confusion from depth outside the focal range, relative to the long edge (preview = export); bokeh circle / bubble / 5-blade / ring, Boost, focus picker, Visualize Depth (map in the panel), Refine focus / blur brushes; upstream's multi-level normalized gather (no halo). No Cat Eye, no on-photo depth overlay, no stroke preview while painting |
 | LR-EDIT-CALIB | Calibration [Classic] | P1 | 🟡 | `ctl:calibration.*` | shadows tint, red/green/blue primary hue and saturation; read/written in XMP. Applied after the camera profile's hue/sat map, where Camera Raw applies it before: Summer Fields' calibration on the oracle chart 4.22 ΔE; the Camera Raw order is in the code (`engine::adobe::HUE_SAT_IN_FINISH`, 2.20 ΔE) but off until it passes the acceptance gate (`docs/lr-match.md` → Round 8) |
 | LR-EDIT-SECTION-TOGGLE | Section on/off | P1 | ✅ | `cmd:develop.sectionEnabled`, `crates/develop/src/lib.rs` (`effective`) | the eye on a section header hides its adjustments: Light (with the curve), Color (white balance, presence, mixers, grading, point colour), Effects, Detail, Optics, Geometry, Calibration; masks stay on (issue #316 fixed Light, Color and Detail, which had no effect) |
 | LR-EDIT-RESET | Reset all / section / slider | P0 | ✅ | `cmd:develop.reset`, `cmd:develop.resetSection`, `cmd:develop.resetControl`, `crates/ui-egui/src/widgets.rs` (double-click) | no "reset to open" |
@@ -354,7 +356,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-MASK-RADIAL | Radial gradient | P0 | ✅ | `cmd:tool.radial`, `cmd:mask.update` | |
 | LR-MASK-COLORRANGE | Colour range | P1 | ✅ | `cmd:mask.add` (`colorRange`), `cmd:mask.sampleColor`, `cmd:mask.update`, `crates/pipeline/src/lib.rs` (`color_range_sample`) | Color tile → click the photo to sample (⇧-click adds, up to 5; samples taken in the space the mask compares in), Pick button, Refine slider |
 | LR-MASK-LUMRANGE | Luminance range | P1 | ✅ | `cmd:mask.add` (`luminanceRange`), `cmd:mask.update`, `crates/ui-egui/src/panels/masking.rs` (`range_controls`) | range bar with two handles (one undo step per drag), Smoothness, Show Luminance Map (B&W photo with the range tinted) |
-| LR-MASK-DEPTHRANGE | Depth range | P2 | ⬜ | | shape exists, needs depth data |
+| LR-MASK-DEPTHRANGE | Depth range | P2 | ✅ | `cmd:mask.add` (`depthRange`), `cmd:mask.addComponent`, `crates/pipeline/src/masks.rs`, `crates/ui-egui/src/panels/masking.rs` (`range_controls`) | Near / Far / Smoothness over the photo's depth map (estimated when the mask is added); imported from `crs:DepthRange`. No depth-range picker bar yet (sliders) |
 | LR-MASK-COMBINE | Add / subtract / intersect | P0 | ✅ | `cmd:mask.addComponent` | |
 | LR-MASK-INVERT | Invert | P0 | ✅ | `cmd:mask.invert` | |
 | LR-MASK-AMOUNT | Mask amount | P1 | ✅ | `cmd:mask.adjust` (`amount`), `crates/ui-egui/src/panels/masking.rs` | |
@@ -419,8 +421,8 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-ENH-DIALOG | Enhance dialog | P2 | ⬜ | | |
-| LR-ENH-INPLACE | In-place enhance | P2 | ⬜ | | |
+| LR-ENH-DIALOG | Enhance dialog | P2 | ✅ | `cmd:dialog.enhance`, `cmd:enhance.preview`, `crates/ui-egui/src/enhance.rs` | Denoise + Amount, Raw Details, Super Resolution, before / after preview of the middle at 1:1 (background job, cancels on change), the models' downloads with size and licence; new DNG `<name>-Enhanced-NR/-RD/-SR/-NR-SR.dng` next to the raw, imported with the original's settings and stacked on top, runs in the background with progress |
+| LR-ENH-INPLACE | In-place enhance | P2 | ✅ | `cmd:photo.enhance` (`inPlace`), `cmd:enhance.status`, `cmd:enhance.remove`, `crates/engine/src/enhance.rs` | the photo renders (preview, 1:1, export) from the enhanced picture in the Enhance cache; undoable; Detail ▸ Denoise shows the amount and remakes a missing / changed result in the background |
 
 ## Q. HDR (HDR)
 
@@ -609,7 +611,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-PHOTO-CREATEVERSION | Create Version… | P1 | ✅ | `cmd:version.create` | no name prompt |
 | MENU-PHOTO-STACK | Stack submenu | P1 | ✅ | `cmd:stack.group`, `cmd:stack.ungroup`, `cmd:dialog.autoStack` | |
 | MENU-PHOTO-MERGE | Photo merge submenu | P2 | ✅ | `cmd:dialog.mergeHdr`, `cmd:dialog.mergePanorama`, `cmd:dialog.mergeHdrPanorama`, `cmd:merge.hdrLast` | |
-| MENU-PHOTO-ENHANCE | Enhance… | P2 | ⬜ | | |
+| MENU-PHOTO-ENHANCE | Enhance… | P2 | ✅ | `cmd:dialog.enhance` | Photo ▸ Enhance… (⌃⌥I), also Detail ▸ denoise. |
 | MENU-PHOTO-AUTO | Auto settings | P0 | ✅ | `cmd:develop.auto` | |
 | MENU-PHOTO-BW | Convert to B&W | P0 | ✅ | `cmd:develop.treatment` | |
 | MENU-PHOTO-RESET | Reset edits / crop | P0 | ✅ | `cmd:develop.reset`, `cmd:crop.reset` | |

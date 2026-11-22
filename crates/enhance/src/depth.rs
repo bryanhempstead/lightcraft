@@ -37,6 +37,7 @@ pub struct DepthModel {
 
 impl DepthModel {
     pub fn load(path: &Path, device: Device) -> Result<Self> {
+        let _gpu = crate::gpu_lock(&device);
         let tensors = candle_core::safetensors::load(path, &Device::Cpu).map_err(|e| Error::Model(format!("{}: {e}", path.display())))?;
         let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
         let dino = crate::dinov2::vit_small(vb.pp("pretrained"))?;
@@ -63,6 +64,7 @@ impl DepthModel {
                 }
             }
         }
+        let _gpu = crate::gpu_lock(&self.device);
         let t = Tensor::from_vec(input, (1, 3, INPUT, INPUT), &self.device)?;
         let out = self.model.forward(&t)?;
         let (_, _, oh, ow) = out.dims4()?;

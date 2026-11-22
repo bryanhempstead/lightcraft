@@ -67,13 +67,48 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(feature = "models")]
 /// The best device here: Metal on macOS (when a GPU is available), else the CPU. `LIGHTCRAFT_ENHANCE_CPU=1` forces
-/// the CPU.
+/// the CPU. One device for the process: candle compiles its Metal kernels per device on first use (~30 s on an
+/// M3 Pro), so every model shares them.
 pub fn best_device() -> candle_core::Device {
-    #[cfg(target_os = "macos")]
-    if std::env::var_os("LIGHTCRAFT_ENHANCE_CPU").is_none()
-        && let Ok(d) = candle_core::Device::new_metal(0)
-    {
-        return d;
+    static DEVICE: std::sync::OnceLock<candle_core::Device> = std::sync::OnceLock::new();
+    DEVICE
+        .get_or_init(|| {
+            #[cfg(target_os = "macos")]
+            if std::env::var_os("LIGHTCRAFT_ENHANCE_CPU").is_none()
+                && let Ok(d) = candle_core::Device::new_metal(0)
+            {
+                return d;
+            }
+            candle_core::Device::Cpu
+        })
+        .clone()
+}
+
+#[cfg(feature = "models")]
+/// Hold this while using the GPU device: candle 0.9.2's Metal device gives wrong results when several threads queue
+/// work on it at once (measured: the runner tests fail when they share it unguarded), so every model's GPU work runs
+/// one at a time. `None` on the CPU (no lock needed).
+pub fn gpu_lock(device: &candle_core::Device) -> Option<std::sync::MutexGuard<'static, ()>> {
+    static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    (!device.is_cpu()).then(|| GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+}
+
+#[cfg(feature = "models")]
+/// Compile the device's kernels now (a background thread at start-up), so the first Enhance doesn't wait for them.
+pub fn warm_up() {
+    let d = best_device();
+    if d.is_cpu() {
+        return;
     }
-    candle_core::Device::Cpu
+    let _gpu = gpu_lock(&d);
+    let run = || -> candle_core::Result<()> {
+        let x = candle_core::Tensor::zeros((1, 8, 16, 16), candle_core::DType::F32, &d)?;
+        let w = candle_core::Tensor::zeros((8, 8, 3, 3), candle_core::DType::F32, &d)?;
+        let y = netrun::conv2d(&x, &w, 1)?.relu()?.max_pool2d(2)?;
+        let _ = y.to_dtype(candle_core::DType::F16)?.avg_pool2d(2)?.to_dtype(candle_core::DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+        d.synchronize()
+    };
+    if let Err(e) = run() {
+        log::warn!("enhance warm-up: {e}");
+    }
 }

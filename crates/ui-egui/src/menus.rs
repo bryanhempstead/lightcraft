@@ -168,6 +168,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.export", "Export…", None, "File"),
     ("dialog.syncLightroom", "Sync from Lightroom Classic…", None, "File"),
     ("photo.editInExternal", "Edit in External Editor", Some("Cmd+Shift+E"), "Photo"),
+    ("dialog.enhance", "Enhance…", Some("Ctrl+Alt+I"), "Photo"),
     ("dialog.mergeHdr", "HDR…", Some("Ctrl+H"), "Photo>Photo Merge"),
     ("dialog.mergePanorama", "Panorama…", Some("Ctrl+M"), "Photo>Photo Merge"),
     ("dialog.mergeHdrPanorama", "HDR Panorama…", None, "Photo>Photo Merge"),
@@ -1346,6 +1347,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "dialog.mergeHdrPanorama" => crate::merge::open(app, "merge.hdrPanorama"),
         "dialog.mergeFocus" => crate::merge::open(app, "merge.focus"),
         "dialog.mergeTake" => crate::merge::open(app, "merge.take"),
+        "dialog.enhance" => crate::enhance::open(app),
         "dialog.merge" => crate::merge::open(app, "merge"),
         "merge.focusLast" => crate::merge::start_last(app, "merge.focus"),
         "app.about" => {

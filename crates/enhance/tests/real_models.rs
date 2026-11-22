@@ -144,9 +144,47 @@ fn metal_op_speed() {
 
 #[test]
 #[ignore]
+fn compact_layer_speed() {
+    use candle_core::{DType, Tensor};
+    let d = lightcraft_enhance::best_device();
+    for dt in [DType::F32, DType::F16] {
+        let x = Tensor::randn(0f32, 1f32, (1, 64, 384, 384), &d).unwrap().to_dtype(dt).unwrap();
+        let w = Tensor::randn(0f32, 0.05f32, (64, 64, 3, 3), &d).unwrap().to_dtype(dt).unwrap();
+        let a = Tensor::randn(0f32, 0.1f32, (1, 64, 1, 1), &d).unwrap().to_dtype(dt).unwrap();
+        for _ in 0..2 {
+            let t = Instant::now();
+            let y = lightcraft_enhance::netrun::conv2d(&x, &w, 1).unwrap();
+            d.synchronize().unwrap();
+            let tc = t.elapsed();
+            let t = Instant::now();
+            let pos = y.relu().unwrap();
+            let z = (&pos + (&y - &pos).unwrap().broadcast_mul(&a).unwrap()).unwrap();
+            d.synchronize().unwrap();
+            let tp = t.elapsed();
+            let t = Instant::now();
+            let big = Tensor::randn(0f32, 1f32, (1, 48, 384, 384), &d).unwrap().to_dtype(dt).unwrap();
+            let s = big
+                .reshape((1, 3, 4, 4, 384, 384))
+                .unwrap()
+                .permute((0, 1, 4, 2, 5, 3))
+                .unwrap()
+                .contiguous()
+                .unwrap()
+                .reshape((1, 3, 1536, 1536))
+                .unwrap();
+            let p = s.avg_pool2d(2).unwrap();
+            d.synchronize().unwrap();
+            eprintln!("{dt:?}: conv {tc:?}, prelu {tp:?}, shuffle+pool {:?} {}", t.elapsed(), z.dims()[1] + p.dims()[1]);
+        }
+    }
+}
+
+#[test]
+#[ignore]
 fn esrgan_speed() {
     let Some(dir) = models() else { return };
-    let m = lightcraft_enhance::esrgan::SuperResolution::load(&dir.join("RealESRGAN_x2plus.pth"), lightcraft_enhance::best_device()).unwrap();
+    let file = std::env::var("LC_SR_FILE").unwrap_or_else(|_| "realesr-general-x4v3.pth".into());
+    let m = lightcraft_enhance::esrgan::SuperResolution::load(&dir.join(&file), lightcraft_enhance::best_device()).unwrap();
     let mut img = lightcraft_raster::Rgb32f::new(768, 768);
     for (i, p) in img.data.iter_mut().enumerate() {
         *p = [(i % 768) as f32 / 768.0, 0.3, 0.6];
@@ -156,5 +194,7 @@ fn esrgan_speed() {
     let t = Instant::now();
     let out = m.upscale(&img, &AtomicBool::new(false), &|_, _| {}).unwrap();
     let s = t.elapsed().as_secs_f64();
-    eprintln!("ESRGAN 768² → {}² in {s:.2} s ({:.1} s per input megapixel)", out.width, s / 0.59);
+    eprintln!("{file}: 768² → {}² in {s:.2} s ({:.1} s per input megapixel)", out.width, s / 0.59);
+    let p = out.data[768 * 1536 + 768];
+    assert!((p[1] - 0.3).abs() < 0.05 && (p[2] - 0.6).abs() < 0.05, "{p:?}");
 }
