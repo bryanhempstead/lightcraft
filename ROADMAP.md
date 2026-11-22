@@ -28,7 +28,7 @@ duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | **AI & computational** | ~15–20% | Assisted culling (focus, bursts), auto tone, HDR/panorama merge; subject/sky/background masks as classical heuristics | Real segmentation masks (subject, sky, people, objects, landscape, depth), AI denoise, super resolution, lens blur, generative remove, faces/people, natural-language search. **Blocked on a model strategy** (licensable weights or our own training; pure-Rust inference is feasible) |
 | **Workflow & library** | ~85% (single machine) | Robust catalog (journal + snapshots, background compaction, crash-tested), 85k-photo libraries stay responsive, Local browsing with automatic cleanup, XMP interop, keywords, smart albums, Move import; Settings ▸ cams. (fork) shows per camera the decoder, the profile that colours it, lens profiles and the last Lightroom ΔE, and an import recognises a camera it hasn't seen | Opening an 85k library takes 1.7–4.7 s (catalog backups, Trash deletes and Lightroom naming landed 2026-11-21); no cloud sync (out of scope), no tablet companion (#74, roadmap), shared albums, publish services, tethering |
 | **Classic modules** | ~30% | Geotagging from GPX track logs, soft proofing (partial), slideshow (basic) | **Map view, Book, Print, Slideshow module, Web, publish services**: ~40 tracker rows ⬜ |
-| **HDR & video** | 0% | | HDR edit/display/export; video play/trim/edit/export |
+| **HDR & video** | HDR ~70%, video 0% | HDR editing (Lightroom's HDR button, HDR Limit, SDR rendition, Visualize HDR, `crs:` round trip), HDR export (gain map JPEG, PQ / HLG AVIF, PNG, JPEG XL, float TIFF; open as HDR in macOS), EDR loupe on macOS | HDR loupe on the GPU, HDR histogram, HDR tone measured against Lightroom, Windows / Linux HDR display; video play/trim/edit/export |
 | **Platform & robustness** | ~70% | macOS native; Windows/Linux builds; web via WASM; no-panic lints workspace-wide, `unsafe` confined to `crates/sysmem`; failed saves are reported; GPU errors fall back to CPU | Windows installer UI unverified on Windows (PR #79); GPU path proven only on Apple + user reports; English, Simplified/Traditional Chinese, Japanese, Brazilian Portuguese and German UI (see docs/localization.md); remaining technical errors; Traditional Chinese uses the Simplified Chinese font until craft-fonts has a TC face; accessibility partial; headless UI tests time out under machine load |
 
 ### By kind of user
@@ -62,7 +62,7 @@ Priorities, in order. Each points at tracker rows in [`docs/parity.md`](docs/par
    segmentation masks and denoise; then pure-Rust inference. Unblocks M12 and Enhance. Object / Describe masks now
    run Meta's SAM 3 in pure Rust (optional, user-consented download under the non-OSI SAM License; CDN mirrors still
    to be set up, docs/ai-masks.md); Subject / Sky / People and Enhance are still open.
-7. **Then:** HDR (Q), the Classic output modules (Print first, then Map view, Book, Slideshow), video (R), localisation
+7. **Then:** the HDR leftovers (GPU HDR loupe, HDR histogram), the Classic output modules (Print first, then Map view, Book, Slideshow), video (R), localisation
    and accessibility.
 
 Already closed in the week of 2026-10-03: compressed NEF (#10), Move import (#29), per-library smart-preview folder,
@@ -89,7 +89,7 @@ yet guarantee original-pixel detail; visible-region rendering remains a gap (LR-
 | M7 | Detail | sharpening + masking preview, luminance/colour NR, Denoise, Raw Details, Super Resolution | 6–10 | 🚧 (sharpening, luminance/colour NR ✅ — sharpening, grain and NR measured against Camera Raw at 1:1 in this fork, `docs/lr-match.md` round 9; AI Denoise, Raw Details, Super Resolution, mask preview ⬜) |
 | M8 | Heal / Remove | content-aware remove (PatchMatch), heal, clone, brush spots, visualize spots, red/pet eye | 6–10 | 🚧 (heal, clone, auto source, visualize spots, red/pet eye ✅; PatchMatch remove ⬜) |
 | M9 | Presets, profiles, versions, sync | preset browser + amount, create/import presets, profile browser, versions, history, copy/paste/sync settings | 5–8 | ✅ |
-| M10 | Export & share | export dialog (JPEG/PNG/TIFF/DNG/AVIF/JXL/original), sizing, sharpening, metadata, watermark, naming, batch jobs, XMP sidecars, HDR export | 6–10 | 🚧 (all formats incl. DNG/original, sizing, presets, background jobs ✅; JXL encode, HDR export ⬜) |
+| M10 | Export & share | export dialog (JPEG/PNG/TIFF/DNG/AVIF/JXL/original), sizing, sharpening, metadata, watermark, naming, batch jobs, XMP sidecars, HDR export | 6–10 | 🚧 (all formats incl. DNG/original, sizing, presets, background jobs, JXL encode, HDR export ✅) |
 | M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (CR3 lossless CRX and C-RAW, RAF uncompressed and lossless/lossy compressed, RW2 (every raw format), PEF, ORF uncompressed ✅; **camera colour calibration** 🚧 (guarded ARW, NEF, RW2 and RAF preview fitting; measured database still missing), CR3, compressed ORF ⬜) |
 | M12 | AI & smart features | subject/sky/background/people/object masks, semantic search, faces/People (permissively licensed models, pure-Rust inference) | 20–40 | ⬜ |
 | M13 | Merge | HDR merge (deghost), panorama (projections, boundary warp, fill edges), HDR panorama | 10–15 | ✅ |
@@ -128,7 +128,7 @@ trip, slideshow, auto import…) in ≈ 12 h on 2026-10-02; four to six parallel
 | Lens-profile database of our own (calibration targets, fitting, data) | LR-EDIT-OPTICS-PROFILE | 15–30 | data collection |
 | Video: playback, trim, edits, export (pure-Rust decode, ideally shared with FilmCraft) | R. Video | 20–40 | medium |
 | AI: subject / sky / background / people / object masks, object-aware remove, AI denoise, super resolution, lens blur, people & faces, natural-language search, culling | ≈ 30 | 80–150 | **high** — permissively licensed weights, pure-Rust inference, maybe training |
-| HDR editing, display, visualisation and export | Q. HDR, LR-EXP-HDR | 15–25 | medium |
+| HDR leftovers: GPU HDR loupe, HDR histogram, Visualize HDR beyond-display marks, Windows / Linux HDR display, HDR tone vs Lightroom | Q. HDR, LR-VIEW-HDR-DISPLAY | 5–10 | medium |
 | Classic modules: Map, Book, Slideshow module, Print, publish services, tethering, soft proofing | ≈ 50 | 60–100 | medium (large, well-understood) |
 | Smaller P2 items: Enhance dialog, export to Photos, help / what's new, accessibility, localisation, sidecar variants | ≈ 15 | 12–25 | low |
 | Look tuning, performance budgets (colour NR at half resolution on CPU + GPU, 100k-photo library), packaging, hardening | — | 25–45 | medium |
