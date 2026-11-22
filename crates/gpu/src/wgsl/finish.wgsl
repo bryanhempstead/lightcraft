@@ -551,6 +551,91 @@ fn legacy_hs(b: f32, hh: f32, ss: f32) -> f32 {
     return ss * 1.7 * ws * sqrt(ws) + hh * 1.7 * wh;
 }
 
+// ---- LUT profiles (`lightcraft_pipeline::lut`, R03)
+
+// `Lut3d::apply` (trilinear) on the table in `aux` at LUT_OFF (red fastest).
+fn lut_at(r: u32, g: u32, b: u32) -> vec3<f32> {
+    let n = pu(F_LUT_N);
+    let o = pu(F_LUT_OFF) + 3u * (r + n * (g + n * b));
+    return vec3<f32>(aux[o], aux[o + 1u], aux[o + 2u]);
+}
+
+fn lut_apply(c: vec3<f32>) -> vec3<f32> {
+    let n = pu(F_LUT_N);
+    let s = f32(n - 1u);
+    var idx = vec3<u32>(0u);
+    var fr = vec3<f32>(0.0);
+    for (var k = 0u; k < 3u; k++) {
+        let lo = pf(F_LUT_MIN + k);
+        let span = max(pf(F_LUT_MAX + k) - lo, 1e-6);
+        let x = clamp((c[k] - lo) / span, 0.0, 1.0) * s;
+        let i = min(u32(floor(x)), n - 2u);
+        idx[k] = i;
+        fr[k] = x - f32(i);
+    }
+    let r = idx.x;
+    let g = idx.y;
+    let b = idx.z;
+    let c00 = mix(lut_at(r, g, b), lut_at(r + 1u, g, b), fr.x);
+    let c10 = mix(lut_at(r, g + 1u, b), lut_at(r + 1u, g + 1u, b), fr.x);
+    let c01 = mix(lut_at(r, g, b + 1u), lut_at(r + 1u, g, b + 1u), fr.x);
+    let c11 = mix(lut_at(r, g + 1u, b + 1u), lut_at(r + 1u, g + 1u, b + 1u), fr.x);
+    return mix(mix(c00, c10, fr.y), mix(c01, c11, fr.y), fr.z);
+}
+
+// `LutTransfer::encode` / `decode` (clamped to 0..1).
+fn lut_encode(v: f32) -> f32 {
+    let x = clamp(v, 0.0, 1.0);
+    let t = pu(F_LUT_TRC);
+    if (t == 1u) {
+        return ad_lin_to_srgb(x);
+    }
+    if (t == 2u) {
+        return pow(x, 1.0 / pf(F_LUT_GAMMA));
+    }
+    return x;
+}
+
+fn lut_decode(v: f32) -> f32 {
+    let x = clamp(v, 0.0, 1.0);
+    let t = pu(F_LUT_TRC);
+    if (t == 1u) {
+        return ad_srgb_to_lin(x);
+    }
+    if (t == 2u) {
+        return pow(x, pf(F_LUT_GAMMA));
+    }
+    return x;
+}
+
+fn lut_mat(f: u32) -> array<vec3<f32>, 3> {
+    return array<vec3<f32>, 3>(
+        vec3<f32>(pf(f), pf(f + 1u), pf(f + 2u)),
+        vec3<f32>(pf(f + 3u), pf(f + 4u), pf(f + 5u)),
+        vec3<f32>(pf(f + 6u), pf(f + 7u), pf(f + 8u)),
+    );
+}
+
+// `Lut3d::apply_linear`: a creative profile's table on linear working colour, blended by LUT_AMT;
+// out of the table's range a colour keeps its offset unless the table clips.
+fn lut_profile(c: vec3<f32>) -> vec3<f32> {
+    let k = pf(F_LUT_AMT);
+    let t = mul3(lut_mat(F_LUT_TO), c);
+    let e = vec3<f32>(lut_encode(t.x), lut_encode(t.y), lut_encode(t.z));
+    let o = lut_apply(e);
+    let b = e + (o - e) * k;
+    let bd = vec3<f32>(lut_decode(b.x), lut_decode(b.y), lut_decode(b.z));
+    var r: vec3<f32>;
+    if (pu(F_LUT_CLIP) != 0u) {
+        r = mul3(lut_mat(F_LUT_FROM), bd);
+    } else {
+        let ed = vec3<f32>(lut_decode(e.x), lut_decode(e.y), lut_decode(e.z));
+        r = mul3(lut_mat(F_LUT_FROM), t + bd - ed);
+    }
+    // non-finite -> 0 (NaN fails every comparison)
+    return select(vec3<f32>(0.0), r, abs(r) < vec3<f32>(3.0e38));
+}
+
 fn enc8(v: f32) -> u32 {
     return u32(clamp(v, 0.0, 1.0) * 255.0 + 0.5);
 }
@@ -820,7 +905,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- the look: curves and grain in the style space (ProPhoto primaries, sRGB curve;
     // `finish::STYLE_SPACE`) whatever the output space, then back to linear working colour
-    if (pu(F_CURVES) != 0u || pu(F_GRAIN) != 0u) {
+    if (pu(F_CURVES) != 0u || pu(F_GRAIN) != 0u || pu(F_LUT) == 1u) {
         let sm = array<vec3<f32>, 3>(
             vec3<f32>(pf(F_ST_TO), pf(F_ST_TO + 1u), pf(F_ST_TO + 2u)),
             vec3<f32>(pf(F_ST_TO + 3u), pf(F_ST_TO + 4u), pf(F_ST_TO + 5u)),
@@ -841,6 +926,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (rs < 1.0) {
                 e = refine_saturation(e0, e, rs);
             }
+        }
+        if (pu(F_LUT) == 1u) {
+            // a creative profile's table after the curves (`finish_with`), in its own space
+            let lin = mul3(sb, vec3<f32>(decode_srgb(e.x), decode_srgb(e.y), decode_srgb(e.z)));
+            let l = mul3(sm, lut_profile(lin));
+            e = vec3<f32>(encode_srgb(l.x), encode_srgb(l.y), encode_srgb(l.z));
         }
         if (pu(F_GRAIN) != 0u) {
             let px = f32(x) + 0.5;
@@ -882,6 +973,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- encode (sRGB curve, then the output's own curve)
     var e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
+    if (pu(F_LUT) == 2u) {
+        // a `.cube` profile on the encoded output, blended by the amount
+        e = e + (lut_apply(clamp(e, vec3<f32>(0.0), vec3<f32>(1.0))) - e) * pf(F_LUT_AMT);
+    }
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
     out[i] = enc8(e.x) | (enc8(e.y) << 8u) | (enc8(e.z) << 16u) | (255u << 24u);
 }

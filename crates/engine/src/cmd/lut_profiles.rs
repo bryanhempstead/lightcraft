@@ -226,7 +226,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Profiles",
             [],
             None,
-            "{paths: [.cube / .xmp file, folder or .zip]} — 3D LUTs and camera-raw creative profiles (XMP Look profiles, or presets carrying one, whose look is an RGB colour table) become creative profiles (Amount 0–200 %; rendered on the CPU) in the profile browser's groups (the profile's group, folder / zip name, else Imported); one already imported (same table, or same name and group) is skipped → {imported: [{id, name, group}], failed, alreadyImported, skipped}",
+            "{paths: [.cube / .xmp file, folder or .zip]} — 3D LUTs and camera-raw creative profiles (XMP Look profiles, or presets carrying one, whose look is an RGB colour table) become creative profiles (Amount 0–200 %; rendered on the CPU or the GPU) in the profile browser's groups (the profile's group, folder / zip name, else Imported); one already imported (same table, or same name and group) is skipped → {imported: [{id, name, group}], failed, alreadyImported, skipped}",
             always,
             import
         ),

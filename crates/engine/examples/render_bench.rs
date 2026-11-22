@@ -158,7 +158,17 @@ fn main() {
         println!("{name:<38} cpu: {}{}", cols[0], cols.get(1).map(|g| format!("  |  gpu: {g}")).unwrap_or_default());
     };
     let preview = Arc::new(fit(&full, 2560, 2560, Filter::Box));
-    let s = typical();
+    let mut s = typical();
+    // LOOK=<profile .xmp>: render with a creative profile's RGB table (`lut:` profile)
+    if let Ok(path) = std::env::var("LOOK") {
+        let xmp = std::fs::read_to_string(&path).expect("read LOOK");
+        let p = lightcraft_engine::crs_table::profile_from_xmp(&xmp).expect("parse LOOK").expect("LOOK has no RGB table");
+        let id = format!("lut:{}", p.name);
+        println!("look: {} ({}³ table)", p.name, p.lut.size);
+        lightcraft_pipeline::lut::register(&id, p.lut);
+        s.profile.id = id;
+    }
+    let s = s;
     let view = RenderRequest::fit(1920, 1280);
     let draft = RenderRequest { quality: Quality::Draft, ..RenderRequest::fit(1152, 768) };
     if gpu {

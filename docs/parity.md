@@ -293,7 +293,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-PROF-LEGACY | Legacy profiles | P2 | ⬜ | | |
 | LR-PROF-NONRAW | Profiles for non-raw files | P0 | ✅ | `cmd:develop.profile` | same looks apply to JPEG/TIFF |
 | LR-PROF-AMOUNT | Profile amount | P1 | ✅ | `ctl:profile.amount` | |
-| LR-PROF-IMPORT | Import profiles | P1 | ✅ | `cmd:profile.import`, `cmd:profile.deleteImported`, `crates/pipeline/src/lut.rs`, `crates/engine/src/cmd/lut_profiles.rs`, `crates/ui-egui/src/panels/edit.rs`, `crates/ui-egui/src/panels/profiles.rs` | `.cube` 3D LUTs and creative XMP profiles whose look is an RGB colour table (files, folders, zips; `crates/engine/src/crs_table.rs`) become creative profiles with Amount, grouped in the profile browser, kept with the library; rendered on the CPU; `.dcp` and hue/saturation-only look tables unsupported |
+| LR-PROF-IMPORT | Import profiles | P1 | ✅ | `cmd:profile.import`, `cmd:profile.deleteImported`, `crates/pipeline/src/lut.rs`, `crates/engine/src/cmd/lut_profiles.rs`, `crates/ui-egui/src/panels/edit.rs`, `crates/ui-egui/src/panels/profiles.rs` | `.cube` 3D LUTs and creative XMP profiles whose look is an RGB colour table (files, folders, zips; `crates/engine/src/crs_table.rs`) become creative profiles with Amount, grouped in the profile browser, kept with the library; rendered on the CPU and the GPU (finish kernel, R03); `.dcp` and hue/saturation-only look tables unsupported |
 
 ## H. Crop & rotate (CROP)
 

@@ -619,3 +619,30 @@ shows on the embedded profile; without that profile, Adobe Standard photos stay 
 Adobe Standard for iPhones is the per-lens `Apple iPhone14,2 back camera` DCP, which
 `adobe::standard_for` doesn't match by Exif model). Next: a profile-keyed source (`lc.color` /
 embedded → own profile + map; `adobe:*` → the DCP matched by `UniqueCameraModel`).
+
+## Round 8 (2026-11-21): Looks on the GPU, Detail and Effects measured with Camera Raw
+
+### Look profiles on the GPU (R03)
+
+Creative profiles whose look is an RGB table (`lut:` profiles: Bryan's Nomad "Summer Fields" on
+6,581 photos and "Nautica" on 876, 44 % of his library) used to force the whole render onto the
+CPU. The finish kernel now has the table (`aux` at `LUT_OFF`, size³ RGB, red fastest) and does
+what `Lut3d::apply_linear` does — into the table's primaries, its encoding (linear / sRGB /
+gamma), trilinear lookup, blended by the amount, keeping the offset of colours outside the
+table's range unless the table clips — after the curves in the style block; `.cube` profiles act
+on the encoded output as on the CPU. `gpu/tests/equivalence.rs::lut_profiles_match`: three table
+spaces / encodings / clip modes, with curves and grain, and a `.cube`: mean 0.0001 LSB, max 1.
+
+Summer Fields on an M262 DNG (2.5 MP preview of the 24 MP file, Apple M3 Pro,
+`LOOK=… render_bench`, min of 7, wall-clock; before = the CPU path these photos took):
+
+| scenario | before (CPU) | after (GPU) | budget |
+|---|---|---|---|
+| loupe 1920×1280, exposure drag (warm) | 103.7 ms | 2.5 ms | 60 ms |
+| draft 1152×768, Highlights drag | 42.1 ms | 2.2 ms | 16 ms |
+| draft, Clarity drag | 37.0 ms | 2.1 ms | 16 ms |
+| draft, NR drag | 97.7 ms | 3.1 ms | 16 ms |
+| loupe 1920×1280 cold (new photo) | 435.8 ms | 28.0 ms | — |
+
+GPU vs CPU on that photo: max 1 LSB, mean 0.0002 LSB. Exports keep the CPU path (16-bit /
+float); the acceptance gate (CPU) is unchanged by construction.

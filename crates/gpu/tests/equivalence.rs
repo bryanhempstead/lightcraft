@@ -746,3 +746,76 @@ fn adobe_base_and_look() {
     s.mixer.yellow.hue = 63.0;
     check("adobe measured colour", &src, &info, &s, &RenderRequest::fit(320, 240));
 }
+
+/// R03: LUT profiles (a creative profile's RGB table in its own space, and a `.cube` on the
+/// encoded output) render on the GPU like on the CPU.
+#[test]
+fn lut_profiles_match() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_pipeline::lut::{Lut3d, LutPrimaries, LutStage, LutTransfer, register};
+    let n = 17;
+    let table = |f: &dyn Fn([f32; 3]) -> [f32; 3]| -> Vec<[f32; 3]> {
+        let mut v = Vec::with_capacity(n * n * n);
+        for b in 0..n {
+            for g in 0..n {
+                for r in 0..n {
+                    let s = (n - 1) as f32;
+                    v.push(f([r as f32 / s, g as f32 / s, b as f32 / s]));
+                }
+            }
+        }
+        v
+    };
+    // a warm, faded look with a hue twist
+    let look = |c: [f32; 3]| [(c[0] * 0.9 + 0.06 + 0.05 * c[1]).min(1.0), c[1] * 0.92 + 0.04, c[2] * 0.8 + 0.08 * (1.0 - c[0])];
+    let src = scene(2, 320, 240);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    typical(&mut s);
+    let cases = [
+        ("lut profile srgb", LutPrimaries::ProPhoto, LutTransfer::Srgb, false, 100.0),
+        ("lut profile gamma clip", LutPrimaries::AdobeRgb, LutTransfer::Gamma(1.8), true, 140.0),
+        ("lut profile linear", LutPrimaries::Srgb, LutTransfer::Linear, false, 60.0),
+    ];
+    for (i, (name, primaries, transfer, clip, amount)) in cases.into_iter().enumerate() {
+        let id = format!("lut:test-profile-{i}");
+        register(
+            &id,
+            Lut3d {
+                size: n,
+                data: table(&look),
+                domain_min: [0.0; 3],
+                domain_max: [1.0; 3],
+                title: None,
+                stage: LutStage::Profile,
+                primaries,
+                transfer,
+                strength: [0.0, 1.0, 1.6],
+                clip,
+            },
+        );
+        s.profile.id = id;
+        s.profile.amount = amount;
+        check(name, &src, &info, &s, &RenderRequest::fit(320, 240));
+        // the table really acts
+        let plain = DevelopSettings { profile: Default::default(), ..s.clone() };
+        let (moved, _, _) =
+            diff(&render(&src, &info, &s, &RenderRequest::fit(320, 240)).image, &render(&src, &info, &plain, &RenderRequest::fit(320, 240)).image);
+        assert!(moved > 1.0, "{name}: the look moved only {moved:.3} LSB");
+    }
+    // with a point curve and grain in the same style block
+    s.curve.master = vec![Point::new(0.0, 0.05), Point::new(0.5, 0.52), Point::new(1.0, 0.97)];
+    s.grain.amount = 30.0;
+    check("lut profile + curve + grain", &src, &info, &s, &RenderRequest::fit(320, 240));
+    // a `.cube` file on the output
+    let mut cube = format!("LUT_3D_SIZE {n}\n");
+    for c in table(&look) {
+        cube.push_str(&format!("{} {} {}\n", c[0], c[1], c[2]));
+    }
+    register("lut:test-cube", Lut3d::parse_cube(&cube).expect("cube"));
+    s.profile.id = "lut:test-cube".into();
+    s.profile.amount = 80.0;
+    check("lut cube output", &src, &info, &s, &RenderRequest::fit(320, 240));
+}

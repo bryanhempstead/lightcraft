@@ -93,6 +93,21 @@ const FIELDS: &[(&str, usize)] = &[
     ("AD_T", 12),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
+    // a LUT profile (`lightcraft_pipeline::lut`, R03): 0 none, 1 a creative profile's table in
+    // the style block, 2 a `.cube` on the encoded output; table at LUT_OFF (size³ rgb, red
+    // fastest), blend, domain, linear working ↔ table-space matrices, the table's encoding
+    // (0 linear, 1 sRGB, 2 gamma) and gamut clip
+    ("LUT", 1),
+    ("LUT_OFF", 1),
+    ("LUT_N", 1),
+    ("LUT_AMT", 1),
+    ("LUT_MIN", 3),
+    ("LUT_MAX", 3),
+    ("LUT_TO", 9),
+    ("LUT_FROM", 9),
+    ("LUT_TRC", 1),
+    ("LUT_GAMMA", 1),
+    ("LUT_CLIP", 1),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -196,6 +211,11 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let ctab_off = aux.len();
     if let Some(t) = &fp.ops.table {
         aux.extend_from_slice(t);
+    }
+    let lut_off = aux.len();
+    let lut = fp.lut.as_ref().filter(|(l, k)| *k > 0.0 && l.size >= 2 && l.data.len() == l.size * l.size * l.size);
+    if let Some((l, _)) = lut {
+        aux.extend(l.data.iter().flatten());
     }
     let mask_off = aux.len();
     for m in masks {
@@ -304,6 +324,26 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         let [a, b, c, d, e, f] = fp.out_to_norm.0;
         let (kx, ky) = (fp.ow / long, fp.oh / long);
         p.fs("GRAIN_AFF", &[(a * kx) as f32, (b * ky) as f32, (c * kx) as f32, (d * ky) as f32, (e * kx) as f32, (f * ky) as f32]);
+    }
+    if let Some((l, k)) = lut {
+        use lightcraft_pipeline::lut::{LutStage, LutTransfer};
+        p.u("LUT", if l.stage == LutStage::Profile { 1 } else { 2 });
+        p.u("LUT_OFF", lut_off as u32);
+        p.u("LUT_N", l.size as u32);
+        p.f("LUT_AMT", *k);
+        p.fs("LUT_MIN", &l.domain_min);
+        p.fs("LUT_MAX", &l.domain_max);
+        let (to, from) = l.matrices();
+        p.fs("LUT_TO", to.as_flattened());
+        p.fs("LUT_FROM", from.as_flattened());
+        let (trc, gamma) = match l.transfer {
+            LutTransfer::Linear => (0, 1.0),
+            LutTransfer::Srgb => (1, 1.0),
+            LutTransfer::Gamma(g) => (2, g.max(0.1)),
+        };
+        p.u("LUT_TRC", trc);
+        p.f("LUT_GAMMA", gamma);
+        p.b("LUT_CLIP", l.clip);
     }
     (p.0, aux)
 }
