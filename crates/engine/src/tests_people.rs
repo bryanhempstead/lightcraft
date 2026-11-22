@@ -114,6 +114,9 @@ fn an_existing_person_keyword_is_reused_and_export_respects_it() {
     s.name_faces(&[FaceRef { photo: ids[0], index: 0 }], Some("ann"), "Name Person").unwrap();
     let p = s.catalog.photo(ids[0]).unwrap().clone();
     assert!(p.meta.keywords.contains(&"People|Ann".to_string()), "{:?}", p.meta.keywords);
+    // the person keyword is left out of export, and so is the name on the face
+    let (flat, _) = crate::export::export_keywords_with(Some(&s.catalog), &p, &crate::export::ExportOptions::default());
+    assert!(!flat.iter().any(|k| k.eq_ignore_ascii_case("ann")), "{flat:?}");
     // XMP: the named face is written, with its name
     let x = crate::sidecar::sidecar_packet(&p, &s.catalog);
     assert!(x.contains("<mwg-rs:Name>ann</mwg-rs:Name>"), "{x}");
