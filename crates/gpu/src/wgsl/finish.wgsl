@@ -744,6 +744,30 @@ fn hs_lut_at(ev: f32) -> f32 {
     return aux[o] + (aux[o + 1u] - aux[o]) * t;
 }
 
+// `dehaze_cr::gain` applied to a channel `v` at Dehaze `s` (−1..0), tables at DZ_OFF.
+fn dz_cr(s: f32, v: f32) -> f32 {
+    if (v <= 0.0 || s >= 0.0) {
+        return v;
+    }
+    let level = log2(max(v, 6.1035156e-5));
+    let x = clamp((level - pf(F_DZ_KEY) + 12.0) / 13.0 * 48.0 - 0.5, 0.0, 47.0);
+    let i = min(u32(x), 46u);
+    let f = x - f32(i);
+    let o = pu(F_DZ_OFF);
+    let b0 = aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * f;
+    let b1 = aux[o + 48u + i] + (aux[o + 48u + i + 1u] - aux[o + 48u + i]) * f;
+    let b2 = aux[o + 96u + i] + (aux[o + 96u + i + 1u] - aux[o + 96u + i]) * f;
+    var g = 0.0;
+    if (s <= -0.4) {
+        g = b0 + (b1 - b0) * (s + 1.0) / 0.6;
+    } else if (s <= -0.2) {
+        g = b1 + (b2 - b1) * (s + 0.4) / 0.2;
+    } else {
+        g = b2 * (s / -0.2);
+    }
+    return v * exp2(g);
+}
+
 fn legacy_hs(b: f32, hh: f32, ss: f32) -> f32 {
     let ws = 1.0 - sstep(-4.8, 0.3, b);
     let wh = sstep(-1.0, 2.8, b);
@@ -936,6 +960,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (dz > 0.0) {
             let t = max(1.0 - 0.95 * min(dz, 1.0) * d, 0.12);
             c = max((c - air * (1.0 - t)) / t, vec3<f32>(0.0));
+        } else if (pu(F_DZ_CR) != 0u) {
+            // Camera Raw's negative Dehaze (`dehaze_cr`): a curve per ProPhoto channel
+            let q = mul3(ad_mat(F_PP_TO), c);
+            let s = max(dz, -1.0);
+            c = mul3(ad_mat(F_PP_FROM), vec3<f32>(dz_cr(s, q.x), dz_cr(s, q.y), dz_cr(s, q.z)));
         } else {
             let k = min(-dz, 1.0) * 0.7 * (0.35 + 0.65 * d);
             c = c + (air * 0.9 - c) * k;

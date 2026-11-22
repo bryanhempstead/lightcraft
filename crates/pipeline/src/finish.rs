@@ -521,6 +521,9 @@ pub struct FinishParams {
     pub air_pre: f32,
     pub gain: f32,
     pub ev: f32,
+    /// Camera Raw's negative Dehaze key (the photo's 99th log2 luminance percentile plus
+    /// Exposure, [`crate::dehaze_cr`]) when it applies; read by the GPU kernel.
+    pub dz_key: Option<f32>,
     /// Grain ([`grain_params`]): amplitude, cells per long edge, seed.
     pub grain: Option<(f32, f32, u32)>,
     /// Output px → normalized oriented coordinates.
@@ -617,6 +620,7 @@ impl FinishParams {
             air_pre,
             gain,
             ev,
+            dz_key: None,
             grain,
             out_to_norm: frame.out_to_norm(w, h),
             ow: frame.ow,
@@ -780,6 +784,14 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 if dz > 0.0 {
                     let t = (1.0 - 0.95 * dz.min(1.0) * d).max(0.12);
                     c = c.map(|v| ((v - air * (1.0 - t)) / t).max(0.0));
+                } else if let Some(p99) = p.p99.filter(|_| crate::dehaze_cr::MEASURED) {
+                    // Camera Raw's negative Dehaze (`dehaze_cr`): a tone curve per ProPhoto
+                    // channel, relative to the photo's 99th percentile
+                    let key = p99 + ev;
+                    let m = crate::colorops::pp_matrices();
+                    let q = mul3(&m.0, c);
+                    let q = q.map(|v| if v > 0.0 { v * crate::dehaze_cr::gain(dz.max(-1.0), key, crate::dehaze_cr::level(v)).exp2() } else { v });
+                    c = mul3(&m.1, q);
                 } else {
                     let k = (-dz).min(1.0) * 0.7 * (0.35 + 0.65 * d);
                     c = c.map(|v| v + (air * 0.9 - v) * k);

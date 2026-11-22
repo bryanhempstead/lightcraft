@@ -29,6 +29,7 @@ pub mod bw_cr;
 pub mod colorops;
 pub mod colortab;
 pub mod cull;
+pub mod dehaze_cr;
 pub mod dump;
 pub mod dust;
 pub mod finish;
@@ -263,6 +264,9 @@ pub(crate) struct Prepared {
     /// strength.
     pub texture_detail: Option<Arc<Rgb32f>>,
     pub dark: Option<Arc<Plane>>,
+    /// The photo's 99th log2 luminance percentile before exposure ([`dehaze_cr::p99_of`]), when
+    /// negative Dehaze may apply.
+    pub p99: Option<f32>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
     /// Airlight of `dark` (before exposure).

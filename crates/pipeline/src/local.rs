@@ -264,6 +264,8 @@ pub(crate) struct Planes {
     pub texture_detail: Option<(u32, Arc<Rgb32f>)>,
     /// Dark channel and its airlight.
     pub dark: Option<(u32, Arc<Plane>, f32)>,
+    /// The 99th log2 luminance percentile ([`crate::dehaze_cr::p99_of`]).
+    pub p99: Option<f32>,
     /// Blurred chromaticity (local Moiré / Noise).
     pub chroma: Option<(u32, Arc<Rgb32f>)>,
 }
@@ -331,6 +333,11 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
 /// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
 /// reusing whatever `planes` already holds for it. Missing planes are computed side by side (each
 /// one alone scales poorly: the guided filters work on small subsampled grids).
+/// Whether negative Dehaze (global or in a mask) may need the photo's 99th luminance percentile.
+pub fn dehaze_key_needed(s: &DevelopSettings) -> bool {
+    crate::dehaze_cr::MEASURED && (s.effects.dehaze < 0.0 || s.masks.iter().any(|m| m.adjust.dehaze != 0.0))
+}
+
 /// The pyramid level Camera Raw's Texture detail starts at for this render (`None`: not
 /// needed, or Texture renders with the older band).
 pub fn texture_level(s: &DevelopSettings, px_per_long: f64, native_long: f32) -> Option<usize> {
@@ -407,9 +414,18 @@ pub(crate) fn prepare(
         Some((d, air)) => (Some(d), air),
         None => (None, 1.0),
     };
+    let p99 = match (dehaze_key_needed(s), planes.p99) {
+        (true, None) => {
+            let k = crate::dehaze_cr::p99_of(log_l.data.iter().step_by(crate::tone::lr::KEY_STEP).copied());
+            planes.p99 = k;
+            k
+        }
+        (true, k) => k,
+        (false, _) => None,
+    };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev));
-    Prepared { img, log_l, base, tone_stats, clarity_blur, texture_blur, texture_detail, dark, chroma_blur, air, masks, px_per_long }
+    Prepared { img, log_l, base, tone_stats, clarity_blur, texture_blur, texture_detail, dark, p99, chroma_blur, air, masks, px_per_long }
 }
 
 /// The airlight is estimated from every `AIRLIGHT_STEP`-th value of the dark channel.

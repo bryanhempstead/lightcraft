@@ -48,6 +48,8 @@ struct Planes {
     texture_detail: Option<(u32, Arc<Buf>)>,
     dark: Option<(u32, Arc<Buf>, f32)>,
     chroma: Option<(u32, Arc<Buf>)>,
+    /// The 99th log2 luminance percentile (negative Dehaze, `dehaze_cr`).
+    p99: Option<f32>,
     /// The tone statistics of `log_l` (`tone::lr::image_stats`).
     tone_stats: Option<lightcraft_pipeline::tone::lr::ToneStats>,
 }
@@ -597,7 +599,8 @@ pub fn render(
     lap("masks", &mut t, &mut cx);
 
     // 5. per-pixel stage
-    let fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, prep.tone_stats, req.space);
+    let mut fp = FinishParams::new(s, &plan.frame, info, w, h, plan.px_per_long, prep.air, prep.tone_stats, req.space);
+    fp.dz_key = prep.p99.filter(|_| local::dehaze_key_needed(s)).map(|k| k + fp.ev);
     let present = Present {
         clarity: prep.clarity.is_some(),
         texture: prep.texture_gauss,
@@ -754,6 +757,7 @@ struct Prep {
     texture_detail: bool,
     tex_g_off: u32,
     dark: Option<Arc<Buf>>,
+    p99: Option<f32>,
     /// Blurred chromaticity (local Moiré / Noise).
     chroma: Option<Arc<Buf>>,
     air: f32,
@@ -849,6 +853,22 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, nat
             }
         },
     };
+    // negative Dehaze's key, from the same every-KEY_STEP-th values the CPU reads
+    let p99 = match (local::dehaze_key_needed(&plan.settings), planes.p99) {
+        (true, None) => {
+            let step = lightcraft_pipeline::tone::lr::KEY_STEP;
+            let m = n.div_ceil(step);
+            let sub = cx.gpu.buffer(m);
+            map(cx, "subsample", m, &[step as u32], [Some(&log_l), None, None], &sub);
+            let v: Vec<f32> = cx.read(&sub, m);
+            cx.flush();
+            let k = lightcraft_pipeline::dehaze_cr::p99_of(v.into_iter());
+            planes.p99 = k;
+            k
+        }
+        (true, k) => k,
+        (false, _) => None,
+    };
     let chroma = sig.chroma.map(|sg| {
         plane_at(&mut planes.chroma, sg, || {
             let ch = cx.gpu.buffer(n * 3);
@@ -856,7 +876,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, nat
             gaussian(cx, &ch, w, h, 3, sg)
         })
     });
-    Prep { log_l, base, clarity, texture, texture_gauss, texture_detail, tex_g_off, dark, chroma, air, tone_stats }
+    Prep { log_l, base, clarity, texture, texture_gauss, texture_detail, tex_g_off, dark, p99, chroma, air, tone_stats }
 }
 
 /// Most brush dabs the mask kernel evaluates per pixel (more: the CPU rasterizes the brush).
