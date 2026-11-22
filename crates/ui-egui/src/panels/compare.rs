@@ -304,7 +304,7 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             select_pair(app, sel, cand, id);
         }
         if resp.double_clicked() {
-            app.ui.zoom = if app.ui.zoom == Zoom::Fit { Zoom::Percent(100.0) } else { Zoom::Fit };
+            app.ui.zoom = if app.ui.zoom == Zoom::Fit { crate::state::click_zoom_target(app.ui.click_zoom) } else { Zoom::Fit };
         }
         resp.context_menu(|ui| {
             if ui.button(crate::i18n::tr("Swap")).clicked() {

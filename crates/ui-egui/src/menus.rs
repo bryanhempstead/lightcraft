@@ -80,6 +80,18 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.zoomToggle", "Toggle Zoom", Some("Z"), "View"),
     // the ratio a click (and Z / Space) zooms to
     ("view.clickZoom", "Click Zoom Ratio", None, ""),
+    ("view.wheelZoom", "Scroll Wheel Zoom", None, ""),
+    // LRC-VIEW-LOUPEOVERLAY: View ▸ Loupe Overlay / Composition Overlay / Aspect Ratio Frames
+    ("view.loupeOverlay", "Show Loupe Overlays", Some("Cmd+Alt+O"), "View"),
+    ("view.overlayShow", "Show Overlays", None, ""),
+    ("view.loupeGrid", "Grid", None, ""),
+    ("view.loupeGuides", "Guides", None, ""),
+    ("view.layoutImage", "Layout Image", None, ""),
+    ("view.chooseLayoutImage", "Choose Layout Image…", None, ""),
+    // O / Shift+O in the loupe (outside the crop and masking tools)
+    ("view.compositionOverlay", "Cycle Composition Overlay", None, ""),
+    ("view.compositionOverlayOrientation", "Cycle Composition Overlay Orientation", None, ""),
+    ("view.frameGuides", "Aspect Ratio Frames", None, ""),
     ("view.navigate", "Set Image Zoom and Pan", None, ""),
     ("view.zoomIn", "Zoom In", Some("Cmd+="), "View"),
     ("view.zoomOut", "Zoom Out", Some("Cmd+-"), "View"),
@@ -425,6 +437,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         return Some(Ok(json!(app.ui.language)));
     }
     if let Some(r) = crate::keymap::run_command(app, id, p) {
+        return Some(r);
+    }
+    if let Some(r) = crate::panels::crop_overlay::run_command(app, id, p) {
         return Some(r);
     }
     let ctx = egui::Context::default();
@@ -914,21 +929,56 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "view.zoomToggle" => {
-            // the same ratio a click on the photo zooms to
-            app.ui.zoom = if app.ui.zoom == Zoom::Fit { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
+            // the same level a click on the photo zooms to
+            app.ui.zoom = if app.ui.zoom == Zoom::Fit { crate::state::click_zoom_target(app.ui.click_zoom) } else { Zoom::Fit };
             app.ui.zoom_anim = true;
             Ok(Value::Null)
         }
         "view.clickZoom" => {
-            // {ratio?: 1|2|3|4|8} → {ratio}
-            if let Some(r) = p.get("ratio").and_then(Value::as_f64) {
-                let pct = (r * 100.0).round() as u32;
-                if !crate::state::CLICK_ZOOMS.contains(&pct) {
-                    return Some(Err(format!("view.clickZoom: ratio {r} (1, 2, 3, 4 or 8)")));
+            // {ratio?: "fill" | 0.25|0.5|1|2|3|4|8|11|16, percent?: 1..1600} → {ratio, label}: the
+            // level a click (Z, Space) zooms to, kept until another is chosen (saved with the UI)
+            let pct = match (p.get("ratio"), p.get("percent").and_then(Value::as_f64)) {
+                (Some(Value::String(s)), _) if s.eq_ignore_ascii_case("fill") => Some(0),
+                (Some(v), _) => {
+                    let pct = v.as_f64().filter(|r| r.is_finite() && *r > 0.0 && *r <= 16.0).map(|r| (r * 100.0).round() as u32);
+                    match pct.filter(|c| crate::state::CLICK_ZOOMS.contains(c)) {
+                        Some(c) => Some(c),
+                        None => return Some(Err(format!("view.clickZoom: ratio {v} (\"fill\", 0.25, 0.5, 1, 2, 3, 4, 8, 11 or 16)"))),
+                    }
                 }
+                (None, Some(pct)) if pct.is_finite() && (1.0..=1600.0).contains(&pct.round()) => Some(pct.round() as u32),
+                (None, Some(pct)) => return Some(Err(format!("view.clickZoom: percent {pct} (1 to 1600)"))),
+                (None, None) => None,
+            };
+            if let Some(pct) = pct {
                 app.ui.click_zoom = pct;
             }
-            Ok(json!({"ratio": app.ui.click_zoom / 100}))
+            let c = app.ui.click_zoom;
+            let ratio = if c == 0 {
+                json!("fill")
+            } else if c.is_multiple_of(100) {
+                json!(c / 100)
+            } else {
+                json!(c as f64 / 100.0)
+            };
+            Ok(json!({"ratio": ratio, "label": crate::state::click_zoom_label(c)}))
+        }
+        "view.wheelZoom" => {
+            // {mode?: auto|zoom|pan, step?: 10|25|50|100} → {mode, step}: what the plain scroll
+            // wheel / trackpad scroll does over the photo and how far one notch zooms (saved)
+            if let Some(m) = p.get("mode") {
+                match serde_json::from_value::<crate::state::WheelMode>(m.clone()) {
+                    Ok(m) => app.ui.wheel = m,
+                    Err(_) => return Some(Err(format!("view.wheelZoom: mode {m} (auto, zoom or pan)"))),
+                }
+            }
+            if let Some(s) = p.get("step") {
+                match s.as_u64().map(|v| v as u32).filter(|v| crate::state::WHEEL_STEPS.contains(v)) {
+                    Some(v) => app.ui.wheel_step = v,
+                    None => return Some(Err(format!("view.wheelZoom: step {s} (10, 25, 50 or 100 percent)"))),
+                }
+            }
+            Ok(json!({"mode": app.ui.wheel, "step": app.ui.wheel_step}))
         }
         "view.zoomIn" | "view.zoomOut" => {
             let steps = [25.0, 50.0, 100.0, 200.0, 400.0, 800.0];
@@ -967,7 +1017,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.zoom = zoom;
             app.ui.pan = pan;
             app.ui.zoom_anim = false;
-            Ok(json!({"zoom": zoom, "pan": pan}))
+            // {remember: true} (the toolbar's zoom menu, the Navigator): a level picked there is
+            // what a click zooms to from now on, as in Lightroom
+            if p.get("remember").and_then(Value::as_bool) == Some(true) {
+                match zoom {
+                    Zoom::Fill => app.ui.click_zoom = 0,
+                    Zoom::Percent(z) if z.round() >= 1.0 => app.ui.click_zoom = z.round().min(1600.0) as u32,
+                    _ => {}
+                }
+            }
+            Ok(json!({"zoom": zoom, "pan": pan, "clickZoom": app.ui.click_zoom}))
         }
         "view.clipping" => {
             app.ui.show_clipping = !app.ui.show_clipping;

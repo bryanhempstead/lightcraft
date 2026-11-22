@@ -156,7 +156,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
     let t = Tokens::get(ui.ctx());
     let mut child = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(Rect::from_min_max(pos2(full.right() - 360.0, full.top()), full.right_bottom()))
+            .max_rect(Rect::from_min_max(pos2(full.right() - 470.0, full.top()), full.right_bottom()))
             .layout(egui::Layout::right_to_left(egui::Align::Center)),
     );
     child.spacing_mut().item_spacing.x = 6.0;
@@ -212,35 +212,38 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
         };
         let zr = crate::widgets::dropdown(&mut child, "zoom", crate::i18n::tr(&zoom_label), t.font(13.0), t.text_label);
         egui::Popup::menu(&zr).show(|ui| {
-            for (label, z) in [
-                ("Fit", Zoom::Fit),
-                ("Fill", Zoom::Fill),
-                ("50%", Zoom::Percent(50.0)),
-                ("100%", Zoom::Percent(100.0)),
-                ("200%", Zoom::Percent(200.0)),
-                ("400%", Zoom::Percent(400.0)),
-            ] {
+            // a level picked here is also what a click zooms to from now on (as Lightroom's
+            // Navigator), until another is picked
+            let fit = ui.selectable_label(app.ui.zoom == Zoom::Fit, crate::i18n::tr("Fit"));
+            if fit.clicked() {
+                let _ = app.run("view.navigate", json!({"zoom": "fit", "pan": [0.5, 0.5]}));
+            }
+            for pct in crate::state::CLICK_ZOOMS {
+                let z = crate::state::click_zoom_target(pct);
+                let label = match pct {
+                    0 => crate::i18n::tr("Fill").to_string(),
+                    p => format!("{} ({p}%)", crate::state::click_zoom_label(p)),
+                };
                 if ui.selectable_label(app.ui.zoom == z, label).clicked() {
-                    app.ui.zoom = z;
-                    app.ui.pan = (0.5, 0.5);
+                    let _ = app.run("view.navigate", json!({"zoom": z, "pan": [0.5, 0.5], "remember": true}));
                 }
             }
         });
         child.add_space(6.0);
-        let cz = crate::widgets::dropdown(
-            &mut child,
-            "clickZoom",
-            &crate::i18n::tr_format!("Click {}:1", app.ui.click_zoom / 100),
-            t.font(13.0),
-            t.text_label,
-        );
-        egui::Popup::menu(&cz).show(|ui| {
-            for pct in crate::state::CLICK_ZOOMS {
-                if ui.selectable_label(app.ui.click_zoom == pct, format!("{}:1", pct / 100)).clicked() {
-                    let _ = app.run("view.clickZoom", json!({"ratio": pct / 100}));
-                }
-            }
-        });
+        let click_label = format!("click. {}", crate::state::click_zoom_label(app.ui.click_zoom));
+        let cz = crate::widgets::dropdown(&mut child, "clickZoom", &click_label, t.font(13.0), t.text_label)
+            .on_hover_text(crate::i18n::tr("What a click on the photo zooms to, and what the scroll wheel does"));
+        egui::Popup::menu(&cz).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| zoom_behavior_menu(app, ui));
+        if app.ui.view == ViewMode::Detail {
+            child.add_space(6.0);
+            let o = &app.ui.loupe_overlay;
+            let on = o.any() && o.show != crate::state::OverlayShow::Never;
+            let ovl = crate::widgets::dropdown(&mut child, "overlays", "ovl.", t.font(13.0), if on { t.text } else { t.text_label })
+                .on_hover_text(crate::i18n::tr("Overlays on the photo: composition guides, frames, grid, guides, layout image"));
+            egui::Popup::menu(&ovl)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| super::crop_overlay::overlay_menu(app, ui));
+        }
     } else {
         // thumbnail size slider
         let (r, resp) = child.allocate_exact_size(vec2(110.0, 20.0), Sense::click_and_drag());
@@ -258,6 +261,44 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
         }
     }
     if child.min_rect().width() > 0.0 { child.min_rect().left() } else { full.right() }
+}
+
+/// The click. menu: the level a click zooms to, what the scroll wheel does and how far a notch
+/// zooms. Every choice is kept (saved with the UI) until another is made.
+pub fn zoom_behavior_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    ui.set_min_width(230.0);
+    ui.label(egui::RichText::new(crate::i18n::tr("A click zooms to")).weak());
+    for pct in crate::state::CLICK_ZOOMS {
+        let label = match pct {
+            0 => crate::i18n::tr("Fill").to_string(),
+            p => format!("{} ({p}%)", crate::state::click_zoom_label(p)),
+        };
+        let r = ui.selectable_label(app.ui.click_zoom == pct, label);
+        if r.clicked() {
+            let ratio = if pct == 0 { json!("fill") } else { json!(pct as f64 / 100.0) };
+            let _ = app.run("view.clickZoom", json!({"ratio": ratio}));
+        }
+    }
+    if !crate::state::CLICK_ZOOMS.contains(&app.ui.click_zoom) {
+        let _ = ui.selectable_label(true, format!("{}%", app.ui.click_zoom));
+    }
+    ui.separator();
+    ui.label(egui::RichText::new(crate::i18n::tr("Scroll wheel")).weak());
+    for m in crate::state::WheelMode::ALL {
+        if ui.selectable_label(app.ui.wheel == m, crate::i18n::tr(m.label())).clicked() {
+            let _ = app.run("view.wheelZoom", json!({"mode": m.id()}));
+        }
+    }
+    ui.separator();
+    ui.label(egui::RichText::new(crate::i18n::tr("Zoom per wheel notch")).weak());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        for s in crate::state::WHEEL_STEPS {
+            if ui.selectable_label(app.ui.wheel_step == s, format!("{s}%")).clicked() {
+                let _ = app.run("view.wheelZoom", json!({"step": s}));
+            }
+        }
+    });
 }
 
 fn sort_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {

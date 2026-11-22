@@ -14,6 +14,14 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   `Services.pick_image`, `LightcraftApp::prepare` (fonts before frame 1), main.rs opaque `clear_color` + transparent
   window until the first frame (the grey box at launch). needs.you #195. Left: plates in exported slideshows/prints
   (no such modules), multi-font text.
+- [ ] (zoomux agent, 2026-11-22, branch worktree-agent-aa922a86531cd4ef5, not merged) **LR-VIEW-ZOOM click / wheel
+  zoom, LRC-VIEW-LOUPEOVERLAY, LRC-LIB-MISSING loupe banner** — `UiState.wheel` / `wheel_step` / `loupe_overlay`
+  (new, saved in ui.json), `click_zoom` 0 = Fill; `view.wheelZoom`, `view.navigate {remember}` (toolbar zoom menu +
+  Navigator set the click level), `view.loupeOverlay` (⌘⌥O) / `overlayShow` / `loupeGrid` / `loupeGuides` /
+  `layoutImage` / `chooseLayoutImage` / `compositionOverlay` (O in the loupe) / `compositionOverlayOrientation` (⇧O) /
+  `frameGuides`; drawing + picker in `panels/crop_overlay.rs`; `detail.rs` `missing_banner` (loc. / fldr.);
+  `ui.scroll {unit: line}`; ui-egui now depends on lightcraft-codecs (layout image decode). Gesture zoom max 800 → 1600.
+  Left: Bryan to try the wheel on his mouse + trackpad (needs.you).
 - [ ] (export agent, 2026-11-22, branch worktree-agent-a3771648dd17295ab, not merged; main merged in twice, DNG
   preview / lossy options kept) **LR-EXP-DIALOG: Export dialog laid out like Lightroom Classic's** —
   `crates/ui-egui/src/export_dialog.rs` (new), `export_task.rs` (queue, pause), `crates/engine/src/export.rs`

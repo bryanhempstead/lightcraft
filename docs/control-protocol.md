@@ -37,7 +37,7 @@ mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 | `ui.pointer` | `{events: [{kind: down\|drag\|up, x, y}], alt?, shift?, cmd?}` | Gesture in normalized image coordinates (Detail view) |
 | `ui.key` | `{key, cmd?, shift?, alt?, ctrl?}` | Key press |
 | `ui.text` | `{text}` | Text input |
-| `ui.scroll` | `{dx, dy, cmd?, ctrl?, shift?, alt?}` | Wheel / two-finger scroll at the current pointer; pans over the image, modifier-scroll zooms |
+| `ui.scroll` | `{dx, dy, unit?, cmd?, ctrl?, shift?, alt?}` | Wheel / two-finger scroll at the current pointer. `unit`: `point` (a trackpad, default) or `line` (mouse-wheel notches, 1 = one notch). Over the image it zooms or pans as `view.wheelZoom` says (default: a notched wheel zooms, a trackpad pans); ⌘-scroll zooms |
 | `ui.zoom` | `{factor}` | Pinch zoom at the current pointer (positive scale multiplier; 1 = unchanged). Position it first with `ui.move` or `ui.hoverWidget` |
 | `ui.set` | partial UI state, e.g. `{"view": "detail"}` | Resulting UI state |
 | `ui.dialog.confirm` / `ui.dialog.cancel` | — | Close the open dialog |

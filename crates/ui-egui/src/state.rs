@@ -449,8 +449,172 @@ impl Default for AppSettings {
 /// Preview sizes offered in Settings → Performance.
 pub const PREVIEW_EDGES: [u32; 4] = [1600, 2560, 3840, 5120];
 
-/// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1.
-pub const CLICK_ZOOMS: [u32; 5] = [100, 200, 300, 400, 800];
+/// Click-zoom levels offered (percent; 0 = Fill): Fill, 1:4, 1:2, 1:1, 2:1, 3:1, 4:1, 8:1, 11:1, 16:1.
+/// Any whole percent 1–1600 is accepted too (a Navigator level remembered as the click level).
+pub const CLICK_ZOOMS: [u32; 10] = [0, 25, 50, 100, 200, 300, 400, 800, 1100, 1600];
+
+/// The zoom a click (and Z / Space) goes to for the click level `pct` (0 = Fill).
+pub fn click_zoom_target(pct: u32) -> Zoom {
+    if pct == 0 { Zoom::Fill } else { Zoom::Percent(pct.min(1600) as f32) }
+}
+
+/// How a click level reads: `Fill`, `1:2`, `1:1`, `3:1`, else `33%`.
+pub fn click_zoom_label(pct: u32) -> String {
+    match pct {
+        0 => "Fill".into(),
+        p if p >= 100 && p.is_multiple_of(100) => format!("{}:1", p / 100),
+        p if p > 0 && p < 100 && 100u32.is_multiple_of(p) => format!("1:{}", 100 / p),
+        p => format!("{p}%"),
+    }
+}
+
+/// What the plain scroll wheel / two-finger scroll does over the photo (LR-VIEW-ZOOM).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WheelMode {
+    /// A notched mouse wheel zooms; a trackpad's two-finger scroll pans and a pinch zooms.
+    #[default]
+    Auto,
+    /// Every scroll zooms, the trackpad's too (⌥-scroll pans).
+    Zoom,
+    /// Every scroll pans (⌘-scroll and pinch zoom).
+    Pan,
+}
+
+impl WheelMode {
+    pub const ALL: [WheelMode; 3] = [WheelMode::Auto, WheelMode::Zoom, WheelMode::Pan];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WheelMode::Auto => "Mouse Wheel Zooms, Trackpad Pans",
+            WheelMode::Zoom => "Scrolling Zooms",
+            WheelMode::Pan => "Scrolling Pans",
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            WheelMode::Auto => "auto",
+            WheelMode::Zoom => "zoom",
+            WheelMode::Pan => "pan",
+        }
+    }
+}
+
+/// How much one wheel notch (40 points of scrolling) zooms, in percent: fine, normal, coarse, double.
+pub const WHEEL_STEPS: [u32; 4] = [10, 25, 50, 100];
+
+/// When the loupe's overlays show (LRC-VIEW-LOUPEOVERLAY).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OverlayShow {
+    #[default]
+    Always,
+    /// While a slider is dragged or the pointer is over the photo (Lightroom's Auto Show).
+    Auto,
+    Never,
+}
+
+impl OverlayShow {
+    pub fn id(self) -> &'static str {
+        match self {
+            OverlayShow::Always => "always",
+            OverlayShow::Auto => "auto",
+            OverlayShow::Never => "never",
+        }
+    }
+}
+
+/// What the loupe draws over the photo outside the crop tool (LRC-VIEW-LOUPEOVERLAY): Lightroom
+/// Classic's View ▸ Loupe Overlay (Grid, Guides, Layout Image) plus the crop tool's composition
+/// guides and aspect-ratio frames for framing deliverables. Drawn on the photo as shown (cropped,
+/// zoomed); nothing here takes clicks except ⌘-dragging the guides.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LoupeOverlay {
+    pub show: OverlayShow,
+    /// The mode ⌘⌥O (Show) goes back to after Never.
+    pub last_show: OverlayShow,
+    pub grid: bool,
+    /// Grid cell size in points on screen (Lightroom's Size), 8–200.
+    pub grid_size: f32,
+    /// 0.05–1.
+    pub grid_opacity: f32,
+    pub guides: bool,
+    /// Where the vertical and horizontal guides cross, as a fraction of the photo shown.
+    pub guides_at: (f32, f32),
+    pub layout: bool,
+    /// The PNG drawn over the photo ("" = none chosen yet).
+    pub layout_path: String,
+    pub layout_opacity: f32,
+    /// A composition guide (the crop tool's kinds); None = off.
+    pub composition: CropOverlay,
+    /// Mirroring of the triangle / spiral (0..4), as the crop tool's.
+    pub orient: u8,
+    /// Aspect-ratio frames (`4:5`, `1:1`, `16:9`, …, or any `w:h`), centred, each as large as fits.
+    pub frames: Vec<String>,
+    /// Darken outside the frame when exactly one is shown.
+    pub frame_dim: bool,
+    /// Opacity of the composition lines and frames, 0.05–1.
+    pub line_opacity: f32,
+}
+
+impl Default for LoupeOverlay {
+    fn default() -> Self {
+        LoupeOverlay {
+            show: OverlayShow::Always,
+            last_show: OverlayShow::Always,
+            grid: false,
+            grid_size: 60.0,
+            grid_opacity: 0.35,
+            guides: false,
+            guides_at: (0.5, 0.5),
+            layout: false,
+            layout_path: String::new(),
+            layout_opacity: 0.5,
+            composition: CropOverlay::None,
+            orient: 0,
+            frames: Vec::new(),
+            frame_dim: true,
+            line_opacity: 0.6,
+        }
+    }
+}
+
+/// The aspect-ratio frames offered in the menus (`view.frameGuides` takes any `w:h`).
+pub const FRAME_GUIDES: [&str; 8] = ["1:1", "4:5", "5:4", "2:3", "3:2", "16:9", "9:16", "1.91:1"];
+
+/// `"4:5"` → width / height; `None` unless both sides are positive numbers.
+pub fn frame_ratio(s: &str) -> Option<f32> {
+    let (w, h) = s.split_once([':', 'x'])?;
+    let (w, h) = (w.trim().parse::<f32>().ok()?, h.trim().parse::<f32>().ok()?);
+    let r = w / h;
+    (w > 0.0 && h > 0.0 && r.is_finite() && r > 0.01 && r < 100.0).then_some(r)
+}
+
+impl LoupeOverlay {
+    /// Anything chosen to draw (before the Show mode).
+    pub fn any(&self) -> bool {
+        self.grid || self.guides || (self.layout && !self.layout_path.is_empty()) || self.composition != CropOverlay::None || !self.frames.is_empty()
+    }
+
+    /// Values from a hand-edited or old `ui.json` brought into range.
+    pub fn sanitized(mut self) -> Self {
+        let f = |v: f32, lo: f32, hi: f32, d: f32| if v.is_finite() { v.clamp(lo, hi) } else { d };
+        self.grid_size = f(self.grid_size, 8.0, 200.0, 60.0);
+        self.grid_opacity = f(self.grid_opacity, 0.05, 1.0, 0.35);
+        self.layout_opacity = f(self.layout_opacity, 0.05, 1.0, 0.5);
+        self.line_opacity = f(self.line_opacity, 0.05, 1.0, 0.6);
+        self.guides_at = (f(self.guides_at.0, 0.0, 1.0, 0.5), f(self.guides_at.1, 0.0, 1.0, 0.5));
+        self.orient %= 4;
+        self.frames.retain(|s| frame_ratio(s).is_some());
+        self.frames.truncate(8);
+        if self.last_show == OverlayShow::Never {
+            self.last_show = OverlayShow::Always;
+        }
+        self
+    }
+}
 
 /// Width limits of a side panel the user resizes (points).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -567,8 +731,19 @@ pub struct UiState {
     #[serde(skip)]
     pub compare_frozen: Option<(Zoom, (f32, f32))>,
     /// Zoom applied by a click on the image (and Z / Space), in percent (100 = 1:1, 200 = 2:1);
-    /// one of [`CLICK_ZOOMS`].
+    /// one of [`CLICK_ZOOMS`] (0 = Fill) or a Navigator level. Picking a level in the toolbar's
+    /// zoom menus or the Navigator makes it the click level until another is picked; saved.
     pub click_zoom: u32,
+    /// What the plain scroll wheel / trackpad scroll does over the photo.
+    pub wheel: WheelMode,
+    /// Percent one wheel notch zooms (one of [`WHEEL_STEPS`]).
+    pub wheel_step: u32,
+    /// The scroll being smoothed came from a notched mouse wheel (not a trackpad).
+    #[serde(skip)]
+    pub wheel_mouse: bool,
+    /// LRC-VIEW-LOUPEOVERLAY: grid, guides, layout image, composition guides and frames on the
+    /// loupe outside the crop tool.
+    pub loupe_overlay: LoupeOverlay,
     /// Animate the loupe rect toward its target (set by a click-zoom).
     #[serde(skip)]
     pub zoom_anim: bool,
@@ -1143,6 +1318,10 @@ impl Default for UiState {
             pan: (0.5, 0.5),
             compare_frozen: None,
             click_zoom: 100,
+            wheel: WheelMode::Auto,
+            wheel_step: 25,
+            wheel_mouse: false,
+            loupe_overlay: LoupeOverlay::default(),
             zoom_anim: false,
             before_after: BeforeAfter::Off,
             thumb_size: 220.0,
@@ -1354,6 +1533,13 @@ impl UiState {
         }
         self.dialog = None;
         self.fullscreen = false;
+        if self.click_zoom > 1600 {
+            self.click_zoom = 100;
+        }
+        if !WHEEL_STEPS.contains(&self.wheel_step) {
+            self.wheel_step = 25;
+        }
+        self.loupe_overlay = std::mem::take(&mut self.loupe_overlay).sanitized();
         if !crate::state::PREVIEW_EDGES.contains(&self.settings.preview_edge) {
             self.settings.preview_edge = AppSettings::default().preview_edge;
         }

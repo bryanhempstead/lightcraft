@@ -157,13 +157,52 @@ pub(crate) fn pan_image(app: &mut LightcraftApp, area: Rect, img: Rect, delta: e
     let _ = app.run("view.navigate", json!({"pan": pan}));
 }
 
-/// Native pinch (also modifier-wheel zoom) and two-finger scroll, scoped to this image view.
+/// Points of scrolling egui makes of one mouse-wheel notch (`InputOptions::line_scroll_speed`).
+const NOTCH: f32 = 40.0;
+
+/// Does this scroll zoom (rather than pan)? `mouse`: it comes from a notched wheel; `alt`: ⌥ is
+/// held (pans instead in the zooming modes).
+pub(crate) fn scroll_zooms(mode: crate::state::WheelMode, mouse: bool, alt: bool) -> bool {
+    use crate::state::WheelMode;
+    match mode {
+        WheelMode::Auto => mouse && !alt,
+        WheelMode::Zoom => !alt,
+        WheelMode::Pan => false,
+    }
+}
+
+/// Native pinch (also ⌘-wheel zoom), the plain scroll wheel (zooms or pans as View ▸ Zoom ▸
+/// Scroll Wheel says, anchored under the pointer) and two-finger scroll, scoped to this image view.
 pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, area: Rect, img: Rect, native: [usize; 2]) -> bool {
+    // where the scroll being smoothed came from: a notched mouse wheel (lines) or a trackpad /
+    // smooth-scrolling surface (points, with touch phases)
+    if let Some(mouse) = ui.input(|i| {
+        i.events.iter().rev().find_map(|e| match e {
+            egui::Event::MouseWheel { unit, phase, .. } => Some(*unit != egui::MouseWheelUnit::Point && *phase == egui::TouchPhase::Move),
+            _ => None,
+        })
+    }) {
+        app.ui.wheel_mouse = mouse;
+    }
     if !resp.hovered() {
         return false;
     }
-    let (factor, delta, anchor) =
-        ui.input(|i| (i.zoom_delta(), i.translation_delta(), i.multi_touch().map(|t| t.center_pos).or(i.pointer.hover_pos())));
+    let (mut factor, mut delta, anchor, touch, alt) = ui.input(|i| {
+        (
+            i.zoom_delta(),
+            i.translation_delta(),
+            i.multi_touch().map(|t| t.center_pos).or(i.pointer.hover_pos()),
+            i.multi_touch().is_some(),
+            i.modifiers.alt,
+        )
+    });
+    if !touch && delta != egui::Vec2::ZERO && scroll_zooms(app.ui.wheel, app.ui.wheel_mouse, alt) {
+        // one notch = one step; a trackpad's points scale the same way, so it feels continuous.
+        // Down / towards you zooms out. Sideways (⇧-wheel) still pans on a mouse.
+        let step = 1.0 + app.ui.wheel_step.clamp(1, 400) as f32 / 100.0;
+        factor *= step.powf((delta.y / NOTCH).clamp(-8.0, 8.0));
+        delta = if app.ui.wheel_mouse { vec2(delta.x, 0.0) } else { egui::Vec2::ZERO };
+    }
     if !factor.is_finite() || factor <= 0.0 || !delta.is_finite() || (factor == 1.0 && delta == egui::Vec2::ZERO) {
         return false;
     }
@@ -175,7 +214,7 @@ pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp:
     let mut zoom = app.ui.zoom;
     let size = if factor != 1.0 {
         // Start at the displayed scale (including Fit/Fill and an interrupted click animation).
-        let pct = (img.width() * ppp * 100.0 / native[0].max(1) as f32 * factor).clamp(fit_pct.min(800.0), 800.0);
+        let pct = (img.width() * ppp * 100.0 / native[0].max(1) as f32 * factor).clamp(fit_pct.min(1600.0), 1600.0);
         zoom = if pct <= fit_pct { Zoom::Fit } else { Zoom::Percent(pct) };
         fit_rect(area, aspect, zoom, native, ppp, (0.5, 0.5)).size()
     } else {
@@ -489,6 +528,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         clipping_overlay(app, &p, img_rect);
     }
     register(ui.ctx(), "canvas:image", img_rect);
+    // LRC-VIEW-LOUPEOVERLAY: grid / guides / layout image / composition guides / frames on the
+    // photo as shown (the crop tool draws its own guides on the uncropped frame)
+    let guide_drag = !crop_tool && !show_before && super::crop_overlay::loupe(app, ui, &resp, img_rect, main_area.intersect(canvas));
     let map = CanvasMap::new(&frame, img_rect);
     brief_info(app, ui.ctx(), id);
     info_overlay(app, &p, canvas, &photo);
@@ -525,7 +567,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !matches!(right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye) {
         general_cursor(app, ui, &resp, img_rect, main_area);
     }
-    if !navigating {
+    if !navigating && !guide_drag {
         match right {
             RightPanel::Crop => crop_overlay(app, ui, &resp, &map, &frame, &d, id),
             RightPanel::Masking => mask_overlay(app, ui, &resp, &map, &d),
@@ -543,8 +585,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     // drawn and hit-tested above the loupe and its tools: clicks on it pan
     navigator(app, ui, canvas, img_rect, id);
+    // the original is gone (moved, renamed, its disk not connected): say so over the photo, with
+    // the ways to point the library at it again (a cached answer, checked off the UI thread)
+    let missing = !fullscreen && missing_banner(app, ui, canvas, &photo, shown != "none");
     if let Some(why) = photo.preview_only.as_deref().filter(|_| !fullscreen) {
-        preview_only_pill(ui, canvas, why);
+        preview_only_pill(ui, canvas, why, if missing { 66.0 } else { 0.0 });
     }
     // a video: the played / scrubbed frame and its control bar (LR-VID-PLAY)
     if photo.kind == lightcraft_catalog::MediaKind::Video {
@@ -997,15 +1042,95 @@ fn filter_pill(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     }
 }
 
+/// The original file of a library photo is missing (`availability`: moved, renamed, its disk not
+/// connected): a banner at the canvas' top centre — "Original missing — showing a preview" (or
+/// "nothing to show" without one), that edits still apply and export needs the original — with
+/// loc. (Locate Missing File…) and fldr. (Find Missing Folder… for the folder it was in).
+/// Registered as `notice:missing:loupe`. Returns whether it is shown.
+fn missing_banner(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, photo: &lightcraft_catalog::Photo, showing: bool) -> bool {
+    let lightcraft_catalog::Source::File { path } = &photo.source else { return false };
+    if !app.session.media.availability.is_offline(path) {
+        return false;
+    }
+    let t = Tokens::get(ui.ctx());
+    let head =
+        if showing { crate::i18n::tr("Original missing — showing a preview") } else { crate::i18n::tr("Original missing — no preview to show") };
+    let note = crate::i18n::tr("edits apply; export needs the original");
+    let p = ui.painter_at(canvas);
+    let g1 = p.layout_no_wrap(head.to_string(), t.semibold(12.5), Color32::WHITE);
+    let g2 = p.layout_no_wrap(format!("· {note}"), t.font(12.0), Color32::from_gray(200));
+    let chip = |label: &str| p.layout_no_wrap(label.to_string(), t.semibold(11.5), Color32::WHITE);
+    let (c1, c2) = (chip("loc."), chip("fldr."));
+    let chip_w = |g: &std::sync::Arc<egui::Galley>| (g.size().x + 18.0).max(37.0);
+    let (w1, w2) = (chip_w(&c1), chip_w(&c2));
+    // icon 16 · 8 · head · 8 · note · 12 · chip · 8 · chip, 12 in from each end
+    let full_w = 12.0 + 16.0 + 8.0 + g1.size().x + 8.0 + g2.size().x + 12.0 + w1 + 8.0 + w2 + 12.0;
+    let narrow = full_w > canvas.width() - 24.0;
+    let w = if narrow { full_w - g2.size().x - 8.0 } else { full_w };
+    let r = Rect::from_min_size(pos2(canvas.center().x - w / 2.0, canvas.top() + 32.0), vec2(w, 34.0));
+    p.rect_filled(r, 8.0, Color32::from_black_alpha(205));
+    p.rect_stroke(r, 8.0, Stroke::new(1.0, t.caution.gamma_multiply(0.7)), StrokeKind::Inside);
+    let mut x = r.left() + 12.0;
+    crate::icons::paint(&p, Rect::from_center_size(pos2(x + 8.0, r.center().y), vec2(16.0, 16.0)), crate::icons::Icon::Info, t.caution);
+    x += 16.0 + 8.0;
+    let gy = |g: &std::sync::Arc<egui::Galley>| r.center().y - g.size().y / 2.0;
+    p.galley(pos2(x, gy(&g1)), g1.clone(), Color32::WHITE);
+    x += g1.size().x + 8.0;
+    if !narrow {
+        p.galley(pos2(x, gy(&g2)), g2.clone(), Color32::from_gray(200));
+        x += g2.size().x + 8.0;
+    }
+    x += 4.0;
+    register(ui.ctx(), "notice:missing:loupe", r);
+    let tip = crate::i18n::tr("The original file isn't where the library expects it (moved, renamed, or its disk isn't connected).");
+    ui.interact(r, egui::Id::new("missing-banner"), Sense::hover()).on_hover_text(format!("{tip}\n{path}"));
+    let mut clicked = None;
+    for (id, g, cw, tip) in [
+        ("missingLocate", c1, w1, "Locate Missing File… — point this photo at its file"),
+        ("missingFolder", c2, w2, "Find Missing Folder… — point every photo from its folder at where the folder went"),
+    ] {
+        let b = Rect::from_min_size(pos2(x, r.center().y - 12.0), vec2(cw, 24.0));
+        let resp = ui.interact(b, egui::Id::new(("missing-banner", id)), Sense::click());
+        register(ui.ctx(), format!("button:{id}"), b);
+        p.rect(b, 4.0, if resp.hovered() { t.hover } else { t.button }, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+        p.galley(b.center() - g.size() / 2.0, g, Color32::WHITE);
+        if resp.on_hover_text(crate::i18n::tr(tip)).clicked() {
+            clicked = Some(id);
+        }
+        x = b.right() + 8.0;
+    }
+    match clicked {
+        Some("missingLocate") => {
+            if let Err(e) = app.run("photo.locate", json!({})) {
+                app.toast(ui.ctx(), e);
+            }
+        }
+        Some(_) => {
+            let folder = std::path::Path::new(path).parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+            if let Some(to) = app.services.pick_folder.as_mut().and_then(|f| f()) {
+                match app.run("folder.locate", json!({"path": folder, "to": to})) {
+                    Ok(r) => app.toast(
+                        ui.ctx(),
+                        format!("{} {} · {} {}", r["relinked"], crate::i18n::tr("relinked"), r["stillMissing"], crate::i18n::tr("still missing")),
+                    ),
+                    Err(e) => app.toast(ui.ctx(), e),
+                }
+            }
+        }
+        None => {}
+    }
+    true
+}
+
 /// A raw shown from its embedded JPEG (issue #10): a pill at the canvas' top centre saying so;
 /// hovering it explains (registered as `notice:previewOnly:loupe`).
-fn preview_only_pill(ui: &mut egui::Ui, canvas: Rect, reason: &str) {
+fn preview_only_pill(ui: &mut egui::Ui, canvas: Rect, reason: &str, below: f32) {
     let t = Tokens::get(ui.ctx());
     let p = ui.painter_at(canvas);
     let text = crate::i18n::tr_format!("Preview only — editing the camera's embedded JPEG ({})", crate::widgets::preview_only_variant(reason));
     let g = p.layout_no_wrap(text, t.font(12.0), Color32::WHITE);
     let size = vec2(g.size().x + 40.0, 26.0);
-    let r = Rect::from_min_size(pos2(canvas.center().x - size.x / 2.0, canvas.top() + 12.0), size);
+    let r = Rect::from_min_size(pos2(canvas.center().x - size.x / 2.0, canvas.top() + 12.0 + below), size);
     p.rect_filled(r, 13.0, Color32::from_black_alpha(185));
     crate::icons::paint(&p, Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(15.0, 15.0)), crate::icons::Icon::Info, t.caution);
     p.galley(pos2(r.left() + 29.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
@@ -1272,18 +1397,22 @@ fn general_interaction(
         }
         return;
     }
-    // click toggles Fit ↔ the chosen click-zoom ratio at the clicked point; drag pans when zoomed
+    // a click zooms to the chosen click level (Fill, 1:1, 2:1 …; the toolbar's click. menu),
+    // centred on the clicked point, and the next click goes back to Fit; drag pans when zoomed
     let zoomed = img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0;
-    if resp.double_clicked() || (resp.clicked() && !zoomed) {
-        if let Some(q) = resp.interact_pointer_pos() {
-            let u = ((q.x - img.left()) / img.width()).clamp(0.0, 1.0);
-            let v = ((q.y - img.top()) / img.height()).clamp(0.0, 1.0);
-            app.ui.pan = (u, v);
+    if resp.clicked() {
+        let target = crate::state::click_zoom_target(app.ui.click_zoom);
+        let zoom_in = app.ui.zoom == Zoom::Fit || (!zoomed && !app.ui.zoom_anim && app.ui.zoom != target);
+        if zoom_in {
+            if let Some(q) = resp.interact_pointer_pos() {
+                let u = ((q.x - img.left()) / img.width()).clamp(0.0, 1.0);
+                let v = ((q.y - img.top()) / img.height()).clamp(0.0, 1.0);
+                app.ui.pan = (u, v);
+            }
+            app.ui.zoom = target;
+        } else {
+            app.ui.zoom = Zoom::Fit;
         }
-        app.ui.zoom = if matches!(app.ui.zoom, Zoom::Fit) { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
-        app.ui.zoom_anim = true;
-    } else if resp.clicked() && zoomed {
-        app.ui.zoom = Zoom::Fit;
         app.ui.zoom_anim = true;
     }
     if zoomed && resp.dragged() {
