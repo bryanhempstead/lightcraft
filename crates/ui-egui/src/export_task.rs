@@ -93,6 +93,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if cancelled {
                         m += " · cancelled";
                     }
+                    app.session.record_exports(&files);
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled}));
                     m
                 }

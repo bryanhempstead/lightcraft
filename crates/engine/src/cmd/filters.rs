@@ -110,6 +110,34 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "filter.presets", "Filter Presets", [], None, "{} → [{name, filter}]", always, |s, _| Ok(list(s))),
         cmd!(
+            query "library.exportStatus",
+            "Export Status",
+            [],
+            None,
+            "{ids?} — when each photo was last exported (null = never; LightCraft's own exports, kept with the library) → [{id, exported}]",
+            always,
+            |s, p| {
+                let ids = s.targets(p);
+                Ok(json!(ids.iter().map(|id| json!({"id": id.0, "exported": s.export_log.get(&id.0)})).collect::<Vec<_>>()))
+            }
+        ),
+        cmd!(
+            "library.resetExportStatus",
+            "Reset Export Status",
+            ["Library"],
+            None,
+            "{ids?} — forgets that the photos were exported (the Exported filter no longer shows them) → {reset}",
+            super::has_selection,
+            |s, p| {
+                let ids = s.targets(p);
+                let n = ids.iter().filter(|id| s.export_log.remove(&id.0).is_some()).count();
+                if n > 0 {
+                    s.save_exports();
+                }
+                Ok(json!({"reset": n}))
+            }
+        ),
+        cmd!(
             query "library.columnBrowser",
             "Metadata Columns",
             [],

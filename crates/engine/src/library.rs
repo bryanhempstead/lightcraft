@@ -97,6 +97,13 @@ struct PresetsFile {
     profile_recent: Vec<String>,
 }
 
+/// `exports.json`: when each photo was last exported (L31).
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct ExportsFile {
+    photos: std::collections::BTreeMap<u64, String>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct ViewFile {
@@ -364,6 +371,7 @@ impl Session {
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
         }
+        self.export_log = settings.read::<ExportsFile>(files.as_mut(), "exports.json").map(|e| e.photos).unwrap_or_default();
         // presets
         if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
             for p in &mut self.presets {
@@ -660,6 +668,33 @@ impl Session {
             lib.journal.snapshot(&self.catalog)?;
         }
         Ok(())
+    }
+
+    // ------------------------------------------------------------------ export status (L31)
+
+    /// Remember that the photos of an export's per-photo results (`{photo, path}`) were exported
+    /// now, and save `exports.json`.
+    pub fn record_exports(&mut self, files: &[serde_json::Value]) {
+        let now = (self.clock)();
+        let mut n = 0;
+        for f in files.iter().filter(|f| f.get("path").is_some()) {
+            if let Some(id) = f.get("photo").and_then(serde_json::Value::as_u64) {
+                self.export_log.insert(id, now.clone());
+                n += 1;
+            }
+        }
+        if n > 0 {
+            self.save_exports();
+        }
+    }
+
+    /// Write `exports.json` (no-op for in-memory sessions).
+    pub fn save_exports(&mut self) {
+        let v = serde_json::to_vec(&ExportsFile { photos: self.export_log.clone() }).unwrap_or_default();
+        let Some(lib) = self.library.as_mut() else { return };
+        if let Err(e) = lib.files.write_atomic("exports.json", &v) {
+            log::error!("library: exports.json: {e}");
+        }
     }
 
     // ------------------------------------------------------------------ catalog backups

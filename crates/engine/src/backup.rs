@@ -26,7 +26,7 @@ pub const DIR_NAME: &str = "Backups";
 pub const MANIFEST: &str = "backup.json";
 pub const SNAPSHOT_GZ: &str = "catalog.snap.gz";
 /// The library's settings files a backup keeps.
-pub const SETTINGS_FILES: [&str; 3] = ["presets.json", "prefs.json", "view.json"];
+pub const SETTINGS_FILES: [&str; 4] = ["presets.json", "prefs.json", "view.json", "exports.json"];
 const FORMAT: &str = "lightcraft-backup";
 const VERSION: u32 = 1;
 /// The largest catalog a backup may unpack to (corrupt or hostile size fields can't allocate more).

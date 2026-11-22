@@ -283,8 +283,24 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .collect(),
     );
 
+    let exported_label = match f.exported {
+        None => "Exported or not",
+        Some(true) => "Exported",
+        Some(false) => "Not exported",
+    };
     // metadata pickers
     let ui: &mut egui::Ui = if two_rows { &mut row2 } else { &mut row1 };
+    picker(
+        app,
+        ui,
+        "exported",
+        exported_label,
+        f.exported.is_some(),
+        [("Exported or not", Value::Null, None), ("Exported", json!(true), Some(true)), ("Not exported", json!(false), Some(false))]
+            .into_iter()
+            .map(|(l, v, e)| (l.to_string(), json!({"exported": v}), f.exported == e))
+            .collect(),
+    );
     let values = app.caches.filter_values(&app.session.catalog);
     let (cameras, lenses, keywords) = (values.cameras.clone(), values.lenses.clone(), values.keywords.clone());
     for (id, key, all_label, current, values) in [

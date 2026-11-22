@@ -41,6 +41,10 @@ pub struct Filter {
     /// `true`: photos in a stack, `false`: photos in none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stacked: Option<bool>,
+    /// Exported (`true`) or never exported (`false`). The export record lives with the library,
+    /// not the catalog: the engine applies this one ([`Filter::matches`] ignores it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exported: Option<bool>,
     /// The metadata column browser's picks ([`crate::columns`]).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<crate::columns::ColumnPick>,
@@ -203,6 +207,9 @@ impl Filter {
         }
         if let Some(st) = self.stacked {
             v.push(if st { "stacked".into() } else { "not stacked".into() });
+        }
+        if let Some(e) = self.exported {
+            v.push(if e { "exported".into() } else { "not exported".into() });
         }
         for c in self.columns.iter().filter(|c| !c.values.is_empty()) {
             v.push(format!(

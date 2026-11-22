@@ -191,6 +191,8 @@ pub struct Session {
     /// Keep an automatic version when leaving an edited photo ([`Session::auto_version`]; off by
     /// default, like Lightroom, which never snapshots by itself; prefs.json).
     pub auto_versions: bool,
+    /// When each photo was last exported (photo id → ISO time; the library's `exports.json`).
+    pub export_log: std::collections::BTreeMap<u64, String>,
     /// Delete from Disk moves files into this folder instead of the system Trash (tests, scripts;
     /// also `LIGHTCRAFT_TRASH_DIR`).
     pub trash_dir: Option<std::path::PathBuf>,
@@ -304,6 +306,7 @@ impl Session {
             naming_templates: Vec::new(),
             naming_counters: Default::default(),
             auto_versions: false,
+            export_log: Default::default(),
             trash_dir: None,
             previous_active: None,
             copy_groups: lightcraft_develop::SettingsGroup::default_copy(),
@@ -691,6 +694,10 @@ impl Session {
                 self.source, self.filter, self.sort, self.browse, self.library_folder, self.library_subfolders, self.library_folder_subfolders
             ),
         );
+        if self.filter.exported.is_some() {
+            // the export record isn't the catalog's: its changes don't move the revision
+            key.1.push_str(&format!("|exports {}", self.export_log.len()));
+        }
         if self.source == LibrarySource::Missing && self.media.availability.is_background() {
             // the view fills in as the background checks find files gone
             key.1.push_str(&format!("|{}", self.media.availability.generation()));
@@ -711,6 +718,10 @@ impl Session {
                 f.library_folder_only = !self.library_folder_subfolders.unwrap_or(self.library_subfolders);
             }
             let mut visible = self.catalog.query(&f, &self.sort);
+            // Exported / not exported: the export record is the library's, not the catalog's
+            if let Some(e) = self.filter.exported {
+                visible.retain(|id| self.export_log.contains_key(&id.0) == e);
+            }
             if visible.is_empty() && self.source == LibrarySource::LibraryFolder && !self.folder_holds_photos() {
                 // the shown folder lost its last photo (deleted, moved, removed): everything, not
                 // an empty grid under the name of a folder that is gone from the sidebar

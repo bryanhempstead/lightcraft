@@ -422,6 +422,7 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
         let w = app.services.write.as_mut().ok_or("no writer")?;
         let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
         let after = lightcraft_engine::export::post_process(&opts, &files);
+        app.session.record_exports(&files);
         json!({"files": files, "postProcessing": after})
     };
     // remember for Export with Previous (and to prefill the dialog)

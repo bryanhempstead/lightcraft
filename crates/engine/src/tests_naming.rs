@@ -120,3 +120,33 @@ fn after_export_commands() {
     // `post_process` with nothing to do runs nothing
     assert!(crate::export::post_process(&ExportOptions::default(), &[json!({"path": "/x.jpg"})]).is_none());
 }
+
+/// L31: export status — recorded per photo, kept with the library, an Exported filter, Reset.
+#[test]
+fn export_status_is_recorded_filtered_and_reset() {
+    let dir = std::env::temp_dir().join(format!("lc-exported-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = Session::new();
+    s.open_library(dir.join("lib"), true).unwrap();
+    let id = s.visible_cloned()[0];
+    let o = crate::export::ExportOptions { resize: Some(crate::export::Resize::long_edge(64)), ..Default::default() };
+    let to = crate::export::Destination { dir: dir.join("out").to_string_lossy().to_string(), exact: None };
+    let files = crate::export::export_batch(&mut s, &[id], &o, &to, &mut crate::export::write_file, &|p| std::path::Path::new(p).exists()).unwrap();
+    assert_eq!(files[0]["photo"], id.0);
+    s.record_exports(&files);
+    let st = s.execute("library.exportStatus", &json!({"ids": [id.0]})).unwrap();
+    assert!(st[0]["exported"].is_string(), "{st}");
+    let n = s.visible_cloned().len();
+    assert_eq!(s.execute("library.filter", &json!({"exported": true})).unwrap()["count"], 1);
+    assert_eq!(s.execute("library.filter", &json!({"exported": false})).unwrap()["count"], n - 1);
+    s.execute("library.filter", &json!({"exported": null})).unwrap();
+    // kept with the library
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new();
+    s.open_library(dir.join("lib"), false).unwrap();
+    assert!(s.export_log.contains_key(&id.0));
+    assert_eq!(s.execute("library.resetExportStatus", &json!({"ids": [id.0]})).unwrap()["reset"], 1);
+    assert!(s.export_log.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
