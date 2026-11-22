@@ -15,8 +15,10 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   all./clr./b&w., views grid./lrg./lst., mng. (hide groups), imp., profile groups per photo in menu + browser;
   LR-PRE-ADAPTIVE / LR-MASK-ADAPTIVE: Camera Raw's Premium + Adobe presets offered read only (`adobe.<uuid>`,
   `presets.adobe`, app loads at start), Landscape / People `MaskSubCategoryID` mapped, preset.apply computes new AI
-  masks. Bryan's catalog: 16,823 photos all resolve (no Camera Matching used). Left: Fujifilm film sims (no DCPs
-  installed here), Snow class, Facial Hair = hair, People masks = first person, Adaptive per-photo tables.
+  masks (a4ea8443f; 20dcf2a89: People presets detect people first, Blur Background → Lens Blur; real parsers on
+  teton / crew: Blue Drama sky, Whiten Teeth, Autumn01 5/7 classes, Pop subject). Bryan's catalog: 16,823 photos all
+  resolve (no Camera Matching used). Left: Fujifilm film sims (no DCPs installed here), Snow class, Facial Hair = hair,
+  People masks = first person, Adaptive per-photo tables, Cat Eye / oval bokeh. needs.you #166, #167.
 - [ ] (AI masks agent, 2026-11-22, branch worktree-agent-af352bb019bacca9d, not merged) **AI masks — parity K + REM rows**
   Done: 08552d289 SAM 3 downloads work (5 ungated HF copies, every file hash-pinned; DEFAULT_MIRRORS was empty);
   365717b7c SegFormer in pure Rust (crates/segment/src/segformer.rs, ported from candle-transformers) + three
