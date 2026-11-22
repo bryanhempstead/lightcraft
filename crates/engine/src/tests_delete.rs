@@ -139,3 +139,39 @@ fn a_shared_stem_sidecar_stays_while_its_other_photo_does() {
     assert!(!dir.join("src/IMG_1.xmp").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// L30: Import from Another Library — photos, virtual copies and albums come over; a second run
+/// skips what's there, or with `replace` takes the other library's settings.
+#[test]
+fn import_from_another_library() {
+    let dir = temp_dir("import-catalog");
+    // two PNGs in dir/src
+    let (_memory, _) = setup(&dir, 2);
+    let mut a = Session::new();
+    a.open_library(dir.join("libA"), false).unwrap();
+    a.execute("library.import", &json!({"paths": [dir.join("src").to_string_lossy()]})).unwrap();
+    let first = a.catalog.photos().next().unwrap().id;
+    a.execute("photo.rate", &json!({"ids": [first.0], "rating": 5})).unwrap();
+    a.execute("photo.virtualCopy", &json!({"ids": [first.0]})).unwrap();
+    a.execute("album.create", &json!({"name": "Best", "addSelected": true})).unwrap();
+    a.close_library().unwrap();
+    drop(a);
+
+    let mut b = Session::new();
+    b.open_library(dir.join("libB"), false).unwrap();
+    let r = b.execute("library.importCatalog", &json!({"path": dir.join("libA").to_string_lossy()})).unwrap();
+    assert_eq!((r["added"].as_u64(), r["albums"].as_u64()), (Some(3), Some(1)), "{r}");
+    assert!(b.catalog.photos().any(|p| p.copy_of.is_some()), "the virtual copy follows its original");
+    assert!(b.catalog.photos().any(|p| p.rating == 5));
+    // again: nothing new; with replace the ratings come over
+    let r = b.execute("library.importCatalog", &json!({"path": dir.join("libA").to_string_lossy()})).unwrap();
+    assert_eq!(r["added"], 0, "{r}");
+    let some = b.catalog.photos().find(|p| p.rating == 5 && p.copy_of.is_none()).unwrap().id;
+    b.selection = crate::Selection::single(some);
+    b.execute("photo.rate", &json!({"ids": [some.0], "rating": 1})).unwrap();
+    let r = b.execute("library.importCatalog", &json!({"path": dir.join("libA").to_string_lossy(), "replace": true})).unwrap();
+    assert_eq!(r["replaced"], 2, "{r}");
+    assert_eq!(b.catalog.photo(some).unwrap().rating, 5);
+    assert!(b.execute("library.importCatalog", &json!({"path": dir.join("nothing").to_string_lossy()})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

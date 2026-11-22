@@ -241,8 +241,137 @@ fn export_catalog(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"dest": dest, "photos": n, "albums": n_albums}))
 }
 
+/// Lightroom's Import from Another Catalog (L30): the photos (with their settings, metadata,
+/// history and virtual copies), regular albums and smart albums of another LightCraft library,
+/// read from a copy of its files (never written). A photo whose file this library already has is
+/// skipped, or with `replace: true` takes the other library's settings, metadata, rating, flag and
+/// label. One undo step.
+fn import_catalog(s: &mut Session, p: &Value) -> Result<Value> {
+    use lightcraft_catalog::{Journal, MemStore};
+    const C: &str = "library.importCatalog";
+    let path = str_param(p, "path").map(str::trim).filter(|d| !d.is_empty()).ok_or_else(|| bad(C, "missing `path` (the other library's folder)"))?;
+    let dir = Path::new(path);
+    if s.library.as_ref().is_some_and(|l| l.dir == dir) {
+        return Err(bad(C, "that is this library"));
+    }
+    let copy = MemStore::new();
+    let mut found = false;
+    for name in [lightcraft_catalog::journal::SNAPSHOT, lightcraft_catalog::journal::LOG] {
+        match std::fs::read(dir.join(name)) {
+            Ok(b) => {
+                copy.set(name, b);
+                found = true;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(bad(C, format!("{}: {e}", dir.join(name).display()))),
+        }
+    }
+    if !found {
+        return Err(bad(C, format!("{path}: not a LightCraft library (no catalog.snap)")));
+    }
+    let (_, other, _) = Journal::open(Box::new(copy)).map_err(|e| bad(C, format!("{path}: {e}")))?;
+    let replace = bool_or(p, "replace", false);
+    let mine: std::collections::HashMap<String, PhotoId> = s
+        .catalog
+        .photos()
+        .filter(|q| q.copy_of.is_none() && q.in_library())
+        .filter_map(|q| match &q.source {
+            Source::File { path } => Some((path.clone(), q.id)),
+            Source::Demo { .. } => None,
+        })
+        .collect();
+    let mut ids: std::collections::HashMap<PhotoId, PhotoId> = Default::default();
+    let mut fresh: HashSet<PhotoId> = HashSet::new();
+    let mut ops: Vec<Op> = Vec::new();
+    let (mut added, mut replaced, mut skipped) = (0usize, 0usize, 0usize);
+    let mut theirs: Vec<&lightcraft_catalog::Photo> = other.photos().map(|q| q.as_ref()).filter(|q| q.in_library()).collect();
+    // originals before their virtual copies
+    theirs.sort_by_key(|q| (q.copy_of.is_some(), q.id));
+    for q in theirs {
+        let existing = match (&q.source, q.copy_of) {
+            (Source::File { path }, None) => mine.get(path).copied(),
+            _ => None,
+        };
+        if let Some(e) = existing {
+            ids.insert(q.id, e);
+            if replace {
+                ops.push(Op::SetDevelop { id: e, settings: q.develop.clone(), label: "Import from Catalog".into(), edited: q.edited.clone() });
+                ops.push(Op::SetMeta { id: e, meta: Box::new(q.meta.clone()) });
+                ops.push(Op::SetRating { id: e, rating: q.rating });
+                ops.push(Op::SetFlag { id: e, flag: q.flag });
+                ops.push(Op::SetLabel { id: e, label: q.label });
+                replaced += 1;
+            } else {
+                skipped += 1;
+            }
+            continue;
+        }
+        // a virtual copy comes with an original that comes now (one this library already has
+        // keeps its own copies)
+        let copy_of = match q.copy_of {
+            Some(m) => match ids.get(&m).filter(|n| fresh.contains(n)) {
+                Some(n) => Some(*n),
+                None => {
+                    skipped += 1;
+                    continue;
+                }
+            },
+            None => None,
+        };
+        let new = s.catalog.alloc_photo_id();
+        ids.insert(q.id, new);
+        fresh.insert(new);
+        let mut ph = q.clone();
+        ph.id = new;
+        ph.copy_of = copy_of;
+        ph.local = false;
+        ops.push(Op::AddPhoto { photo: Box::new(ph) });
+        added += 1;
+    }
+    // albums: folders first (parents before children), photos remapped
+    let mut album_ids: std::collections::HashMap<lightcraft_catalog::AlbumId, lightcraft_catalog::AlbumId> = Default::default();
+    let mut albums: Vec<lightcraft_catalog::Album> = other.albums().filter(|a| !a.quick).cloned().collect();
+    let depth = |a: &lightcraft_catalog::Album| {
+        let mut d = 0;
+        let mut cur = a.parent;
+        while let Some(pid) = cur.filter(|_| d < 32) {
+            d += 1;
+            cur = other.album(pid).and_then(|x| x.parent);
+        }
+        d
+    };
+    albums.sort_by_key(|a| (depth(a), a.id));
+    let mut n_albums = 0;
+    for mut a in albums {
+        let new = s.catalog.alloc_album_id();
+        album_ids.insert(a.id, new);
+        a.id = new;
+        a.parent = a.parent.and_then(|pid| album_ids.get(&pid).copied());
+        a.photos = a.photos.iter().filter_map(|x| ids.get(x).copied()).collect();
+        a.cover = a.cover.and_then(|c| ids.get(&c).copied());
+        if !a.folder && !a.is_smart() && a.photos.is_empty() {
+            continue;
+        }
+        ops.push(Op::AddAlbum { album: a });
+        n_albums += 1;
+    }
+    if !ops.is_empty() {
+        s.commit("Import from Catalog", Op::Batch { ops })?;
+    }
+    Ok(json!({"added": added, "replaced": replaced, "skipped": skipped, "albums": n_albums}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(
+            "library.importCatalog",
+            "Import from Another Library…",
+            [],
+            None,
+            "{path: another LightCraft library's folder, replace?: bool (photos both have: take the other library's settings and metadata; default skip)} — Lightroom's Import from Another Catalog: its photos (settings, metadata, history, virtual copies), albums and smart albums; the other library is only read; one undo step → {added, replaced, skipped, albums}",
+            always,
+            import_catalog
+        ),
         cmd!(
             query "library.folderStatus",
             "Folder Status",
