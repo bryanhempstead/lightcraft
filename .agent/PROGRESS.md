@@ -6,6 +6,19 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (lrsync agent, 2026-11-21 night, branch worktree-agent-a56ca074558d7129e) **Lightroom migration rows L01 / R14 /
+  U15 / R18 / R26** — c456db97f R14 (Upright: PerspectiveUpright 3 = Level / 4 = Vertical / 2 = Full, stored
+  `UprightTransform_<mode>` used instead of re-detection, Constrain Crop; `repairLightroomMigration upright`),
+  657ebd80d U15 + R18 (history side files `<library>/Lightroom History/`, History panel "In Lightroom Classic",
+  `history.restoreLightroom`; snapshots → versions; `library.migrateLightroomHistory`), e077d6fcb L01
+  (`library.syncLightroom`, File ▸ Sync from Lightroom Classic…, `<library>/lightroom-sync.json`), then R26
+  (`library.lightroomDust`). **Bryan runs, on the live library after merging** (app closed or via the menu):
+  `library.migrateLightroomHistory` (15 s: 13,773 photos / 73,373 steps, 19 snapshots → versions), File ▸ Sync from
+  Lightroom Classic… (today: 1 photo re-edited after the migration snapshot, 14 duplicates, 2,947 offline), then
+  `library.lightroomDust dryRun=true` → without (12 of 39 photos in the library, 38 spots). Left: the 192 Upright
+  photos (Medora, BONUSBOY) aren't in the library (folder missing); Find Dust Spots misses some faint specks
+  Lightroom removed (detector sensitivity); `migrated` time in lightroom-migration.json is the CLI's fixed clock
+  (2026-09-30), so first-sync baselines use the newest Lightroom time the migration recorded instead.
 - [ ] (Claude, 2026-11-21 night) **"No gaps" program — Lightroom Classic 15.4.1 reverse-engineered (Library + Develop only).**
   Research (local only, Adobe text never in the repo): /private/tmp/claude-501/lr-re/{library,develop}/inventory.md,
   usage table from his catalog, ranked list gaps.md (103 rows: Tier 1 = 23, Tier 2 = 22, Tier 3 = 58). Running on branches

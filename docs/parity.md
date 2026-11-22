@@ -324,7 +324,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-REM-VISUALIZE | Visualize spots | P1 | ✅ | `cmd:view.visualizeSpots` | |
 | LR-REM-PEOPLE | Remove people (generative) | OOS | 🚫 | | |
 | LR-REM-REFLECT | Remove reflections | P2 | ⬜ | | |
-| LR-REM-DUST | Dust detection | P2 | ✅ | `cmd:spot.findDust`, `crates/pipeline/src/dust.rs` | Remove panel ▸ Find Dust Spots: small, soft, round dark spots on smooth areas become heal spots (sensitivity; one undo step); Visualize Spots for checking by eye |
+| LR-REM-DUST | Dust detection | P2 | ✅ | `cmd:spot.findDust`, `cmd:library.lightroomDust`, `crates/pipeline/src/dust.rs`, `crates/engine/src/lr_dust.rs` | Remove panel ▸ Find Dust Spots: small, soft, round dark spots on smooth areas become heal spots (sensitivity; one undo step); Visualize Spots for checking by eye. Photos Lightroom cleaned with its Dust Removal filter (baked patches) get Find Dust Spots inside the areas Lightroom patched, at migration or with `cmd:library.lightroomDust`; a small patch with nothing found gets a heal spot where Lightroom put it |
 | LR-REM-SYNC | Sync spots | P1 | ✅ | `cmd:develop.copy` (`groups`), `crates/develop/src/presets.rs` | |
 
 ## J. Red eye (EYE)

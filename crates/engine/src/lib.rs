@@ -32,6 +32,7 @@ mod import_move;
 pub mod lcp;
 pub mod library;
 pub mod logging;
+pub mod lr_dust;
 pub mod lr_history;
 pub mod lr_migrate;
 pub mod lr_sync;

@@ -173,6 +173,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         {
             r["lightroomHistory"] = migrate_extras(s, db, &rec, &eo)?;
         }
+        // photos Lightroom cleaned with Dust Removal: our Find Dust Spots in its areas
+        if !opts.collections_only && bool_or(p, "dust", true) {
+            r["dust"] = crate::lr_dust::find_dust(s, &rec, opts.dry_run, 50.0)?;
+        }
         Ok(r)
     };
     if let Some(r) = str_param(p, "records").filter(|r| !r.trim().is_empty()) {
@@ -209,7 +213,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Migrate from Lightroom Classic…",
             ["File"],
             None,
-            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy with the system sqlite3, the catalog itself is never opened) | records?: records JSON (from recordsOut), recordsOut?: path, import?: bool (default true: add the files in place; false when they were imported already), limit?: N (only the first N photos whose files exist), dryRun?: bool, developAll?: bool (also photos never edited in Lightroom), collectionsOnly?: bool (only the collections, for a library migrated already: nothing imported, no photo changed, no presets), onlyNew?: bool (only the photos this run imports — e.g. files an earlier run failed on — photos already in the library are left as they are), lookMap?: {lookName: profileId} (creative looks → our profiles; an imported profile named like the look matches by itself), profiles?: bool (default: as presets; first import the creative profiles — XMP Look profiles with a colour table such as Summer Fields / Nautica, presets carrying one, .cube files — from profileDirs?: [folders] (default: the preset folders below) so photos using them match), presets?: bool (default true), presetDirs?: [folders] (default: Lightroom Settings/{Settings, Develop Presets, Keyword Sets} next to the catalog + Camera Raw / Lightroom preset folders), history?: bool (default true, with a catalog: each photo's Lightroom history steps, kept in <library>/Lightroom History/), snapshots?: bool (default true, with a catalog: Lightroom snapshots → versions)} → {found, missing, missingByRoot, matched, rated, flagged, labelled, keyworded, virtualCopies, develop: {applied, unmapped: [{key, photos}], photosWithUnmapped…}, albums: {albums, smart, sets, quick, skipped}, presets, lightroomHistory: {history: {photos, steps…}, snapshots: {added…}}} — ratings, flags, colour labels, keywords, caption/copyright/creator/location, collections (the catalog's own tree: sets as album folders, smart collections whose rules map, the Quick Collection into ours), virtual copies, develop settings, history, snapshots and Lightroom's edit times; one undo step (+ one for the snapshots)",
+            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy with the system sqlite3, the catalog itself is never opened) | records?: records JSON (from recordsOut), recordsOut?: path, import?: bool (default true: add the files in place; false when they were imported already), limit?: N (only the first N photos whose files exist), dryRun?: bool, developAll?: bool (also photos never edited in Lightroom), collectionsOnly?: bool (only the collections, for a library migrated already: nothing imported, no photo changed, no presets), onlyNew?: bool (only the photos this run imports — e.g. files an earlier run failed on — photos already in the library are left as they are), lookMap?: {lookName: profileId} (creative looks → our profiles; an imported profile named like the look matches by itself), profiles?: bool (default: as presets; first import the creative profiles — XMP Look profiles with a colour table such as Summer Fields / Nautica, presets carrying one, .cube files — from profileDirs?: [folders] (default: the preset folders below) so photos using them match), presets?: bool (default true), presetDirs?: [folders] (default: Lightroom Settings/{Settings, Develop Presets, Keyword Sets} next to the catalog + Camera Raw / Lightroom preset folders), history?: bool (default true, with a catalog: each photo's Lightroom history steps, kept in <library>/Lightroom History/), snapshots?: bool (default true, with a catalog: Lightroom snapshots → versions), dust?: bool (default true: photos Lightroom cleaned with Dust Removal get Find Dust Spots in its areas, see library.lightroomDust)} → {found, missing, missingByRoot, matched, rated, flagged, labelled, keyworded, virtualCopies, develop: {applied, unmapped: [{key, photos}], photosWithUnmapped…}, albums: {albums, smart, sets, quick, skipped}, presets, lightroomHistory: {history: {photos, steps…}, snapshots: {added…}}} — ratings, flags, colour labels, keywords, caption/copyright/creator/location, collections (the catalog's own tree: sets as album folders, smart collections whose rules map, the Quick Collection into ours), virtual copies, develop settings, history, snapshots and Lightroom's edit times; one undo step (+ one for the snapshots)",
             always,
             run
         ),
@@ -221,6 +225,19 @@ pub fn specs() -> Vec<CommandSpec> {
             "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy) | records?: records JSON + extras?: history JSON (read ahead), dryRun?: bool (report only), conflicts?: ask (default: photos whose look changed on both sides stay as they are here and are listed, asked again next time) | lightroom (Lightroom's replace ours, ours kept as the version \"LightCraft before Lightroom sync\") | lightcraft (ours stay) | newest (the side edited last), take?: [photoId] (these conflicts go Lightroom's way), keep?: [photoId] (these stay ours), import?: bool (default true: photos new in Lightroom or whose drive is back), collections?: bool (default true), history?: bool (default true: the changed photos' Lightroom history and snapshots)} — bring what changed in Lightroom Classic since the migration / last sync into this library: new photos, develop settings, ratings / flags / labels / keywords / IPTC text, collection membership, history and snapshots; never overwrites a change made here unless asked; one undo step → {firstSync, since, newPhotos: {found, imported, missingFiles, virtualCopies}, develop: {fromLightroom, keptMine, conflicts, resolved, conflictList: [{photoId, file, lightroomEdited, lightcraftEdited, newer}], unchanged}, metadata: {rating, flag, label, keywords, text, conflicts}, collections: {added, removed, albumsMade}, history}",
             always,
             sync_run
+        ),
+        cmd!(
+            "library.lightroomDust",
+            "Find Dust Spots Where Lightroom Removed Dust",
+            [],
+            None,
+            "{catalog?: path.lrcat (default: the newest in ~/Pictures/Lightroom; read from a copy) | records?: path, sensitivity?: 0..100 (50), dryRun?: bool} — photos Lightroom cleaned with its Dust Removal filter (baked patches we can't use): Find Dust Spots runs on them, keeping the spots inside the areas Lightroom patched; a small patch with nothing found still gets a heal spot; photos edited here and areas that already have a spot are left alone; one undo step → {photos, notInLibrary, keptChangedHere, spots, fromLightroomAreas, failed}",
+            always,
+            |s, p| {
+                let c = "library.lightroomDust";
+                let rec = load_records(p).map_err(|e| bad(c, e))?;
+                crate::lr_dust::find_dust(s, &rec, bool_or(p, "dryRun", false), super::f64_or(p, "sensitivity", 50.0).clamp(0.0, 100.0))
+            }
         ),
         cmd!(
             "library.migrateLightroomHistory",
