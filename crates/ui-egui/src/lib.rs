@@ -10,6 +10,7 @@ pub mod control;
 pub mod credits;
 pub mod display_p3;
 pub mod enhance;
+pub mod export_dialog;
 pub mod export_task;
 pub mod hdr_view;
 pub mod headless;

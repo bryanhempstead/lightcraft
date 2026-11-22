@@ -378,7 +378,7 @@ pub fn default_export_dir() -> String {
 /// [`lightcraft_engine::export::ExportOptions::from_json`], plus `dir` (output folder) or `path`
 /// (exact output file, single photo), `ids` (default: the selection, else the active photo).
 pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
-    use lightcraft_engine::export::{Destination, ExportOptions, export_batch};
+    use lightcraft_engine::export::{Destination, ExportOptions};
     // E05: several presets at once (Lightroom's checked presets), each into a subfolder named
     // after it under `dir`; run one after another
     if let Some(names) = p.get("presets").and_then(Value::as_array) {
@@ -428,25 +428,44 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     // than a silent write into the working directory. No folder at all (e.g. File → Export with
     // Preset): the last export's, else the default.
     let exact = p.get("path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(str::to_string);
-    let dir = match p.get("dir").and_then(Value::as_str) {
-        Some(d) => d.trim().to_string(),
-        None => {
+    use lightcraft_engine::export::ExportTo;
+    let given = p.get("dir").and_then(Value::as_str).map(|d| d.trim().to_string());
+    let dir = match (opts.export_to, given) {
+        // Home / Documents / Pictures / Desktop: that folder
+        (t @ (ExportTo::Home | ExportTo::Documents | ExportTo::Pictures | ExportTo::Desktop), _) => t.resolve(""),
+        // Choose folder later: the front end asks, then passes it
+        (ExportTo::ChooseLater, None) if exact.is_none() => return Err("Export To ▸ Choose folder later: no folder was chosen".into()),
+        (_, Some(d)) => d,
+        (_, None) => {
             let last_dir =
                 app.session.last_export.as_ref().and_then(|l| l.get("dir")).and_then(Value::as_str).map(str::trim).filter(|d| !d.is_empty());
             last_dir.map(str::to_string).unwrap_or_else(default_export_dir)
         }
     };
-    if dir.is_empty() && exact.is_none() && !opts.same_folder {
+    if dir.is_empty() && exact.is_none() && opts.export_to != ExportTo::SameFolder {
         return Err(NO_EXPORT_FOLDER.into());
     }
     let to = Destination { dir: dir.clone(), exact };
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false) && app.services.write_shared.is_some();
+    // the answers to Existing Files ▸ Ask what to do, per photo
+    let resolve = p.get("resolve");
     let out = if background {
-        let items = lightcraft_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
+        let mut items = lightcraft_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
+        lightcraft_engine::export::apply_resolutions(&mut items, resolve);
         crate::export_task::start(app, items, opts, to)?
     } else {
         let w = app.services.write.as_mut().ok_or("no writer")?;
-        let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
+        let mut items = lightcraft_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
+        lightcraft_engine::export::apply_resolutions(&mut items, resolve);
+        let files = lightcraft_engine::export::run_batch(
+            items,
+            &opts,
+            &to,
+            &mut |path, bytes| w(path, bytes),
+            &|path| std::path::Path::new(path).exists(),
+            true,
+            &mut |_, _| true,
+        )?;
         let after = lightcraft_engine::export::post_process(&opts, &files);
         app.session.record_exports(&files);
         let added = lightcraft_engine::export::add_to_catalog(&mut app.session, &opts, &files);
@@ -457,6 +476,7 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     if let Some(o) = last.as_object_mut() {
         o.remove("ids");
         o.remove("path");
+        o.remove("resolve");
         o.insert("dir".into(), json!(dir));
     }
     app.session.last_export = Some(last);

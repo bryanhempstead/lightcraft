@@ -28,6 +28,7 @@ pub mod devices;
 pub mod disks;
 pub mod enhance;
 pub mod export;
+pub mod export_lrtemplate;
 pub mod faces;
 pub mod files;
 pub mod fonts;
@@ -270,6 +271,8 @@ pub struct Session {
     pub last_export: Option<serde_json::Value>,
     /// The user's export presets (built-ins: [`export::builtin_presets`]), persisted in prefs.json.
     pub export_presets: Vec<export::ExportPreset>,
+    /// Folders of the Export dialog's preset list made by the user (also empty ones), persisted in prefs.json.
+    pub export_preset_folders: Vec<String>,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
     pub metadata_presets: Vec<cmd::metadata::MetadataPreset>,
     /// Saved filter-bar settings (`filter.*`), persisted in prefs.json.
@@ -389,6 +392,7 @@ impl Session {
             xmp: sidecar::XmpPrefs::default(),
             last_export: None,
             export_presets: Vec::new(),
+            export_preset_folders: Vec::new(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
             curve_presets: Vec::new(),

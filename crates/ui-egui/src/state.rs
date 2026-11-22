@@ -759,6 +759,10 @@ pub struct UiState {
     pub status: String,
     #[serde(skip)]
     pub dialog: Option<Dialog>,
+    /// A dialog opened from inside another one's body (the Export dialog's Rename… prompt): it
+    /// replaces that dialog once the frame is drawn.
+    #[serde(skip)]
+    pub dialog_next: Option<Dialog>,
 }
 
 /// Settings group ids (`SettingsGroup` serde names) a new preset includes by default: everything
@@ -968,6 +972,24 @@ pub enum Dialog {
         preset_name: String,
         limit_kb: u32,
         dir: String,
+        /// The preset picked in the list (its settings were loaded).
+        #[serde(default)]
+        selected: Option<String>,
+        /// The presets whose checkbox is on: export once with each (multi-batch).
+        #[serde(default)]
+        checked: Vec<String>,
+        /// Export To ▸ Apple Photos: the album (empty = none).
+        #[serde(default)]
+        album: String,
+    },
+    /// Existing Files ▸ Ask what to do: the files already there, asked about one at a time;
+    /// `params` is the export to run once every one is answered (`answers`: photo id → choice).
+    ExportExisting {
+        params: serde_json::Value,
+        existing: Vec<(u64, String)>,
+        at: usize,
+        answers: serde_json::Map<String, serde_json::Value>,
+        apply_all: bool,
     },
     /// Photo Merge (HDR / Panorama / HDR Panorama) options; the preview lives in the app.
     Merge {
@@ -1164,6 +1186,7 @@ impl Default for UiState {
             rechecked_library: None,
             status: String::new(),
             dialog: None,
+            dialog_next: None,
         }
     }
 }

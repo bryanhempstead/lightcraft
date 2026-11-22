@@ -70,16 +70,20 @@ impl ExportFormat {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ResizeMode {
-    /// `value` = long edge in pixels.
+    /// `value` = long edge.
     #[default]
     LongEdge,
-    /// `value` = short edge in pixels.
+    /// `value` = short edge.
     ShortEdge,
-    /// `value` = width in pixels.
+    /// `value` = width.
     Width,
-    /// `value` = height in pixels.
+    /// `value` = height.
     Height,
-    /// Fit inside `value × height` pixels, whichever way round the photo is (long edge ≤ the larger).
+    /// Lightroom's Width & Height: fit inside `value` wide × `height` tall as the photo stands
+    /// (400 × 600 makes a 400 × 600 portrait or a 400 × 267 landscape); 0 leaves that side free.
+    WidthHeight,
+    /// Lightroom's Dimensions: fit inside `value × height` whichever way round the photo is (the
+    /// larger value on the long edge: a 400 × 600 portrait or a 600 × 400 landscape).
     Dimensions,
     /// `value` = megapixels.
     Megapixels,
@@ -87,21 +91,90 @@ pub enum ResizeMode {
     Percent,
 }
 
-/// Output size: a mode, its value(s) and whether smaller photos are left at their own size.
+impl ResizeMode {
+    /// The Resize to Fit menu: Lightroom's six in its order, then LightCraft's Width / Height only.
+    pub const ALL: [(ResizeMode, &'static str); 8] = [
+        (ResizeMode::WidthHeight, "Width & Height"),
+        (ResizeMode::Dimensions, "Dimensions"),
+        (ResizeMode::LongEdge, "Long Edge"),
+        (ResizeMode::ShortEdge, "Short Edge"),
+        (ResizeMode::Megapixels, "Megapixels"),
+        (ResizeMode::Percent, "Percentage"),
+        (ResizeMode::Width, "Width only"),
+        (ResizeMode::Height, "Height only"),
+    ];
+
+    pub fn label(self) -> &'static str {
+        Self::ALL.iter().find(|(m, _)| *m == self).map_or("Long Edge", |(_, l)| l)
+    }
+
+    /// Whether the mode's values are lengths (pixels, inches or cm), not megapixels / percent.
+    pub fn is_length(self) -> bool {
+        !matches!(self, Self::Megapixels | Self::Percent)
+    }
+
+    /// Whether the mode takes two values (`value` and `height`).
+    pub fn is_pair(self) -> bool {
+        matches!(self, Self::WidthHeight | Self::Dimensions)
+    }
+}
+
+/// The unit of a [`Resize`]'s lengths (Lightroom's pixels / in / cm), converted at the export's
+/// resolution.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SizeUnit {
+    #[default]
+    Pixels,
+    Inches,
+    Cm,
+}
+
+impl SizeUnit {
+    pub const ALL: [(SizeUnit, &'static str); 3] = [(SizeUnit::Pixels, "pixels"), (SizeUnit::Inches, "in"), (SizeUnit::Cm, "cm")];
+
+    pub fn label(self) -> &'static str {
+        Self::ALL.iter().find(|(u, _)| *u == self).map_or("pixels", |(_, l)| l)
+    }
+
+    /// Pixels in one of this unit at `ppi`.
+    pub fn pixels_per(self, ppi: f64) -> f64 {
+        match self {
+            Self::Pixels => 1.0,
+            Self::Inches => ppi,
+            Self::Cm => ppi / 2.54,
+        }
+    }
+}
+
+/// The unit the Resolution field shows (files always store pixels per inch).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResolutionUnit {
+    /// pixels per inch
+    #[default]
+    Inch,
+    /// pixels per cm
+    Cm,
+}
+
+/// Output size: a mode, its value(s) and unit, and whether smaller photos keep their own size.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Resize {
     pub mode: ResizeMode,
     pub value: f32,
-    /// Second dimension for [`ResizeMode::Dimensions`].
-    pub height: u32,
+    /// Second value for [`ResizeMode::WidthHeight`] (height) and [`ResizeMode::Dimensions`].
+    pub height: f32,
     /// Never upscale past the photo's own (cropped) size.
     pub dont_enlarge: bool,
+    /// The unit of `value` / `height` in the length modes.
+    pub unit: SizeUnit,
 }
 
 impl Default for Resize {
     fn default() -> Self {
-        Self { mode: ResizeMode::LongEdge, value: 2048.0, height: 2048, dont_enlarge: true }
+        Self { mode: ResizeMode::LongEdge, value: 2048.0, height: 2048.0, dont_enlarge: true, unit: SizeUnit::Pixels }
     }
 }
 
@@ -110,19 +183,38 @@ impl Resize {
         Self { value: px as f32, ..Default::default() }
     }
 
-    /// Scale factor from a `w × h` (cropped, full-resolution) photo to the output.
+    /// This size with its lengths in pixels at `ppi` (inches / cm converted; pixels, megapixels
+    /// and percent as they are).
+    pub fn in_pixels(&self, ppi: u16) -> Self {
+        if self.unit == SizeUnit::Pixels || !self.mode.is_length() {
+            return Self { unit: SizeUnit::Pixels, ..*self };
+        }
+        let k = self.unit.pixels_per(f64::from(ppi.max(1)));
+        let px = |v: f32| (f64::from(v) * k).round().min(1.0e6) as f32;
+        Self { value: px(self.value), height: px(self.height), unit: SizeUnit::Pixels, ..*self }
+    }
+
+    /// Scale factor from a `w × h` (cropped, full-resolution) photo to the output (lengths in
+    /// pixels: see [`Resize::in_pixels`]).
     pub fn scale(&self, w: f64, h: f64) -> f64 {
         let (w, h) = (w.max(1.0), h.max(1.0));
         let (long, short) = (w.max(h), w.min(h));
-        let v = (self.value as f64).max(0.0);
+        let v = f64::from(self.value).max(0.0);
+        let v2 = f64::from(self.height).max(0.0);
         let k = match self.mode {
             ResizeMode::LongEdge => v / long,
             ResizeMode::ShortEdge => v / short,
             ResizeMode::Width => v / w,
             ResizeMode::Height => v / h,
+            ResizeMode::WidthHeight => match (v > 0.0, v2 > 0.0) {
+                (true, true) => (v / w).min(v2 / h),
+                (true, false) => v / w,
+                (false, true) => v2 / h,
+                (false, false) => 1.0,
+            },
             ResizeMode::Dimensions => {
-                let (a, b) = (v, self.height as f64);
-                (a.max(b) / long).min(a.min(b) / short)
+                let (a, b) = (v.max(v2), v.min(v2));
+                if b > 0.0 { (a / long).min(b / short) } else { a / long }
             }
             ResizeMode::Megapixels => (v * 1e6 / (w * h)).sqrt(),
             ResizeMode::Percent => v / 100.0,
@@ -149,24 +241,131 @@ pub enum Conflict {
     Overwrite,
     /// Leave the existing file and skip the photo.
     Skip,
+    /// Lightroom's "Ask what to do": the desktop app lists the files that exist before it starts
+    /// ([`existing_targets`]) and asks per file (new name, overwrite, skip), passing the answers as
+    /// `resolve`; with nobody to ask (CLI, MCP) a taken name gets a new one, as with `Unique`.
+    Ask,
 }
 
-/// A named set of `app.export` params.
+impl Conflict {
+    /// Lightroom's Existing Files menu, in its order.
+    pub const ALL: [(Conflict, &'static str); 4] = [
+        (Conflict::Ask, "Ask what to do"),
+        (Conflict::Unique, "Choose a new name for the exported file"),
+        (Conflict::Overwrite, "Overwrite WITHOUT WARNING"),
+        (Conflict::Skip, "Skip"),
+    ];
+
+    pub fn label(self) -> &'static str {
+        Self::ALL.iter().find(|(c, _)| *c == self).map_or("Ask what to do", |(_, l)| l)
+    }
+}
+
+/// A named set of `app.export` params, in a folder of the Export dialog's preset list.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ExportPreset {
     pub name: String,
     pub params: serde_json::Value,
+    /// The preset list's folder (empty = User Presets).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub folder: String,
 }
 
-/// The built-in export presets (File → Export with Preset).
+/// The folder of the user's presets that aren't in a folder of their own.
+pub const USER_PRESETS: &str = "User Presets";
+/// The folder of Lightroom's built-in presets.
+pub const LIGHTROOM_PRESETS: &str = "Lightroom Presets";
+/// The folder of LightCraft's own built-in presets.
+pub const LIGHTCRAFT_PRESETS: &str = "LightCraft Presets";
+
+impl ExportPreset {
+    /// The folder the preset list shows it in.
+    pub fn folder_name(&self) -> &str {
+        if self.folder.trim().is_empty() { USER_PRESETS } else { self.folder.trim() }
+    }
+}
+
+/// The built-in export presets (File → Export with Preset): Lightroom's four (Burn Full-Sized
+/// JPEGs writes to the hard drive here: no disc burning), then LightCraft's.
 pub fn builtin_presets() -> Vec<ExportPreset> {
-    let p = |name: &str, params: serde_json::Value| ExportPreset { name: name.into(), params };
+    let p = |folder: &str, name: &str, params: serde_json::Value| ExportPreset { name: name.into(), params, folder: folder.into() };
+    let (lr, lc) = (LIGHTROOM_PRESETS, LIGHTCRAFT_PRESETS);
     vec![
-        p("JPEG (Small)", serde_json::json!({"format": "jpeg", "quality": 85, "longEdge": 2048, "colorSpace": "srgb"})),
-        p("JPEG (Large)", serde_json::json!({"format": "jpeg", "quality": 92, "longEdge": 0, "colorSpace": "srgb"})),
-        p("Original + Settings", serde_json::json!({"format": "original"})),
-        p("DNG", serde_json::json!({"format": "dng"})),
+        p(
+            lr,
+            "Burn Full-Sized JPEGs",
+            serde_json::json!({"format": "jpeg", "quality": 100, "longEdge": 0, "colorSpace": "srgb", "ppi": 240,
+                "exportTo": "chooseLater", "subfolder": "LightCraft Burned Exports", "service": "disc"}),
+        ),
+        p(lr, "Export to DNG", serde_json::json!({"format": "dng", "exportTo": "chooseLater", "after": "nothing"})),
+        p(
+            lr,
+            "For Email",
+            serde_json::json!({"format": "jpeg", "quality": 60, "longEdge": 640, "ppi": 72, "colorSpace": "srgb", "service": "email",
+                "metadata": "copyrightContact"}),
+        ),
+        p(
+            lr,
+            "For Email (Hard Drive)",
+            serde_json::json!({"format": "jpeg", "quality": 60, "resize": {"mode": "widthHeight", "value": 640, "height": 640}, "ppi": 72,
+                "colorSpace": "srgb", "exportTo": "chooseLater", "after": "showInFinder"}),
+        ),
+        p(lc, "JPEG (Small)", serde_json::json!({"format": "jpeg", "quality": 85, "longEdge": 2048, "colorSpace": "srgb"})),
+        p(lc, "JPEG (Large)", serde_json::json!({"format": "jpeg", "quality": 92, "longEdge": 0, "colorSpace": "srgb"})),
+        p(lc, "Original + Settings", serde_json::json!({"format": "original"})),
+        p(lc, "DNG", serde_json::json!({"format": "dng"})),
     ]
+}
+
+/// The Export dialog's Export To menu at the top: where the files go once written.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportService {
+    /// Hard Drive: the files are the result.
+    #[default]
+    HardDrive,
+    /// Email: written to a temporary folder and attached to a new mail message (desktop).
+    Email,
+    /// CD/DVD: LightCraft burns no discs; the files go to the folder chosen, ready to burn.
+    Disc,
+    /// Apple Photos (macOS): written, then imported into Photos.
+    Photos,
+}
+
+impl ExportService {
+    pub const ALL: [(ExportService, &'static str); 4] =
+        [(ExportService::HardDrive, "Hard Drive"), (ExportService::Email, "Email"), (ExportService::Disc, "CD/DVD"), (ExportService::Photos, "Apple Photos")];
+
+    pub fn label(self) -> &'static str {
+        Self::ALL.iter().find(|(s, _)| *s == self).map_or("Hard Drive", |(_, l)| l)
+    }
+}
+
+/// Adobe Photoshop as installed on this Mac (`/Applications/Adobe Photoshop …/Adobe Photoshop ….app`,
+/// the newest by name), for Post-Processing ▸ Open in Adobe Photoshop.
+pub fn photoshop_app() -> Option<String> {
+    photoshop_in(std::path::Path::new("/Applications"))
+}
+
+/// [`photoshop_app`] under `apps`.
+pub fn photoshop_in(apps: &std::path::Path) -> Option<String> {
+    let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(apps)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("Adobe Photoshop")))
+        .filter_map(|p| {
+            if p.extension().is_some_and(|x| x == "app") {
+                return Some(p);
+            }
+            let rd = std::fs::read_dir(&p).ok()?;
+            rd.flatten().map(|e| e.path()).find(|a| {
+                a.extension().is_some_and(|x| x == "app") && a.file_name().is_some_and(|n| n.to_string_lossy().starts_with("Adobe Photoshop"))
+            })
+        })
+        .collect();
+    found.sort();
+    found.pop().map(|p| p.to_string_lossy().to_string())
 }
 
 /// Output sharpening target (applied after resizing, in display-encoded values).
@@ -541,20 +740,50 @@ fn logo_coverage(width: usize, height: usize, wm: &Watermark, mut blend_px: impl
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MetadataPolicy {
-    /// Everything we know: camera, capture settings, lens, location, title, caption, keywords, copyright.
+    /// All Metadata: camera, capture settings, lens, location, title, caption, keywords, copyright.
     #[default]
     All,
-    /// Everything except camera/lens make, model and capture settings.
+    /// All Except Camera Raw Info. LightCraft never embeds its develop settings in a rendered
+    /// file (a re-imported export would be edited twice), so this writes what `All` does.
+    AllExceptCameraRaw,
+    /// All Except Camera & Camera Raw Info: no camera / lens make, model or capture settings.
     AllExceptCamera,
-    /// Copyright and creator only.
+    /// Copyright & Contact Info Only: the copyright fields and the creator.
+    CopyrightContact,
+    /// Copyright Only: notice, status, usage terms and info URL.
     Copyright,
-    /// Nothing (the sRGB profile is still embedded).
+    /// Nothing (the colour profile is still embedded). Not in Lightroom's menu.
     None,
+}
+
+impl MetadataPolicy {
+    /// The Metadata section's Include menu: Lightroom's five in its order, then LightCraft's None.
+    pub const ALL: [(MetadataPolicy, &'static str); 6] = [
+        (MetadataPolicy::Copyright, "Copyright Only"),
+        (MetadataPolicy::CopyrightContact, "Copyright & Contact Info Only"),
+        (MetadataPolicy::AllExceptCameraRaw, "All Except Camera Raw Info"),
+        (MetadataPolicy::AllExceptCamera, "All Except Camera & Camera Raw Info"),
+        (MetadataPolicy::All, "All Metadata"),
+        (MetadataPolicy::None, "None (LightCraft)"),
+    ];
+
+    pub fn label(self) -> &'static str {
+        Self::ALL.iter().find(|(m, _)| *m == self).map_or("All Metadata", |(_, l)| l)
+    }
+
+    /// Whether the policy writes more than copyright / contact info (the person, location and
+    /// keyword options apply).
+    pub fn is_full(self) -> bool {
+        matches!(self, Self::All | Self::AllExceptCameraRaw | Self::AllExceptCamera)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ExportOptions {
+    /// Export To (the dialog's top menu): Hard Drive, Email, CD/DVD or Apple Photos. The engine
+    /// writes files either way; the desktop app hands them to Mail / Photos.
+    pub service: ExportService,
     pub format: ExportFormat,
     /// 1–100 (JPEG, AVIF).
     pub quality: u8,
@@ -562,6 +791,8 @@ pub struct ExportOptions {
     pub resize: Option<Resize>,
     /// Print resolution written into the file (pixels per inch).
     pub ppi: u16,
+    /// The unit the dialog shows the resolution in (Lightroom's pixels per inch / per cm).
+    pub resolution_unit: ResolutionUnit,
     /// JPEG only: largest quality whose file fits in this many KB.
     pub limit_kb: Option<u32>,
     pub sharpen: SharpenFor,
@@ -583,8 +814,10 @@ pub struct ExportOptions {
     /// [`AfterExport::OpenInApp`]: the application (name or path; empty = each file's default
     /// app) or an Export Action (an app or script in the Export Actions folder).
     pub after_app: String,
-    /// Export To ▸ Same folder as original photo (each file next to its original; `dir` unused).
-    pub same_folder: bool,
+    /// Export Location ▸ Export To: a specific folder (`dir`), Choose folder later (asked when the
+    /// export starts), Same folder as original photo (`dir` unused), or a standard folder (Home,
+    /// Documents, Pictures, Desktop). `sameFolder: true` (older presets) reads as `sameFolder`.
+    pub export_to: ExportTo,
     /// Add to This Catalog: the exported files are imported (in place) once written.
     pub add_to_catalog: bool,
     /// With `add_to_catalog`: stack each one with its original, above or below it.
@@ -655,6 +888,63 @@ impl HdrCurve {
             Self::Pq => lightcraft_codecs::HdrTransfer::Pq,
             Self::Hlg => lightcraft_codecs::HdrTransfer::Hlg,
         }
+    }
+}
+
+/// Export Location ▸ Export To (Lightroom's list, in its order).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExportTo {
+    /// The folder the export names (`dir`).
+    #[default]
+    SpecificFolder,
+    /// Choose folder later (useful for presets): the folder is asked for when the export starts.
+    ChooseLater,
+    /// Same folder as original photo.
+    SameFolder,
+    Home,
+    Documents,
+    Pictures,
+    Desktop,
+}
+
+impl ExportTo {
+    /// Every choice with Lightroom's label, in its menu order.
+    pub const ALL: [(ExportTo, &'static str); 7] = [
+        (ExportTo::SpecificFolder, "Specific folder"),
+        (ExportTo::ChooseLater, "Choose folder later (useful for presets)"),
+        (ExportTo::SameFolder, "Same folder as original photo"),
+        (ExportTo::Home, "Home folder"),
+        (ExportTo::Documents, "Documents folder"),
+        (ExportTo::Pictures, "Pictures folder"),
+        (ExportTo::Desktop, "Desktop"),
+    ];
+
+    pub fn label(self) -> &'static str {
+        Self::ALL.iter().find(|(t, _)| *t == self).map_or("Specific folder", |(_, l)| l)
+    }
+
+    /// The standard folder this choice names (Home, Documents, Pictures, Desktop) under `home`.
+    pub fn standard_dir_in(self, home: &std::path::Path) -> Option<std::path::PathBuf> {
+        match self {
+            Self::Home => Some(home.to_path_buf()),
+            Self::Documents => Some(home.join("Documents")),
+            Self::Pictures => Some(home.join("Pictures")),
+            Self::Desktop => Some(home.join("Desktop")),
+            Self::SpecificFolder | Self::ChooseLater | Self::SameFolder => None,
+        }
+    }
+
+    /// [`ExportTo::standard_dir_in`] the user's home folder (`HOME`, `USERPROFILE` on Windows).
+    pub fn standard_dir(self) -> Option<String> {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(std::path::PathBuf::from)?;
+        self.standard_dir_in(&home).map(|d| d.to_string_lossy().to_string())
+    }
+
+    /// The folder an export writes to: the standard folder this names, else `dir` (a specific or
+    /// chosen folder; unused for the same folder as the original).
+    pub fn resolve(self, dir: &str) -> String {
+        self.standard_dir().unwrap_or_else(|| dir.trim().to_string())
     }
 }
 
@@ -838,10 +1128,12 @@ pub fn post_process(o: &ExportOptions, files: &[serde_json::Value]) -> Option<se
 impl Default for ExportOptions {
     fn default() -> Self {
         Self {
+            service: ExportService::HardDrive,
             format: ExportFormat::Jpeg,
             quality: 90,
             resize: None,
             ppi: 240,
+            resolution_unit: ResolutionUnit::Inch,
             limit_kb: None,
             sharpen: SharpenFor::None,
             sharpen_amount: SharpenAmount::Standard,
@@ -851,7 +1143,7 @@ impl Default for ExportOptions {
             ext_case: crate::rename::ExtCase::Keep,
             after: AfterExport::Nothing,
             after_app: String::new(),
-            same_folder: false,
+            export_to: ExportTo::SpecificFolder,
             add_to_catalog: false,
             add_to_stack: None,
             subfolder: String::new(),
@@ -876,10 +1168,11 @@ impl Default for ExportOptions {
 
 /// The `app.export` params that are not export options: which photos, where to, a preset to start
 /// from, and the desktop app's background flag.
-pub const TARGET_PARAMS: &[&str] = &["id", "ids", "path", "dir", "preset", "background"];
+pub const TARGET_PARAMS: &[&str] = &["id", "ids", "path", "dir", "preset", "background", "resolve"];
 
 /// The export option params [`ExportOptions::from_json`] reads (and [`ExportOptions::to_json`] writes).
 pub const OPTION_PARAMS: &[&str] = &[
+    "service",
     "format",
     "iccProfile",
     "quality",
@@ -892,6 +1185,7 @@ pub const OPTION_PARAMS: &[&str] = &[
     "percent",
     "dontEnlarge",
     "ppi",
+    "resolutionUnit",
     "limitKb",
     "sharpen",
     "sharpenAmount",
@@ -902,6 +1196,7 @@ pub const OPTION_PARAMS: &[&str] = &[
     "after",
     "afterApp",
     "sameFolder",
+    "exportTo",
     "addToCatalog",
     "addToStack",
     "subfolder",
@@ -920,6 +1215,15 @@ pub const OPTION_PARAMS: &[&str] = &[
     "hdrCompat",
     "video",
 ];
+
+/// Lightroom's Simple Copyright Watermark: each photo's Copyright field as a text watermark (none
+/// on a photo whose field is empty).
+pub fn simple_copyright_watermark() -> Watermark {
+    Watermark { text: SIMPLE_COPYRIGHT.into(), ..Default::default() }
+}
+
+/// The text of [`simple_copyright_watermark`].
+pub const SIMPLE_COPYRIGHT: &str = "{copyright}";
 
 /// The keys of a `watermark` object ([`Watermark`], camelCase).
 pub const WATERMARK_PARAMS: &[&str] = &["text", "vertical", "size", "opacity", "anchor", "inset", "color", "shadow", "image", "imageWidth"];
@@ -1026,6 +1330,8 @@ impl ExportOptions {
                 "quality" => {
                     int(k, v, 1, 100)?;
                 }
+                "resolutionUnit" => one_of(k, v, &["inch", "cm"])?,
+                "service" => one_of(k, v, &["hardDrive", "email", "disc", "photos"])?,
                 "ppi" => {
                     int(k, v, 1, u16::MAX as i64)?;
                 }
@@ -1051,9 +1357,9 @@ impl ExportOptions {
                     num(k, v, 0.0, 1.0e9)?;
                 }
                 "resize" => {
-                    let Some(r) = v.as_object() else { return Err(bad(format!("`{k}` must be an object {{mode, value, height?, dontEnlarge?}}"))) };
-                    if let Some(x) = r.keys().find(|x| !matches!(x.as_str(), "mode" | "value" | "height" | "dontEnlarge")) {
-                        return Err(bad(unknown_key("resize key", x, &["mode", "value", "height", "dontEnlarge"])));
+                    let Some(r) = v.as_object() else { return Err(bad(format!("`{k}` must be an object {{mode, value, height?, dontEnlarge?, unit?}}"))) };
+                    if let Some(x) = r.keys().find(|x| !matches!(x.as_str(), "mode" | "value" | "height" | "dontEnlarge" | "unit")) {
+                        return Err(bad(unknown_key("resize key", x, &["mode", "value", "height", "dontEnlarge", "unit"])));
                     }
                     serde_json::from_value::<Resize>(v.clone()).map_err(|e| bad(format!("`{k}`: {e}")))?;
                 }
@@ -1062,6 +1368,7 @@ impl ExportOptions {
                 }
                 "extCase" => one_of(k, v, &["keep", "lower", "upper"])?,
                 "after" => one_of(k, v, &["nothing", "showInFinder", "openInApp"])?,
+                "exportTo" => one_of(k, v, &["specificFolder", "chooseLater", "sameFolder", "home", "documents", "pictures", "desktop"])?,
                 "sameFolder" | "addToCatalog" => {
                     boolean(k, v)?;
                 }
@@ -1076,13 +1383,21 @@ impl ExportOptions {
                 "sharpen" => one_of(k, v, &["none", "screen", "matte", "glossy"])?,
                 "hdrTransfer" => one_of(k, v, &["pq", "hlg"])?,
                 "sharpenAmount" => one_of(k, v, &["low", "standard", "high"])?,
-                "conflict" => one_of(k, v, &["unique", "overwrite", "skip"])?,
+                "conflict" => one_of(k, v, &["unique", "overwrite", "skip", "ask"])?,
+                "resolve" => {
+                    let ok = v.as_object().is_some_and(|o| {
+                        o.iter().all(|(id, c)| id.parse::<u64>().is_ok() && matches!(c.as_str(), Some("unique" | "overwrite" | "skip")))
+                    });
+                    if !ok {
+                        return Err(bad(format!("`{k}` must be an object {{\"<photo id>\": unique|overwrite|skip}}")));
+                    }
+                }
                 "tiffCompression" => one_of(k, v, &["none", "lzw", "zip", "deflate"])?,
                 "dngCompression" => {
                     serde_json::from_value::<DngCompression>(v.clone())
                         .map_err(|_| bad(format!("`{k}` must be one of lossless|deflate|uncompressed")))?;
                 }
-                "metadata" => one_of(k, v, &["all", "allExceptCamera", "copyright", "none"])?,
+                "metadata" => one_of(k, v, &["all", "allExceptCameraRaw", "allExceptCamera", "copyrightContact", "copyright", "none"])?,
                 "colorSpace" => {
                     if OutputSpace::parse(string(cmd, k, v)?).is_none() {
                         return Err(bad(format!("`{k}` must be one of srgb|displayP3|adobeRgb|proPhoto|rec2020")));
@@ -1173,10 +1488,12 @@ impl ExportOptions {
             p.get(k).cloned().and_then(|v| serde_json::from_value(v).ok())
         }
         Self {
+            service: enm(p, "service").unwrap_or(d.service),
             format: s("format").and_then(ExportFormat::parse).unwrap_or(d.format),
             quality: u("quality").map_or(d.quality, |q| q.clamp(1, 100) as u8),
             resize: Self::resize_from_json(p),
             ppi: u("ppi").filter(|v| *v > 0).map_or(d.ppi, |v| v.min(u16::MAX as u64) as u16),
+            resolution_unit: enm(p, "resolutionUnit").unwrap_or(d.resolution_unit),
             limit_kb: u("limitKb").filter(|v| *v > 0).map(|v| v.min(u32::MAX as u64) as u32),
             sharpen: enm(p, "sharpen").unwrap_or(d.sharpen),
             sharpen_amount: enm(p, "sharpenAmount").unwrap_or(d.sharpen_amount),
@@ -1186,7 +1503,11 @@ impl ExportOptions {
             ext_case: s("extCase").and_then(crate::rename::ExtCase::parse).unwrap_or(d.ext_case),
             after: enm(p, "after").unwrap_or(d.after),
             after_app: s("afterApp").map_or(d.after_app, |v| v.trim().to_string()),
-            same_folder: p.get("sameFolder").and_then(Value::as_bool).unwrap_or(d.same_folder),
+            export_to: match (enm::<ExportTo>(p, "exportTo"), p.get("sameFolder").and_then(Value::as_bool)) {
+                (Some(t), _) => t,
+                (None, Some(true)) => ExportTo::SameFolder,
+                (None, _) => d.export_to,
+            },
             add_to_catalog: p.get("addToCatalog").and_then(Value::as_bool).unwrap_or(d.add_to_catalog),
             add_to_stack: enm(p, "addToStack").or(d.add_to_stack),
             subfolder: s("subfolder").map_or(d.subfolder, |v| v.trim().replace(['\\', ':', '\0'], "_")),
@@ -1230,9 +1551,9 @@ impl ExportOptions {
             let r: Resize = serde_json::from_value(r.clone()).ok()?;
             return (r.value > 0.0).then_some(Resize { dont_enlarge: p.get("dontEnlarge").and_then(Value::as_bool).unwrap_or(r.dont_enlarge), ..r });
         }
-        let r = |mode, value: f64| Resize { mode, value: value.min(65_535.0) as f32, height: 0, dont_enlarge };
+        let r = |mode, value: f64| Resize { mode, value: value.min(65_535.0) as f32, height: 0.0, dont_enlarge, unit: SizeUnit::Pixels };
         Some(match (f("width"), f("height")) {
-            (Some(w), Some(h)) => Resize { height: h.min(65_535.0) as u32, ..r(ResizeMode::Dimensions, w) },
+            (Some(w), Some(h)) => Resize { height: h.min(65_535.0) as f32, ..r(ResizeMode::Dimensions, w) },
             (Some(w), None) => r(ResizeMode::Width, w),
             (None, Some(h)) => r(ResizeMode::Height, h),
             (None, None) => {
@@ -1793,8 +2114,9 @@ pub fn export_metadata_with(cat: Option<&lightcraft_catalog::Catalog>, photo: &l
     };
     match o.metadata {
         MetadataPolicy::None => return None,
-        MetadataPolicy::Copyright => return Some(out),
-        MetadataPolicy::All | MetadataPolicy::AllExceptCamera => {}
+        MetadataPolicy::Copyright => return Some(Metadata { artist: None, ..out }),
+        MetadataPolicy::CopyrightContact => return Some(out),
+        MetadataPolicy::All | MetadataPolicy::AllExceptCameraRaw | MetadataPolicy::AllExceptCamera => {}
     }
     out.title = text(&m.title);
     out.caption = text(&m.caption);
@@ -1822,7 +2144,7 @@ pub fn export_metadata_with(cat: Option<&lightcraft_catalog::Catalog>, photo: &l
     if !o.remove_location && !cat.is_some_and(|c| crate::map::in_private_location(c, m.gps)) {
         out.gps = m.gps.map(|(latitude, longitude)| Gps { latitude, longitude, altitude: None });
     }
-    if o.metadata == MetadataPolicy::All {
+    if matches!(o.metadata, MetadataPolicy::All | MetadataPolicy::AllExceptCameraRaw) {
         (out.make, out.model) = split_camera(&m.camera);
         out.lens_model = text(&m.lens);
         out.focal_length = m.focal_mm.map(f64::from);
@@ -1895,8 +2217,92 @@ pub struct Exported {
 pub fn output_size(p: &lightcraft_catalog::Photo, o: &ExportOptions) -> (usize, usize) {
     let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
     match &o.resize {
-        Some(r) => r.apply(w, h),
+        Some(r) => r.in_pixels(o.ppi).apply(w, h),
         None => ((w.round() as usize).max(1), (h.round() as usize).max(1)),
+    }
+}
+
+/// The Export dialog's before-export preview (LightCraft): photo `id` exported small (long edge
+/// at most `max_edge`) with everything `o` does to it — size, sharpening, watermark — once as
+/// `o`'s format (to estimate the file size) and once as an 8-bit sRGB PNG (to show). Prepared
+/// here; [`PreviewJob::run`] renders on any thread.
+pub struct PreviewJob {
+    /// The full-size output (`o`'s), in pixels.
+    pub size: (usize, usize),
+    /// Output pixels per preview pixel (for the size estimate).
+    pub area_ratio: f64,
+    sized: Option<PreparedExport>,
+    shown: PreparedExport,
+    limit_kb: Option<u32>,
+    /// An Original / DNG export: the file's own size (bytes) is the estimate.
+    file_bytes: Option<u64>,
+}
+
+/// What [`PreviewJob::run`] made: the preview PNG and the estimated file size.
+pub struct Preview {
+    pub png: Vec<u8>,
+    pub width: usize,
+    pub height: usize,
+    /// Estimated bytes of the exported file (`None`: no estimate for this format).
+    pub estimated_bytes: Option<u64>,
+}
+
+/// Set up a [`PreviewJob`] for photo `id` (`None` for a video).
+pub fn preview_job(session: &mut crate::Session, id: lightcraft_catalog::PhotoId, o: &ExportOptions, max_edge: u32) -> Result<Option<PreviewJob>, String> {
+    let p = session.catalog.photo(id).ok_or("no such photo")?;
+    if p.kind == lightcraft_catalog::MediaKind::Video {
+        return Ok(None);
+    }
+    let file_bytes = (!o.format.is_rendered()).then_some(p.file_size);
+    let size = if o.format.is_rendered() { output_size(p, o) } else { (p.width.max(1) as usize, p.height.max(1) as usize) };
+    let long = size.0.max(size.1).max(1) as f64;
+    let small_long = long.min(f64::from(max_edge.max(16))).round();
+    let k = small_long / long;
+    let (pw, ph) = (((size.0 as f64 * k).round()).max(1.0), ((size.1 as f64 * k).round()).max(1.0));
+    let area_ratio = (size.0 as f64 * size.1 as f64) / (pw * ph);
+    let small = Resize { mode: ResizeMode::LongEdge, value: small_long as f32, height: 0.0, dont_enlarge: false, unit: SizeUnit::Pixels };
+    let base = if o.format.is_rendered() { o.clone() } else { ExportOptions { format: ExportFormat::Jpeg, ..o.clone() } };
+    let sized_opts = ExportOptions { resize: Some(small), limit_kb: None, after: AfterExport::Nothing, add_to_catalog: false, ..base.clone() };
+    let shown_opts = ExportOptions {
+        format: ExportFormat::Png,
+        bit_depth: Some(8),
+        color_space: OutputSpace::Srgb,
+        icc_profile: None,
+        hdr: false,
+        metadata: MetadataPolicy::None,
+        ..sized_opts.clone()
+    };
+    let sized = if o.format.is_rendered() { Some(prepare_export(session, id, &sized_opts, 1)?) } else { None };
+    let shown = prepare_export(session, id, &shown_opts, 1)?;
+    Ok(Some(PreviewJob { size, area_ratio, sized, shown, limit_kb: o.limit_kb.filter(|_| o.format == ExportFormat::Jpeg), file_bytes }))
+}
+
+impl PreviewJob {
+    pub fn run(self) -> Result<Preview, String> {
+        let shown = self.shown.run()?;
+        let estimated_bytes = match (self.file_bytes, self.sized) {
+            (Some(b), _) => Some(b),
+            (None, Some(s)) => {
+                let e = s.run()?;
+                let est = (e.bytes.len() as f64 * self.area_ratio).round() as u64;
+                Some(match self.limit_kb {
+                    Some(kb) => est.min(u64::from(kb) * 1024),
+                    None => est,
+                })
+            }
+            (None, None) => None,
+        };
+        Ok(Preview { width: shown.width, height: shown.height, png: shown.bytes, estimated_bytes })
+    }
+}
+
+/// `1.2 MB`, `640 KB`, `12 bytes`.
+pub fn human_bytes(b: u64) -> String {
+    match b {
+        0..1024 => format!("{b} bytes"),
+        1024..1_048_576 => format!("{:.0} KB", b as f64 / 1024.0),
+        1_048_576..1_073_741_824 => format!("{:.1} MB", b as f64 / 1_048_576.0),
+        _ => format!("{:.2} GB", b as f64 / 1_073_741_824.0),
     }
 }
 
@@ -1914,9 +2320,71 @@ pub struct PreparedExport {
     pub file_name: String,
     /// The original's folder (Export To ▸ Same folder as original photo).
     pub source_dir: Option<String>,
+    /// What to do if this photo's file exists, answered for it (Existing Files ▸ Ask what to do);
+    /// `None` = the batch's policy.
+    pub conflict: Option<Conflict>,
     work: Work,
     /// The library's originals, which [`run_batch`] never writes over (shared by a batch).
     guard: std::sync::Arc<crate::originals::OriginalGuard>,
+}
+
+impl PreparedExport {
+    /// The file names this export writes besides its main file's (the XMP sidecar of an
+    /// `Original` export), as extensions.
+    fn sidecar_exts(&self) -> &'static [&'static str] {
+        match self.work {
+            Work::File { dng: None, .. } => &["xmp"],
+            _ => &[],
+        }
+    }
+}
+
+/// The folder photo `item` is written to: the batch's (with the subfolder), or with Export To ▸
+/// Same folder as original photo the original's.
+fn target_dir(item_source: Option<&str>, o: &ExportOptions, to: &Destination) -> String {
+    let join = |a: &str, b: &str| if a.is_empty() { b.to_string() } else { format!("{}/{b}", a.trim_end_matches('/')) };
+    let base = match item_source.filter(|_| o.export_to == ExportTo::SameFolder) {
+        Some(src) => src.to_string(),
+        None => to.dir.clone(),
+    };
+    if o.subfolder.is_empty() { base } else { join(&base, &o.subfolder) }
+}
+
+/// Existing Files ▸ Ask what to do: the photos whose file (or sidecar) is already there, as
+/// `(photo, path)`, before anything is rendered — what the desktop app asks about. Names two
+/// photos of the batch would both take count too (the second one's).
+pub fn existing_targets(
+    items: &[PreparedExport],
+    o: &ExportOptions,
+    to: &Destination,
+    exists: &dyn Fn(&str) -> bool,
+) -> Vec<(lightcraft_catalog::PhotoId, String)> {
+    if to.exact.is_some() && items.len() == 1 {
+        return Vec::new();
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for item in items {
+        let dir = target_dir(item.source_dir.as_deref(), o, to);
+        let path = if dir.is_empty() { item.file_name.clone() } else { format!("{}/{}", dir.trim_end_matches('/'), item.file_name) };
+        let group: Vec<String> = std::iter::once(path.clone()).chain(item.sidecar_exts().iter().map(|x| sidecar_path(&path, x))).collect();
+        if group.iter().any(|p| seen.contains(p) || exists(p)) {
+            out.push((item.photo, path));
+        }
+        seen.extend(group);
+    }
+    out
+}
+
+/// Apply `resolve` (`{"<photo id>": unique|overwrite|skip}`, the answers to Ask what to do) to
+/// prepared exports.
+pub fn apply_resolutions(items: &mut [PreparedExport], resolve: Option<&serde_json::Value>) {
+    let Some(map) = resolve.and_then(serde_json::Value::as_object) else { return };
+    for item in items {
+        if let Some(c) = map.get(&item.photo.0.to_string()).cloned().and_then(|v| serde_json::from_value::<Conflict>(v).ok()) {
+            item.conflict = Some(c);
+        }
+    }
 }
 
 struct VideoWork {
@@ -2012,7 +2480,7 @@ fn prepare_guarded(
             }
         };
         let work = Work::Video(Box::new(VideoWork { path: path.clone(), range, opts: o.video, develop: p.develop.clone() }));
-        return Ok(PreparedExport { photo: id, file_name, work, guard, source_dir });
+        return Ok(PreparedExport { photo: id, file_name, work, guard, source_dir, conflict: None });
     } else if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
         let meta = export_metadata_with(Some(&session.catalog), p, o);
@@ -2022,6 +2490,11 @@ fn prepare_guarded(
         if let Some(wm) = opts.watermark.as_mut().filter(|w| w.text.contains('{')) {
             let batch = crate::rename::Batch { total, text: o.custom_text.clone(), ..Default::default() };
             wm.text = crate::rename::expand_tokens_in(&wm.text, p, seq, 1, &batch);
+        }
+        // Simple Copyright Watermark (`{copyright}`) on a photo with no copyright: no watermark,
+        // as in Lightroom
+        if opts.watermark.as_ref().is_some_and(|w| w.text.trim().is_empty() && w.image.trim().is_empty()) {
+            opts.watermark = None;
         }
         let gain_map = o.gain_map_output();
         let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
@@ -2040,7 +2513,7 @@ fn prepare_guarded(
             size: (p.width as usize, p.height as usize),
         }
     };
-    Ok(PreparedExport { photo: id, file_name, work, guard, source_dir })
+    Ok(PreparedExport { photo: id, file_name, work, guard, source_dir, conflict: None })
 }
 
 impl PreparedExport {
@@ -2204,7 +2677,6 @@ pub fn run_batch(
 ) -> Result<Vec<serde_json::Value>, String> {
     use serde_json::json;
     let join = |a: &str, b: &str| if a.is_empty() { b.to_string() } else { format!("{}/{b}", a.trim_end_matches('/')) };
-    let dir = if o.subfolder.is_empty() { to.dir.clone() } else { join(&to.dir, &o.subfolder) };
     let single = items.len() == 1;
     let mut taken = std::collections::HashSet::new();
     let mut out = Vec::new();
@@ -2213,11 +2685,13 @@ pub fn run_batch(
             break;
         }
         let (photo, name, guard) = (item.photo, item.file_name.clone(), item.guard.clone());
-        // Same folder as original: this photo's own folder (+ the subfolder)
-        let dir = match item.source_dir.as_deref().filter(|_| o.same_folder) {
-            Some(src) if o.subfolder.is_empty() => src.to_string(),
-            Some(src) => join(src, &o.subfolder),
-            None => dir.clone(),
+        // the batch's folder, or (Same folder as original) this photo's own; + the subfolder
+        let dir = target_dir(item.source_dir.as_deref(), o, to);
+        // an answer to Ask what to do for this photo, else the batch's policy (Ask unanswered:
+        // a new name, as nobody was there to ask)
+        let conflict = match item.conflict.unwrap_or(o.conflict) {
+            Conflict::Ask => Conflict::Unique,
+            c => c,
         };
         let e = match item.run() {
             Ok(e) => e,
@@ -2237,13 +2711,13 @@ pub fn run_batch(
                 if !busy(&path) {
                     Ok(path)
                 } else {
-                    match o.conflict {
+                    match conflict {
                         Conflict::Overwrite => Ok(path),
                         Conflict::Skip => {
                             out.push(json!({"skipped": path}));
                             continue;
                         }
-                        Conflict::Unique => {
+                        Conflict::Unique | Conflict::Ask => {
                             let (stem, ext) = e.file_name.rsplit_once('.').map_or((e.file_name.as_str(), None), |(a, b)| (a, Some(b)));
                             let name = |n: usize| join(&dir, &ext.map_or(format!("{stem}-{n}"), |x| format!("{stem}-{n}.{x}")));
                             (2..1_000_000).map(name).find(|p| !busy(p)).ok_or_else(|| format!("{path}: no free file name"))
@@ -2569,7 +3043,7 @@ mod tests {
         let o = ExportOptions::from_json(&serde_json::json!({"format": "jpg", "quality": 150, "longEdge": 2048, "naming": "{name}-{seq}"}));
         assert_eq!(o.format, ExportFormat::Jpeg);
         assert_eq!(o.quality, 100);
-        assert_eq!(o.resize, Some(Resize { dont_enlarge: true, height: 0, ..Resize::long_edge(2048) }));
+        assert_eq!(o.resize, Some(Resize { dont_enlarge: true, height: 0.0, ..Resize::long_edge(2048) }));
         assert_eq!(o.file_name_for(&named("IMG/1.png"), 7), "IMG_1-007.jpg");
         assert_eq!(o.ppi, 240);
         let orig = ExportOptions { format: ExportFormat::Original, naming: "{name}-{seq}".into(), ..Default::default() };
@@ -2606,7 +3080,7 @@ mod tests {
         let o = ExportOptions {
             format: ExportFormat::Tiff,
             quality: 70,
-            resize: Some(Resize { mode: ResizeMode::Megapixels, value: 12.5, height: 0, dont_enlarge: false }),
+            resize: Some(Resize { mode: ResizeMode::Megapixels, value: 12.5, height: 0.0, dont_enlarge: false, unit: SizeUnit::Pixels }),
             ppi: 300,
             limit_kb: Some(500),
             sharpen: SharpenFor::Glossy,
@@ -2655,7 +3129,7 @@ mod tests {
         assert_eq!(size(json!({}), 6000.0, 4000.0), None);
         assert!(ExportOptions::has_size_param(&json!({"longEdge": 0})) && !ExportOptions::has_size_param(&json!({"quality": 3})));
         // the `resize` object form round-trips (what the dialog and prefs store)
-        let r = Resize { mode: ResizeMode::ShortEdge, value: 720.0, height: 0, dont_enlarge: false };
+        let r = Resize { mode: ResizeMode::ShortEdge, value: 720.0, height: 0.0, dont_enlarge: false, unit: SizeUnit::Pixels };
         let back = ExportOptions::from_json(&ExportOptions::resize_json(Some(&r))).resize;
         assert_eq!(back, Some(r));
         assert_eq!(ExportOptions::from_json(&ExportOptions::resize_json(None)).resize, None);
