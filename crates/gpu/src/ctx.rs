@@ -275,6 +275,24 @@ fn constants() -> String {
         s += &format!("const {name}: f32 = {v:?};\n");
     }
     s += &format!("const HALO_TAU: f32 = {:?};\n", lightcraft_pipeline::finish::HALO_TAU);
+    {
+        use lightcraft_pipeline::scene_cr as sc;
+        for (name, v) in [
+            ("SC_FLOOR", sc::FLOOR),
+            ("SC_UPS", sc::UPSAMPLE_RANGE),
+            ("SC_MIN_T", sc::MIN_TRANSMISSION),
+            ("SC_CH_FLOOR", sc::CHANNEL_FLOOR),
+            ("SC_PAIR_POW", sc::PAIR_SAME_POWER),
+            ("SC_PAIR_RATE", sc::PAIR_OPPOSITE_RATE),
+        ] {
+            s += &format!("const {name}: f32 = {v:?};\n");
+        }
+        s += &format!("const SC_LEVELS: u32 = {}u;\n", sc::LEVELS);
+        s += &format!("const SC_FINE: bool = {};\nconst SC_CL_NEG: bool = {};\n", sc::CLARITY_FINE, sc::CLARITY_NEGATIVE_MEASURED);
+        for (i, (a, o)) in sc::OMEGA.iter().enumerate() {
+            s += &format!("const SC_OM_S{i}: f32 = {a:?};\nconst SC_OM_W{i}: f32 = {o:?};\n");
+        }
+    }
     s += &format!("const BW_GAIN: f32 = {:?};\n", lightcraft_pipeline::colorops::BW_GAIN);
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");

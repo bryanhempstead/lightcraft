@@ -48,6 +48,11 @@ black_white_chart.bin, color_mixer.rs, point_color.rs), Copyright (c) 2026 RAWma
 contributors, licensed under the MIT License. The tables are RAWmakase's measurements of Camera
 Raw's output on synthetic charts (no Adobe data). The port was modified by the LightCraft
 contributors (2026); each ported file says so.
+Round 11 (scene_cr.rs, with scene_cr_rule_data.rs, scene_cr_rule_ext.rs and scene_cr_rule_pair.rs
+copied verbatim) ports RAWmakase's scene tone map from the same crate: local_tone.rs (measurement
+map, guided base, grid sampling), clarity.rs and clarity_data.rs, scene_tone/haze.rs,
+local_tone_rule.rs and local_tone_rule_data.rs, local_tone_rule_ext_data.rs,
+local_tone_rule_pair_data.rs (fitted networks and tables), under the same MIT License.
 
 LibRaw (https://www.libraw.org, Copyright 2008-2025 LibRaw LLC; based on dcraw by Dave Coffin) is
 LightCraft's fallback raw decoder in this fork (crates/libraw-sys). It is not in this repository:

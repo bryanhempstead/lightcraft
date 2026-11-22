@@ -536,6 +536,11 @@ pub struct FinishParams {
     /// Peak linear output relative to SDR white: 1 for SDR renders; `2^max_ev` for an HDR render
     /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them.
     pub peak: f32,
+    /// Camera Raw's scene tone map for this render ([`crate::scene_cr`], [`FinishParams::with_scene`]):
+    /// Clarity, Highlights / Shadows and positive Dehaze, when the settings use them.
+    pub scene: Option<std::sync::Arc<crate::scene_cr::SceneTone>>,
+    /// The camera RGB Texture's gain applies in ([`crate::texture_cr::space`]): working → camera, back.
+    pub tex_space: Option<([[f32; 3]; 3], [[f32; 3]; 3])>,
 }
 
 impl FinishParams {
@@ -635,13 +640,60 @@ impl FinishParams {
             w,
             h,
             px_per_long,
+            scene: None,
+            tex_space: crate::texture_cr::space(info),
         }
+    }
+
+    /// Attach the photo's scene tone map (`map`, `haze`: [`crate::Prepared`]'s) for `s`: Clarity and
+    /// positive Dehaze always (with their `MEASURED` switches), Highlights / Shadows of an Adobe
+    /// base with [`crate::scene_cr::HS_MEASURED`] (which then replaces `hs_lut`).
+    pub fn with_scene(
+        mut self,
+        map: Option<&std::sync::Arc<crate::scene_cr::MapBase>>,
+        haze: Option<&std::sync::Arc<crate::scene_cr::Haze>>,
+        s: &DevelopSettings,
+    ) -> FinishParams {
+        use crate::scene_cr as sc;
+        let masks = |f: fn(&LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
+        let clarity = sc::CLARITY_MEASURED && !sc::r11_off() && (self.clar != 0.0 || masks(|a| a.clarity));
+        let hs_used = s.light.highlights != 0.0 || s.light.shadows != 0.0 || masks(|a| a.highlights) || masks(|a| a.shadows);
+        let hs = sc::hs_measured() && self.adobe.is_some() && hs_used;
+        let dehaze = sc::HAZE_MEASURED && !sc::r11_off() && (self.dehaze > 0.0 || s.masks.iter().any(|m| m.adjust.dehaze > 0.0));
+        let map = map.filter(|_| clarity || hs);
+        let haze = haze.filter(|_| dehaze);
+        // a flat stand-in map when only the haze is needed (its grid is the haze's)
+        let base = match (map, haze) {
+            (Some(m), _) => m.clone(),
+            (None, Some(h)) => match sc::MapBase::new(vec![0.18; h.w * h.h], h.w, h.h) {
+                Some(m) => std::sync::Arc::new(m),
+                None => return self,
+            },
+            (None, None) => return self,
+        };
+        let mut t = sc::SceneTone::new(base, self.w, self.h, self.ev);
+        t.clarity = clarity && map.is_some();
+        if t.clarity {
+            // made here, outside the per-pixel stage's parallel rows: a lazily made detail inside
+            // them would block every row on the one making it (whose parallel work then waits)
+            let _ = t.map.detail();
+        }
+        if hs && let Some(m) = map {
+            let hs_ev = if sc::hs_before_exposure() { 0.0 } else { self.ev };
+            t.hs = Some((m.hs_curves(hs_ev), (s.light.shadows / 100.0) as f32, (s.light.highlights / 100.0) as f32));
+            t.hs_shift = self.ev - hs_ev;
+            self.hs_lut = None;
+        }
+        t.haze = haze.map(|h| (h.clone(), h.air.map(|a| a * self.gain)));
+        self.scene = Some(std::sync::Arc::new(t));
+        self
     }
 }
 
 pub(crate) fn finish(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &SourceInfo, space: OutputSpace, proof: Option<crate::Proof>) -> Rgba8 {
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.tone_stats, space);
+    let mut fp =
+        FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.tone_stats, space).with_scene(p.scene_map.as_ref(), p.haze.as_ref(), s);
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let data = finish_with(p, &fp, false, |e| match trc {
@@ -667,7 +719,8 @@ pub(crate) fn finish_deep(
 ) -> DeepImage {
     use lightcraft_color::transfer::srgb_to_linear;
     let (w, h) = (p.img.width, p.img.height);
-    let mut fp = FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.tone_stats, space);
+    let mut fp =
+        FinishParams::new(s, frame, info, w, h, p.px_per_long, p.air, p.tone_stats, space).with_scene(p.scene_map.as_ref(), p.haze.as_ref(), s);
     fp.proof = proof.map(|pr| pr.params(space));
     let trc = fp.out_trc;
     let samples = match depth {
@@ -744,6 +797,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     // measurement hook for tools/lr-compare (`LIGHTCRAFT_LR_DUMP=<file>`, CPU renders only): per
     // pixel the source colour, base, tone input EV, mask weight, encoded result, position, log L
     let dump = crate::dump::Dump::from_env(w, h);
+    // measurement hook for refitting Clarity (`LIGHTCRAFT_CLARITY_DUMP=<file>`, CPU renders with
+    // Camera Raw's Clarity): at every 4th pixel x, y, its level and `SceneTone::clarity_terms`
+    let cla_dump: Option<std::sync::Mutex<Vec<f32>>> = std::env::var("LIGHTCRAFT_CLARITY_DUMP").ok().map(|_| std::sync::Mutex::new(Vec::new()));
     for_rows(&mut out, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
             let i = y * w + x;
@@ -790,9 +846,16 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
             }
 
-            // --- dehaze (scene linear)
+            // Camera Raw's scene tone map (`scene_cr`): the pixel's neighbours on the map, and its
+            // level after Exposure, before Dehaze and a mask's Exposure
+            let sc = fp.scene.as_deref();
+            let smp = sc.map(|t| t.sample(x, y));
+            let l_scene = crate::scene_cr::level(luminance_2020(c));
+            // --- dehaze (scene linear): positive with Camera Raw's haze model after local tone
             let dz = dehaze + l_dehaze;
+            let haze_cr = dz > 0.0 && sc.is_some_and(|t| t.haze.is_some());
             if dz != 0.0
+                && !haze_cr
                 && let Some(dark) = &p.dark
             {
                 let d = (dark.data[i] / air_pre).clamp(0.0, 1.0);
@@ -837,9 +900,19 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 Some(t) => wb * crate::tone::lr::hs_at(t, base) + (1.0 - wb) * crate::tone::lr::hs_at(t, l1),
                 None => 0.0f32,
             };
-            let hs_delta = delta;
+            let mut hs_delta = delta;
             let (hh, ss) = (hl + l_hl, sh + l_sh);
-            if hh != 0.0 || ss != 0.0 {
+            // Camera Raw's Highlights / Shadows (`scene_cr`): the photo's rule at the base level
+            let hs_cr = match (sc.and_then(|t| t.hs.as_ref().map(|h| (t, h))), smp.as_ref()) {
+                (Some((t, (curves, gs, gh))), Some(m)) => {
+                    let g = curves.gain(t.base(m, l_scene + l_exp) - t.hs_shift, gs + l_sh, gh + l_hl);
+                    delta += g;
+                    hs_delta = g;
+                    true
+                }
+                _ => false,
+            };
+            if !hs_cr && (hh != 0.0 || ss != 0.0) {
                 let legacy = |b: f32| {
                     let ws = 1.0 - smooth(-4.8, 0.3, b);
                     let wh = smooth(-1.0, 2.8, b);
@@ -863,7 +936,22 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 }
             }
             let cl = clar + l_clar;
-            if cl != 0.0
+            let mut scene_gain = hs_delta;
+            if let (Some(t), Some(m)) = (sc.filter(|t| t.clarity && crate::scene_cr::clarity_by_model(cl)), smp.as_ref()) {
+                // Camera Raw's Clarity (`scene_cr`): four scales on the map, upsampled by the level
+                let g = t.clarity_gain(m, cl, l_scene);
+                if let Some(cd) = &cla_dump
+                    && x % 4 == 0
+                    && y % 4 == 0
+                {
+                    let terms = t.clarity_terms(m, l_scene);
+                    let mut v = cd.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    v.extend([x as f32, y as f32, l_scene]);
+                    v.extend(terms);
+                }
+                delta += g;
+                scene_gain += g;
+            } else if cl != 0.0
                 && let Some(b) = &p.clarity_blur
             {
                 let det = (l_pre - b.data[i]).clamp(-2.5, 2.5);
@@ -907,8 +995,12 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let g = delta.exp2();
                 c = c.map(|v| v * g);
             }
+            // Camera Raw's positive Dehaze (`scene_cr`): its airlight follows the gains applied so far
+            if haze_cr && let (Some(t), Some(m)) = (sc, smp.as_ref()) {
+                c = t.dehaze(m, c, dz, (scene_gain + l_exp).exp2());
+            }
             if let Some(g) = tex_gain {
-                c = [c[0] * g[0], c[1] * g[1], c[2] * g[2]];
+                c = crate::texture_cr::apply(c, g, fp.tex_space.as_ref());
             }
 
             let tone_in = c;
@@ -1072,6 +1164,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     if let Some(d) = dump {
         let key = p.tone_stats.map_or(f32::NAN, |t| t.key + ev - crate::tone::lr::KEY_REF);
         d.write([fp.ow as f32, fp.oh as f32, ev, key, 0.0, 0.0]);
+    }
+    if let (Some(cd), Ok(path)) = (cla_dump, std::env::var("LIGHTCRAFT_CLARITY_DUMP")) {
+        let v = cd.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bytes: Vec<u8> = [w as f32, h as f32].iter().chain(&v).flat_map(|f| f.to_le_bytes()).collect();
+        let _ = std::fs::write(path, bytes);
     }
     out
 }

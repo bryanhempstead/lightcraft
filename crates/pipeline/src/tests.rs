@@ -432,3 +432,53 @@ fn highlights_and_shadows_leave_no_halos_at_edges() {
         }
     }
 }
+
+/// Round 11: Camera Raw's Clarity (`scene_cr`) multiplies log contrast at every scale up to a
+/// large fraction of the frame — on our oracle's frequency scene Camera Raw's +100 is ×2.16 from
+/// 3 to 233 px periods — and a render with it completes (a lazily made map detail used to block
+/// the per-pixel rows on each other).
+#[test]
+fn camera_raw_clarity_lifts_fine_and_coarse_detail() {
+    let grating = |p: f32| Rgb32f::from_fn(512, 96, move |x, _| [0.18 * 2f32.powf(-1.5 + 0.4 * (std::f32::consts::TAU * x as f32 / p).sin()); 3]);
+    let lstd = |img: &Rgb32f| {
+        let l: Vec<f32> = img.data.iter().map(|c| lightcraft_color::luminance_2020(*c).max(1e-6).log2()).collect();
+        let m = l.iter().sum::<f32>() / l.len() as f32;
+        (l.iter().map(|v| (v - m).powi(2)).sum::<f32>() / l.len() as f32).sqrt()
+    };
+    let req = RenderRequest { space: crate::OutputSpace::ProPhoto, depth: crate::OutputDepth::F32Linear, ..RenderRequest::fit(512, 96) };
+    let lin = |src: &Rgb32f, s: &DevelopSettings| {
+        let r = render(src, &SourceInfo::default(), s, &req);
+        let Some(crate::DeepImage { samples: crate::DeepSamples::F32(v), width, height, .. }) = r.deep else { panic!("no deep render") };
+        Rgb32f { width, height, data: v.chunks(3).map(|c| [c[0], c[1], c[2]]).collect() }
+    };
+    let mut s = DevelopSettings::default();
+    for p in [4.0, 40.0] {
+        let src = grating(p);
+        s.effects.clarity = 0.0;
+        let base = lstd(&lin(&src, &s));
+        s.effects.clarity = 100.0;
+        let up = lstd(&lin(&src, &s));
+        s.effects.clarity = -50.0;
+        let down = lstd(&lin(&src, &s));
+        assert!(up > 1.25 * base && down < base, "period {p}: {base} {up} {down}");
+    }
+}
+
+/// Round 11: positive Dehaze (`scene_cr`, Camera Raw's haze model) darkens a hazy region and adds
+/// contrast, and leaves a scene without haze nearly alone at +30.
+#[test]
+fn camera_raw_dehaze_removes_haze() {
+    let src = Rgb32f::from_fn(240, 160, |x, y| {
+        let t = 0.3 + 0.6 * y as f32 / 160.0;
+        let surface = 0.02 + 0.2 * (x as f32 / 240.0);
+        [surface * t + 0.6 * (1.0 - t), surface * t + 0.62 * (1.0 - t), surface * t + 0.7 * (1.0 - t)]
+    });
+    let mut s = DevelopSettings::default();
+    let base = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(240, 160)).image;
+    s.effects.dehaze = 60.0;
+    let dz = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(240, 160)).image;
+    let at = |img: &lightcraft_raster::Rgba8, x: usize, y: usize| img.data[y * img.width + x][1] as i32;
+    // the haziest rows darken, and the left/right contrast there grows
+    assert!(at(&dz, 20, 10) < at(&base, 20, 10) - 5, "{} {}", at(&dz, 20, 10), at(&base, 20, 10));
+    assert!(at(&dz, 220, 10) - at(&dz, 20, 10) > at(&base, 220, 10) - at(&base, 20, 10));
+}
