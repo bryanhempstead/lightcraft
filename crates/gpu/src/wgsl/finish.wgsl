@@ -800,27 +800,40 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let sr = i32(pu(F_SHARP_R));
     if (sp != 0.0 && sr > 0) {
         var acc = 0.0;
-        var lo = 1e30;
-        var hi = -1e30;
-        for (var dy = -sr; dy <= sr; dy++) {
+        var gx = 0.0;
+        var gy = 0.0;
+        let sm = pf(F_SHARPEN_MASK);
+        // the Edge Masking gradient's wider kernel (`finish::Sharpen::sample`)
+        var rr = sr;
+        if (sm > 0.0) {
+            rr = max(sr, i32(pu(F_SHARP_GR)));
+        }
+        for (var dy = -rr; dy <= rr; dy++) {
             let yy = u32(clamp(i32(y) + dy, 0, i32(h) - 1));
-            let wy = pf(F_SHARP_W + u32(abs(dy)));
-            for (var dx = -sr; dx <= sr; dx++) {
+            let ay = abs(dy);
+            var wy = 0.0;
+            var gwy = 0.0;
+            if (ay <= SHARPEN_TAPS) {
+                wy = pf(F_SHARP_W + u32(ay));
+                gwy = pf(F_SHARP_GW + u32(ay));
+            }
+            for (var dx = -rr; dx <= rr; dx++) {
                 let xx = u32(clamp(i32(x) + dx, 0, i32(w) - 1));
                 let v = log_l[yy * w + xx];
-                acc += wy * pf(F_SHARP_W + u32(abs(dx))) * v;
-                if (abs(dx) <= 1 && abs(dy) <= 1) {
-                    lo = min(lo, v);
-                    hi = max(hi, v);
-                }
+                let ax = u32(abs(dx));
+                acc += wy * pf(F_SHARP_W + ax) * v;
+                let g = gwy * pf(F_SHARP_GW + ax) * v;
+                gx += g * f32(dx);
+                gy += g * f32(dy);
             }
         }
         var det = l_pre - acc;
         det = det / (1.0 + abs(det) / pf(F_SHARP_T));
-        let sm = pf(F_SHARPEN_MASK);
+        // Edge Masking by the smoothed gradient (`finish::Sharpen::mask`)
         var mk = 1.0;
         if (sm > 0.0) {
-            mk = sstep(sm * 0.12, sm * 0.12 + 0.08, hi - lo);
+            let c = SHARPEN_MASK_C0 * exp(SHARPEN_MASK_K * min(sm, 1.0));
+            mk = sstep(SHARPEN_MASK_LO * c, SHARPEN_MASK_HI * c, length(vec2<f32>(gx, gy)) / pf(F_SHARP_GN));
         }
         delta += sp * det * mk;
     }

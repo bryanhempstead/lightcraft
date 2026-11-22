@@ -256,6 +256,15 @@ fn constants() -> String {
     s += &format!("const AUTO_TOL_EV: f32 = {AUTO_TOL_EV:?};\nconst AUTO_TOL_CHROMA: f32 = {AUTO_TOL_CHROMA:?};\n");
     s += &format!("const SHADOW_TINT_K: f32 = {:?};\n", lightcraft_pipeline::colorops::SHADOW_TINT);
     s += &format!("const SHARPEN_GAIN: f32 = {:?};\n", lightcraft_pipeline::finish::SHARPEN_GAIN);
+    s += &format!("const SHARPEN_TAPS: i32 = {};\n", lightcraft_pipeline::finish::SHARPEN_TAPS);
+    for (name, v) in [
+        ("SHARPEN_MASK_C0", lightcraft_pipeline::finish::SHARPEN_MASK_C0),
+        ("SHARPEN_MASK_K", lightcraft_pipeline::finish::SHARPEN_MASK_K),
+        ("SHARPEN_MASK_LO", lightcraft_pipeline::finish::SHARPEN_MASK_LO),
+        ("SHARPEN_MASK_HI", lightcraft_pipeline::finish::SHARPEN_MASK_HI),
+    ] {
+        s += &format!("const {name}: f32 = {v:?};\n");
+    }
     for (name, v) in [
         ("GRAIN_ROT_C", lightcraft_pipeline::finish::GRAIN_ROT[0]),
         ("GRAIN_ROT_S", lightcraft_pipeline::finish::GRAIN_ROT[1]),

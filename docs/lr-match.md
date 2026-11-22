@@ -686,3 +686,27 @@ band; mean |log ratio|; the 1,024 / 3,072 px sizes were not used to fit):
 
 Previews keep the downscaled full-size grain (fewer, weaker cells per pixel), so the acceptance
 gate (Lightroom's previews, ≤ 2,560 px) is unchanged: 4.00 ΔE, 25 pass, every cell within 0.01.
+
+### Sharpening at 1:1 (R07)
+
+Measured on the edge chart (6,000 px source scale: the chart is rendered at its own size):
+Camera Raw's capture sharpening was ~10× stronger than LightCraft's at 1:1 (Amount 40 / Radius 1 /
+Detail 25: step-edge overshoot 0.38 of the step vs 0.04; Bryan's 126 / 1.0 / 25 / Masking 94:
+0.19–0.27 vs 0.05–0.12). Round 2 had tuned it on Lightroom's ≤ 2,560 px previews, where a
+full-size halo is mostly averaged away. The structure was right (an unsharp mask of log
+luminance whose large differences Detail damps: overshoot ratio across 0.6 / 2 / 6 EV edges
+1 : 0.42 : 0.08 here, 1 : 0.35 : 0.05 in Camera Raw), so it was refitted on the chart
+(`oracle/sharpfit.py`: the operator emulated on Camera Raw's own tone, 12 settings fitted, 3
+held out; `GSIG=1.6`): gain `8.14 · (Amount/150)^0.82`, sigma 0.82 × Radius source px, Detail damping
+`0.006 + 0.405 · Detail/100` EV; and Edge Masking now weighs the log-luminance gradient smoothed
+by a 1.6 px Gaussian (`c = 0.0075 · e^(3.52 · Masking/100)`, fading in from −0.275c to 2.275c),
+like Camera Raw, which already masks a 3 px grating at Masking 30 — the old 3×3 range kept it.
+CPU and GPU (`finish::Sharpen`, the kernel's gradient loop); the mask's wider window only runs
+when Masking > 0.
+
+`sharp_ana.py` (edges, lines, gratings, textures; mean |log ratio| LightCraft / Camera Raw over
+15 settings): **1.755 → 0.417**. Bryan's 126 / 1.0 / 25 / 94: 0.6 EV edge 0.19 vs 0.28 (was
+0.12), 2 EV edge 0.27 vs 0.30 (was 0.05), 6 px grating gain 1.21 vs 1.15 (was 1.12), low-contrast
+texture 1.00–1.05 vs 1.10–1.13 (was 1.17–1.31). Left: Masking 100 keeps more than Camera Raw
+(0.6 EV edge 0.22 vs 0.09), Radius 3 kernels are truncated at 4 taps, and strong unmasked amounts
+stay ~20 % under. No Alt-drag mask / detail preview yet.
