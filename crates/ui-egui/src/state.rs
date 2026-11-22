@@ -564,6 +564,8 @@ pub enum Dialog {
         /// `{text}`: Lightroom's Custom Text.
         text: String,
     },
+    /// Edit Keyword Tag (L11): name, synonyms, export options, person.
+    EditKeyword(KeywordEdit),
     /// Rename a keyword on every photo (children included).
     RenameKeyword {
         from: String,
@@ -908,5 +910,52 @@ impl UiState {
         self.open_sections = open;
         self.sync_module();
         self
+    }
+}
+
+/// The Edit Keyword Tag dialog's fields.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct KeywordEdit {
+    /// The keyword edited (its full path).
+    pub path: String,
+    /// Its own level's name.
+    pub name: String,
+    /// Synonyms, commas between them.
+    pub synonyms: String,
+    pub include_on_export: bool,
+    pub export_containing: bool,
+    pub export_synonyms: bool,
+    pub person: bool,
+}
+
+impl KeywordEdit {
+    /// From `keyword.info`'s answer.
+    pub fn from_info(v: &serde_json::Value) -> KeywordEdit {
+        let path = v["path"].as_str().unwrap_or("").to_string();
+        let flag = |k: &str| v[k].as_bool().unwrap_or(true);
+        KeywordEdit {
+            name: path.rsplit('|').next().unwrap_or(&path).to_string(),
+            synonyms: v["synonyms"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_str).collect::<Vec<_>>().join(", "),
+            include_on_export: flag("includeOnExport"),
+            export_containing: flag("exportContaining"),
+            export_synonyms: flag("exportSynonyms"),
+            person: v["person"].as_bool().unwrap_or(false),
+            path,
+        }
+    }
+
+    /// `keyword.edit`'s parameters.
+    pub fn params(&self) -> serde_json::Value {
+        let synonyms: Vec<&str> = self.synonyms.split(',').map(str::trim).filter(|x| !x.is_empty()).collect();
+        serde_json::json!({
+            "keyword": self.path,
+            "name": self.name.trim(),
+            "synonyms": synonyms,
+            "includeOnExport": self.include_on_export,
+            "exportContaining": self.export_containing,
+            "exportSynonyms": self.export_synonyms,
+            "person": self.person,
+        })
     }
 }

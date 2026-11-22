@@ -49,6 +49,8 @@ mod tests_keys;
 #[cfg(test)]
 mod tests_labels;
 #[cfg(test)]
+mod tests_library2;
+#[cfg(test)]
 mod tests_library_problem;
 #[cfg(test)]
 mod tests_masking;
@@ -113,6 +115,10 @@ pub struct Services {
     pub pick_curve_preset_files: Option<PickFiles>,
     /// Save dialog for an exported `.lccurve` file.
     pub save_curve_preset_file: Option<SaveFile>,
+    /// Open dialog for a text file (Metadata ▸ Import Keywords…: a keyword list `.txt`).
+    pub pick_text_file: Option<PickFiles>,
+    /// Save dialog for a text file (Metadata ▸ Export Keywords…), the suggested name given.
+    pub save_text_file: Option<SaveFile>,
     pub write: Option<WriteFn>,
     /// Thread-safe writer: with it, UI-started exports run in the background (desktop only).
     pub write_shared: Option<SharedWrite>,

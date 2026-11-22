@@ -217,6 +217,19 @@ const LAYOUT: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "Metadata",
+        &[
+            "dialog.keywordShortcut",
+            "keyword.toggleShortcut",
+            "keyword.nextSet",
+            "keyword.previousSet",
+            "---",
+            "dialog.importKeywords",
+            "dialog.exportKeywords",
+            "keyword.purgeUnused",
+        ],
+    ),
+    (
         "Window",
         &[
             "view.library",

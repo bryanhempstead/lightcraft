@@ -250,6 +250,25 @@ fn keyword_list(app: &mut LightcraftApp, ui: &mut egui::Ui, active: Option<Photo
         register(ui.ctx(), "field:keywordListFilter", r.rect);
     });
     ui.data_mut(|d| d.insert_temp(fid, filter.clone()));
+    // the keyword list as a file, and the unused ones (Metadata menu too)
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 20, top: 2, bottom: 6 }).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if crate::widgets::text_button(ui, "keywordListImport", "imp.", false).on_hover_text(crate::i18n::tr("Import Keywords…")).clicked() {
+                let _ = app.run("dialog.importKeywords", json!({}));
+            }
+            if crate::widgets::text_button(ui, "keywordListExport", "exp.", false).on_hover_text(crate::i18n::tr("Export Keywords…")).clicked() {
+                let _ = app.run("dialog.exportKeywords", json!({}));
+            }
+            if crate::widgets::text_button(ui, "keywordListPurge", "purge.", false).on_hover_text(crate::i18n::tr("Purge Unused Keywords")).clicked()
+            {
+                match app.run("keyword.purgeUnused", json!({})) {
+                    Ok(v) => app.ui.toast = Some((format!("Purged {} unused keywords", v["purged"]), app.last_time + 4.0, None)),
+                    Err(e) => app.ui.toast = Some((e, app.last_time + 6.0, None)),
+                }
+            }
+        });
+    });
     if tree.is_empty() {
         note(ui, "No keywords yet");
         return;
@@ -294,6 +313,24 @@ fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode
                 let _ = app.run("library.filter", json!({"keyword": n.path.clone()}));
             }
         }
+        resp.context_menu(|ui| {
+            if ui.button(crate::i18n::tr("Edit Keyword Tag…")).clicked() {
+                let _ = app.run("dialog.editKeyword", json!({"keyword": n.path}));
+                ui.close();
+            }
+            if ui.button(crate::i18n::tr("Use as Keyword Shortcut")).clicked() {
+                let _ = app.run("keyword.setShortcut", json!({"keywords": [n.path]}));
+                ui.close();
+            }
+            if ui.button(crate::i18n::tr("Put New Keywords Inside This Keyword")).clicked() {
+                let _ = app.run("keyword.setDefaultParent", json!({"keyword": n.path}));
+                ui.close();
+            }
+            if ui.button(crate::i18n::tr("Delete Keyword")).clicked() {
+                let _ = app.run("keyword.delete", json!({"keyword": n.path}));
+                ui.close();
+            }
+        });
         let path = n.path.clone();
         resp.on_hover_text(crate::i18n::tr_format!("{path}: click the box to tag the selection, the name to show its photos", path = path));
         if !n.children.is_empty() {

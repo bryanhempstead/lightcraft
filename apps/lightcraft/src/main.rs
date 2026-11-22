@@ -366,6 +366,20 @@ fn services() -> Services {
                 .map(|p| vec![p.to_string_lossy().to_string()])
                 .unwrap_or_default()
         })),
+        pick_text_file: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter(lightcraft_ui_egui::i18n::tr("Text"), &["txt"])
+                .pick_file()
+                .map(|p| vec![p.to_string_lossy().to_string()])
+                .unwrap_or_default()
+        })),
+        save_text_file: Some(Box::new(|name: &str| {
+            rfd::FileDialog::new()
+                .add_filter(lightcraft_ui_egui::i18n::tr("Text"), &["txt"])
+                .set_file_name(name)
+                .save_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
         save_preset_file: Some(Box::new(|name: &str| {
             rfd::FileDialog::new()
                 .set_title(lightcraft_ui_egui::i18n::tr("Export Presets"))

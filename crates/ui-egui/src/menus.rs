@@ -189,6 +189,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.restoreLibrary", "Restore Library from Backup…", None, "File"),
     ("photo.locate", "Locate Missing File…", None, ""),
     ("dialog.saveMetadataPreset", "Save Metadata Preset…", None, ""),
+    // Metadata ▸ keyword list (L11)
+    ("dialog.importKeywords", "Import Keywords…", None, "Metadata"),
+    ("dialog.exportKeywords", "Export Keywords…", None, "Metadata"),
+    ("dialog.keywordShortcut", "Set Keyword Shortcut…", Some("Cmd+Alt+Shift+K"), "Metadata"),
+    ("dialog.editKeyword", "Edit Keyword Tag…", None, ""),
     ("app.quit", "Quit LightCraft", Some("Cmd+Q"), "File"),
     ("file.importPresets", "Import Profiles & Presets…", None, "File"),
     ("file.exportPresets", "Export Presets…", None, "File"),
@@ -1346,6 +1351,53 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "app.quit" => {
             app.ui.quit = true;
+            Ok(Value::Null)
+        }
+        "dialog.importKeywords" => {
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => Some(x.to_string()),
+                None => app.services.pick_text_file.as_mut().and_then(|f| f().into_iter().next()),
+            };
+            let Some(path) = path else { return Some(Ok(Value::Null)) };
+            let r = app.run("keyword.import", json!({"path": path}));
+            if let Ok(v) = &r {
+                app.ui.toast = Some((format!("Imported keywords: {} added, {} updated", v["added"], v["updated"]), app.last_time + 4.0, None));
+            }
+            r
+        }
+        "dialog.exportKeywords" => {
+            let path = match p.get("path").and_then(Value::as_str) {
+                Some(x) => Some(x.to_string()),
+                None => app.services.save_text_file.as_mut().and_then(|f| f("Keywords.txt")),
+            };
+            let Some(path) = path else { return Some(Ok(Value::Null)) };
+            let r = app.run("keyword.export", json!({"path": path}));
+            if let Ok(v) = &r {
+                app.ui.toast = Some((format!("Exported {} keywords", v["keywords"]), app.last_time + 4.0, None));
+            }
+            r
+        }
+        "dialog.keywordShortcut" => {
+            let now = app.session.execute("keyword.shortcut", &json!({})).ok().and_then(|v| v["keywords"].as_array().cloned()).unwrap_or_default();
+            let text: Vec<&str> = now.iter().filter_map(Value::as_str).collect();
+            crate::panels::dialogs::prompt(
+                app,
+                "Set Keyword Shortcut",
+                "Keywords (commas between them)",
+                &text.join(", "),
+                "keyword.setShortcut",
+                json!({}),
+                "keywords",
+            );
+            Ok(Value::Null)
+        }
+        "dialog.editKeyword" => {
+            let Some(k) = p.get("keyword").and_then(Value::as_str) else { return Some(Err("dialog.editKeyword: missing `keyword`".into())) };
+            let info = match app.session.execute("keyword.info", &json!({"keyword": k})) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            app.ui.dialog = Some(crate::state::Dialog::EditKeyword(crate::state::KeywordEdit::from_info(&info)));
             Ok(Value::Null)
         }
         "dialog.saveMetadataPreset" => {

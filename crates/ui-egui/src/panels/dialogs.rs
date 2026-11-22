@@ -177,6 +177,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::LabelNames { .. } => "Edit Color Label Names",
         Dialog::CaptureTime { .. } => "Edit Capture Time",
         Dialog::RenameKeyword { .. } => "Rename Keyword",
+        Dialog::EditKeyword(_) => "Edit Keyword Tag",
         Dialog::MergeKeywords { .. } => "Merge Keywords",
         Dialog::NewSmartAlbum { .. } => "Create Smart Album",
         Dialog::AllMetadata { .. } => "All Metadata",
@@ -508,6 +509,31 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if more > 0 {
                         ui.label(egui::RichText::new(crate::i18n::tr_format!("… and {more} more", more = more)).color(t.text_dim));
                     }
+                }
+                Dialog::EditKeyword(e) => {
+                    field(ui, "Keyword name", |ui| {
+                        let r = ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(f32::INFINITY));
+                        crate::widgets::register(ui.ctx(), "field:editKeywordName", r.rect);
+                    });
+                    field(ui, "Synonyms", |ui| {
+                        let r = ui.add(egui::TextEdit::singleline(&mut e.synonyms).hint_text(crate::i18n::tr("commas between them")).desired_width(f32::INFINITY));
+                        crate::widgets::register(ui.ctx(), "field:editKeywordSynonyms", r.rect);
+                    });
+                    ui.add_space(4.0);
+                    for (id, label, v) in [
+                        ("include", "Include on Export", &mut e.include_on_export),
+                        ("containing", "Export Containing Keywords", &mut e.export_containing),
+                        ("synonyms", "Export Synonyms", &mut e.export_synonyms),
+                        ("person", "Person", &mut e.person),
+                    ] {
+                        let r = ui.checkbox(v, crate::i18n::tr(label));
+                        crate::widgets::register(ui.ctx(), format!("check:editKeyword-{id}"), r.rect);
+                    }
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr("A keyword left out of export stays in the library; a person keyword is left out when an export removes person info."))
+                            .size(11.0)
+                            .color(t.text_dim),
+                    );
                 }
                 Dialog::RenameKeyword { from, to } => {
                     let n = app.session.catalog.photos().filter(|p| p.meta.keywords.iter().any(|k| lightcraft_catalog::keywords::is_under(k, from))).count();
@@ -1316,6 +1342,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             r
         }
         Dialog::Rename { template, start, text } => app.run("photo.rename", json!({"template": template, "start": start, "text": text})),
+        Dialog::EditKeyword(e) => app.run("keyword.edit", e.params()),
         Dialog::RenameKeyword { from, to } => app.run("keyword.rename", json!({"from": from, "to": to})),
         Dialog::MergeKeywords { from, into } => app.run("keyword.merge", json!({"from": from, "into": into})),
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),

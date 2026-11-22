@@ -205,7 +205,7 @@ fn export_keywords_follow_the_metadata_options() {
     }];
     let o = crate::export::ExportOptions::default();
     let (flat, hier) = crate::export::export_keywords(&p, &o);
-    assert_eq!(flat, ["Places", "Portugal", "Lisbon", "dawn", "Ann Lee"]);
+    assert_eq!(flat, ["Lisbon", "Portugal", "Places", "dawn", "Ann Lee"]);
     assert!(hier.is_empty());
     let o = crate::export::ExportOptions::from_params(&json!({"removePeople": true, "keywordHierarchy": true})).unwrap();
     let (flat, hier) = crate::export::export_keywords(&p, &o);

@@ -1518,6 +1518,11 @@ pub fn split_camera(camera: &str) -> (Option<String>, Option<String>) {
 
 /// The metadata to embed for `photo` under `o.metadata` / `o.remove_location`. `None` = embed nothing.
 pub fn export_metadata(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> Option<Metadata> {
+    export_metadata_with(None, photo, o)
+}
+
+/// [`export_metadata`] with the library's keyword list (synonyms, export options, person keywords).
+pub fn export_metadata_with(cat: Option<&lightcraft_catalog::Catalog>, photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> Option<Metadata> {
     let m = &photo.meta;
     let text = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     // copyright info (also under "copyright only"): notice, creator, status, usage terms, info URL
@@ -1545,7 +1550,7 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> 
         out.state = text(&m.state);
         out.country = text(&m.country);
     }
-    (out.keywords, out.hierarchical_keywords) = export_keywords(photo, o);
+    (out.keywords, out.hierarchical_keywords) = export_keywords_with(cat, photo, o);
     out.capture_time = photo.captured.as_deref().and_then(DateTime::parse_iso);
     out.rating = (photo.rating > 0).then_some(photo.rating as i8);
     // Pixels are exported upright: orientation is baked in.
@@ -1564,30 +1569,43 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> 
     Some(out)
 }
 
-/// The keywords an export writes (E06): each `a|b|c` keyword as its own words `a`, `b`, `c`
-/// (Lightroom includes the parents on export), the named people unless Remove Person Info, and
-/// the full paths as `lr:hierarchicalSubject` when Write Keywords as Lightroom Hierarchy is on.
+/// The keywords an export writes (E06), with default keyword options: see [`export_keywords_with`].
 pub fn export_keywords(photo: &lightcraft_catalog::Photo, o: &ExportOptions) -> (Vec<String>, Vec<String>) {
-    let mut flat: Vec<String> = Vec::new();
-    let mut push = |k: &str| {
-        let k = k.trim();
-        if !k.is_empty() && !flat.iter().any(|x| x.eq_ignore_ascii_case(k)) {
-            flat.push(k.to_string());
+    export_keywords_with(None, photo, o)
+}
+
+/// The keywords an export writes (E06, L11): each `a|b|c` keyword as its own words `a`, `b`, `c`
+/// (Lightroom includes the containing keywords unless the keyword says not to), its synonyms, none
+/// of a keyword left out of export (the keyword list's options), the named people unless Remove
+/// Person Info (which also leaves out keywords marked as a person), and the full paths as
+/// `lr:hierarchicalSubject` when Write Keywords as Lightroom Hierarchy is on.
+pub fn export_keywords_with(
+    cat: Option<&lightcraft_catalog::Catalog>,
+    photo: &lightcraft_catalog::Photo,
+    o: &ExportOptions,
+) -> (Vec<String>, Vec<String>) {
+    let empty;
+    let cat = match cat {
+        Some(c) => c,
+        None => {
+            empty = lightcraft_catalog::Catalog::new();
+            &empty
         }
     };
-    for k in &photo.meta.keywords {
-        for part in k.split('|') {
-            push(part);
-        }
-    }
+    let kws: Vec<String> =
+        photo.meta.keywords.iter().filter(|k| !(o.remove_people && cat.keyword_info(k).is_some_and(|i| i.person))).cloned().collect();
+    let ek = cat.export_keywords(&kws);
+    let mut flat = ek.flat;
     if !o.remove_people {
         for r in photo.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
-            if let Some(n) = r.name.as_deref() {
-                push(n);
+            if let Some(n) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty())
+                && !flat.iter().any(|x| x.eq_ignore_ascii_case(n))
+            {
+                flat.push(n.to_string());
             }
         }
     }
-    let hier = if o.keyword_hierarchy { photo.meta.keywords.iter().filter(|k| !k.trim().is_empty()).cloned().collect() } else { Vec::new() };
+    let hier = if o.keyword_hierarchy { ek.hierarchical } else { Vec::new() };
     (flat, hier)
 }
 
@@ -1684,7 +1702,7 @@ fn prepare_guarded(
     };
     let work = if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
-        let meta = export_metadata(p, o);
+        let meta = export_metadata_with(Some(&session.catalog), p, o);
         let mut opts = o.clone();
         // a text watermark is a text template (E10): its tokens are this photo's ({title},
         // {date:%Y}, {creator}, {seq} …, the file-name tokens)

@@ -45,6 +45,7 @@
 //! | (none) | early builds: a log without a snapshot | |
 //! | 1 | up to v0.2.0 | |
 //! | 2 | after v0.2.0 | `Op::SetBrowsed`, `Catalog.browsed`, `Photo.local_baseline` |
+//! | 3 | the keyword list (Bryan's fork; upstream calls its own v5 this) | `Op::SetKeyword`, `Catalog.keyword_list` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -69,7 +70,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

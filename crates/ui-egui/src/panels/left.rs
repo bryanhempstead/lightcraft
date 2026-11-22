@@ -1581,14 +1581,27 @@ fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode
                 let _ = app.run("photo.setMeta", json!({"removeKeywords": [n.path]}));
             }
             ui.separator();
+            if ui.button(crate::i18n::tr("Edit Keyword Tag…")).clicked() {
+                let _ = app.run("dialog.editKeyword", json!({"keyword": n.path}));
+            }
             if ui.button(crate::i18n::tr("Rename Keyword…")).clicked() {
                 app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: n.path.clone(), to: n.path.clone() });
             }
             if ui.button(crate::i18n::tr("Merge into…")).clicked() {
                 app.ui.dialog = Some(crate::state::Dialog::MergeKeywords { from: vec![n.path.clone()], into: String::new() });
             }
+            if ui.button(crate::i18n::tr("Use as Keyword Shortcut")).clicked() {
+                let _ = app.run("keyword.setShortcut", json!({"keywords": [n.path]}));
+            }
+            if ui.button(crate::i18n::tr("Put New Keywords Inside This Keyword")).clicked() {
+                let _ = app.run("keyword.setDefaultParent", json!({"keyword": n.path}));
+            }
             if ui.button(crate::i18n::tr("Delete Keyword")).clicked() {
                 let _ = app.run("keyword.delete", json!({"keyword": n.path}));
+            }
+            ui.separator();
+            if ui.button(crate::i18n::tr("Purge Unused Keywords")).clicked() {
+                let _ = app.run("keyword.purgeUnused", json!({}));
             }
         });
         if open && !n.children.is_empty() {
