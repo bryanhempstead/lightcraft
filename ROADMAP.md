@@ -212,7 +212,11 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   filename templates and its naming tokens; Export Post-Processing (Show in Finder, open in an app, Export Actions);
   Set Copy as Original; Library Filter extras (No Label, copy status, stacks) and the Metadata column browser; 63
   smart-collection fields; selection set operations, Refine Photos, capture time from the file; raw imports start with
-  lens corrections; automatic versions off by default, like Lightroom.
+  lens corrections; automatic versions off by default, like Lightroom. Then: export status and the Exported filter,
+  Export To the original's folder, Add to This Catalog (stacked), export metadata options, named watermarks, tokens in
+  watermark text, several presets per export; collection extras, import presets, Eject after import, Quick Develop
+  crop / treatment, more sort orders, Painter modes, Text filter targets and rules, Auto-Stack by similarity, Find
+  Duplicates, Import from another library, Grid View Options (⌘J).
 
 ## Chinese and Japanese interfaces, and text watermarks
 
