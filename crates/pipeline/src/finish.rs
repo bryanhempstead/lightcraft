@@ -472,7 +472,7 @@ impl FinishParams {
         // raw files with a camera tone curve take Lightroom-matched Basic tone
         // raw files with a camera tone curve, and rendered files seen through the reference
         // curve (`tone::rendered_reference`), take Lightroom-matched Basic tone
-        let adobe = crate::adobe::Finish::new(info.adobe, &s.profile.id, s.profile.amount / 100.0);
+        let adobe = crate::adobe::Finish::new(info.adobe, &s.profile.id, s.profile.amount / 100.0, s.light.exposure);
         let lr_tone = info.camera_tone.is_some() || adobe.is_some();
         let (hl, sh) = ((s.light.highlights / 100.0) as f32, (s.light.shadows / 100.0) as f32);
         let tone_key = tone_stats.map(|t| t.key);

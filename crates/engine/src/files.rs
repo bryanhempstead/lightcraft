@@ -438,7 +438,12 @@ fn load_adobe(
     let m = color.matrix.to_f32();
     let wb = color.wb;
     let gain = 2f32.powf(color.gain_ev as f32);
-    let tables = color.hue_sat.clone().and_then(|h| {
+    let late = crate::adobe::hue_sat_in_finish(&cam.info.unique_model);
+    let adobe_key = match (&color.hue_sat, late) {
+        (Some(h), true) => crate::adobe::photo_base(cam.key, h, color.gain_ev),
+        _ => cam.key,
+    };
+    let tables = color.hue_sat.clone().filter(|_| adobe_key == cam.key).and_then(|h| {
         let look = lightcraft_raw::profile::ProfileLook { hue_sat_map: [Some(h), None], ..Default::default() };
         lightcraft_raw::profile::ProfileTables::new(&look, 1.0)
     });
@@ -488,7 +493,7 @@ fn load_adobe(
             camera_wb: Some(color.camera_wb),
             wb_map: None,
             native_long: native_w.max(native_h) as f32,
-            adobe: Some(cam.key),
+            adobe: Some(adobe_key),
         },
     ))
 }

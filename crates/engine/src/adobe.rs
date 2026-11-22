@@ -149,6 +149,42 @@ fn hsv_table(m: &sdk::HueSatMap) -> Option<HsvTable> {
     HsvTable::from_tags(&[m.dims[0] as u64, m.dims[1] as u64, m.dims[2].max(1) as u64], &data, m.encoding as u64)
 }
 
+/// Cameras whose profile hue/sat map is applied in the per-pixel stage, after white balance and
+/// Calibration, as Camera Raw does (R10, `docs/lr-match.md` → *Round 7*), instead of in the raw
+/// decode; their custom white balance then moves as the DNG colour spec says (strength 1, R05).
+/// Empty for now: with every camera in it Bryan's acceptance set goes 4.01 → 3.81 ΔE (Summer
+/// Fields R6 5.88 → 4.51), but one default photo crosses the pass line (1.99 → 2.01) and the three
+/// X100F PV6 photos get 0.17 worse, so the gate fails (`docs/lr-match.md` → *Round 7*).
+pub const HUE_SAT_IN_FINISH: &[&str] = &[];
+
+/// Whether `model`'s hue/sat map is applied in the per-pixel stage ([`HUE_SAT_IN_FINISH`]).
+pub fn hue_sat_in_finish(model: &str) -> bool {
+    HUE_SAT_IN_FINISH.contains(&model)
+}
+
+/// The base of camera `key` with `hue_sat` applied by the per-pixel stage (Bryan's fork, R10:
+/// Calibration acts before the profile's hue/sat map, as in Camera Raw), registered once per
+/// distinct map; `key` itself when the camera has no registered base.
+pub fn photo_base(key: u64, hue_sat: &HsvTable, gain_ev: f64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut h);
+    (hue_sat.hue_divisions, hue_sat.sat_divisions, hue_sat.val_divisions, hue_sat.srgb_value).hash(&mut h);
+    (gain_ev as f32).to_bits().hash(&mut h);
+    for v in hue_sat.data.iter().flatten() {
+        v.to_bits().hash(&mut h);
+    }
+    let k = h.finish();
+    if lightcraft_pipeline::adobe::base(k).is_some() {
+        return k;
+    }
+    let Some(b) = lightcraft_pipeline::adobe::base(key) else { return key };
+    let mut b = (*b).clone();
+    b.hue_sat = Some(hue_sat.clone());
+    b.hue_sat_ev = if gain_ev.is_finite() { gain_ev.clamp(-20.0, 20.0) as f32 } else { 0.0 };
+    if lightcraft_pipeline::adobe::register_base(k, b) { k } else { key }
+}
+
 fn load_camera(path: &Path) -> Result<Camera, String> {
     let bytes = read_capped(path, MAX_DCP)?;
     let profile = sdk::Profile::parse(&bytes).map_err(|e| e.to_string())?;
@@ -157,6 +193,8 @@ fn load_camera(path: &Path) -> Result<Camera, String> {
     let (curve, _own) = profile.tone_curve(&xs).map_err(|e| e.to_string())?;
     let look = profile.look_table().map_err(|e| e.to_string())?.as_ref().and_then(hsv_table);
     let base = lightcraft_pipeline::adobe::Base {
+        hue_sat: None,
+        hue_sat_ev: 0.0,
         look,
         curve: curve.iter().map(|v| *v as f32).collect(),
         black: if info.default_black_render == 0 { black_level() } else { 0.0 },
@@ -240,7 +278,11 @@ pub fn decode_color(cam: &Arc<Camera>, raw: &lightcraft_raw::RawImage) -> Option
     let wb = n.map(|v| (nmax / v) as f32);
     let c2p = Mat3(spec.camera_to_pcs);
     let matrix = pcs_to_working().mul(&c2p).mul(&Mat3::diag(1.0 / wb[0] as f64, 1.0 / wb[1] as f64, 1.0 / wb[2] as f64));
-    let hue_sat = cam.profile.hue_sat_map(spec.white_xy).ok().flatten().as_ref().and_then(hsv_table);
+    // applied per pixel (`HUE_SAT_IN_FINISH`): the white on a 0.0005 grid, so a library holds few
+    // distinct maps (`photo_base` keeps one per map)
+    let late = hue_sat_in_finish(&cam.info.unique_model);
+    let q = |v: f64| if late { (v / 0.0005).round() * 0.0005 } else { v };
+    let hue_sat = cam.profile.hue_sat_map([q(spec.white_xy[0]), q(spec.white_xy[1])]).ok().flatten().as_ref().and_then(hsv_table);
     let [temp, tint] = sdk::xy_to_temp_tint(spec.white_xy[0], spec.white_xy[1]).ok()?;
     // the file's baseline exposure (DNG tag; Fujifilm's raw exposure bias), the profile's offset
     // (a DNG carries its own baseline exposure: the measured offsets are for the camera's own format)
@@ -265,6 +307,9 @@ pub const WB_STRENGTH: &[(&str, f64)] = &[("LEICA M (Typ 262)", 1.0)];
 pub const WB_STRENGTH_DEFAULT: f64 = 2.0;
 
 pub fn wb_strength(model: &str) -> f64 {
+    if hue_sat_in_finish(model) {
+        return 1.0;
+    }
     WB_STRENGTH.iter().find(|(m, _)| *m == model).map_or(WB_STRENGTH_DEFAULT, |e| e.1)
 }
 

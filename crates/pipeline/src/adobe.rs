@@ -27,6 +27,13 @@ pub const CURVE_N: usize = 1024;
 /// A camera profile's rendering after the raw decode.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Base {
+    /// The profile's hue/sat map for the photo's white, when the per-pixel stage applies it
+    /// (Bryan's fork, R10: Calibration acts before it, as in Camera Raw); `None` when the raw
+    /// decode already did.
+    pub hue_sat: Option<HsvTable>,
+    /// The gain (EV) the raw decode applies after the hue/sat map (baseline exposure and the
+    /// camera's offsets): the map is read at the colour's level before it and before Exposure.
+    pub hue_sat_ev: f32,
     /// The profile's look table (applied after the exposure ramp, before the tone curve).
     pub look: Option<HsvTable>,
     /// The tone curve sampled at `i / CURVE_N` (linear in, linear out, 0..=1).
@@ -268,15 +275,21 @@ pub struct Finish {
     pub base: Arc<Base>,
     /// Look tables in order (the camera profile's, then the look profile's at its strength).
     pub tables: Vec<Arc<HsvTable>>,
+    /// With the base's hue/sat map first in `tables`: the scale back to its own level
+    /// (`2^-(hue_sat_ev + exposure)`), else 1.
+    pub hsm_k: f32,
     pub to_pp: [[f32; 3]; 3],
     pub from_pp: [[f32; 3]; 3],
 }
 
 impl Finish {
     /// For source base `key` and profile `id` at `amount` (0..=2); `None` without a registered base.
-    pub fn new(key: Option<u64>, id: &str, amount: f64) -> Option<Finish> {
+    pub fn new(key: Option<u64>, id: &str, amount: f64, exposure: f64) -> Option<Finish> {
         let base = base(key?)?;
         let mut tables = Vec::new();
+        if let Some(t) = &base.hue_sat {
+            tables.push(Arc::new(t.clone()));
+        }
         if let Some(t) = &base.look {
             tables.push(Arc::new(t.clone()));
         }
@@ -289,7 +302,9 @@ impl Finish {
             }
         }
         let (to_pp, from_pp) = prophoto_matrices();
-        Some(Finish { base, tables, to_pp, from_pp })
+        let ev = base.hue_sat_ev + if exposure.is_finite() { exposure.clamp(-20.0, 20.0) as f32 } else { 0.0 };
+        let hsm_k = if base.hue_sat.is_some() { (-ev).exp2() } else { 1.0 };
+        Some(Finish { base, tables, hsm_k, to_pp, from_pp })
     }
 
     /// Scene-linear Rec.2020 (after exposure) → ProPhoto after the ramp and look tables, ready
@@ -302,8 +317,8 @@ impl Finish {
         if black > 0.0 {
             p = p.map(|v| ramp(v, black));
         }
-        for t in &self.tables {
-            p = t.apply(p);
+        for (i, t) in self.tables.iter().enumerate() {
+            p = if i == 0 && self.hsm_k != 1.0 { t.apply(p.map(|v| v * self.hsm_k)).map(|v| v / self.hsm_k) } else { t.apply(p) };
         }
         p
     }
@@ -321,7 +336,7 @@ mod tests {
     use super::*;
 
     fn base() -> Base {
-        Base { look: None, curve: (0..=CURVE_N).map(|i| (i as f32 / CURVE_N as f32).sqrt()).collect(), black: 0.005 }
+        Base { hue_sat: None, hue_sat_ev: 0.0, look: None, curve: (0..=CURVE_N).map(|i| (i as f32 / CURVE_N as f32).sqrt()).collect(), black: 0.005 }
     }
 
     #[test]
@@ -356,7 +371,7 @@ mod tests {
         let mut bad = base();
         bad.curve[10] = f32::NAN;
         assert!(!register_base(0xbad, bad));
-        assert!(Finish::new(Some(0xbad), "adobe:Adobe Color", 1.0).is_none());
+        assert!(Finish::new(Some(0xbad), "adobe:Adobe Color", 1.0, 0.0).is_none());
         assert!(register_base(0x600d, base()));
         register_look(
             "adobe:Test Look",
@@ -368,10 +383,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        let f = Finish::new(Some(0x600d), "adobe:Test Look", 1.0).unwrap();
+        let f = Finish::new(Some(0x600d), "adobe:Test Look", 1.0, 0.0).unwrap();
         assert_eq!(f.tables.len(), 1);
-        assert!(Finish::new(Some(0x600d), "adobe:Test Look", 0.0).unwrap().tables.is_empty(), "amount 0 with min 0: no table");
-        let half = Finish::new(Some(0x600d), "adobe:Test Look", 0.5).unwrap();
+        assert!(Finish::new(Some(0x600d), "adobe:Test Look", 0.0, 0.0).unwrap().tables.is_empty(), "amount 0 with min 0: no table");
+        let half = Finish::new(Some(0x600d), "adobe:Test Look", 0.5, 0.0).unwrap();
         assert!((half.tables[0].data[0][1] - 1.1).abs() < 1e-6);
         // grey stays grey through the ramp-free path, and round-trips through ProPhoto
         let g = f.post_tone(f.pre_tone([0.18, 0.18, 0.18]));

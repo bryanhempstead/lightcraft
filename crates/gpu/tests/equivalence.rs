@@ -702,7 +702,7 @@ fn adobe_base_and_look() {
         srgb_value: true,
     };
     let curve: Vec<f32> = (0..=adobe::CURVE_N).map(|i| (i as f32 / adobe::CURVE_N as f32).powf(0.45)).collect();
-    assert!(adobe::register_base(0xad0be, adobe::Base { look: Some(dcp), curve, black: 0.005 }));
+    assert!(adobe::register_base(0xad0be, adobe::Base { hue_sat: None, hue_sat_ev: 0.0, look: Some(dcp), curve, black: 0.005 }));
     adobe::register_look(
         "adobe:Test Look",
         adobe::Look {
@@ -737,6 +737,25 @@ fn adobe_base_and_look() {
     s.light.whites = -20.0;
     s.light.blacks = 15.0;
     check("adobe look edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+    // R10: the profile's hue/sat map in the per-pixel stage (three tables, read at its own level)
+    let hsm = HsvTable {
+        hue_divisions: 90,
+        sat_divisions: 25,
+        val_divisions: 1,
+        data: (0..2250).map(|i| [(i as f32 * 0.07).sin() * 5.0, 0.92 + (i % 25) as f32 * 0.006, 1.0]).collect(),
+        srgb_value: false,
+    };
+    let mut b = (*adobe::base(0xad0be).expect("registered")).clone();
+    b.hue_sat = Some(hsm);
+    b.hue_sat_ev = 0.6;
+    assert!(adobe::register_base(0xad0bf, b));
+    let info_hsm = SourceInfo { adobe: Some(0xad0bf), ..info };
+    s.light.exposure = -0.7;
+    s.calibration.green_hue = 44.0;
+    s.calibration.blue_sat = 38.0;
+    check("adobe hue/sat map after calibration", &src, &info_hsm, &s, &RenderRequest::fit(320, 240));
+    s.light.exposure = 0.0;
+    s.calibration = Default::default();
     // Lightroom's measured HSL / Saturation / Vibrance tables (`colortab`)
     s.color.saturation = -30.0;
     s.color.vibrance = 20.0;

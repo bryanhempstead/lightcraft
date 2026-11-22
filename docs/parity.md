@@ -274,7 +274,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-EDIT-GEOM-CONSTRAIN | Constrain crop | P1 | ✅ | `crates/ui-egui/src/panels/right.rs` (checkbox → `cmd:develop.merge`) | |
 | LR-EDIT-GEOM-GRID | Grid while transforming | P2 | ✅ | `crates/ui-egui/src/panels/detail.rs` | a fine grid over the photo while a geometry slider is dragged |
 | LR-EDIT-LENSBLUR | Lens blur | P2 | ⬜ | | settings field reserved, not rendered |
-| LR-EDIT-CALIB | Calibration [Classic] | P1 | ✅ | `ctl:calibration.*` | shadows tint, red/green/blue primary hue and saturation; read/written in XMP |
+| LR-EDIT-CALIB | Calibration [Classic] | P1 | 🟡 | `ctl:calibration.*` | shadows tint, red/green/blue primary hue and saturation; read/written in XMP. Applied after the camera profile's hue/sat map, where Camera Raw applies it before: Summer Fields' calibration on the oracle chart 4.22 ΔE; the Camera Raw order is in the code (`engine::adobe::HUE_SAT_IN_FINISH`, 2.20 ΔE) but off until it passes the acceptance gate (`docs/lr-match.md` → Round 7) |
 | LR-EDIT-SECTION-TOGGLE | Section on/off | P1 | ✅ | `cmd:develop.sectionEnabled`, `crates/develop/src/lib.rs` (`effective`) | the eye on a section header hides its adjustments: Light (with the curve), Color (white balance, presence, mixers, grading, point colour), Effects, Detail, Optics, Geometry, Calibration; masks stay on (issue #316 fixed Light, Color and Detail, which had no effect) |
 | LR-EDIT-RESET | Reset all / section / slider | P0 | ✅ | `cmd:develop.reset`, `cmd:develop.resetSection`, `cmd:develop.resetControl`, `crates/ui-egui/src/widgets.rs` (double-click) | no "reset to open" |
 | LR-EDIT-SHOWORIG | Show original | P0 | ✅ | `cmd:view.showOriginal` | |

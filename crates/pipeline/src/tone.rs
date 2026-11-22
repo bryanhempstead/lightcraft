@@ -846,6 +846,8 @@ mod tests {
     #[test]
     fn adobe_tone_tables_are_monotone_and_safe() {
         let base = crate::adobe::Base {
+            hue_sat: None,
+            hue_sat_ev: 0.0,
             look: None,
             curve: (0..=crate::adobe::CURVE_N).map(|i| (i as f32 / crate::adobe::CURVE_N as f32).sqrt()).collect(),
             black: 0.0,
