@@ -6,6 +6,17 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (cameras agent, 2026-11-22, branch worktree-agent-acff297ced8c6b589, not merged) **LR-IMP-CAMERA-COVERAGE +
+  LR-IMP-FORMATS from Bryan's real library** — `docs/camera-coverage.md`: all 15 raw bodies (catalog + drives) decode
+  natively, crop = Lightroom's (smart previews' OriginalDefaultFinalSize), levels = LibRaw, ΔE vs his stored previews.
+  69d692264 JPEG XL DNG native (jxl-oxide; his 3,745 JXL smart previews, ΔE 0.64 vs original), deba98211 LibRaw
+  fallback keeps the file's DNG/RAF tags (BaselineExposure, opcodes, gain map, DR bias: was up to 3 EV dark),
+  ee46520e8 + 9f58b2133 Canon black from the real masked columns (T3 2282→2048, CC0 6D 2591→2047…), 4378f2085 CR2
+  white = ColorData SpecularWhiteLevel, 32d96d428 Rebel/Kiss names → Camera Raw profile (T3 rendered washed out),
+  7e1f99a05 CinemaDNG make. lr-compare.json was briefly overwritten by my compare run (tag nat); a later r12g4 run by
+  another agent has replaced it since, so nothing to restore. needs.you #183 (rebuild Previews.lrdata), #184 (where the
+  //lot48/…/MY MEDIA originals are). Left: Lightroom ΔE for Q2 / 5D III / iPhone 17 / Sony / Nikon (no previews),
+  specular vs normal white for Canon, DNG SDK built without JXL.
 - [ ] (hdr2 agent, 2026-11-22, branch worktree-agent-ac64e49f32754ea1f, not merged) **HDR leftovers + LR-VID-EDIT** —
   e0f0ea988 HDR loupe on the GPU (finish kernel's float HDR output, `PEAK`/`SCENE_TOP` params appended; CPU/GPU
   equivalence crates/gpu/tests/hdr.rs; 1936x1290 draft drag 12–14 ms GPU vs 340–620 ms CPU under load ~100; UI
