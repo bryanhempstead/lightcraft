@@ -153,8 +153,12 @@ pub struct Metadata {
     pub rating: Option<i8>,
     /// Colour label name (e.g. "Red").
     pub label: Option<String>,
-    /// Face/pet/focus/barcode regions (`mwg-rs:Regions`), read from XMP only.
+    /// Face/pet/focus/barcode regions (`mwg-rs:Regions`). [`write_xmp`] writes the named ones (as
+    /// Lightroom Classic does: a found face nobody named stays in the catalog).
     pub regions: Vec<Region>,
+    /// The upright pixel size the regions apply to (`mwg-rs:AppliedToDimensions`), for writing.
+    #[serde(skip)]
+    pub region_dims: Option<(u32, u32)>,
     /// IPTC Extension / PLUS fields by id ([`iptc_ext::IPTC_EXT`]; a list as `a; b`).
     pub iptc_ext: std::collections::BTreeMap<String, String>,
 }

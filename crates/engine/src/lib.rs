@@ -47,6 +47,7 @@ pub mod media;
 pub mod memory;
 pub mod merge;
 pub mod originals;
+pub mod people;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
@@ -58,6 +59,7 @@ pub mod smart;
 pub mod trash;
 pub mod video;
 mod view;
+pub mod vision;
 
 use std::sync::Arc;
 
@@ -243,6 +245,10 @@ pub struct Session {
     pub segmenter: segment::Segmenter,
     /// Photo ▸ Enhance: its models and their downloads.
     pub enhancer: enhance::Enhancer,
+    /// People, AI culling and AI search: models, indexes, background runs.
+    pub vision: vision::Vision,
+    /// The People view's caches (face clusters, the last view).
+    pub people_cache: people::PeopleCache,
     /// Selected spot (Remove panel), by index into the active photo's spots.
     pub active_spot: Option<usize>,
     /// The persistent library this session writes to (`None` = in-memory only).
@@ -361,6 +367,8 @@ impl Session {
             active_mask: None,
             segmenter: segment::Segmenter::default(),
             enhancer: enhance::Enhancer::default(),
+            vision: vision::Vision::default(),
+            people_cache: people::PeopleCache::default(),
             active_spot: None,
             library: None,
             xmp: sidecar::XmpPrefs::default(),
@@ -799,6 +807,10 @@ impl Session {
             // the export record isn't the catalog's: its changes don't move the revision
             key.1.push_str(&format!("|exports {}", self.export_log.len()));
         }
+        if self.filter.semantic.is_some() {
+            // nor is the search index
+            key.1.push_str(&format!("|semantic {}", self.vision.generation));
+        }
         if self.source == LibrarySource::Missing && self.media.availability.is_background() {
             // the view fills in as the background checks find files gone
             key.1.push_str(&format!("|{}", self.media.availability.generation()));
@@ -806,22 +818,17 @@ impl Session {
         if self.visible_key.as_ref() != Some(&key) {
             // "in the last N days" rules count back from the session's clock
             lightcraft_catalog::rules::set_now(Some((self.clock)()));
-            let mut f = self.source.to_filter(&self.filter, &self.catalog);
-            if self.source == LibrarySource::Folder {
-                // no folder chosen: nothing (an empty path matches nothing)
-                let b = self.browse.clone().unwrap_or_default();
-                f.folder = Some(b.path);
-                f.subfolders = b.subfolders;
-            }
-            if self.source == LibrarySource::LibraryFolder {
-                // no folder chosen: nothing (`.` names no folder)
-                f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
-                f.library_folder_only = !self.library_folder_subfolders.unwrap_or(self.library_subfolders);
-            }
+            let f = self.view_filter();
             let mut visible = self.catalog.query(&f, &self.sort);
             // Exported / not exported: the export record is the library's, not the catalog's
             if let Some(e) = self.filter.exported {
                 visible.retain(|id| self.export_log.contains_key(&id.0) == e);
+            }
+            // AI search: the best matches among them, best first (no index or model: nothing matches)
+            if let Some(q) = self.filter.semantic.clone() {
+                let ranked = self.semantic_rank(&q).unwrap_or_default();
+                let shown: std::collections::HashSet<PhotoId> = visible.iter().copied().collect();
+                visible = ranked.iter().map(|(id, _)| *id).filter(|id| shown.contains(id)).collect();
             }
             if visible.is_empty() && self.source == LibrarySource::LibraryFolder && !self.folder_holds_photos() {
                 // the shown folder lost its last photo (deleted, moved, removed): everything, not
@@ -867,6 +874,24 @@ impl Session {
             self.visible_key = Some(key);
         }
         &self.visible
+    }
+
+    /// The filter the grid applies for the current source (a folder, collection or library folder chosen in the
+    /// sidebar included), as [`Self::visible`] runs it.
+    pub fn view_filter(&self) -> Filter {
+        let mut f = self.source.to_filter(&self.filter, &self.catalog);
+        if self.source == LibrarySource::Folder {
+            // no folder chosen: nothing (an empty path matches nothing)
+            let b = self.browse.clone().unwrap_or_default();
+            f.folder = Some(b.path);
+            f.subfolders = b.subfolders;
+        }
+        if self.source == LibrarySource::LibraryFolder {
+            // no folder chosen: nothing (`.` names no folder)
+            f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
+            f.library_folder_only = !self.library_folder_subfolders.unwrap_or(self.library_subfolders);
+        }
+        f
     }
 
     /// Whether the library still holds a photo imported from the folder a `LibraryFolder` source
@@ -989,6 +1014,8 @@ mod tests_metadata_status;
 mod tests_naming;
 #[cfg(test)]
 mod tests_organize;
+#[cfg(test)]
+mod tests_people;
 #[cfg(test)]
 mod tests_persist;
 #[cfg(test)]

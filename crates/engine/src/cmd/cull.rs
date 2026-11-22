@@ -1,7 +1,10 @@
 //! Assisted culling: score photos for focus and clipping, group similar shots taken close
 //! together (bursts) and mark the sharpest of each group; optionally reject blurry ones and pick
-//! each group's best. Scores are kept on the photos (rules / smart albums: `sharpness`,
-//! `bestOfGroup`).
+//! each group's best. With the face models (L09, Lightroom's AI culling criteria) also: the faces
+//! in each photo, how many blink (eyes closed) and how sharp the main face is — a burst's best is
+//! then the one with nobody blinking and the sharpest face, and photos can be rejected for closed
+//! eyes or a soft face. Scores are kept on the photos (rules / smart albums: `sharpness`,
+//! `bestOfGroup`, `faceFocus`, `eyesClosed`, `faceCount`).
 
 use lightcraft_catalog::{Analysis, Flag, Op, PhotoId};
 use serde_json::{Value, json};
@@ -23,6 +26,20 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     let ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p) } else { s.visible_cloned() };
     let reject_below = p.get("rejectBelow").and_then(Value::as_f64).map(|v| v as f32);
     let pick_best = p.get("pickBest").and_then(Value::as_bool).unwrap_or(false);
+    let reject_eyes = p.get("rejectEyesClosed").and_then(Value::as_bool).unwrap_or(false);
+    let reject_face_below = p.get("rejectFaceBelow").and_then(Value::as_f64).map(|v| v as f32);
+    // faces: from the faces index; photos not in it yet are analysed first (in the background in the
+    // app: their face scores arrive with the results, `Session::vision_poll`)
+    let mut faces_pending = 0;
+    if s.vision.installed(lightcraft_vision::models::Package::Faces) && p.get("faces").and_then(Value::as_bool).unwrap_or(true) {
+        let todo = s.vision_items(crate::vision::Kind::Faces, &ids, false)?.len();
+        if todo > 0 && !s.vision.busy() {
+            s.vision_start(crate::vision::Kind::Faces, &ids, false)?;
+            if s.vision.background {
+                faces_pending = todo;
+            }
+        }
+    }
     // measure (thumbnail-level sources: fast, and enough for focus at 512 px)
     let mut rows: Vec<(PhotoId, Option<i64>, f32, f32, [f32; 64])> = Vec::new();
     let mut failed = Vec::new();
@@ -51,12 +68,21 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
             group_of[i] = Some(g);
         }
     }
+    // face scores, from the index
+    let faces: Vec<Option<FaceScores>> = rows.iter().map(|r| face_scores(s, r.0)).collect();
+    // a burst's best: nobody blinking first, then the sharpest main face, then the sharpest photo
+    let rank = |i: usize| -> f32 {
+        match faces.get(i).copied().flatten().filter(|f| f.faces > 0) {
+            Some(f) => -1000.0 * f32::from(f.eyes_closed) + f.focus.unwrap_or(0.0) * 2.0 + rows[i].2,
+            None => rows[i].2,
+        }
+    };
     let mut best: std::collections::HashMap<u32, (usize, f32)> = Default::default();
     for (i, g) in group_of.iter().enumerate() {
         if let Some(g) = g {
-            let e = best.entry(*g).or_insert((i, -1.0));
-            if rows[i].2 > e.1 {
-                *e = (i, rows[i].2);
+            let e = best.entry(*g).or_insert((i, f32::MIN));
+            if rank(i) > e.1 {
+                *e = (i, rank(i));
             }
         }
     }
@@ -67,21 +93,66 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
         let g = group_of[i];
         let is_best = g.is_some_and(|g| best.get(&g).is_some_and(|b| b.0 == i));
         let prev = s.catalog.photo(*id).and_then(|p| p.analysis).unwrap_or_default();
-        ops.push(Op::SetAnalysis { id: *id, analysis: Some(Analysis { sharpness: *sharp, clipped: *clip, group: g, best: is_best, ..prev }) });
+        let fs = faces.get(i).copied().flatten();
+        let (n_faces, eyes_closed, face_focus) = match fs {
+            Some(f) => (f.faces, f.eyes_closed, f.focus),
+            None => (prev.faces, prev.eyes_closed, prev.face_focus),
+        };
+        ops.push(Op::SetAnalysis {
+            id: *id,
+            analysis: Some(Analysis { sharpness: *sharp, clipped: *clip, group: g, best: is_best, faces: n_faces, eyes_closed, face_focus }),
+        });
         let flag = s.catalog.photo(*id).map(|p| p.flag).unwrap_or_default();
-        if reject_below.is_some_and(|t| *sharp < t) && flag != Flag::Reject {
+        let blink = reject_eyes && eyes_closed > 0;
+        let soft_face = reject_face_below.is_some_and(|t| face_focus.is_some_and(|f| f < t));
+        if (reject_below.is_some_and(|t| *sharp < t) || blink || soft_face) && flag != Flag::Reject {
             ops.push(Op::SetFlag { id: *id, flag: Flag::Reject });
             rejected += 1;
         } else if pick_best && is_best && flag == Flag::None {
             ops.push(Op::SetFlag { id: *id, flag: Flag::Pick });
             picked += 1;
         }
-        out.push(json!({"id": id.0, "sharpness": (sharp * 10.0).round() / 10.0, "clipped": clip, "group": g, "best": is_best}));
+        out.push(json!({
+            "id": id.0, "sharpness": (sharp * 10.0).round() / 10.0, "clipped": clip, "group": g, "best": is_best,
+            "faces": n_faces, "eyesClosed": eyes_closed, "faceFocus": face_focus.map(|f| (f * 10.0).round() / 10.0),
+        }));
     }
     if !ops.is_empty() {
         s.commit("Assisted Culling", Op::Batch { ops })?;
     }
-    Ok(json!({"photos": out, "groups": best.len(), "rejected": rejected, "picked": picked, "failed": failed}))
+    Ok(json!({"photos": out, "groups": best.len(), "rejected": rejected, "picked": picked, "failed": failed, "facesPending": faces_pending}))
+}
+
+/// What the faces index says about a photo, for culling.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FaceScores {
+    pub faces: u16,
+    pub eyes_closed: u16,
+    pub focus: Option<f32>,
+}
+
+/// Both eyes of a face shut: neither clearly open and together more likely shut than not (a squint or a wink
+/// isn't a blink).
+pub(crate) fn blinking(e: [f32; 2]) -> bool {
+    e[0].min(e[1]) >= 0.7 && (e[0] + e[1]) / 2.0 >= 0.85
+}
+
+/// Faces, blinks among the main faces (at least a quarter the size of the largest) and the largest face's focus.
+pub(crate) fn scores_of(record: &lightcraft_vision::index::FaceRecord) -> FaceScores {
+    let area = |f: &lightcraft_vision::index::FaceEntry| f.rect[2].max(0.0) * f.rect[3].max(0.0);
+    let found: Vec<&lightcraft_vision::index::FaceEntry> = record.faces.iter().filter(|f| f.score > 0.0).collect();
+    let largest = found.iter().map(|f| area(f)).fold(0f32, f32::max);
+    let main = found.iter().filter(|f| area(f) >= largest * 0.25);
+    let eyes_closed = main.filter(|f| f.eyes.is_some_and(blinking)).count();
+    let focus = found.iter().max_by(|a, b| area(a).total_cmp(&area(b))).map(|f| f.sharpness).filter(|v| v.is_finite());
+    FaceScores { faces: found.len().min(u16::MAX as usize) as u16, eyes_closed: eyes_closed.min(u16::MAX as usize) as u16, focus }
+}
+
+fn face_scores(s: &mut Session, id: PhotoId) -> Option<FaceScores> {
+    let key = crate::media::content_key(s.catalog.photo(id)?);
+    let index = s.faces_index().ok()?;
+    let index = index.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    index.get(&key).map(scores_of)
 }
 
 /// Find Similar: photos that look like `id` (signatures from thumbnail-level sources, cached by
@@ -241,7 +312,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Assisted Culling",
             [],
             None,
-            "{ids?, rejectBelow?: sharpness 0..100, pickBest?: bool} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots taken within 10 s and mark the sharpest of each; optionally reject blurry photos and pick each group's best; one undo step → {photos: [{id, sharpness, clipped, group, best}], groups, rejected, picked}",
+            "{ids?, rejectBelow?: sharpness 0..100, rejectEyesClosed?: bool, rejectFaceBelow?: face focus 0..100, pickBest?: bool, faces?: bool (true)} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots taken within 10 s and mark the best of each (nobody blinking, sharpest face, sharpest photo); with the face models also the faces, blinks and main-face focus (photos not analysed yet are first: in the background in the app → facesPending); optionally reject blurry photos, blinks or soft faces and pick each group's best; one undo step → {photos: [{id, sharpness, clipped, group, best, faces, eyesClosed, faceFocus}], groups, rejected, picked, facesPending}",
             always,
             analyze
         ),

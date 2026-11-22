@@ -26,20 +26,29 @@ fn normalize(v: &mut [f32]) {
 }
 
 /// Groups of indices into `faces` (each group's faces in the order given), largest group first; faces of a different
-/// length than the first are left out.
-pub fn cluster(faces: &[&[f32]], threshold: f32) -> Vec<Vec<usize>> {
+/// length than the first are left out. Faces with the same `owner` (the same photo) never share a group: nobody is
+/// twice in one photo.
+pub fn cluster(faces: &[&[f32]], owners: &[u64], threshold: f32) -> Vec<Vec<usize>> {
     let Some(dim) = faces.first().map(|f| f.len()) else { return Vec::new() };
     let mut sums: Vec<Vec<f32>> = Vec::new();
     let mut means: Vec<Vec<f32>> = Vec::new();
     let mut of: Vec<Option<usize>> = vec![None; faces.len()];
-    let best = |means: &[Vec<f32>], f: &[f32]| -> Option<(usize, f32)> {
-        means.iter().enumerate().map(|(i, m)| (i, dot(m, f))).max_by(|a, b| a.1.total_cmp(&b.1))
+    // the owners each group holds
+    let mut held: Vec<Vec<u64>> = Vec::new();
+    let owner = |i: usize| owners.get(i).copied();
+    let best = |means: &[Vec<f32>], held: &[Vec<u64>], f: &[f32], own: Option<u64>| -> Option<(usize, f32)> {
+        means
+            .iter()
+            .enumerate()
+            .filter(|(g, _)| own.is_none_or(|o| !held.get(*g).is_some_and(|h| h.contains(&o))))
+            .map(|(i, m)| (i, dot(m, f)))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
     };
     for (i, f) in faces.iter().enumerate() {
         if f.len() != dim || f.iter().any(|v| !v.is_finite()) {
             continue;
         }
-        match best(&means, f) {
+        match best(&means, &held, f, owner(i)) {
             Some((g, s)) if s >= threshold => {
                 if let (Some(sum), Some(mean)) = (sums.get_mut(g), means.get_mut(g)) {
                     for (a, b) in sum.iter_mut().zip(f.iter()) {
@@ -48,6 +57,9 @@ pub fn cluster(faces: &[&[f32]], threshold: f32) -> Vec<Vec<usize>> {
                     mean.copy_from_slice(sum);
                     normalize(mean);
                 }
+                if let (Some(h), Some(o)) = (held.get_mut(g), owner(i)) {
+                    h.push(o);
+                }
                 of[i] = Some(g);
             }
             _ => {
@@ -55,18 +67,30 @@ pub fn cluster(faces: &[&[f32]], threshold: f32) -> Vec<Vec<usize>> {
                 let mut m = f.to_vec();
                 normalize(&mut m);
                 means.push(m);
+                held.push(owner(i).into_iter().collect());
                 of[i] = Some(means.len() - 1);
             }
         }
     }
-    // second pass: every face to the group it fits best now (its own group if nothing reaches the threshold)
+    // second pass: every face to the group it fits best now (its own group if nothing reaches the threshold), when
+    // that group has no other face of its photo
     for (i, f) in faces.iter().enumerate() {
         let Some(own) = of[i] else { continue };
-        if let Some((g, s)) = best(&means, f)
+        if let Some((g, s)) = best(&means, &held, f, owner(i))
             && g != own
             && s >= threshold
             && s > means.get(own).map(|m| dot(m, f)).unwrap_or(f32::MIN)
         {
+            if let Some(o) = owner(i) {
+                if let Some(h) = held.get_mut(own)
+                    && let Some(k) = h.iter().position(|x| *x == o)
+                {
+                    h.remove(k);
+                }
+                if let Some(h) = held.get_mut(g) {
+                    h.push(o);
+                }
+            }
             of[i] = Some(g);
         }
     }
@@ -123,9 +147,14 @@ mod tests {
         let a3 = unit(&[0.9, 0.0, 0.1]);
         let odd = vec![f32::NAN, 0.0, 0.0];
         let faces: Vec<&[f32]> = vec![&a1, &b1, &a2, &a3, &odd];
-        let g = cluster(&faces, 0.8);
+        let g = cluster(&faces, &[], 0.8);
         assert_eq!(g, vec![vec![0, 2, 3], vec![1]]);
-        assert!(cluster(&[], 0.5).is_empty());
+        assert!(cluster(&[], &[], 0.5).is_empty());
+        // two look-alikes in one photo are two people
+        let g = cluster(&faces[..4], &[1, 2, 1, 3], 0.8);
+        assert_eq!(g.len(), 3);
+        assert!(g.iter().all(|grp| !(grp.contains(&0) && grp.contains(&2))), "{g:?}");
+        assert!(g.iter().any(|grp| grp.contains(&3) && grp.len() == 2), "{g:?}");
     }
 
     #[test]

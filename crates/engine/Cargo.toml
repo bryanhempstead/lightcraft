@@ -37,11 +37,14 @@ harfrust = { version = "0.12", default-features = false, features = ["std"] }
 lightcraft-segment = { workspace = true, optional = true }
 # Enhance: options, catalog and in-place results always; the models with the `enhance` feature
 lightcraft-enhance = { workspace = true }
+# People (faces), AI culling criteria and natural-language search (models run natively only)
+lightcraft-vision = { workspace = true }
 lightcraft-denoise-core = { workspace = true }
 
 # Map tiles over HTTPS (LR-MAP-MODULE; the web build fetches none)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lightcraft-fetch = { workspace = true }
+candle-core = { workspace = true }
 
 [features]
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.

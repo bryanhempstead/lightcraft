@@ -163,6 +163,9 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
     if !f.text.trim().is_empty() {
         add(format!("Search: “{}”", f.text.trim()), json!({"text": ""}));
     }
+    if let Some(q) = f.semantic.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+        add(format!("AI search: “{q}”"), json!({"semantic": Null}));
+    }
     if f.rating > 0 {
         let op = match f.rating_op {
             RatingOp::AtLeast => "≥",

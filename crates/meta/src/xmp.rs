@@ -35,8 +35,9 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("lc", LC_NS),
     // Read-only: develop settings written by other raw developers (interchange; see docs/xmp-interop.md).
     ("crs", CRS_NS),
-    // Read-only: face/pet/focus regions written by Lightroom, digiKam, Picasa and others (MWG Region
-    // Guidelines v2.0). Canonicalising these three lets a packet use any prefix for them.
+    // Face/pet/focus regions written by Lightroom, digiKam, Picasa and others (MWG Region Guidelines
+    // v2.0); LightCraft writes its named faces back. Canonicalising these three lets a packet use any
+    // prefix for them.
     ("mwg-rs", "http://www.metadataworkinggroup.com/schemas/regions/"),
     ("stArea", "http://ns.adobe.com/xmp/sType/Area#"),
     ("stDim", "http://ns.adobe.com/xap/1.0/sType/Dimensions#"),
@@ -711,8 +712,58 @@ pub fn write_xmp_lc_crs(meta: &Metadata, lc: &[(&str, &str)], crs: &[(&str, Stri
             tf(r & 0x40 != 0)
         ));
     }
+    write_regions(&mut x, meta);
     x.push_str("  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>");
     x
+}
+
+/// `mwg-rs:Regions` with the named regions of `meta` (MWG Region Guidelines: the area's centre and size,
+/// normalized to the upright picture, which `AppliedToDimensions` names when known).
+fn write_regions(x: &mut String, meta: &Metadata) {
+    let named: Vec<&Region> = meta.regions.iter().filter(|r| r.name.as_deref().is_some_and(|n| !n.trim().is_empty())).collect();
+    if named.is_empty() {
+        return;
+    }
+    x.push_str("   <mwg-rs:Regions rdf:parseType=\"Resource\">\n");
+    if let Some((w, h)) = meta.region_dims.filter(|(w, h)| *w > 0 && *h > 0) {
+        x.push_str(&format!("    <mwg-rs:AppliedToDimensions rdf:parseType=\"Resource\" stDim:w=\"{w}\" stDim:h=\"{h}\" stDim:unit=\"pixel\"/>\n"));
+    }
+    x.push_str("    <mwg-rs:RegionList>\n     <rdf:Bag>\n");
+    let num = |v: f64| {
+        let v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+        let s = format!("{v:.6}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    for r in named {
+        let (cx, cy) = ((r.rect.x0 + r.rect.x1) / 2.0, (r.rect.y0 + r.rect.y1) / 2.0);
+        let (w, h) = (r.rect.x1 - r.rect.x0, r.rect.y1 - r.rect.y0);
+        let kind = match &r.kind {
+            RegionKind::Face => "Face",
+            RegionKind::Pet => "Pet",
+            RegionKind::Focus => "Focus",
+            RegionKind::BarCode => "BarCode",
+            RegionKind::Other(t) => t.as_str(),
+        };
+        x.push_str("      <rdf:li rdf:parseType=\"Resource\">\n");
+        x.push_str(&format!(
+            "       <mwg-rs:Area rdf:parseType=\"Resource\" stArea:x=\"{}\" stArea:y=\"{}\" stArea:w=\"{}\" stArea:h=\"{}\" stArea:unit=\"normalized\"/>\n",
+            num(cx),
+            num(cy),
+            num(w),
+            num(h)
+        ));
+        if let Some(n) = &r.name {
+            x.push_str(&format!("       <mwg-rs:Name>{}</mwg-rs:Name>\n", escape(n.as_str())));
+        }
+        if !kind.is_empty() {
+            x.push_str(&format!("       <mwg-rs:Type>{}</mwg-rs:Type>\n", escape(kind)));
+        }
+        if let Some(d) = &r.description {
+            x.push_str(&format!("       <mwg-rs:Description>{}</mwg-rs:Description>\n", escape(d.as_str())));
+        }
+        x.push_str("      </rdf:li>\n");
+    }
+    x.push_str("     </rdf:Bag>\n    </mwg-rs:RegionList>\n   </mwg-rs:Regions>\n");
 }
 
 #[cfg(test)]
@@ -721,9 +772,10 @@ mod tests {
 
     fn full() -> Metadata {
         Metadata {
-            // write_xmp doesn't emit regions yet (read-only interchange; see docs/xmp-interop.md), so the
-            // roundtrip fixture must leave this empty or `roundtrip_all_fields` can't round-trip it.
+            // regions have their own round-trip test (`named_regions_are_written_and_read_back`); the
+            // fixture leaves them out
             regions: Vec::new(),
+            region_dims: None,
             iptc_ext: [
                 ("personShown", "Ann <Lee>; Bo"),
                 ("event", "Wedding & party"),
@@ -892,6 +944,26 @@ mod tests {
     /// Lightroom typically writes it. One named face, one untyped/unnamed region (still usable), one
     /// region with a description. `AppliedToDimensions` is present but irrelevant: normalized areas
     /// (the default, and the only unit real files use) don't need it.
+    #[test]
+    fn named_regions_are_written_and_read_back() {
+        let face = |name: Option<&str>, x0: f64| Region {
+            rect: Rect { x0, y0: 0.2, x1: x0 + 0.1, y1: 0.35 },
+            kind: RegionKind::Face,
+            name: name.map(str::to_string),
+            description: None,
+            rejected: vec!["Not me".into()],
+        };
+        let meta = Metadata { regions: vec![face(Some("Ann <Lee>"), 0.1), face(None, 0.5)], region_dims: Some((4000, 3000)), ..Default::default() };
+        let x = write_xmp(&meta, None);
+        assert!(x.contains("stDim:w=\"4000\""), "{x}");
+        let back = parse_xmp(&x).unwrap().metadata.regions;
+        assert_eq!(back.len(), 1, "only named regions are written");
+        assert_eq!(back[0].name.as_deref(), Some("Ann <Lee>"));
+        assert!((back[0].rect.x0 - 0.1).abs() < 1e-5 && (back[0].rect.y1 - 0.35).abs() < 1e-5);
+        assert!(back[0].rejected.is_empty());
+        assert!(!write_xmp(&Metadata { regions: vec![face(None, 0.1)], ..Default::default() }, None).contains("mwg-rs:Regions"));
+    }
+
     #[test]
     fn mwg_regions_element_form() {
         let x = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">

@@ -94,6 +94,10 @@ pub struct Filter {
     /// Smart-album rules (all / any / none, nested groups; see [`crate::rules`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_set: Option<crate::RuleSet>,
+    /// Natural-language search ("dog on the beach"): the photos whose picture matches best, best first.
+    /// The embeddings are the engine's: it applies this one ([`Filter::matches`] ignores it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

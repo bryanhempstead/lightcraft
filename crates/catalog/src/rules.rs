@@ -84,6 +84,9 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("album", "Album", Kind::Number),
     ("sharpness", "Focus (assisted culling)", Kind::Number),
     ("bestOfGroup", "Best of Similar Shots", Kind::Bool),
+    ("faceFocus", "Face Focus (assisted culling)", Kind::Number),
+    ("eyesClosed", "Eyes Closed (faces)", Kind::Number),
+    ("faceCount", "Faces Found", Kind::Number),
     // Lightroom Classic's other smart-collection fields (L08)
     ("labelText", "Label Text", Kind::Text),
     ("copyName", "Copy Name", Kind::Text),
@@ -435,6 +438,9 @@ impl Rule {
             "megapixels" => num_op(op, Some(p.width as f64 * p.height as f64 / 1e6), value),
             "sharpness" => num_op(op, p.analysis.map(|a| a.sharpness as f64), value),
             "bestOfGroup" => p.analysis.is_some_and(|a| a.best || a.group.is_none()) == value.as_bool().unwrap_or(true),
+            "faceFocus" => num_op(op, p.analysis.and_then(|a| a.face_focus).map(f64::from), value),
+            "eyesClosed" => num_op(op, p.analysis.filter(|a| a.face_focus.is_some()).map(|a| f64::from(a.eyes_closed)), value),
+            "faceCount" => num_op(op, p.analysis.filter(|a| a.face_focus.is_some()).map(|a| f64::from(a.faces)), value),
             "album" => {
                 let id = number(value).map(|v| crate::AlbumId(v as u64));
                 id.is_some_and(|a| cat.album(a).is_some_and(|al| !al.is_smart()) && cat.album_contains(a, p)) == (op == "is")

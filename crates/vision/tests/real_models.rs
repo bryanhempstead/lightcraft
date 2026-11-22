@@ -23,6 +23,35 @@ fn load(p: &std::path::Path, edge: usize) -> Rgb8 {
     Rgb8::new(w as usize, h as usize, img.into_raw()).unwrap().fit(edge).0
 }
 
+/// Prints what the eye model sees in every photo of `LC_VISION_DIR` (for checking eye-state results by eye).
+#[test]
+#[ignore]
+fn print_eyes_in_folder() {
+    let (Some(m), Some(dir)) = (env("LC_VISION_MODELS"), env("LC_VISION_DIR")) else { return };
+    let f = m.join("faces");
+    let det = yunet::YuNet::load(&f.join(models::YUNET)).unwrap();
+    let eye = eyes::EyeState::load(&f.join(models::EYES)).unwrap();
+    let mut names: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).collect();
+    names.sort();
+    for p in names {
+        use image::ImageDecoder;
+        let Ok(mut dec) =
+            image::ImageReader::open(&p).and_then(|r| r.with_guessed_format()).map_err(|_| ()).and_then(|r| r.into_decoder().map_err(|_| ()))
+        else {
+            continue;
+        };
+        let o = dec.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+        let Ok(mut img) = image::DynamicImage::from_decoder(dec) else { continue };
+        img.apply_orientation(o);
+        let img = img.to_rgb8();
+        let (w, h) = img.dimensions();
+        let img = Rgb8::new(w as usize, h as usize, img.into_raw()).unwrap().fit(1280).0;
+        let faces = det.detect(&img).unwrap();
+        let e: Vec<_> = faces.iter().map(|fc| eye.eyes(&img, fc).unwrap().map(|e| e.closed.map(|v| (v * 100.0).round() / 100.0))).collect();
+        println!("{}: {}x{} {e:?}", p.file_name().unwrap().to_string_lossy(), img.width, img.height);
+    }
+}
+
 #[test]
 #[ignore]
 fn faces_match_opencv() {
