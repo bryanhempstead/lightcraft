@@ -882,3 +882,172 @@ Left: the darker photo keeps ~1.5× Camera Raw's luminance noise and ~3× its ch
 demosaic starts 3× noisier in colour); Color 50 and 25 leave the same fine chroma in both
 renderers (the metric sees only the finest scale). Upstream's process V6 "joint" colour NR was
 not merged (its own process version, a larger change than these constants).
+
+## Round 10 (2026-11-22): Texture, Dehaze, Color Grading, Point Color, B&W and the masks' tone sliders
+
+The rows round 6 left measured only (R04, R16, R19–R23), against the Camera Raw oracle. New
+experiments in `oracle/make_fx.py SET fx|fx2|grade|bw|pc2|look|mask|mask2` (frequency scenes —
+bands of sine gratings, and single full-frame gratings at 1,024 and 3,072 px with amplitude and
+level variants —, the colour grid, the spatial scene, and full-frame / half / radial masks) and
+`make_fuji.py` (Bryan's X-T2 / X100F raws); analysis `fx_ana.py` / `fx2_ana.py` (grating gain
+and mean shift), `grade_ana.py` (OkLab shifts of the grid's neutrals), `bw_ana.py`, `selfcmp.py`
+(one renderer against itself: does a setting do anything, is a local slider the global one),
+`local_ana.py` + `gen_local.py` (the masks' tone curves), `fuji_ana.py`; `lcrun.sh` renders the
+LightCraft side with this checkout's `oracle_render`, which now also reads masks, spots and Point
+Color from the XMP (before, every mask experiment rendered without its mask).
+
+**Reused, not rebuilt.** RAWmakase (<https://github.com/pch/rawmakase>, MIT) is a Rust raw
+editor whose develop operators were each measured against Camera Raw 18.7 on synthetic charts.
+Its Texture, Color Grading, B&W mix, Point Color and negative Dehaze agree with what our oracle
+measured, so they are ported (NOTICE; each file says so) and checked on our renders: `texture_cr`,
+`grading_cr` (+ `grading_cr.bin`), `bw_cr` (+ `bw_cr.bin`), `point_color_cr`, `dehaze_cr`. The
+masks' Contrast / Whites / Blacks are our own measurement (`local_tone_cr`). Every one has a
+`MEASURED` switch, runs on the CPU and the GPU (equivalence tests pass), and only changes
+renders that use its slider.
+
+ΔE2000 against Camera Raw (grid: valid patch means; other scenes: every pixel). Base renders, for
+scale: grid 0.42, spatial 0.55, frequency scene 0.72, single gratings 0.70.
+
+| row | experiment | before | after |
+|---|---|---|---|
+| R21 Texture | single gratings, ±50 / +100 (21 scenes) | 1.07 | **0.79** |
+| | grid +25 / +50 / +100 | 2.24 / 3.68 / 5.31 | 1.92 / 3.15 / 4.50 |
+| | grid −25 / −50 / −100 | 1.65 / 2.67 / 3.98 | 1.44 / 2.26 / 3.39 |
+| | spatial / frequency scene (1,024 + 3,072 px), ±25…100 | 0.58–0.77 / 0.81–1.69 | 0.56–0.64 / 0.73–0.84 |
+| R21 Dehaze (−) | grid −25 / −50 | 7.13 / 11.76 | **1.39 / 3.19** |
+| | spatial −25 / −50 | 4.36 / 7.01 | **1.21 / 1.96** |
+| | frequency scene −25 / −50 | 2.76 / 5.42 | **1.11 / 1.97** |
+| | single gratings −50, periods ≥ 21 px / 3–13 px | 2.0–5.3 / 0.7–3.2 | 0.8–2.0 / 4.9–7.8 |
+| R21 Dehaze (+), Clarity | grid / spatial | unchanged (below) | — |
+| R20 Color Grading | Global wheels (5) | 2.99–12.20 | **0.43–0.47** |
+| | Midtones wheels (5) | 1.34–4.93 | **0.43–0.47** |
+| | Highlights wheels (5) | 1.68–6.34 | **0.42–0.62** |
+| | Shadows wheels (5) | 3.08–14.23 | 0.44–3.13 |
+| | Luminance ±50 (8) | 1.08–3.42 | **0.39–0.74** |
+| | split toning, Blending 0 / 50 / 100 | 4.19 / 3.94 / 4.56 | **0.50 / 0.47 / 0.72** |
+| | split toning, Balance −50 / +50 | 5.07 / 4.23 | **0.76 / 0.66** |
+| R19 Point Color | 22 swatch settings (hue, shifts, Range, Variance, sample) | 0.50–1.09 (ignored) | **0.43–0.50** (Variance −100: 0.67) |
+| R22 B&W | default mix | 0.74 | **0.33** |
+| | single bands ±60 (16) | 1.02–2.99 | **0.35–0.72** |
+| | Adobe Monochrome; + Blue −40 | 1.32; 1.58 | 1.20; 1.28 |
+| R16 masks | local Blacks ±50 / ±100 (spatial) | 6.35–12.14 | **0.08–0.32** |
+| | local Whites ±50 / ±100 | 4.47–7.86 | **0.10–0.92** |
+| | local Contrast ±50 / ±100 (frequency scene +50) | 1.16–3.90 (3.23) | **0.11–0.33** (0.44) |
+| | the same on the scene 2 EV darker / 1 EV brighter | 0.64–9.89 | 0.25–1.43 |
+| | local Exposure ±1, Texture +40 | 0.52–0.55, 0.61 | 0.52–0.55, 0.60 |
+| | local Highlights −60 / Shadows +60 / Clarity +40 / Dehaze +30 | 1.26 / 1.39 / 2.14 / 1.90 | unchanged |
+| R04 Nautica | grid, Amount 100 / 50 | 0.41 / 0.42 | (already matched) |
+
+### Texture (R21)
+
+Camera Raw's Texture is a broad band of log-luminance contrast: at +100 on 0.4 EV gratings the
+gain is 1.78 at a 3 px period, 1.54 at 21–34 px, 1.25 at 89 px and 1.05 at 233 px, in pixels of
+the full-resolution photo (a 3,072 px image renders the same per pixel up to ~40 px periods);
+faint detail is lifted most (×1.78 at 0.1 EV) and strong contrast hardly (×1.13 at 1.2 EV, 13 px).
+LightCraft's single band (σ 0.18 % of the long edge, ×1.1) was 2.07 at 3 px and 1.02 at 55 px —
+far too strong on the finest detail and absent at the scales Camera Raw lifts most. Now
+RAWmakase's operator: a 6-level Laplacian pyramid of each channel's log2 (5-tap binomial),
+each level compressed (`band / (1 + (band / t)²)`) and weighted, the sum scaled by a measured
+strength; the finest level follows the render's scale against the photo (`texture_cr::level_offset`).
+Its gratings (Camera Raw / LightCraft at +100): 3 px 1.79 / 1.80, 13 px 1.56 / 1.49, 34 px
+1.53 / 1.49, 89 px 1.25 / 1.22, 0.1 EV 1.78 / 1.84, 2.5 EV 1.13 / 1.13. Per channel, because
+Camera Raw's Texture also moves colour at colour edges (the grid's neutral patches gain 0.02 OkLab
+chroma beside coloured ones; luminance-only left the grid at 3.71, per channel 3.15). The rest of
+the grid's error is that colour effect: ours gains a quarter of Camera Raw's. In a mask Texture is
+the global operator (Camera Raw: local +40 = global +40 to 0.00 ΔE). The GPU path reads the
+detail made on the CPU once per image and level.
+
+### Clarity and Dehaze (R21): measured, Clarity left
+
+**Clarity** is not a fixed-radius band in Camera Raw. On single full-frame gratings at −3.5 EV,
++50 / +100 barely move them (×1.02–1.08), while the same gratings as bands next to brighter
+ones were ×1.59 / ×2.15 at every period up to 233 px; −50 works on both (×0.68, with a cut-off
+near 55 px at 1,024 px and 165 px at 3,072 px: relative to the image). So positive Clarity is
+weighted by the level relative to the photo's brightest levels, at scales up to ~15 % of the long
+edge — RAWmakase's 4-scale bilateral model with weights by base level against a highlight key,
+part of its scene-tone stage. LightCraft's (one 1.2 % edge-aware band, absolute level weight) is
+1.04 / 1.90 / 3.77 on the grid at +25 / +50 / +100 and 0.47–0.78 at −25…−100. Not ported this
+round (it needs RAWmakase's local-tone map); next.
+
+**Negative Dehaze** is a tone curve per linear-ProPhoto channel by its level relative to the
+photo's 99th luminance percentile (RAWmakase's measured family at −100 / −40 / −20 with its
+monotone projection, `dehaze_cr`): on gratings Camera Raw's −25 / −50 keep ×0.75 / ×0.50 of the
+contrast at every scale and lift the darks; LightCraft's mix towards the airlight crushed the
+grid (7.1 / 11.8 ΔE). Masks' negative Dehaze takes the same curve. On single full-frame
+gratings −50 is 2.0–5.3 → 0.8–2.0 ΔE at periods of 21 px and up, but 0.7–3.2 → 4.9–7.8 at 3–13 px
+(mean over the 21 gratings 2.88 → 2.89): there Camera Raw keeps the mean level (+0.00 EV at 13 px,
++0.28 at 21 px for the same statistics), a spatial (dark-channel window?) part the per-channel
+curve does not have. **Positive Dehaze** stays
+LightCraft's dark-channel removal (grid +15 / +30 / +60 / +100: 0.56 / 0.89 / 1.58 / 2.73; spatial
+0.70 / 1.31 / 3.29 / 6.67 — it drives dark regions to black where Camera Raw lifts them);
+RAWmakase's measured haze model (`scene_tone/haze.rs`) is the next port.
+
+### Color Grading (R20)
+
+Camera Raw grades each channel of linear ProPhoto with its own curve (Global at 210° / 100: green
+exactly unchanged, red ×0.565 and blue ×1.774 in the shadows, both fading to ×0.88 / ×1.08 at
+L 0.9); LightCraft added OkLab offsets with a constant strength and a hue map 20–45° off. Now
+RAWmakase's measured curves (profiles by Blending and Balance, per-channel coefficients by hue
+and saturation, Luminance curves), collapsed per render into three 64-sample gain curves (CPU;
+192 floats in the kernel's aux table on the GPU). One more finding: **Split Toning without
+`ColorGradeBlending` (settings from before Color Grading) renders as Blending 100** — a
+shadows-only tint spreads over the midtones exactly like Blending 100 (Shadows 210° / 20 with
+the key missing: 3.08 → 1.34 with the curves, → 0.44 once read as 100); `crs::to_partial` now maps
+it so. Left: Shadows at saturation 100 in deep cyan / green (3.13 / 1.76: Camera Raw drives red to
+×0.01 there).
+
+### Point Color (R19)
+
+Camera Raw ignored both encodings round 6 guessed. Its XMP form is 19 numbers per swatch — the
+sample as HSV of linear ProPhoto (hue in sixths of a turn), the three shifts (−1..1), Range, then
+the hue / saturation / luminance ranges as trapezoids (outer, inner, inner, outer) — with one
+`crs:ColorVariance` per swatch; Camera Raw drops swatches whose ranges don't hold the sample
+(Lightroom's empty selection is all −1). The catalog keeps the same fields by name. LightCraft
+read neither the XMP form nor the units (`SrcHue` as radians of an sRGB HSL colour). Both forms
+now keep Lightroom's own sample (`PointColor.lr`) and render it with Camera Raw's model
+(RAWmakase's fit: HSV of linear ProPhoto after the mixer, smoothed trapezoids scaled by Range,
+±35° at Hue ±100, Saturation ×/÷1.9, Variance spreading around the sample; CPU and GPU).
+Swatches picked in LightCraft keep its own OkLCh model. (Camera Raw ignores swatches written as
+named XMP fields; only the catalog stores them so, and those now render with the Camera Raw
+model too.)
+
+### B&W (R22)
+
+Camera Raw's bands are narrower than LightCraft's were and its darkening is stronger than its
+lightening (Aqua −60 −0.18 OkLab L on aquas, +60 +0.09; ours ∓0.27–0.38, centred 30° off). Now
+RAWmakase's measured grey chart: a colour becomes `Y · 2^g`, `g` looked up in the colour mixer's
+36 × 6 × 6 grid of linear-ProPhoto HSV from the zero-mix table plus each band's table at
+−100 / −50 / +50 / +100. Adobe Monochrome (its look table under the mix) 1.32 → 1.20.
+
+### The masks' tone sliders (R16)
+
+In Camera Raw a full-frame mask's Exposure, Highlights, Shadows, Texture and Clarity are within
+0.0–0.8 ΔE of the global sliders, but Contrast (1.7), Dehaze (1.4–1.8) and Blacks (5.0) are not.
+Read off the spatial scene's gradient (scene-referred change LightCraft's own base would need, by
+level l1 = log2(Y / 0.18)): local Blacks +50 lifts l1 −5 by +2.2 EV and l1 0 by +0.27 (global
+Blacks +50: +0.5 / +0.1), −50 crushes below l1 −2.5; local Whites ±50 moves the mid tones by
+±0.3 EV and l1 +0.5 by +0.73 / −0.47; local Contrast +50 pivots near l1 +0.4 (−0.48 at −2.5,
++0.14 at +1.5). The curves are the same on the scene 2 EV darker or 1 EV brighter — they follow
+the scene level, not the photo. They replace LightCraft's guessed formulas as 16-knot tables at
+±50 / ±100 (`local_tone_cr`, from `gen_local.py`). Left: local Highlights / Shadows still use
+LightCraft's older local formula (Camera Raw: local = global, which uses the measured tables
+only globally), Clarity and positive Dehaze as above.
+
+### Nautica (R04)
+
+Bryan's imported Nautica look (an Archipelago RGB table, `look_from_file`) on the grid: 0.41 /
+0.42 ΔE at Amount 100 / 50, the base itself 0.42 — LightCraft renders the look as Camera Raw does.
+The 5.45 ΔE of the four Nautica R6 photos in the acceptance set comes from the rest of their
+edits (Basic tone, R02), not the look.
+
+### Fujifilm brightness (R23): measured, not changed
+
+`make_fuji.py` on four of Bryan's split-A raws (X-T2 `DSCF6043`, X100F `_DSF4109` PV5,
+`_DSF4145`, `_DSF4241`), Camera Raw's minimum size, Adobe Standard: at defaults LightCraft is
++0.12 to +0.20 EV too bright in the mid tones (+1.3 to +2.1 L*; +0.06 to +0.15 at Exposure +1),
+about the same on both bodies and at ISO 100–400 (RawExposureBias +0.3 … −1.7; RAWmakase's camera
+table gives both bodies a constant 0.15 EV baseline that ignores it). With the
+photos' own tone and colour settings (no look) LightCraft is 0.3–0.8 EV too dark — that is Basic
+tone (R02: their Highlights −74…−90 / Shadows +43…+79), and it dominates what the acceptance set
+sees. Lowering `MEASURED_EXPOSURE` by ~0.16 EV would fix the defaults but move the edited
+photos the wrong way until R02 is refitted, so it is left.

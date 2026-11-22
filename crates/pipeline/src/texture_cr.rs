@@ -95,7 +95,7 @@ fn down(p: &Plane) -> Plane {
 fn up(p: &Plane, w: usize, h: usize) -> Plane {
     let expand = |i: usize, f: &dyn Fn(isize) -> f32| -> f32 {
         let c = (i / 2) as isize;
-        if i % 2 == 0 { f(c - 1) * EVEN[0] + f(c) * EVEN[1] + f(c + 1) * EVEN[2] } else { (f(c) + f(c + 1)) * ODD }
+        if i.is_multiple_of(2) { f(c - 1) * EVEN[0] + f(c) * EVEN[1] + f(c + 1) * EVEN[2] } else { (f(c) + f(c + 1)) * ODD }
     };
     let mut wide = vec![0.0f32; w * p.height];
     par_rows(&mut wide, w, |y, out| {
