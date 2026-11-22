@@ -453,6 +453,49 @@ fn sync_dialog_per_setting_checklist_and_subsets() {
     assert_eq!(h.app.ui.sync_prefs.groups.as_deref(), Some(&["exposure".to_string(), "sharpening".to_string()][..]));
 }
 
+/// U02: Copy Settings' paste mode (relative changes since the first history state) and ⌘V asking
+/// to merge or replace masks when the photo has its own.
+#[test]
+fn copy_relative_and_paste_asks_merge_or_replace_masks() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
+    exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
+    exec(&mut h, "develop.set", json!({"values": {"light.exposure": 1.0}}));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "name": "Face"}));
+    exec(&mut h, "library.select", json!({"ids": [ids[0]]}));
+    exec(&mut h, "develop.set", json!({"values": {"light.exposure": 0.5}}));
+    exec(&mut h, "mask.add", json!({"kind": "linear", "name": "Sky"}));
+    exec(&mut h, "dialog.copySettings", json!({}));
+    for _ in 0..8 {
+        h.step();
+    }
+    let click = |h: &mut Headless, w: &str| {
+        let r = h.request("ui.clickWidget", json!({"id": w}), T);
+        assert_eq!(r["ok"], true, "{w}: {r}");
+        h.step();
+    };
+    click(&mut h, "copyGroup:none");
+    click(&mut h, "copyGroup:exposure");
+    click(&mut h, "copyGroup:masks");
+    click(&mut h, "combo:copyPasteMode");
+    click(&mut h, "copyPasteMode:sinceFirst");
+    assert_eq!(h.request("ui.dialog.confirm", json!({}), T)["ok"], true);
+    assert!(h.app.session.clipboard_base.is_some(), "relative");
+    // ⌘V onto a photo with a mask of its own: asked, merge is the default
+    exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
+    key(&mut h, "V", json!({"cmd": true}));
+    h.step();
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::PasteMasks { merge: true, .. })), "{:?}", h.app.ui.dialog);
+    for _ in 0..8 {
+        h.step();
+    }
+    click(&mut h, "pasteMasks:replaceMasks");
+    assert_eq!(h.request("ui.dialog.confirm", json!({}), T)["ok"], true);
+    let d = h.app.session.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
+    assert!((d.light.exposure - 1.5).abs() < 1e-9, "+0.5 EV on its own 1.0: {}", d.light.exposure);
+    assert_eq!(d.masks.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Sky"], "replaced");
+}
+
 /// Sync prefs saved by older versions (coarse groups) open as their per-setting checkboxes.
 #[test]
 fn old_coarse_sync_prefs_open_as_per_setting_checkboxes() {

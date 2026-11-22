@@ -99,6 +99,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::CopySettings { .. } => "Choose Edit Settings to Copy",
         Dialog::SyncSettings { .. } => "Synchronize Settings",
         Dialog::PasteSettings { .. } => "Paste Selected Settings",
+        Dialog::PasteMasks { .. } => "Paste Masks",
         Dialog::Export { .. } => "Export",
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
@@ -464,7 +465,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label(egui::RichText::new(crate::i18n::tr("Settings to include")).color(t.text_dim));
                     group_checklist(app, ui, "presetInclude", groups, Some(masks));
                 }
-                Dialog::CopySettings { groups, masks } => group_checklist(app, ui, "copyGroup", groups, Some(masks)),
+                Dialog::CopySettings { groups, masks, mode, step } => {
+                    group_checklist(app, ui, "copyGroup", groups, Some(masks));
+                    paste_mode_row(app, ui, mode, step);
+                }
                 Dialog::SyncSettings { groups, match_exposure, auto_align, match_color, masks } => {
                     let n = app.session.selection.ids.len().saturating_sub(1);
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Copy to {n} other selected photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
@@ -489,13 +493,24 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         app.ui.sync_prefs = now;
                     }
                 }
-                Dialog::PasteSettings { groups } => {
+                Dialog::PasteMasks { merge, .. } => {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr("The copied settings have masks, and photos you're pasting onto have masks of their own."))
+                            .color(t.text_label),
+                    );
+                    mask_choice(ui, "pasteMasks", merge);
+                }
+                Dialog::PasteSettings { groups, merge_masks } => {
                     let n = app.session.targets(&json!({})).len();
                     ui.label(
                         egui::RichText::new(crate::i18n::tr_format!("Paste into {n} photo{} — only settings that were copied are pasted", if n == 1 { "" } else { "s" }, n = n))
                             .color(t.text_dim),
                     );
                     group_checklist(app, ui, "pasteGroup", groups, None);
+                    if groups.iter().any(|g| g == "masks") && crate::menus::paste_meets_masks(app, &json!({})) {
+                        ui.add_space(4.0);
+                        mask_choice(ui, "pasteGroup", merge_masks);
+                    }
                 }
                 Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } => {
                     use lightcraft_engine::export::{Anchor as P, ExportFormat as F, MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
@@ -1108,12 +1123,21 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
                 "masks": masks,
             }),
         ),
-        Dialog::CopySettings { groups, masks } => app.run("develop.copy", json!({"groups": groups, "masks": masks})),
+        Dialog::CopySettings { groups, masks, mode, step } => {
+            app.run("develop.copy", json!({"groups": groups, "masks": masks, "mode": mode, "step": step}))
+        }
         Dialog::SyncSettings { groups, match_exposure, auto_align, match_color, masks } => app.run(
             "develop.sync",
             json!({"groups": groups, "masks": masks, "matchExposure": match_exposure, "autoAlign": auto_align, "matchCameraColor": match_color}),
         ),
-        Dialog::PasteSettings { groups } => app.run("develop.paste", json!({"groups": groups})),
+        Dialog::PasteSettings { groups, merge_masks } => {
+            app.run("develop.paste", json!({"groups": groups, "maskMode": if *merge_masks { "merge" } else { "replace" }}))
+        }
+        Dialog::PasteMasks { params, merge } => {
+            let mut p = params.clone();
+            p["maskMode"] = json!(if *merge { "merge" } else { "replace" });
+            app.run("develop.paste", p)
+        }
         Dialog::Export { opts, full_size, resize, limit_kb, dir, .. } => {
             let mut p = export_dialog_params(opts, *full_size, resize, *limit_kb);
             p["dir"] = json!(dir);
@@ -1150,6 +1174,62 @@ fn export_dialog_params(
 }
 
 // ------------------------------------------------------------------------------------------ dialog widgets
+
+/// Merge or replace the photos' masks with the copied ones.
+fn mask_choice(ui: &mut egui::Ui, tag: &str, merge: &mut bool) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 16.0;
+        let r =
+            ui.radio_value(merge, true, crate::i18n::tr("Merge masks")).on_hover_text(crate::i18n::tr("Add the copied masks to each photo's own"));
+        crate::widgets::register(ui.ctx(), format!("{tag}:mergeMasks"), r.rect);
+        let r = ui.radio_value(merge, false, crate::i18n::tr("Replace masks")).on_hover_text(crate::i18n::tr("Remove each photo's masks first"));
+        crate::widgets::register(ui.ctx(), format!("{tag}:replaceMasks"), r.rect);
+    });
+}
+
+/// Copy Settings ▸ how Paste applies them: the exact settings, or (Lightroom's relative paste) the
+/// changes made since the first or a chosen history state, moved onto each photo's own values.
+fn paste_mode_row(app: &LightcraftApp, ui: &mut egui::Ui, mode: &mut String, step: &mut usize) {
+    let t = Tokens::get(ui.ctx());
+    let history: Vec<String> = app
+        .session
+        .active()
+        .and_then(|id| app.session.catalog.photo(id))
+        .map(|p| p.history.iter().map(|h| h.label.clone()).collect())
+        .unwrap_or_default();
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.label(egui::RichText::new(crate::i18n::tr("Paste")).color(t.text_dim));
+        let label = |m: &str| match m {
+            "sinceFirst" => "Relative changes since the first history state",
+            "sinceStep" => "Relative changes since a history state",
+            _ => "Exact settings",
+        };
+        let c = egui::ComboBox::from_id_salt("copyPasteMode").width(300.0).selected_text(crate::i18n::tr(label(mode))).show_ui(ui, |ui| {
+            for m in ["exact", "sinceFirst", "sinceStep"] {
+                let r = ui.selectable_label(mode == m, crate::i18n::tr(label(m)));
+                crate::widgets::register(ui.ctx(), format!("copyPasteMode:{m}"), r.rect);
+                if r.clicked() {
+                    *mode = m.to_string();
+                }
+            }
+        });
+        crate::widgets::register(ui.ctx(), "combo:copyPasteMode", c.response.rect);
+    });
+    if mode == "sinceStep" {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let last = history.len().max(1);
+            let mut n = (*step + 1).min(last);
+            let r = ui.add(egui::DragValue::new(&mut n).range(1..=last).prefix(crate::i18n::tr("step ")));
+            crate::widgets::register(ui.ctx(), "field:copyPasteStep", r.rect);
+            *step = n.saturating_sub(1);
+            let name = history.get(*step).cloned().unwrap_or_else(|| crate::i18n::tr("no history yet").into());
+            ui.label(egui::RichText::new(name).color(t.text_label));
+        });
+    }
+}
 
 /// The checklist's three columns (heading ids), in Lightroom's order.
 const CHECKLIST_COLUMNS: [&[&str]; 3] = [

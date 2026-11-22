@@ -379,3 +379,46 @@ fn per_setting_copy_sync_modified_and_saved_subsets() {
     assert!(s.copy_subsets.is_empty());
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+/// U02: relative paste (the changes since the first / a chosen history state move each photo's
+/// own values) and merge-or-replace masks on paste.
+#[test]
+fn relative_paste_and_merge_or_replace_masks() {
+    let mut s = Session::with_demo();
+    let ids: Vec<_> = s.visible().iter().copied().take(3).collect();
+    s.execute("library.select", &json!({"ids": [ids[1].0]})).unwrap();
+    s.execute("develop.set", &json!({"values": {"light.exposure": 1.0, "light.contrast": 10}})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
+    s.execute("develop.set", &json!({"values": {"light.exposure": 0.5}})).unwrap();
+    s.execute("develop.set", &json!({"values": {"light.exposure": 0.75, "light.contrast": 20}})).unwrap();
+    // since the first history state: +0.75 EV, +20 contrast on top of photo 1's own
+    let r = s.execute("develop.copy", &json!({"groups": ["light"], "mode": "sinceFirst"})).unwrap();
+    assert_eq!(r["mode"], "sinceFirst");
+    let r = s.execute("develop.paste", &json!({"ids": [ids[1].0]})).unwrap();
+    assert_eq!(r["relative"], true);
+    let d = s.develop_of(ids[1]).unwrap();
+    assert!((d.light.exposure - 1.75).abs() < 1e-9 && (d.light.contrast - 30.0).abs() < 1e-9, "{} {}", d.light.exposure, d.light.contrast);
+    assert_eq!(d.light.highlights, 0.0, "unchanged sliders stay the photo's own");
+    // since a chosen step (the one after the first edit): +0.25 EV
+    let n = s.catalog.photo(ids[0]).unwrap().history.len();
+    assert!(n >= 2, "history: {n}");
+    s.execute("develop.copy", &json!({"groups": ["exposure"], "mode": "sinceStep", "step": n - 2})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [ids[2].0]})).unwrap();
+    assert!((s.develop_of(ids[2]).unwrap().light.exposure - 0.25).abs() < 1e-9);
+    assert!(s.execute("develop.copy", &json!({"mode": "sinceStep", "step": 999})).is_err());
+    assert!(s.execute("develop.copy", &json!({"mode": "nope"})).is_err());
+    // masks: merge adds the copied mask, replace swaps the photo's own for it
+    s.execute("mask.add", &json!({"kind": "linear", "name": "Sky"})).unwrap();
+    s.execute("develop.copy", &json!({"groups": ["masks"]})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[1].0]})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial", "name": "Face"})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [ids[1].0], "maskMode": "merge"})).unwrap();
+    let names: Vec<String> = s.develop_of(ids[1]).unwrap().masks.iter().map(|m| m.name.clone()).collect();
+    assert_eq!(names, ["Face", "Sky"]);
+    s.execute("develop.paste", &json!({"ids": [ids[1].0], "maskMode": "merge"})).unwrap();
+    assert_eq!(s.develop_of(ids[1]).unwrap().masks.len(), 2, "the same mask isn't added twice");
+    s.execute("develop.paste", &json!({"ids": [ids[1].0], "maskMode": "replace"})).unwrap();
+    let names: Vec<String> = s.develop_of(ids[1]).unwrap().masks.iter().map(|m| m.name.clone()).collect();
+    assert_eq!(names, ["Sky"]);
+    assert!(s.execute("develop.paste", &json!({"maskMode": "blend"})).is_err());
+}

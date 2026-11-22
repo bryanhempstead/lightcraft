@@ -5,7 +5,7 @@ use lightcraft_develop::{DevelopSettings, Preset, Section, SettingsGroup, Treatm
 use lightcraft_geom::{CropGeometry, CropHandle, Point, Rect, crop_fit_angle, drag_crop};
 use serde_json::{Value, json};
 
-use super::copy_subsets::{groups_param, masks_param};
+use super::copy_subsets::{groups_param, masks_param, merge_masks_param, paste_base};
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, f64_req, has_active, has_clipboard, has_selection, ok, str_param};
 use crate::{Result, Session, media::SourceLevel};
 
@@ -695,22 +695,28 @@ pub fn specs() -> Vec<CommandSpec> {
             "Copy Edit Settings",
             ["Edit"],
             Some("Cmd+C"),
-            "{groups?: [settingsGroup] (per-setting ids from develop.settingsGroups, or a heading id such as light / detail / crop), subset?: all | none | default | modified | a saved subset (develop.saveSubset), masks?: [mask id] (only these masks)} (default: the groups last copied; at first all but crop, masking, remove and red eye) → {groups}",
+            "{groups?: [settingsGroup] (per-setting ids from develop.settingsGroups, or a heading id such as light / detail / crop), subset?: all | none | default | modified | a saved subset (develop.saveSubset), masks?: [mask id] (only these masks)} (default: the groups last copied; at first all but crop, masking, remove and red eye), mode?: exact (default) | sinceFirst | sinceStep — paste the settings, or the changes made since the first history state / history `step` (an index) moved onto each photo's own (Lightroom's relative paste) → {groups, mode}",
             has_active,
             |s, p| {
                 let c = "develop.copy";
                 let id = active(s, c)?;
+                let base = paste_base(s, id, p, c)?;
                 if let Some(g) = groups_param(s, p, c)? {
                     s.copy_groups = g;
                 }
                 let masks = masks_param(p, c)?;
                 let d = s.develop_of(id).unwrap_or_default();
-                let mut clip = lightcraft_develop::extract_groups(&d, &s.copy_groups);
-                if let Some(m) = masks {
-                    lightcraft_develop::retain_masks(&mut clip, &m);
-                }
+                let take = |d: &DevelopSettings| {
+                    let mut v = lightcraft_develop::extract_groups(d, &s.copy_groups);
+                    if let Some(m) = &masks {
+                        lightcraft_develop::retain_masks(&mut v, m);
+                    }
+                    v
+                };
+                let clip = take(&d);
+                s.clipboard_base = base.as_ref().map(take);
                 s.clipboard = Some(clip);
-                Ok(json!({"groups": s.copy_groups}))
+                Ok(json!({"groups": s.copy_groups, "mode": str_param(p, "mode").unwrap_or("exact")}))
             }
         ),
         cmd!(
@@ -742,25 +748,38 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Edit Settings",
             ["Edit"],
             Some("Cmd+V"),
-            "{ids?, groups?: [settingsGroup], subset? (paste only these of the copied groups)}",
+            "{ids?, groups?: [settingsGroup], subset? (paste only these of the copied groups), maskMode?: replace (default) | merge — copied masks replace the photo's own or are added to them} — exact settings, or the changes since a history state when copied that way (develop.copy mode) → {changed, relative}",
             has_clipboard,
             |s, p| {
+                let c = "develop.paste";
                 let mut clip = s.clipboard.clone().unwrap_or_default();
-                if let Some(only) = groups_param(s, p, "develop.paste")? {
+                let mut base = s.clipboard_base.clone();
+                let merge = merge_masks_param(p, c)?;
+                if let Some(only) = groups_param(s, p, c)? {
                     // the clipboard holds whole groups: rebuild it with just the chosen (copied) ones
                     let only: Vec<_> = only.into_iter().filter(|g| s.copy_groups.contains(g)).collect();
-                    let full = lightcraft_develop::apply_partial(&DevelopSettings::default(), &clip, 1.0);
-                    clip = lightcraft_develop::extract_groups(&full, &only);
+                    let pick = |v: &Value| {
+                        lightcraft_develop::extract_groups(&lightcraft_develop::apply_partial(&DevelopSettings::default(), v, 1.0), &only)
+                    };
+                    base = base.as_ref().map(pick);
+                    clip = pick(&clip);
                 }
+                let paste = |d: &DevelopSettings| {
+                    let patch = match &base {
+                        Some(b) => lightcraft_develop::relative_patch(&d.to_json(), &clip, b).unwrap_or_else(|| json!({})),
+                        None => clip.clone(),
+                    };
+                    if merge { lightcraft_develop::apply_merging_masks(d, &patch, 1.0) } else { lightcraft_develop::apply_partial(d, &patch, 1.0) }
+                };
                 let ids = s.targets(p);
                 let ops = ids
                     .iter()
                     .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                    .filter_map(|(id, d)| s.develop_op(id, lightcraft_develop::apply_partial(&d, &clip, 1.0), "Paste Settings"))
+                    .filter_map(|(id, d)| s.develop_op(id, paste(&d), "Paste Settings"))
                     .collect::<Vec<_>>();
                 let n = ops.len();
                 s.commit("Paste Settings", Op::Batch { ops })?;
-                Ok(json!({"changed": n}))
+                Ok(json!({"changed": n, "relative": base.is_some()}))
             }
         ),
         cmd!(

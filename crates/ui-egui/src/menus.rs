@@ -356,6 +356,12 @@ pub fn parse_rgb(v: &Value) -> Option<[u8; 3]> {
 }
 
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
+/// Does a paste carry masks onto a photo that has masks of its own?
+pub fn paste_meets_masks(app: &LightcraftApp, p: &Value) -> bool {
+    let copied = app.session.clipboard.as_ref().and_then(|c| c.get("masks")).and_then(Value::as_array).is_some_and(|m| !m.is_empty());
+    copied && app.session.targets(p).iter().any(|id| app.session.develop_of(*id).is_some_and(|d| !d.masks.is_empty()))
+}
+
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
@@ -369,6 +375,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     }
     let ctx = egui::Context::default();
     let r: Result<Value, String> = match id {
+        // Lightroom asks whether copied masks merge with the photos' own or replace them
+        "develop.paste" if p.get("maskMode").is_none() && paste_meets_masks(app, p) => {
+            app.ui.dialog = Some(Dialog::PasteMasks { params: p.clone(), merge: true });
+            Ok(json!({"asked": "maskMode"}))
+        }
         "view.develop" => {
             // Lightroom Classic's Develop module (D): the loupe with the develop panels, never a toggle
             enter_develop(app);
@@ -1137,7 +1148,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "dialog.pasteSettings" => {
             let groups = crate::state::group_ids(&app.session.copy_groups);
-            app.ui.dialog = Some(Dialog::PasteSettings { groups });
+            app.ui.dialog = Some(Dialog::PasteSettings { groups, merge_masks: false });
             Ok(Value::Null)
         }
         "view.focusSearch" => {
@@ -1161,7 +1172,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "dialog.copySettings" => {
             let groups = crate::state::group_ids(&app.session.copy_groups);
-            app.ui.dialog = Some(Dialog::CopySettings { groups, masks: None });
+            app.ui.dialog = Some(Dialog::CopySettings { groups, masks: None, mode: "exact".into(), step: 0 });
             Ok(Value::Null)
         }
         // File ▸ Sync from Lightroom Classic…: the catalog is read in the background (lr_sync.rs)

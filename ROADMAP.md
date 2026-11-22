@@ -229,6 +229,8 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   stored.
 - 2026-11-21 (fork): Copy / Sync / Paste Selected / New Preset use Lightroom's per-setting checklist (43 settings
   under 14 headings, choose masks) with all. / none. / def. / mod. and saved subsets; older coarse group ids still work.
+- 2026-11-21 (fork): relative paste (changes since the first / a chosen history state) and Merge / Replace masks
+  on paste, as Lightroom asks.
 
 ## Chinese and Japanese interfaces, and text watermarks
 

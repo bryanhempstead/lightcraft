@@ -71,6 +71,36 @@ pub fn masks_param(p: &Value, c: &str) -> Result<Option<Vec<u32>>> {
     }
 }
 
+/// Paste modes (Lightroom's Copy Settings ▸ "Paste": exact settings, or the changes since the
+/// first / a chosen history state).
+pub const PASTE_MODES: [&str; 3] = ["exact", "sinceFirst", "sinceStep"];
+
+/// The settings a relative paste counts from (`mode` sinceFirst / sinceStep with `step`, a history
+/// index) for photo `id`; `None` for exact settings.
+pub fn paste_base(s: &Session, id: PhotoId, p: &Value, c: &str) -> Result<Option<lightcraft_develop::DevelopSettings>> {
+    let ph = s.catalog.photo(id).ok_or_else(|| bad(c, "no photo"))?;
+    match str_param(p, "mode").unwrap_or("exact") {
+        "exact" => Ok(None),
+        // History keeps the state after each step: the first state is how the photo came in
+        "sinceFirst" => Ok(Some(ph.import_defaults())),
+        "sinceStep" => {
+            let step = p.get("step").and_then(Value::as_u64).ok_or_else(|| bad(c, "`sinceStep` needs `step` (a history index, 0 = the first)"))?;
+            let h = usize::try_from(step).ok().and_then(|i| ph.history.get(i)).ok_or_else(|| bad(c, format!("no history step {step}")))?;
+            Ok(Some((*h.settings).clone()))
+        }
+        m => Err(bad(c, format!("unknown `mode` `{m}` (one of {})", PASTE_MODES.join(", ")))),
+    }
+}
+
+/// `maskMode`: merge the copied masks with the photo's own, or replace them (default).
+pub fn merge_masks_param(p: &Value, c: &str) -> Result<bool> {
+    match str_param(p, "maskMode") {
+        None | Some("replace") => Ok(false),
+        Some("merge") => Ok(true),
+        Some(m) => Err(bad(c, format!("unknown `maskMode` `{m}` (merge or replace)"))),
+    }
+}
+
 fn ids(groups: &[SettingsGroup]) -> Vec<String> {
     groups.iter().map(|g| g.id()).collect()
 }

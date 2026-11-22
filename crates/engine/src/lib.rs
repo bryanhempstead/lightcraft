@@ -166,6 +166,9 @@ pub struct Session {
     pub(crate) skip_auto_write: bool,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
+    /// The copied photo's settings at the history state a relative paste counts from (same
+    /// groups as [`Session::clipboard`]); `None` = paste exact settings.
+    pub clipboard_base: Option<Value>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
     pub browse: Option<Browse>,
     /// The folder the [`LibrarySource::LibraryFolder`] view shows: the library's photos imported
@@ -285,6 +288,7 @@ impl Session {
             interaction: None,
             skip_auto_write: false,
             clipboard: None,
+            clipboard_base: None,
             meta_clipboard: None,
             browse: None,
             library_folder: None,

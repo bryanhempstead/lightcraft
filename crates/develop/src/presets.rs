@@ -455,26 +455,70 @@ impl Preset {
     /// Apply at `amount` (1.0 = 100 %). Masks in the preset are added to the photo's own (ones it
     /// already has are skipped), their effect scaled by the amount.
     pub fn apply(&self, s: &DevelopSettings, amount: f64) -> DevelopSettings {
-        let Some(masks) = self.settings.get("masks").and_then(Value::as_array).filter(|m| !m.is_empty()) else {
-            return apply_partial(s, &self.settings, amount);
-        };
-        let mut rest = self.settings.clone();
-        if let Some(o) = rest.as_object_mut() {
-            o.remove("masks");
+        apply_merging_masks(s, &self.settings, amount)
+    }
+}
+
+/// Apply a partial settings object with its masks *added* to the photo's own (Lightroom's
+/// "Merge" when pasting masks onto a photo that has some; identical ones are skipped), each
+/// mask's effect scaled by `amount`.
+pub fn apply_merging_masks(s: &DevelopSettings, partial: &Value, amount: f64) -> DevelopSettings {
+    let Some(masks) = partial.get("masks").and_then(Value::as_array).filter(|m| !m.is_empty()) else {
+        return apply_partial(s, partial, amount);
+    };
+    let mut rest = partial.clone();
+    if let Some(o) = rest.as_object_mut() {
+        o.remove("masks");
+    }
+    let mut out = apply_partial(s, &rest, amount);
+    let mut next = out.masks.iter().map(|m| m.id).max().unwrap_or(0);
+    for m in masks {
+        let Ok(mut m) = serde_json::from_value::<crate::Mask>(m.clone()) else { continue };
+        if out.masks.iter().any(|q| q.name == m.name && q.components == m.components) {
+            continue;
         }
-        let mut out = apply_partial(s, &rest, amount);
-        let mut next = out.masks.iter().map(|m| m.id).max().unwrap_or(0);
-        for m in masks {
-            let Ok(mut m) = serde_json::from_value::<crate::Mask>(m.clone()) else { continue };
-            if out.masks.iter().any(|q| q.name == m.name && q.components == m.components) {
-                continue;
+        next = next.saturating_add(1);
+        m.id = next;
+        m.adjust.amount = (m.adjust.amount * amount).clamp(0.0, 200.0);
+        out.masks.push(m);
+    }
+    out
+}
+
+/// Lightroom's "Relative changes since …" paste: the change from `base` to `partial` (both taken
+/// with the same groups from the copied photo) as a patch for `target` (its settings as JSON):
+/// numbers move by the same amount, anything else that changed is copied, anything that didn't
+/// change is left alone. `None`: nothing changed.
+pub fn relative_patch(target: &Value, partial: &Value, base: &Value) -> Option<Value> {
+    match (partial, base) {
+        (Value::Object(p), _) => {
+            let mut out = Map::new();
+            for (k, pv) in p {
+                let bv = base.get(k).unwrap_or(&Value::Null);
+                let tv = target.get(k).unwrap_or(&Value::Null);
+                if let Some(v) = relative_patch(tv, pv, bv) {
+                    out.insert(k.clone(), v);
+                }
             }
-            next += 1;
-            m.id = next;
-            m.adjust.amount = (m.adjust.amount * amount).clamp(0.0, 200.0);
-            out.masks.push(m);
+            (!out.is_empty()).then_some(Value::Object(out))
         }
-        out
+        (Value::Number(p), Value::Number(b)) => {
+            let (p, b) = (p.as_f64().unwrap_or(0.0), b.as_f64().unwrap_or(0.0));
+            if (p - b).abs() < 1e-12 {
+                return None;
+            }
+            let t = target.as_f64().unwrap_or(b);
+            serde_json::Number::from_f64(t + (p - b)).map(Value::Number)
+        }
+        (p, b) => (p != b).then(|| p.clone()),
+    }
+}
+
+/// Apply [`relative_patch`] to `target` (values clamped through the control specs).
+pub fn apply_relative(target: &DevelopSettings, partial: &Value, base: &Value) -> DevelopSettings {
+    match relative_patch(&target.to_json(), partial, base) {
+        Some(patch) => apply_partial(target, &patch, 1.0),
+        None => target.clone(),
     }
 }
 
@@ -581,6 +625,27 @@ mod tests {
         a.light.highlights = -40.0;
         a.grain.amount = 20.0;
         assert_eq!(SettingsGroup::modified_in(&a, &base), vec![SettingsGroup::Highlights, SettingsGroup::Grain]);
+    }
+
+    #[test]
+    fn relative_paste_moves_by_the_change() {
+        let base = DevelopSettings::default();
+        let mut edited = base.clone();
+        edited.light.exposure = 0.5;
+        edited.light.contrast = 20.0;
+        edited.treatment = crate::Treatment::Bw;
+        let groups = [SettingsGroup::Exposure, SettingsGroup::Contrast, SettingsGroup::Shadows, SettingsGroup::Treatment];
+        let (p, b) = (extract_groups(&edited, &groups), extract_groups(&base, &groups));
+        let mut target = DevelopSettings::default();
+        target.light.exposure = 1.0;
+        target.light.shadows = 30.0;
+        let out = apply_relative(&target, &p, &b);
+        assert!((out.light.exposure - 1.5).abs() < 1e-9 && (out.light.contrast - 20.0).abs() < 1e-9);
+        assert_eq!(out.light.shadows, 30.0, "unchanged on the copied photo: left alone");
+        assert_eq!(out.treatment, crate::Treatment::Bw);
+        // clamped through the specs
+        target.light.exposure = 4.8;
+        assert_eq!(apply_relative(&target, &p, &b).light.exposure, 5.0);
     }
 
     #[test]

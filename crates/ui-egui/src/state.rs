@@ -492,6 +492,10 @@ pub fn default_preset_groups() -> Vec<String> {
     group_ids(&lightcraft_develop::SettingsGroup::default_copy())
 }
 
+fn exact_mode() -> String {
+    "exact".into()
+}
+
 /// Per-setting group ids for the checklists.
 pub fn group_ids(groups: &[lightcraft_develop::SettingsGroup]) -> Vec<String> {
     groups.iter().map(|g| g.id()).collect()
@@ -611,6 +615,11 @@ pub enum Dialog {
         groups: Vec<String>,
         #[serde(default)]
         masks: Option<Vec<u32>>,
+        /// How Paste applies them: `exact`, `sinceFirst` or `sinceStep` (history index `step`).
+        #[serde(default = "exact_mode")]
+        mode: String,
+        #[serde(default)]
+        step: usize,
     },
     /// Synchronize Settings (Classic's Sync…): which groups of the active photo's settings go to
     /// the other selected photos.
@@ -629,6 +638,15 @@ pub enum Dialog {
     /// Paste Selected Settings: which of the copied groups to paste.
     PasteSettings {
         groups: Vec<String>,
+        /// Copied masks are added to the photos' own (`true`) or replace them.
+        #[serde(default)]
+        merge_masks: bool,
+    },
+    /// Paste onto photos that have masks of their own, with masks copied: merge or replace them
+    /// (Lightroom asks). `params`: the develop.paste call.
+    PasteMasks {
+        params: serde_json::Value,
+        merge: bool,
     },
     /// `resize` is used unless `full_size`; `limit_kb` 0 = no limit; `dir` empty = default export folder.
     Export {
