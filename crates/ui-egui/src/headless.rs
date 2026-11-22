@@ -438,6 +438,43 @@ mod tests {
         h.settle(SETTLE);
     }
 
+    /// Profile browser extras: list view, the B&W filter, Manage Profiles hides a group.
+    #[test]
+    fn profile_browser_views_filter_and_manage() {
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.request("ui.set", json!({"view": "detail"}), t);
+        h.request("engine.execute", json!({"command": "panel.profiles"}), t);
+        h.settle(SETTLE);
+        let has = |h: &mut Headless, id: &str| {
+            let w = h.request("ui.widgets", json!({"filter": id}), Duration::from_secs(10));
+            w["result"].as_array().is_some_and(|a| a.iter().any(|x| x["id"] == id))
+        };
+        // list view: one row per profile, still applied on click
+        h.request("ui.clickWidget", json!({"id": "button:profileView-list"}), t);
+        h.settle(SETTLE);
+        assert_eq!(h.app.session.profile_view, "list");
+        h.request("ui.clickWidget", json!({"id": "profileCell:lc.vivid"}), t);
+        let id = h.app.session.active().unwrap();
+        assert_eq!(h.app.session.catalog.photo(id).unwrap().develop.profile.id, "lc.vivid");
+        // B&W filter: only black & white profiles
+        h.request("ui.clickWidget", json!({"id": "button:profileFilter-bw"}), t);
+        h.settle(SETTLE);
+        assert!(has(&mut h, "profileCell:lc.mono"));
+        assert!(!has(&mut h, "profileCell:lc.neutral"));
+        h.request("ui.clickWidget", json!({"id": "button:profileFilter-all"}), t);
+        // Manage Profiles: hide Film, then it is gone from the browser
+        h.request("ui.clickWidget", json!({"id": "button:profileManage"}), t);
+        h.settle(SETTLE);
+        h.request("ui.clickWidget", json!({"id": "profileShow:Film"}), t);
+        assert_eq!(h.app.session.profile_hidden_groups, ["Film"]);
+        h.request("ui.clickWidget", json!({"id": "button:profileManage"}), t);
+        h.settle(SETTLE);
+        assert!(!has(&mut h, "profileGroup:Film"));
+        assert!(has(&mut h, "profileGroup:Basic"));
+        h.settle(SETTLE);
+    }
+
     /// Presets column: resting on a preset previews it in the loupe without a history entry;
     /// thumbnails are variant renders; Create Preset includes only the checked groups.
     #[test]

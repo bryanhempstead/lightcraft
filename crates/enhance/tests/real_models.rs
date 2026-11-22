@@ -198,3 +198,61 @@ fn esrgan_speed() {
     let p = out.data[768 * 1536 + 768];
     assert!((p[1] - 0.3).abs() < 0.05 && (p[2] - 0.6).abs() < 0.05, "{p:?}");
 }
+
+/// `LC_RAW=<raw> LC_MODELS=… LC_OUT=<dir>`: Super Resolution (x4v3) on a whole real photo: first use in the
+/// process (kernel compilation, on a small picture) and the photo itself, timed apart; three 1024² crops of the
+/// result (centre, top left, a tile seam) saved as raw little-endian f32 RGB (`sr-<tag>-<crop>.f32`, tag from
+/// `LC_TAG`) for comparing two builds, and compared with `LC_REF=<tag>` when given (PSNR, max difference).
+#[test]
+#[ignore]
+fn sr_real_raw() {
+    let (Some(dir), Some(raw)) = (models(), std::env::var_os("LC_RAW")) else { return };
+    let out = std::env::var_os("LC_OUT").map(PathBuf::from);
+    let tag = std::env::var("LC_TAG").unwrap_or_else(|_| "new".into());
+    let bytes = std::fs::read(&raw).unwrap();
+    let img = lightcraft_raw::decode(&bytes).unwrap().develop(lightcraft_raw::Method::Ahd).unwrap();
+    let t = Instant::now();
+    let m = lightcraft_enhance::esrgan::SuperResolution::load(&dir.join("realesr-general-x4v3.pth"), lightcraft_enhance::best_device()).unwrap();
+    let small = lightcraft_raster::Rgb32f::new(64, 64);
+    let _ = m.upscale(&small, &AtomicBool::new(false), &|_, _| {}).unwrap();
+    let warm = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    let r = m.upscale(&img, &AtomicBool::new(false), &|_, _| {}).unwrap();
+    let s = t.elapsed().as_secs_f64();
+    eprintln!(
+        "SR {}×{} → {}×{}: {s:.1} s warm, first use +{warm:.1} s ({:.2} s per input MP)",
+        img.width,
+        img.height,
+        r.width,
+        r.height,
+        s / (img.width * img.height) as f64 * 1e6
+    );
+    let Some(out) = out else { return };
+    std::fs::create_dir_all(&out).unwrap();
+    let crops = [("centre", r.width / 2 - 512, r.height / 2 - 512), ("corner", 0, 0), ("seam", 2 * 616 - 512, 2 * 616 - 512)];
+    for (name, x0, y0) in crops {
+        let mut v = Vec::with_capacity(1024 * 1024 * 12);
+        for y in y0..y0 + 1024 {
+            for x in x0..x0 + 1024 {
+                for c in r.data[y * r.width + x] {
+                    v.extend_from_slice(&c.to_le_bytes());
+                }
+            }
+        }
+        std::fs::write(out.join(format!("sr-{tag}-{name}.f32")), &v).unwrap();
+        if let Ok(rt) = std::env::var("LC_REF") {
+            let Ok(b) = std::fs::read(out.join(format!("sr-{rt}-{name}.f32"))) else { continue };
+            let (mut se, mut mx) = (0f64, 0f32);
+            for (p, q) in v.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
+                let (p, q) = (f32::from_le_bytes(*p), f32::from_le_bytes(*q));
+                // compared display-encoded, as the network sees it
+                let e = |v: f32| v.clamp(0.0, 1.0).powf(1.0 / 2.2);
+                let d = e(p) - e(q);
+                se += (d as f64).powi(2);
+                mx = mx.max(d.abs());
+            }
+            let mse = se / (v.len() / 4) as f64;
+            eprintln!("{name} vs {rt}: PSNR {:.1} dB, max |Δ| {mx:.4} (display-encoded 0..1)", -10.0 * mse.max(1e-20).log10());
+        }
+    }
+}

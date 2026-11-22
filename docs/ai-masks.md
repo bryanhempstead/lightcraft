@@ -41,6 +41,16 @@ tone or the crop, since masks cover the uncropped photo). When the photo's basis
 mask shows `⚠ upd.` in the Masks list (and `upd. all.` above it); the chip, the menu or the
 command recomputes them from what defines them (class, person, parts, clicks, description).
 
+**Adaptive presets** (Bryan's fork): the presets Lightroom installs (Camera Raw's `Settings/Premium`
+and `Settings/Adobe/Presets` — Adaptive: Subject / Sky / Portrait / Landscape / Blur Background,
+Style, Portraits, …) are read at run time and shown as read-only built-in presets (`adobe.<uuid>`;
+`presets.adobe` loads them outside the app). A preset's AI masks map from Camera Raw's
+`MaskSubType` / `MaskSubCategoryID` (1 Subject, 2 Sky, 0 + 50001–50007 Landscape classes,
+3 + part People parts: 2 Face Skin, 3 Iris and Pupil, 4 Body Skin, 5 Hair, 6 Lips, 7 Facial Hair →
+hair, 8 Eye Sclera, 9 Eyebrows, 11 Clothes, 12 Teeth) and `preset.apply` computes the ones it adds
+right away (background in the app); without the models they keep the heuristic selections and
+`aiErrors` says why. Snow (50008) has no class here; People parts select the first person.
+
 **Remove ▸ Detect** (⌥⇧O, `remove.detect`): finds people (SAM 3 or the Scene parser), wires and
 cables (SAM 3 “power lines, cables, wires”) and sensor dust (`spot.findDust`) and covers each
 object with content-aware Remove spots (brushed rows across it), one undo step per kind.

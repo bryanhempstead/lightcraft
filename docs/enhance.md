@@ -23,7 +23,7 @@ rawDetails, superResolution, inPlace, stack}`, `enhance.preview {…, beforePath
 |---|---|---|
 | Denoise | On the raw Bayer mosaic, denoising and demosaicing at once, tile by tile (`crates/denoise-core`, from storytold/lightcraft) | RawNIND UtNet2 as published by darktable-ai (GPL-3.0, 58 MB), run on candle (Metal on macOS). Without it, the built-in block-matching denoiser (BM3D-style, no download) |
 | Raw Details | RCD demosaic (Luis Sanz Rodríguez, ported from RawTherapee, GPL-3.0+: `crates/rcd`) | none |
-| Super Resolution | Real-ESRGAN general x4v3 (SRVGGNetCompact) on the demosaiced picture, ×4 then box-averaged to 2× width and height (`RealESRGAN_x2plus`, an RRDBNet, also loads) | Real-ESRGAN general x4v3 (BSD-3-Clause, 4.9 MB) |
+| Super Resolution | Real-ESRGAN general x4v3 (SRVGGNetCompact) on the demosaiced picture, ×4 averaged down to 2× width and height (the average folded into the last layer; `RealESRGAN_x2plus`, an RRDBNet, also loads) | Real-ESRGAN general x4v3 (BSD-3-Clause, 4.9 MB) |
 | Depth | Depth Anything V2 Small on the photo as developed (uncropped, no masks), kept with the photo's settings | Depth Anything V2 Small (Apache-2.0, 99 MB) |
 
 The models live in `~/Library/Application Support/LightCraft/Models/Enhance/<model>/` (override:
@@ -44,7 +44,7 @@ On a Ricoh GR III DNG at ISO 4000 (6112 × 4064):
 | Raw Details (RCD) | 0.34 s |
 | Denoise, RawNIND on Metal | 11.2 s (the first model use in a process adds ~30 s while candle compiles its Metal kernels; the app warms them up in the background at start when a model is installed) |
 | Denoise, built-in (CPU, 4 threads) | 37.6 s |
-| Super Resolution (x4v3) | 217 s for the whole 24.8 MP photo → 12000 × 8000 (incl. ~30 s first-use warm-up) |
+| Super Resolution (x4v3) | 43 s for the whole photo (6000 × 4000 → 12000 × 8000; was 217 s), with other builds running on the machine; +0.2 s for the first use in a process once macOS has the kernels cached (a fresh install compiles them once, ~30 s) |
 | Depth map | 0.6 s warm (518 px model input; plus a 768 px render of the photo, ~2 s) |
 
 `cargo test -p lightcraft-enhance --release --test real_models -- --ignored --nocapture` with `LC_MODELS=<folder of
@@ -53,6 +53,16 @@ the downloaded files>` and `LC_RAW=<a raw>` measures it again and writes crops (
 candle 0.9.2's own convolution is wrong on the CPU when a layer's channel count equals its width, and slow on Metal;
 `lightcraft_enhance::netrun::conv2d` (one matrix product per kernel tap over a flattened, padded picture) is used
 instead (`conv2d_is_right_when_the_channels_equal_the_width`).
+
+Super Resolution's compact network runs channels-last (`esrgan::CompactNet::forward_cl`): the picture stays
+`[pixels, channels]` over rows of the padded width from layer to layer, so each 3 × 3 convolution is three strided
+copies of the three horizontal neighbours into one kept `[pixels, 3 · channels + bias]` buffer and one batched
+matrix product over the three kernel rows (three overlapping views one padded row apart), summed; the bias is a
+column of ones and PReLU is `max(x, x · diag(a))`, avoiding candle's slow broadcasting kernels. Per 640² layer on the
+M3 Pro: ~53 ms → ~16–20 ms. The ×4 network's 2 × 2 average is folded into its last layer (48 → 12 channels), tiles
+(≤ 1024) are sized so as few as possible cover the photo, and the CPU blends a finished tile while the GPU works on
+the next. `LIGHTCRAFT_ESRGAN_LEGACY=1` runs the old layout for comparison; `sr_real_raw` in `tests/real_models.rs`
+times a whole photo and compares crops of two builds (`LC_TAG`, `LC_REF`).
 
 ## Lens Blur
 

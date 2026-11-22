@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use lightcraft_catalog::PhotoId;
 use lightcraft_develop::Preset;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -133,6 +134,98 @@ impl Session {
             self.presets.push(p);
         }
         added
+    }
+}
+
+/// Largest preset file read from Camera Raw's folders.
+const MAX_ADOBE_PRESET: u64 = 8 << 20;
+
+/// The presets installed with Lightroom / Camera Raw on this Mac (Bryan's fork): Adobe's Premium
+/// presets (Adaptive: Subject / Sky / Portrait / Landscape / Blur Background, Style, Portraits,
+/// Subject, Seasons, …) and the Adobe sets (B&W, Color, Curve, Grain, Optics, Sharpening,
+/// Vignetting, …), from Camera Raw's `Settings` folders. Read at run time, never copied; built in
+/// (read only), with ids `adobe.<uuid>`. Presets hidden from Lightroom's panel
+/// (`ShowInPresets="False"`) are left out. Their AI masks are computed when applied.
+pub fn adobe_presets() -> Vec<Preset> {
+    let mut out: Vec<Preset> = Vec::new();
+    for root in crate::adobe::camera_raw_dirs() {
+        let mut stack = vec![(root.join("Settings"), 0usize)];
+        let mut seen = 0usize;
+        while let Some((dir, depth)) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+            entries.sort();
+            for path in entries {
+                seen += 1;
+                if seen > 20_000 {
+                    break;
+                }
+                if path.is_dir() {
+                    if depth < 6 {
+                        stack.push((path, depth + 1));
+                    }
+                    continue;
+                }
+                if !path.extension().is_some_and(|x| x.eq_ignore_ascii_case("xmp")) {
+                    continue;
+                }
+                if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_ADOBE_PRESET {
+                    continue;
+                }
+                // the preset type sits in the packet's first attributes: skip the (large) look
+                // profiles without reading them whole
+                let head = {
+                    use std::io::Read;
+                    let mut b = Vec::new();
+                    let _ = std::fs::File::open(&path).map(|f| f.take(16 << 10).read_to_end(&mut b));
+                    b
+                };
+                if !String::from_utf8_lossy(&head).contains("crs:PresetType=\"Normal\"") {
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(&path) else { continue };
+                let text = String::from_utf8_lossy(&bytes);
+                if !text.contains("crs:PresetType=\"Normal\"") || text.contains("crs:ShowInPresets=\"False\"") {
+                    continue;
+                }
+                let folder = path.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().to_string());
+                let name = path.to_string_lossy().to_string();
+                let Ok(found) = crate::preset_import::read_presets(&name, &bytes, folder) else { continue };
+                for im in found {
+                    let mut p = im.preset;
+                    p.id = format!("adobe.{}", p.id.trim_start_matches("user.xmp."));
+                    p.builtin = true;
+                    p.favorite = false;
+                    if !out.iter().any(|q| q.id == p.id) {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+impl Session {
+    /// Offer the presets installed with Lightroom / Camera Raw ([`adobe_presets`]) as built-in
+    /// presets (the app and CLI call this; nothing is stored in the library).
+    pub fn with_adobe_presets(mut self) -> Self {
+        self.add_adobe_presets();
+        self
+    }
+
+    /// [`Self::with_adobe_presets`] on a running session; returns how many were added.
+    pub fn add_adobe_presets(&mut self) -> usize {
+        let t0 = web_time::Instant::now();
+        let mut n = 0;
+        for p in adobe_presets() {
+            if !self.presets.iter().any(|q| q.id == p.id) {
+                self.presets.push(p);
+                n += 1;
+            }
+        }
+        log::info!("adobe presets: {n} in {:.0} ms", t0.elapsed().as_secs_f64() * 1e3);
+        n
     }
 }
 
@@ -433,7 +526,54 @@ pub const PROFILES: &[ProfileInfo] = &[
     ProfileInfo { id: "adobe:Adobe Portrait", name: "Adobe Portrait", group: "Adobe Raw" },
     ProfileInfo { id: "adobe:Adobe Vivid", name: "Adobe Vivid", group: "Adobe Raw" },
     ProfileInfo { id: "adobe:Adobe Monochrome", name: "Adobe Monochrome", group: "Adobe Raw" },
+    // Adobe's Adaptive profiles: their look table is rendered; the per-photo part Camera Raw
+    // computes with its own (encrypted) model is not (`crate::adobe::ADAPTIVE_LOOKS`)
+    ProfileInfo { id: "adobe:Adaptive Color", name: "Adaptive: Color", group: "Adaptive" },
+    ProfileInfo { id: "adobe:Adaptive B&W", name: "Adaptive: B&W", group: "Adaptive" },
 ];
+
+/// Where Lightroom's browser lists a camera's own profiles: after Adobe Raw.
+const CAMERA_GROUPS_AFTER: &str = "Adobe Raw";
+
+/// One entry of the profile browser / menu.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProfileItem {
+    pub id: String,
+    pub name: String,
+    pub group: String,
+}
+
+/// A group of the profile browser / menu.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProfileGroup {
+    pub name: String,
+    /// Imported LUT / XMP profiles (`lut:` ids).
+    pub imported: bool,
+    /// Hidden with Manage Profiles (listed only when asked for every group).
+    pub hidden: bool,
+    pub profiles: Vec<ProfileItem>,
+}
+
+/// Name and group of a camera-profile id (`cam:` / `legacy:`) without looking it up.
+fn camera_profile_info(id: &str) -> Option<(&str, &str)> {
+    if let Some(n) = id.strip_prefix("legacy:") {
+        return Some((n, crate::adobe::GROUP_LEGACY));
+    }
+    let n = id.strip_prefix("cam:")?;
+    Some((n, if n.to_ascii_lowercase().starts_with("camera ") { crate::adobe::GROUP_CAMERA } else { crate::adobe::GROUP_IMPORTED }))
+}
+
+/// Whether profile `id` has an Amount slider: not our default, and not a camera profile (Camera
+/// Matching / imported DCP / Legacy profiles are the camera's colour itself, as in Lightroom).
+pub fn profile_has_amount(id: &str) -> bool {
+    id != "lc.color" && camera_profile_info(id).is_none()
+}
+
+/// Whether a profile renders black & white (the browser's B&W filter).
+pub fn profile_is_bw(id: &str, name: &str, group: &str) -> bool {
+    let n = format!("{id} {name} {group}").to_ascii_lowercase();
+    ["mono", "b&w", "bw.", "acros", "sepia", "black & white", "black and white"].iter().any(|w| n.contains(w))
+}
 
 /// Profile groups in menu/browser order.
 pub fn profile_groups() -> Vec<&'static str> {
@@ -456,11 +596,76 @@ pub const RECENT_PROFILES: usize = 5;
 
 impl Session {
     /// A profile by id, looking up built-in profiles first and imported LUT profiles second.
-    pub fn profile_info(&self, id: &str) -> Option<(&str, &str)> {
+    pub fn profile_info<'a>(&'a self, id: &'a str) -> Option<(&'a str, &'a str)> {
         if let Some(p) = profile(id) {
             return Some((p.name, p.group));
         }
+        if let Some(info) = camera_profile_info(id) {
+            return Some(info);
+        }
         self.lut_profiles.iter().find(|p| p.id == id).map(|p| (p.name.as_str(), p.group.as_str()))
+    }
+
+    /// Whether `id` names a profile (built in, imported, or a camera profile — Camera Matching /
+    /// imported DCP / Legacy, which falls back to our nearest look where not installed).
+    pub fn is_profile(&self, id: &str) -> bool {
+        profile(id).is_some() || camera_profile_info(id).is_some_and(|(n, _)| !n.trim().is_empty()) || self.lut_profiles.iter().any(|p| p.id == id)
+    }
+
+    /// The camera profiles of photo `id`'s camera (raw files only): Camera Matching, imported
+    /// DCPs and Legacy, from the Adobe data on this Mac.
+    pub fn camera_profiles_of(&self, id: PhotoId) -> Vec<ProfileItem> {
+        let Some(p) = self.catalog.photo(id).filter(|p| p.kind == lightcraft_catalog::MediaKind::Raw) else { return Vec::new() };
+        let (make, model) = crate::cameras::split(&p.meta.camera);
+        let make = Some(make.as_str()).filter(|m| !m.is_empty());
+        crate::adobe::camera_profiles(make, &model)
+            .iter()
+            .map(|e| ProfileItem { id: e.id.clone(), name: e.name.clone(), group: e.group.to_string() })
+            .collect()
+    }
+
+    /// Every profile group for photo `id` in browser order: ours and Adobe Raw, the photo's camera
+    /// profiles (Camera Matching, Legacy, imported DCPs), Adaptive, our creative groups, then
+    /// imported LUT / XMP groups. Groups hidden with Manage Profiles are left out unless `all`.
+    pub fn profile_groups_for(&self, photo: Option<PhotoId>, all: bool) -> Vec<ProfileGroup> {
+        let mut out: Vec<ProfileGroup> = Vec::new();
+        let item = |p: &ProfileInfo| ProfileItem { id: p.id.to_string(), name: p.name.to_string(), group: p.group.to_string() };
+        let camera = photo.map(|id| self.camera_profiles_of(id)).unwrap_or_default();
+        for g in profile_groups() {
+            out.push(ProfileGroup {
+                name: g.to_string(),
+                imported: false,
+                hidden: false,
+                profiles: PROFILES.iter().filter(|p| p.group == g).map(item).collect(),
+            });
+            if g == CAMERA_GROUPS_AFTER {
+                for cg in [crate::adobe::GROUP_CAMERA, crate::adobe::GROUP_LEGACY, crate::adobe::GROUP_IMPORTED] {
+                    let list: Vec<ProfileItem> = camera.iter().filter(|c| c.group == cg).cloned().collect();
+                    if !list.is_empty() {
+                        out.push(ProfileGroup { name: cg.to_string(), imported: false, hidden: false, profiles: list });
+                    }
+                }
+            }
+        }
+        let mut lut_groups: Vec<&str> = self.lut_profiles.iter().map(|p| p.group.as_str()).collect();
+        lut_groups.sort_unstable();
+        lut_groups.dedup();
+        for g in lut_groups {
+            let profiles = self
+                .lut_profiles
+                .iter()
+                .filter(|p| p.group == g)
+                .map(|p| ProfileItem { id: p.id.clone(), name: p.name.clone(), group: p.group.clone() })
+                .collect();
+            out.push(ProfileGroup { name: g.to_string(), imported: true, hidden: false, profiles });
+        }
+        for g in &mut out {
+            g.hidden = self.profile_hidden_groups.iter().any(|h| h.eq_ignore_ascii_case(&g.name));
+        }
+        if !all {
+            out.retain(|g| !g.hidden);
+        }
+        out
     }
 
     /// Remember `id` as the most recently applied profile.
@@ -468,6 +673,30 @@ impl Session {
         self.profile_recent.retain(|p| p != id);
         self.profile_recent.insert(0, id.to_string());
         self.profile_recent.truncate(RECENT_PROFILES);
+    }
+
+    /// The profile menu for photo `photo` (its camera profiles too): favourites, recent, then
+    /// every shown group (`profiles.menu {id?}`).
+    pub fn profile_menu_for(&self, photo: Option<PhotoId>) -> Value {
+        let fav = |id: &str| self.profile_favorites.iter().any(|f| f == id);
+        let list = |ids: &[String]| {
+            ids.iter()
+                .filter_map(|id| self.profile_info(id).map(|(name, group)| json!({"id": id, "name": name, "group": group, "favorite": fav(id)})))
+                .collect::<Vec<_>>()
+        };
+        let groups: Vec<Value> = self
+            .profile_groups_for(photo, true)
+            .into_iter()
+            .map(|g| {
+                let profiles: Vec<Value> = g
+                    .profiles
+                    .iter()
+                    .map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": fav(&p.id), "imported": g.imported.then_some(true)}))
+                    .collect();
+                json!({"name": g.name, "profiles": profiles, "imported": g.imported.then_some(true), "hidden": g.hidden})
+            })
+            .collect();
+        json!({"favorites": list(&self.profile_favorites), "recent": list(&self.profile_recent), "groups": groups})
     }
 
     /// The profile menu: favourites, recent, then every group (`profiles.menu`).
@@ -530,7 +759,7 @@ mod tests {
             assert!(p.id == "lc.color" || looks.contains(&p.id) || crate::pipeline::adobe::is_adobe_look(p.id), "{} has no look", p.id);
         }
         assert!(PROFILES.len() >= 22);
-        assert_eq!(profile_groups(), ["Basic", "Film", "Cinematic", "Muted", "B&W", "Adobe Raw"]);
+        assert_eq!(profile_groups(), ["Basic", "Film", "Cinematic", "Muted", "B&W", "Adobe Raw", "Adaptive"]);
     }
 
     #[test]

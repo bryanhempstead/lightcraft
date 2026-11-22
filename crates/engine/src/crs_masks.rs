@@ -111,6 +111,41 @@ fn pt(x: f64, y: f64) -> Value {
 }
 
 /// One mask component → our component JSON; `Err(kind)` names an unsupported one.
+/// Lightroom's Landscape `MaskSubCategoryID` (`MaskSubType` 0) → our class
+/// (`lightcraft_develop::ai::LANDSCAPE_CLASSES`), read off the adaptive Landscape presets'
+/// mask names. 50008 is Snow, a class we don't have.
+pub(crate) fn landscape_class(cat: &str) -> Option<&'static str> {
+    Some(match cat {
+        "50001" => "architecture",
+        "50002" => "mountains",
+        "50003" => "artificialGround",
+        "50004" => "naturalGround",
+        "50005" => "vegetation",
+        "50006" => "sky",
+        "50007" => "water",
+        _ => return None,
+    })
+}
+
+/// Lightroom's People `MaskSubCategoryID` (`MaskSubType` 3) → our part
+/// (`lightcraft_develop::ai::PEOPLE_PARTS`), read off the adaptive Portrait presets' mask names.
+/// Facial Hair (7) has no part of its own here and selects the hair.
+pub(crate) fn person_part(cat: &str) -> Option<&'static str> {
+    Some(match cat {
+        "" | "0" | "1" => "person",
+        "2" => "faceSkin",
+        "3" => "iris",
+        "4" => "bodySkin",
+        "5" | "7" => "hair",
+        "6" => "lips",
+        "8" => "eyeSclera",
+        "9" => "eyebrows",
+        "11" => "clothes",
+        "12" => "teeth",
+        _ => return None,
+    })
+}
+
 fn component(m: &XmpValue, aspect: f64) -> Result<Value, String> {
     let what = text(m, "crs:What").unwrap_or("");
     let op = match num(m, "crs:MaskBlendMode").unwrap_or(0.0) as i64 {
@@ -164,11 +199,24 @@ fn component(m: &XmpValue, aspect: f64) -> Result<Value, String> {
                 "erase": erase,
             }]})
         }
-        "Mask/Image" => match text(m, "crs:MaskSubType") {
-            Some("1") => json!({"kind": "subject"}),
-            Some("2") => json!({"kind": "sky"}),
-            other => return Err(format!("AI mask ({})", other.unwrap_or("?"))),
-        },
+        "Mask/Image" => {
+            let cat = text(m, "crs:MaskSubCategoryID").map(str::trim).unwrap_or("");
+            match text(m, "crs:MaskSubType") {
+                Some("1") => json!({"kind": "subject"}),
+                Some("2") => json!({"kind": "sky"}),
+                // Landscape (Lightroom's adaptive Landscape presets and masks): one class each
+                Some("0") if !cat.is_empty() => match landscape_class(cat) {
+                    Some(class) => json!({"kind": "landscape", "class": class}),
+                    None => return Err(format!("AI landscape mask ({cat})")),
+                },
+                // People: a part of the (first) person
+                Some("3") => match person_part(cat) {
+                    Some(part) => json!({"kind": "people", "person": 0, "parts": [part]}),
+                    None => return Err(format!("AI people mask ({cat})")),
+                },
+                other => return Err(format!("AI mask ({})", other.unwrap_or("?"))),
+            }
+        }
         "Mask/RangeMask" => {
             let r = m.field("crs:CorrectionRangeMask").unwrap_or(m);
             match text(r, "crs:Type") {

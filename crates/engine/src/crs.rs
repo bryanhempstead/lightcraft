@@ -175,6 +175,8 @@ fn base_profile(name: &str) -> Option<&'static str> {
         "adobe portrait" => return Some("adobe:Adobe Portrait"),
         "adobe landscape" => return Some("adobe:Adobe Landscape"),
         "adobe vivid" => return Some("adobe:Adobe Vivid"),
+        "adaptive color" | "adaptive: color" => return Some("adobe:Adaptive Color"),
+        "adaptive b&w" | "adaptive: b&w" => return Some("adobe:Adaptive B&W"),
         _ => {}
     }
     let rest = lower.strip_prefix("adobe ").or_else(|| lower.strip_prefix("camera "))?;
@@ -187,6 +189,26 @@ fn base_profile(name: &str) -> Option<&'static str> {
         "monochrome" | "mono" | "monochrome v2" | "b&w" => "lc.mono",
         _ => return None,
     })
+}
+
+/// A `crs:CameraProfile` that names a camera profile of its own (Bryan's fork): Camera Matching
+/// (`Camera Standard`, `Camera PROVIA/Standard`, …) → `cam:<name>`, Legacy (`ACR 4.4`, …) →
+/// `legacy:<name>`, and profiles imported into Camera Raw or LightCraft by their name. The raw
+/// decodes with the camera's own DCP of that name (`crate::adobe::profile_for`), else renders our
+/// nearest look.
+pub fn camera_profile_id(name: &str) -> Option<String> {
+    let n = name.trim();
+    let lower = n.to_ascii_lowercase();
+    if lower.starts_with("camera ") && !lower.starts_with("camera raw ") {
+        return Some(format!("cam:{n}"));
+    }
+    if crate::adobe::is_legacy_name(n) {
+        return Some(format!("legacy:{n}"));
+    }
+    if !n.is_empty() && base_profile(n).is_none() && crate::adobe::known_profile_name(n) {
+        return Some(format!("cam:{n}"));
+    }
+    None
 }
 
 /// Map the `crs:` fields of an XMP packet to a partial develop-settings JSON object.
@@ -381,6 +403,44 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     n(o, "GrainSize", "grain.size");
     n(o, "GrainFrequency", "grain.roughness");
 
+    // ---- Lens Blur (`crs:LensBlur`, e.g. Lightroom's Adaptive: Blur Background presets). The
+    // focal range "near-start near-full far-full far-end" (0..100); the whole range (0 0 100 100)
+    // means "focus on the subject", which applying it works out (`lensBlur.apply`).
+    if let Some(b) = boolean(props, "crs:LensBlur/crs:Active") {
+        note("crs:LensBlur");
+        put(o, "lens_blur.enabled", json!(b));
+    }
+    if let Some(v) = num(props, "crs:LensBlur/crs:BlurAmount") {
+        put(o, "lens_blur.amount", json!(v.clamp(0.0, 100.0)));
+    }
+    if let Some(v) = num(props, "crs:LensBlur/crs:HighlightsBoost") {
+        put(o, "lens_blur.boost", json!(v.clamp(0.0, 100.0)));
+    }
+    if let Some(shape) = num(props, "crs:LensBlur/crs:BokehShape") {
+        let detail = num(props, "crs:LensBlur/crs:BokehShapeDetail").unwrap_or(0.0);
+        let bubble = num(props, "crs:LensBlur/crs:SphericalAberration").unwrap_or(0.0) > 40.0;
+        let bokeh = if shape >= 1.0 {
+            "ring"
+        } else if detail >= 1.0 {
+            "fiveBlade"
+        } else if bubble {
+            "bubble"
+        } else {
+            "circle"
+        };
+        put(o, "lens_blur.bokeh", json!(bokeh));
+    }
+    if let Some(r) = first(props, "crs:LensBlur/crs:FocalRange") {
+        let q: Vec<f64> = r.split_whitespace().filter_map(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()).collect();
+        if let [a, b, c, d] = q[..] {
+            let whole = a <= 0.0 && b <= 0.0 && c >= 100.0 && d >= 100.0;
+            let (lo, hi) = (b.min(c).clamp(0.0, 100.0), b.max(c).clamp(0.0, 100.0));
+            let (distance, range) = if whole { (0.0, 0.0) } else { ((lo + hi) / 2.0, (hi - lo).max(1.0)) };
+            put(o, "lens_blur.focal_distance", json!(distance));
+            put(o, "lens_blur.focal_range", json!(range));
+        }
+    }
+
     // ---- Optics: the switch, and the lens profile Lightroom chose (by name, file and digest;
     // Bryan's fork renders it from the installed `.lcp`). A profile embedded in the file
     // (`LensProfileIsEmbedded`) is the file's own: nothing to name.
@@ -446,10 +506,11 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     // ---- Profile: the base profiles map to ours by name; creative looks (their own colour
     // tables) have no counterpart and stay unmapped
     let look = first(props, "crs:Look/crs:Name");
-    let look_id = look.and_then(base_profile);
+    let look_id = look.and_then(base_profile).map(str::to_string);
     // (read without marking it read: an unknown camera profile is reported)
-    let camera_id = props.get("crs:CameraProfile").and_then(|v| v.first()).and_then(|n| base_profile(n));
-    match (look_id, camera_id) {
+    let camera_id =
+        props.get("crs:CameraProfile").and_then(|v| v.first()).and_then(|n| camera_profile_id(n).or_else(|| base_profile(n).map(str::to_string)));
+    match (&look_id, &camera_id) {
         (Some(id), _) => {
             note("crs:Look");
             put(o, "profile.id", json!(id));

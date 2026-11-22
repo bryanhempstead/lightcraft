@@ -32,6 +32,19 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   photos (scratch only). needs.you #163–#165. Left: LaMa ~5 s per 1024² variation (f16 / faster 7×7 convs), fills
   capped at 1024 px, wires (SAM 3) not run, Find Dust Spots over-reports on textured photos, Lightroom's generative /
   reflection XMP not read.
+- [ ] (profiles agent, 2026-11-22, branch worktree-agent-a5465a93af5a64b95, not merged) **Profiles + adaptive presets +
+  SR speed** — 05f28a03c SR channels-last on Metal (24 MP 217 → 43 s, PSNR 73–79 dB vs the old path); LR-PROF-CAMERA /
+  LEGACY / ADAPTIVE: Camera Matching + imported DCPs (Camera Raw `CameraProfiles/Camera|Imported`, `.dcp` import into
+  the library) decode on their own DCP through the SDK (`cam:<name>`, `files::with_base_profile`, sources cached per
+  base), Legacy `legacy:ACR 4.4` (matrices only + ACR3 curve), Adaptive Color / B&W look tables (per-photo part needs
+  Camera Raw's encrypted `ai_look` model); GR III vs the SDK's reference render ΔE76 1.0–1.8; U09: browser filter
+  all./clr./b&w., views grid./lrg./lst., mng. (hide groups), imp., profile groups per photo in menu + browser;
+  LR-PRE-ADAPTIVE / LR-MASK-ADAPTIVE: Camera Raw's Premium + Adobe presets offered read only (`adobe.<uuid>`,
+  `presets.adobe`, app loads at start), Landscape / People `MaskSubCategoryID` mapped, preset.apply computes new AI
+  masks (a4ea8443f; 20dcf2a89: People presets detect people first, Blur Background → Lens Blur; real parsers on
+  teton / crew: Blue Drama sky, Whiten Teeth, Autumn01 5/7 classes, Pop subject). Bryan's catalog: 16,823 photos all
+  resolve (no Camera Matching used). Left: Fujifilm film sims (no DCPs installed here), Snow class, Facial Hair = hair,
+  People masks = first person, Adaptive per-photo tables, Cat Eye / oval bokeh. needs.you #166, #167.
 - [ ] (AI masks agent, 2026-11-22, branch worktree-agent-af352bb019bacca9d, not merged) **AI masks — parity K + REM rows**
   Done: 08552d289 SAM 3 downloads work (5 ungated HF copies, every file hash-pinned; DEFAULT_MIRRORS was empty);
   365717b7c SegFormer in pure Rust (crates/segment/src/segformer.rs, ported from candle-transformers) + three

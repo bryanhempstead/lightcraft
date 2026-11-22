@@ -438,7 +438,7 @@ pub struct Plan<'a> {
 
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
 pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &RenderRequest) -> Plan<'a> {
-    let mut settings: Cow<'a, DevelopSettings> = match profiles::effective(s) {
+    let mut settings: Cow<'a, DevelopSettings> = match profiles::effective_for(s, info.adobe) {
         Cow::Borrowed(b) => upright::resolve(src, info, b),
         Cow::Owned(o) => Cow::Owned(upright::resolve(src, info, &o).into_owned()),
     };

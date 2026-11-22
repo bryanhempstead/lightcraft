@@ -460,7 +460,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("develop.profile", "Set Profile", [], None, "{id: profile id (see profiles.list), amount?: 0..200}", has_active, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("develop.profile", "missing id"))?.to_string();
-            if !crate::presets::PROFILES.iter().any(|x| x.id == id) && !s.lut_profiles.iter().any(|x| x.id == id) {
+            if !s.is_profile(&id) {
                 return Err(bad("develop.profile", format!("unknown profile `{id}`")));
             }
             edit(s, "develop.profile", "Profile", |d| {
@@ -473,7 +473,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("profile.favorite", "Favorite Profile", [], None, "{id, favorite?: bool} (toggles when omitted)", always, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("profile.favorite", "missing id"))?.to_string();
-            if crate::presets::profile(&id).is_none() && !s.lut_profiles.iter().any(|x| x.id == id) {
+            if !s.is_profile(&id) {
                 return Err(bad("profile.favorite", format!("unknown profile `{id}`")));
             }
             let on = s.profile_favorites.contains(&id);
@@ -484,6 +484,50 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.profile_favorites.retain(|f| *f != id);
             }
             Ok(json!({"favorite": want}))
+        }),
+        cmd!(
+            "presets.adobe",
+            "Load Lightroom's Presets",
+            [],
+            None,
+            "{} — offer the presets installed with Lightroom / Camera Raw on this Mac (Adaptive, Style, Portraits, B&W, …; read only, ids `adobe.…`); the app loads them at start → {added, total}",
+            always,
+            |s, _| {
+                let added = s.add_adobe_presets();
+                Ok(json!({"added": added, "total": s.presets.iter().filter(|p| p.id.starts_with("adobe.")).count()}))
+            }
+        ),
+        cmd!(
+            "profile.group.show",
+            "Show Profile Group",
+            [],
+            None,
+            "{group: name, show?: bool} — Manage Profiles: show or hide a profile group in the menu and browser (toggles when omitted)",
+            always,
+            |s, p| {
+                let c = "profile.group.show";
+                let group = str_param(p, "group").map(str::trim).filter(|g| !g.is_empty()).ok_or_else(|| bad(c, "missing group"))?.to_string();
+                let hidden = s.profile_hidden_groups.iter().any(|g| g.eq_ignore_ascii_case(&group));
+                let show = bool_or(p, "show", hidden);
+                s.profile_hidden_groups.retain(|g| !g.eq_ignore_ascii_case(&group));
+                if !show {
+                    s.profile_hidden_groups.push(group.clone());
+                }
+                Ok(json!({"group": group, "shown": show}))
+            }
+        ),
+        cmd!("profile.groups.reset", "Reset Hidden Profiles", [], None, "{} — show every profile group again", always, |s, _| {
+            s.profile_hidden_groups.clear();
+            ok()
+        }),
+        cmd!("profile.view", "Profile Browser View", [], None, "{view: grid | large | list}", always, |s, p| {
+            let c = "profile.view";
+            let v = str_param(p, "view").ok_or_else(|| bad(c, "missing view"))?;
+            if !["grid", "large", "list"].contains(&v) {
+                return Err(bad(c, format!("unknown view `{v}` (grid, large, list)")));
+            }
+            s.profile_view = v.to_string();
+            Ok(json!({"view": v}))
         }),
         cmd!("develop.curve", "Set Point Curve", [], None, "{channel: master|red|green|blue, points: [[x,y],...] in 0..1}", has_active, |s, p| {
             let ch = str_param(p, "channel").unwrap_or("master").to_string();
@@ -1107,13 +1151,76 @@ pub fn specs() -> Vec<CommandSpec> {
             let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
             let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
             let ids = s.targets(p);
-            let ops = ids
-                .iter()
-                .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                .filter_map(|(id, d)| s.develop_op(id, preset.apply(&d, amount), &format!("Preset: {}", preset.name)))
-                .collect::<Vec<_>>();
+            // masks the preset adds that a model computes (adaptive presets: Subject, Sky, People
+            // parts, Landscape): (photo, mask id)
+            let mut ai: Vec<(PhotoId, u32)> = Vec::new();
+            let mut ops = Vec::new();
+            for id in &ids {
+                let Some(d) = s.develop_of(*id) else { continue };
+                let after = preset.apply(&d, amount);
+                for m in &after.masks {
+                    if !d.masks.iter().any(|o| o.id == m.id) && m.components.iter().any(|c| c.shape.is_ai() && c.shape.seg().is_none()) {
+                        ai.push((*id, m.id));
+                    }
+                }
+                if let Some(op) = s.develop_op(*id, after, &format!("Preset: {}", preset.name)) {
+                    ops.push(op);
+                }
+            }
             s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
-            ok()
+            // compute them now (or in the background): without the models they keep the
+            // heuristic selections, and the reason is returned
+            let (mut queued, mut errors) = (0usize, Vec::<String>::new());
+            for (id, mask) in ai {
+                // People parts need the photo's people first (the active photo's: in the app the
+                // masks are computed once they are found)
+                let person = s.develop_of(id).and_then(|d| {
+                    d.masks.iter().find(|m| m.id == mask).and_then(|m| {
+                        m.components.iter().find_map(|c| match &c.shape {
+                            lightcraft_develop::MaskShape::People { person, rect: None, .. } => Some(*person as usize),
+                            _ => None,
+                        })
+                    })
+                });
+                if let Some(k) = person
+                    && s.person_rect(id, k).is_none()
+                {
+                    let then = (s.active() == Some(id)).then(|| json!({"command": "mask.updateAI", "params": {"id": mask}}));
+                    match s.detect_people(id, then) {
+                        Ok(Some(v)) if v.is_empty() => {
+                            errors.push("No people were found in this photo.".into());
+                            continue;
+                        }
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            queued += 1;
+                            continue;
+                        }
+                        Err(e) => {
+                            errors.push(e);
+                            continue;
+                        }
+                    }
+                }
+                match s.update_ai(id, Some(mask)) {
+                    Ok((n, e)) => {
+                        queued += n;
+                        errors.extend(e);
+                    }
+                    Err(e) => errors.push(e),
+                }
+            }
+            // a preset that switches Lens Blur on with its focus left to the photo (Adaptive: Blur
+            // Background): the active photo gets its depth map and Lightroom's starting focus
+            if let Some(id) = s.active().filter(|a| ids.contains(a))
+                && s.develop_of(id).is_some_and(|d| d.lens_blur.enabled && d.lens_blur.focal_distance == 0.0 && d.lens_blur.focal_range == 0.0)
+                && let Err(e) = s.execute("lensBlur.apply", &json!({"on": true}))
+            {
+                errors.push(e.to_string());
+            }
+            errors.sort();
+            errors.dedup();
+            Ok(json!({"aiMasks": queued, "aiErrors": errors}))
         }),
         cmd!(
             "preset.create",
