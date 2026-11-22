@@ -17,7 +17,7 @@ The Masking panel's tiles (`subj.`, `sky.`, `bg.`, `ppl.`, `land.`) and `mask.ad
 
 | Mask | Model used (first installed wins) | Stored |
 |---|---|---|
-| Subject (`subject`) | SAM 3: the most prominent people and animals (else what it selects at the centre); else the Scene parser's people and animals | 288² (SAM 3) / 256² logits |
+| Subject (`subject`) | SAM 3: the people and animals the camera's focus point falls on, else the most prominent (else what it selects at the focus point or the centre); else the Scene parser's people and animals — with a focus point on or next to one of them, just that one. The focus point comes from the file's maker note (Sony, Canon, Nikon, Fujifilm: `crates/meta/src/focus.rs`), read on the worker | 288² (SAM 3) / 256² logits |
 | Background (`background`) | the subject, inverted | the subject's segmentation |
 | Sky (`sky`) | the Scene parser's ADE20K `sky`; else SAM 3 “sky” | 256² logits |
 | Landscape (`landscape`, `classes`) | Scene parser: Sky, Water, Vegetation, Mountains, Architecture, Natural Ground, Artificial Ground (ADE20K classes grouped like Lightroom's, `crates/segment/src/parsers.rs`); else SAM 3 descriptions | 256² logits; several classes = one selection (their union), or `separate: true` = one mask each |

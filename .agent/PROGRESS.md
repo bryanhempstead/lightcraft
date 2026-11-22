@@ -6,6 +6,21 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (faces agent round 2, 2026-11-22, branch worktree-agent-a60c94c49b5526429, not merged) **People / culling
+  finished** (LR-PREF-PEOPLE, LR-LIB-PEOPLE, LRC-LIB-PEOPLE, LR-LIB-CULL, LR-FILT-CULL, LR-IMP-CULL-AT-IMPORT,
+  LRC-IMP-PREVIEWCULL, LR-MASK-SUBJECT; `docs/people.md`). **Catalog v10** (`Region.drawn`, `Analysis.smiles` /
+  `expression`; merge note: another branch bumping to v10 must renumber). Faces found by themselves
+  (`faces.auto`, Settings ▸ General ▸ Find faces off./view./all.; half the workers, waits while the user works,
+  top-bar activity strip with stop, `resume.`, imports join the front, failed photos skipped); Draw Face Region in
+  the loupe (draw / move / resize / rename); OpenCV Zoo FER expression model (4.8 MB, Apache-2.0, own package
+  `expressions`; identical to ONNX Runtime on 38 crops; face index record v2) → smiles / expression in culling,
+  rules and the dialog; culling on worker threads (`CullJob`, `cull_poll`) and at import as bookkeeping
+  (`library.import {cull}`); person keywords ↔ face names in step; People bulk row (name / yes. / no. / rm.) and
+  opened stacks; Select Subject uses the camera's focus point (`crates/meta/src/focus.rs`: upstream's Sony reader
+  + Canon AFInfo2/3 checked on Bryan's R6 CR3s, Nikon AFInfo2, Fujifilm FocusPixel from ExifTool docs only).
+  PRelu/per-channel broadcast fast path in the ONNX interpreter (PRelu 300 → 2 ms a face under load).
+  Left: pets, expression network on a labelled set of Bryan's photos, Nikon/Fuji focus on real files, 13k-library
+  throughput without the build load.
 - [ ] (hdr2 agent, 2026-11-22, branch worktree-agent-ac64e49f32754ea1f, not merged) **HDR leftovers + LR-VID-EDIT** —
   e0f0ea988 HDR loupe on the GPU (finish kernel's float HDR output, `PEAK`/`SCENE_TOP` params appended; CPU/GPU
   equivalence crates/gpu/tests/hdr.rs; 1936x1290 draft drag 12–14 ms GPU vs 340–620 ms CPU under load ~100; UI
