@@ -98,8 +98,82 @@ fn standard_index() -> &'static HashMap<String, PathBuf> {
     })
 }
 
+/// Canon's American (Rebel) and Japanese (Kiss) names for the bodies Camera Raw files under their
+/// European `EOS <n>D` name: an EOS Rebel T3 CR2 says "Canon EOS REBEL T3" but its profiles are
+/// "Canon EOS 1100D …", so it found no Adobe profile and rendered on the neutral fallback colour
+/// (washed out next to its camera JPEG). Keys are the model without "Canon", "EOS" and "Digital",
+/// lowercased; values are Camera Raw's names (as `CameraProfiles/Adobe Standard` lists them).
+const CANON_ALIASES: &[(&str, &str)] = &[
+    ("rebel", "300D"),
+    ("kiss", "300D"),
+    ("300d", "300D"),
+    ("rebel xt", "350D"),
+    ("kiss n", "350D"),
+    ("rebel xti", "400D"),
+    ("kiss x", "400D"),
+    ("rebel xsi", "450D"),
+    ("kiss x2", "450D"),
+    ("rebel xs", "1000D"),
+    ("kiss f", "1000D"),
+    ("rebel t1i", "500D"),
+    ("kiss x3", "500D"),
+    ("rebel t2i", "550D"),
+    ("kiss x4", "550D"),
+    ("rebel t3i", "600D"),
+    ("kiss x5", "600D"),
+    ("rebel t3", "1100D"),
+    ("kiss x50", "1100D"),
+    ("rebel t4i", "650D"),
+    ("kiss x6i", "650D"),
+    ("rebel t5i", "700D"),
+    ("kiss x7i", "700D"),
+    ("rebel sl1", "100D"),
+    ("kiss x7", "100D"),
+    ("rebel t5", "1200D"),
+    ("kiss x70", "1200D"),
+    ("rebel t6i", "750D"),
+    ("kiss x8i", "750D"),
+    ("rebel t6s", "760D"),
+    ("8000d", "760D"),
+    ("rebel t6", "1300D"),
+    ("kiss x80", "1300D"),
+    ("rebel t7i", "800D"),
+    ("kiss x9i", "800D"),
+    ("9000d", "77D"),
+    ("rebel sl2", "200D"),
+    ("kiss x9", "200D"),
+    ("rebel t7", "1500D"),
+    ("kiss x90", "1500D"),
+    ("2000d", "1500D"),
+    ("rebel t100", "3000D"),
+    ("4000d", "3000D"),
+    ("rebel sl3", "250D"),
+    ("kiss x10", "250D"),
+    ("200d ii", "250D"),
+    ("rebel t8i", "850D"),
+    ("kiss x10i", "850D"),
+    ("kiss m", "M50"),
+    ("kiss m2", "M50 Mark II"),
+];
+
+/// Camera Raw's name for a Canon body sold under a regional name (`None` for the others).
+fn canon_alias(model: &str) -> Option<&'static str> {
+    let key: Vec<String> = model.split_whitespace().map(str::to_lowercase).filter(|w| !matches!(w.as_str(), "canon" | "eos" | "digital")).collect();
+    let key = key.join(" ");
+    CANON_ALIASES.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
+}
+
 /// Names Camera Raw may file a camera under, from the file's Exif make and model.
 fn candidates(make: Option<&str>, model: &str) -> Vec<String> {
+    let mut v = candidates_as_named(make, model);
+    let canon = make.is_some_and(|m| m.trim().to_lowercase().starts_with("canon")) || model.to_lowercase().contains("eos");
+    if let Some(alias) = canon_alias(model).filter(|_| canon) {
+        v.push(lower(&format!("Canon EOS {alias}")));
+    }
+    v
+}
+
+fn candidates_as_named(make: Option<&str>, model: &str) -> Vec<String> {
     let model = model.trim();
     let mut v = vec![lower(model)];
     if let Some(make) = make.map(str::trim).filter(|m| !m.is_empty()) {
@@ -884,6 +958,24 @@ mod tests {
         assert!(candidates(Some("SONY"), "ILCE-7M4").contains(&"sony ilce-7m4".to_string()));
         assert!(candidates(Some("LEICA CAMERA AG"), "LEICA M (Typ 262)").contains(&"leica m (typ 262)".to_string()));
         assert!(candidates(None, "  ").iter().all(|c| c.is_empty()));
+    }
+
+    #[test]
+    fn canon_regional_names_find_camera_raws_profile() {
+        // Bryan's EOS Rebel T3 CR2s found no profile (Camera Raw files it as the 1100D)
+        let has = |model: &str, want: &str| candidates(Some("Canon"), model).iter().any(|c| c == want);
+        assert!(has("Canon EOS REBEL T3", "canon eos 1100d"));
+        assert!(has("Canon EOS Kiss X50", "canon eos 1100d"));
+        assert!(has("Canon EOS REBEL T3i", "canon eos 600d"));
+        assert!(has("Canon EOS DIGITAL REBEL XTi", "canon eos 400d"));
+        assert!(has("Canon EOS Kiss Digital X", "canon eos 400d"));
+        assert!(has("Canon EOS 300D DIGITAL", "canon eos 300d"));
+        assert!(has("Canon EOS Rebel T7", "canon eos 1500d"));
+        assert_eq!(canon_alias("Canon EOS Kiss M"), Some("M50"));
+        // European names and other makes are left alone
+        assert_eq!(canon_alias("Canon EOS 1100D"), None);
+        assert_eq!(canon_alias("Canon EOS R6"), None);
+        assert!(!candidates(Some("Pentax"), "Rebel T3").iter().any(|c| c == "canon eos 1100d"));
     }
 
     #[test]
