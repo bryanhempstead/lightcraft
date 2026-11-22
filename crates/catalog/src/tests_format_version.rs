@@ -244,6 +244,28 @@ fn v9_regions_and_face_analysis_round_trip() {
     assert_eq!((a.faces, a.eyes_closed, a.face_focus), (0, 0, None));
 }
 
+/// v10: a hand-drawn face and the expression scores survive a snapshot round trip; v9 data reads with neither.
+#[test]
+fn v10_drawn_faces_and_expressions_round_trip() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 400, 300, "2026-11-22");
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let face = lightcraft_meta::Region::drawn_face(lightcraft_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 });
+    c.apply(Op::SetRegions { id, regions: vec![face.clone()] }).unwrap();
+    let a = Analysis { sharpness: 50.0, faces: 2, smiles: 1, expression: Some(71.5), ..Default::default() };
+    c.apply(Op::SetAnalysis { id, analysis: Some(a) }).unwrap();
+    let snap = c.to_snapshot();
+    assert!(snap.contains("\"drawn\":true") && snap.contains("\"smiles\":1"), "{snap}");
+    let back: Catalog = serde_json::from_str(&snap).unwrap();
+    assert!(back.photo(id).unwrap().meta.regions[0].drawn);
+    assert_eq!(back.photo(id).unwrap().analysis, Some(a));
+    // a found face doesn't write the field at all
+    assert!(!serde_json::to_string(&lightcraft_meta::Region::face(face.rect)).unwrap().contains("drawn"));
+    let a: Analysis = serde_json::from_str(r#"{"sharpness":1.0,"clipped":0.0,"group":null,"best":false,"faces":1}"#).unwrap();
+    assert_eq!((a.smiles, a.expression), (0, None));
+}
+
 /// Upgrading keeps the older format's files beside the library, once.
 #[test]
 fn an_upgrade_keeps_the_older_files() {

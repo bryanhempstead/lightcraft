@@ -50,6 +50,9 @@ pub enum Slot {
     /// A small HDR rendition of the active photo at its own HDR Limit, for the HDR histogram
     /// ([`Tex::hdr_histogram`]; `crate::panels::hdr_histogram`).
     HdrMaster,
+    /// Native-resolution detail of a view (0 = the loupe, 1.. = Compare's views): region renders
+    /// kept as pieces in [`Renderer::tiles`], not as a texture of the slot ([`crate::tiles`]).
+    Detail(u8),
 }
 
 pub struct Tex {
@@ -114,6 +117,8 @@ pub struct Renderer {
     /// Slot → (key, priority) of the request in flight (queued or running).
     pending: HashMap<Slot, (u64, u32)>,
     pub textures: HashMap<Slot, Tex>,
+    /// The views' native-resolution detail ([`Slot::Detail`], [`crate::tiles`]).
+    pub tiles: HashMap<u8, crate::tiles::TileView>,
     pub last_main_ms: f64,
     /// Jobs finished since start (for inspect/perf).
     pub completed: u64,
@@ -174,6 +179,7 @@ impl Renderer {
             seq: 0,
             pending: HashMap::new(),
             textures: HashMap::new(),
+            tiles: HashMap::new(),
             last_main_ms: 0.0,
             completed: 0,
             keep_pixels: false,
@@ -261,8 +267,11 @@ impl Renderer {
         job.request_id = lightcraft_preview::next_tick();
         self.request_ids.insert(slot, job.request_id);
         // (an offload keeps its own per-view stage caches; the flag tells it to)
-        let job =
-            if matches!(slot, Slot::Main | Slot::Before | Slot::Hover) { job.with_stages(self.stages.entry(slot).or_default().clone()) } else { job };
+        let job = if matches!(slot, Slot::Main | Slot::Before | Slot::Hover | Slot::Detail(_)) {
+            job.with_stages(self.stages.entry(slot).or_default().clone())
+        } else {
+            job
+        };
         if self.offload.is_some() {
             self.seq += 1;
             self.queue.retain(|q| q.slot != slot);
@@ -317,6 +326,7 @@ impl Renderer {
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
         self.textures.clear();
+        self.tiles.clear();
         self.stages.clear();
         self.quick_tried.clear();
         self.failed.clear();
@@ -463,6 +473,35 @@ impl Renderer {
         let mut changed = false;
         for (mut slot, r, ms) in finished {
             self.completed += 1;
+            // detail regions: every result for the photo is kept (a pan asks for new regions
+            // before the older ones finish; their pixels are still right)
+            if let Slot::Detail(v) = slot {
+                if r.request_id < self.epoch {
+                    continue;
+                }
+                session.accept(&r);
+                if self.request_ids.get(&slot) == Some(&r.request_id) {
+                    self.request_ids.remove(&slot);
+                }
+                if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
+                    self.pending.remove(&slot);
+                }
+                let view = self.tiles.entry(v).or_default();
+                match &r.rendered {
+                    Ok(x) => {
+                        if let Some(px) = x.region {
+                            self.failed.remove(&slot);
+                            changed |= view.accept(ctx, &format!("{slot:?}"), r.key, &x.image, px, ms, self.keep_pixels, self.display_p3);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("render {slot:?}: {e}");
+                        view.asked.remove(&r.key);
+                        self.failed.insert(slot, (r.key, e.clone(), self.catalog_rev));
+                    }
+                }
+                continue;
+            }
             // Ignore obsolete pixels, failures and decoded sources, even for the same render key;
             // an interactive view still takes a superseded draft that is newer than what it shows.
             if self.request_ids.get(&slot) != Some(&r.request_id) {
@@ -570,6 +609,7 @@ impl Renderer {
             changed = true;
         }
         self.evict_variants();
+        crate::tiles::forget_unseen(&mut self.tiles, ctx.input(|i| i.time));
         #[cfg(not(target_arch = "wasm32"))]
         self.trim_when_idle(ctx);
         if !self.pending.is_empty() {
@@ -605,7 +645,8 @@ impl Renderer {
     pub fn memory(&self) -> serde_json::Value {
         let cpu: usize = self.stages.values().map(|s| s.bytes()).sum();
         let gpu: usize = self.stages.values().map(|s| lightcraft_engine::gpu::stage_bytes(s)).sum();
-        let tex: usize = self.textures.values().map(|t| t.size[0] * t.size[1] * 4).sum();
+        let tex: usize =
+            self.textures.values().map(|t| t.size[0] * t.size[1] * 4).sum::<usize>() + self.tiles.values().map(|v| v.bytes()).sum::<usize>();
         let copies: usize = self.textures.values().filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu},
@@ -615,7 +656,13 @@ impl Renderer {
 
     /// CPU copies of the current textures by id (see [`Self::keep_pixels`]).
     pub fn cpu_textures(&self) -> HashMap<egui::TextureId, crate::softpaint::CpuTexture> {
-        self.textures.values().filter_map(|t| Some((t.tex.id(), crate::softpaint::CpuTexture::linear(t.pixels.clone()?)))).collect()
+        let pieces = self.tiles.values().flat_map(|v| v.pieces.iter()).filter_map(|p| Some((p.tex.id(), p.pixels.clone()?)));
+        self.textures
+            .values()
+            .filter_map(|t| Some((t.tex.id(), t.pixels.clone()?)))
+            .chain(pieces)
+            .map(|(id, px)| (id, crate::softpaint::CpuTexture::linear(px)))
+            .collect()
     }
 
     /// Drop the import review thumbnails (a new review, or the dialog closed).

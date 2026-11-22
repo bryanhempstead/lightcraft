@@ -35,6 +35,7 @@ pub mod softpaint;
 pub mod state;
 pub mod tasks;
 pub mod theme;
+pub mod tiles;
 pub mod video_ui;
 pub mod widgets;
 
@@ -96,6 +97,8 @@ mod tests_shoots;
 mod tests_switch_library;
 #[cfg(test)]
 mod tests_unsaved;
+#[cfg(test)]
+mod tests_zoom;
 
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -236,6 +239,8 @@ pub struct LightcraftApp {
     pub image_rect: Option<egui::Rect>,
     /// HDR (EDR) display output, when the app's window can show it ([`hdr_view::HdrView`]).
     pub hdr_view: Option<Box<dyn hdr_view::HdrView>>,
+    /// The window surface's colour space, when the app can set it ([`display_p3::WindowSpace`]).
+    pub window_space: Option<Box<dyn display_p3::WindowSpace>>,
     /// Scroll offsets (points) of the photo grid (vertical) and the filmstrip (horizontal) as
     /// drawn last (`ui.inspect` → `scroll`).
     pub grid_scroll: Option<f32>,
@@ -326,6 +331,7 @@ impl LightcraftApp {
             canvas_rect: None,
             image_rect: None,
             hdr_view: None,
+            window_space: None,
             grid_scroll: None,
             film_scroll: None,
             widgets: vec![],
@@ -521,6 +527,33 @@ impl LightcraftApp {
         }
         if self.session.vision.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+        // faces found without being asked (Settings ▸ General ▸ Find faces); automatic runs hold back while the
+        // user works
+        if ctx.input(|i| !i.events.is_empty() || i.pointer.any_down()) {
+            lightcraft_engine::vision::touch();
+        }
+        let people_open = self.ui.view == crate::state::ViewMode::People;
+        if self.session.faces_auto_tick(people_open) > 0 {
+            ctx.request_repaint();
+        }
+        // Assisted Culling measuring on worker threads (the dialog, culling at import)
+        if self.session.cull_job.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(300));
+        }
+        match self.session.cull_poll() {
+            Some(Ok(v)) => {
+                let n = v["photos"].as_array().map_or(0, Vec::len);
+                let mut msg = crate::i18n::tr_format!("Assisted Culling: {n} photos, {g} groups of look-alikes", n = n, g = v["groups"]);
+                let (r, p) = (v["rejected"].as_u64().unwrap_or(0), v["picked"].as_u64().unwrap_or(0));
+                if r + p > 0 {
+                    msg = format!("{msg} · {}", crate::i18n::tr_format!("{r} rejected, {p} picked", r = r, p = p));
+                }
+                self.toast(ctx, msg);
+                ctx.request_repaint();
+            }
+            Some(Err(e)) => self.toast_error(ctx, format!("Assisted Culling: {e}")),
+            None => {}
         }
         let polled = self.session.segment_poll();
         let now = ctx.input(|i| i.time);
@@ -863,9 +896,16 @@ impl LightcraftApp {
         // (an HDR window is colour-managed by the system: photos go to it as sRGB)
         let managed = self.hdr_view.as_ref().is_some_and(|v| v.color_managed());
         let p3 = self.ui.settings.view_space.is_p3() && !self.headless_host && !managed;
+        // Auto on a Mac: the SDR window surface tagged Display P3, so the system shows the P3
+        // values right on whichever display (its own profile); the manual choices: untagged
+        if let Some(ws) = self.window_space.as_mut() {
+            ws.request_p3_tag(self.ui.settings.view_space.tags_surface() && !managed);
+        }
         if self.renderer.display_p3 != p3 {
             self.renderer.display_p3 = p3;
             self.renderer.forget_all();
+            self.video.forget_textures();
+            self.map.forget_textures();
         }
         if self.gpu_applied != Some(self.ui.settings.gpu) {
             self.gpu_applied = Some(self.ui.settings.gpu);

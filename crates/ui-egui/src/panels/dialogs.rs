@@ -212,7 +212,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         egui::RichText::new(crate::i18n::tr_format!("Creates {} stacks from {} of {scope}", preview["stacks"], preview["photos"], scope = crate::i18n::tr(scope))).color(t.text_dim),
                     );
                 }
-                Dialog::Cull { reject_below, pick_best, reject_eyes, reject_face_below } => {
+                Dialog::Cull { reject_below, pick_best, reject_eyes, reject_face_below, reject_expression_below } => {
                     let n = app.session.selection.ids.len();
                     let scope = if n > 1 { crate::i18n::tr_format!("the {n} selected photos", n = n) } else { crate::i18n::tr_format!("the {} photos in view", app.session.visible_cloned().len()) };
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).", scope = scope)).color(t.text_label));
@@ -229,10 +229,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         let r = ui.add(egui::Slider::new(reject_face_below, 0.0..=80.0).text(crate::i18n::tr("Reject below face focus")).step_by(1.0));
                         crate::widgets::register(ui.ctx(), "field:cullFace", r.rect);
                         ui.label(egui::RichText::new(crate::i18n::tr("Faces are found first where needed (in the background); a burst's best is the one where nobody blinks and the face is sharpest.")).color(t.text_dim));
+                        ui.add_space(6.0);
+                        cull_expressions(app, ui, &t, reject_expression_below);
                     } else {
                         ui.label(egui::RichText::new(crate::i18n::tr("Eyes-closed and face-focus checks need the face finder: People view ▸ get.")).color(t.text_dim));
                     }
-                    ui.label(egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus, Face Focus, Eyes Closed and Best of Similar Shots.")).color(t.text_dim));
+                    ui.label(egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus, Face Focus, Eyes Closed, Smiles, Expression and Best of Similar Shots.")).color(t.text_dim));
                 }
                 Dialog::WhatsNew => {
                     egui::ScrollArea::vertical().max_height(460.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -1020,6 +1022,48 @@ fn sam_model_body(app: &mut LightcraftApp, ui: &mut egui::Ui, error: Option<&str
     }
 }
 
+/// The Assisted Culling dialog's smiles row: the expression slider, or the model's get. with its size and licence.
+fn cull_expressions(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, reject_below: &mut f32) {
+    use lightcraft_engine::vision::models::{self, Package};
+    if app.session.vision.installed(Package::Expressions) {
+        let r = ui.add(egui::Slider::new(reject_below, 0.0..=60.0).text(crate::i18n::tr("Reject below expression")).step_by(1.0));
+        crate::widgets::register(ui.ctx(), "field:cullExpression", r.rect);
+        ui.label(
+            egui::RichText::new(crate::i18n::tr(
+                "Expression: smiling ≈ 90, neutral ≈ 50, frowning or grimacing low. A burst's best also prefers smiles.",
+            ))
+            .color(t.text_dim),
+        );
+        return;
+    }
+    let i = models::info(Package::Expressions);
+    let dl = app.session.vision.download_state(Package::Expressions);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if dl.running {
+            ui.label(egui::RichText::new(format!("{:.1} / {:.1} MB …", dl.done as f64 / 1e6, dl.total as f64 / 1e6)).color(t.text_dim));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        } else {
+            let tip =
+                crate::i18n::tr_format!("Download {m} — {mb} MB, {l}", m = i.models, mb = format!("{:.1}", i.size() as f64 / 1e6), l = i.licence);
+            if crate::widgets::text_button(ui, "cullGetExpressions", "get.", false).on_hover_text(tip).clicked()
+                && let Err(e) = app.run("vision.model.download", json!({"model": "expressions", "acknowledged": true}))
+            {
+                app.toast_error(ui.ctx(), e);
+            }
+        }
+        let msg = match &dl.error {
+            Some(e) => format!("⚠ {e}"),
+            None => crate::i18n::tr_format!(
+                "Smiles need the expression model ({mb} MB, {l})",
+                mb = format!("{:.1}", i.size() as f64 / 1e6),
+                l = i.licence
+            ),
+        };
+        ui.label(egui::RichText::new(msg).color(t.text_dim));
+    });
+}
+
 pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_json::Value, String> {
     match dlg {
         Dialog::SamModel { then, .. } => {
@@ -1080,8 +1124,12 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::MergeKeywords { from, into } => app.run("keyword.merge", json!({"from": from, "into": into})),
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),
         Dialog::AllMetadata { .. } | Dialog::SystemInfo { .. } | Dialog::WhatsNew => Ok(serde_json::Value::Null),
-        Dialog::Cull { reject_below, pick_best, reject_eyes, reject_face_below } => {
-            let mut p = json!({"pickBest": pick_best, "rejectEyesClosed": reject_eyes});
+        Dialog::Cull { reject_below, pick_best, reject_eyes, reject_face_below, reject_expression_below } => {
+            // measured on worker threads: the result lands (and is told) when every photo is in
+            let mut p = json!({"pickBest": pick_best, "rejectEyesClosed": reject_eyes, "background": true});
+            if *reject_expression_below > 0.0 {
+                p["rejectExpressionBelow"] = json!(reject_expression_below);
+            }
             if *reject_below > 0.0 {
                 p["rejectBelow"] = json!(reject_below);
             }

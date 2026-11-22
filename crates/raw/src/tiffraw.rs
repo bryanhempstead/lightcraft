@@ -170,6 +170,7 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
             }
             Ok(ChunkPx::U16(v))
         }
+        comp::JPEG_XL => jxl_chunk(src, cw, ch, cpp, bits, float),
         comp::ADOBE_DEFLATE | comp::DEFLATE => {
             let bytes_per = if float { bits.div_ceil(8) as usize } else { 0 };
             let row_bytes = if float { cw * cpp * bytes_per } else { (cw * cpp * bits as usize).div_ceil(8) };
@@ -178,6 +179,58 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
         }
         other => Err(RawError::Unsupported(format!("TIFF compression {other}"))),
     }
+}
+
+/// Decode one JPEG XL chunk (DNG 1.7 `Compression` 52546: every tile or strip is a complete JPEG XL
+/// codestream, lossless or lossy, of the chunk's samples; Lightroom's smart previews and
+/// JPEG XL-compressed DNG exports use it). The codestream is rendered in its own colour encoding
+/// (no conversion: the samples are raw data, not display colour) and scaled to the IFD's bit depth;
+/// floating-point IFDs keep the decoded values. A codestream larger than the chunk is refused,
+/// and decoding memory is capped by the chunk's size.
+fn jxl_chunk(src: &[u8], cw: usize, ch: usize, cpp: usize, bits: u32, float: bool) -> Result<ChunkPx> {
+    use jxl_oxide::{AllocTracker, JxlImage};
+    let n = cw * ch * cpp;
+    let bad = |e: &dyn std::fmt::Display| RawError::Corrupt(format!("JPEG XL tile: {e}"));
+    // a tile decode keeps a few f32 planes per channel plus the entropy decoder's state
+    let cap = n.saturating_mul(48).saturating_add(32 << 20);
+    let img = JxlImage::builder().alloc_tracker(AllocTracker::with_limit(cap)).read(std::io::Cursor::new(src)).map_err(|e| bad(&e))?;
+    let (jw, jh) = (img.width() as usize, img.height() as usize);
+    if jw == 0 || jh == 0 || jw > cw || jh > ch {
+        return Err(RawError::Corrupt(format!("JPEG XL tile is {jw}x{jh}, the chunk {cw}x{ch}")));
+    }
+    let render = img.render_frame(0).map_err(|e| bad(&e))?;
+    let fb = render.image_all_channels();
+    let (fw, fh, fc) = (fb.width(), fb.height(), fb.channels());
+    if fc < cpp || fw == 0 || fh == 0 {
+        return Err(RawError::Corrupt(format!("JPEG XL tile has {fc} channels, the image {cpp}")));
+    }
+    let buf = fb.buf();
+    let at = |x: usize, y: usize, k: usize| buf.get((y * fw + x) * fc + k).copied().unwrap_or(0.0);
+    let (rw, rh) = (fw.min(cw), fh.min(ch));
+    if float {
+        let mut v = vec![0f32; n];
+        for y in 0..rh {
+            for x in 0..rw {
+                for k in 0..cpp {
+                    let s = at(x, y, k);
+                    v[(y * cw + x) * cpp + k] = if s.is_finite() { s } else { 0.0 };
+                }
+            }
+        }
+        return Ok(ChunkPx::F32(v));
+    }
+    let max = ((1u32 << bits.clamp(1, 16)) - 1) as f32;
+    let mut v = vec![0u16; n];
+    for y in 0..rh {
+        for x in 0..rw {
+            for k in 0..cpp {
+                let s = at(x, y, k);
+                // NaN maps to 0 through the saturating cast
+                v[(y * cw + x) * cpp + k] = (s.clamp(0.0, 1.0) * max).round() as u16;
+            }
+        }
+    }
+    Ok(ChunkPx::U16(v))
 }
 
 /// Decode one baseline JPEG chunk to 8-bit samples: (samples, width, height, channels).

@@ -26,7 +26,15 @@ fn person(k: usize, jitter: f32) -> Vec<f32> {
 }
 
 fn face(x: f32, embedding: Vec<f32>) -> FaceEntry {
-    FaceEntry { rect: [x, 0.2, 0.15, 0.2], landmarks: [[0.0; 2]; 5], score: 0.9, embedding, eyes: Some([0.1, 0.1]), sharpness: 40.0 }
+    FaceEntry {
+        rect: [x, 0.2, 0.15, 0.2],
+        landmarks: [[0.0; 2]; 5],
+        score: 0.9,
+        embedding,
+        eyes: Some([0.1, 0.1]),
+        sharpness: 40.0,
+        expression: None,
+    }
 }
 
 /// A session with demo photos whose faces are indexed (one face per photo: `people[i]` is the person on photo i).
@@ -39,7 +47,7 @@ fn session(people: &[usize]) -> (Session, Vec<PhotoId>) {
     let index = s.faces_index().unwrap();
     for (i, (id, k)) in ids.iter().zip(people).enumerate() {
         let key = crate::media::content_key(s.catalog.photo(*id).unwrap());
-        let record = FaceRecord { faces: vec![face(0.3, person(*k, 0.05 * i as f32))], width: 100, height: 100 };
+        let record = FaceRecord { faces: vec![face(0.3, person(*k, 0.05 * i as f32))], width: 100, height: 100, expressions: false };
         index.lock().unwrap().put(&key, record.clone()).unwrap();
         let op = s.merge_found_faces(*id, &record).unwrap();
         s.apply_bookkeeping(op).unwrap();
@@ -254,4 +262,34 @@ fn real_models_end_to_end() {
     println!("search.ai: {r} in {:?}", t.elapsed());
     assert_eq!(r["top"][0]["id"], solvay.0);
     assert_eq!(s.visible_cloned().first(), Some(&solvay));
+}
+
+/// Keyword sync: a person keyword renamed in the keyword list renames the faces, one taken off a photo unnames that
+/// photo's face, a deleted one unnames them all (Lightroom: a person keyword is the person).
+#[test]
+fn person_keywords_and_face_names_stay_in_step() {
+    let (mut s, ids) = session(&[1, 1, 2]);
+    let f = |i: usize| json!({"photo": ids[i].0, "index": 0});
+    s.execute("people.name", &json!({"faces": [f(0), f(1)], "name": "Ann"})).unwrap();
+    s.execute("people.name", &json!({"faces": [f(2)], "name": "Bob"})).unwrap();
+    let name = |s: &Session, i: usize| s.catalog.photo(ids[i]).unwrap().meta.regions[0].name.clone();
+    // rename the keyword: the faces follow
+    s.execute("keyword.rename", &json!({"from": "Ann", "to": "Anna"})).unwrap();
+    assert_eq!((name(&s, 0).as_deref(), name(&s, 1).as_deref()), (Some("Anna"), Some("Anna")));
+    assert!(s.catalog.keyword_info("Anna").is_some_and(|i| i.person));
+    // take it off one photo: that face is unnamed, the other keeps its name
+    s.execute("photo.setMeta", &json!({"ids": [ids[0].0], "removeKeywords": ["Anna"]})).unwrap();
+    assert_eq!((name(&s, 0), name(&s, 1).as_deref()), (None, Some("Anna")));
+    // an ordinary keyword taken off changes no face
+    s.execute("photo.setMeta", &json!({"ids": [ids[2].0], "addKeywords": ["beach"]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[2].0], "removeKeywords": ["beach"]})).unwrap();
+    assert_eq!(name(&s, 2).as_deref(), Some("Bob"));
+    // merge Bob into Anna: Bob's face is Anna's now
+    s.execute("keyword.rename", &json!({"from": "Bob", "to": "Anna"})).unwrap();
+    assert_eq!(name(&s, 2).as_deref(), Some("Anna"));
+    // delete the keyword: nobody is Anna any more; one undo brings the names back
+    s.execute("keyword.delete", &json!({"keyword": "Anna"})).unwrap();
+    assert!((0..3).all(|i| name(&s, i).is_none()));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(name(&s, 2).as_deref(), Some("Anna"));
 }

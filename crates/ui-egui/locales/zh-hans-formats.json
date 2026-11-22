@@ -207,5 +207,16 @@
   "downloading the AI search model {d} / {n} MB…": "正在下载 AI 搜索模型 {d} / {n} MB…",
   "AI search needs {m} ({mb} MB, {l}): Return downloads it": "AI 搜索需要 {m}（{mb} MB，{l}）：按 Return 下载",
   "Describe a photo… (indexing {d} / {n})": "描述照片…（正在索引 {d} / {n}）",
-  "{n} photos match “{q}”, best first": "{n} 张照片匹配“{q}”，最佳优先"
+  "{n} photos match “{q}”, best first": "{n} 张照片匹配“{q}”，最佳优先",
+  "Assisted Culling: {n} photos, {g} groups of look-alikes": "辅助筛选：{n} 张照片，{g} 组相似照片",
+  "Confirm the {n} suggested faces as who they're suggested as": "将 {n} 张建议的面孔确认为建议的人物",
+  "Culling {d} of {n}": "正在筛选 {d} / {n}",
+  "Download {m} — {mb} MB, {l}": "下载 {m} — {mb} MB，{l}",
+  "Finding faces {d} of {n}": "正在查找面孔 {d} / {n}",
+  "Smiles need the expression model ({mb} MB, {l})": "识别笑容需要表情模型（{mb} MB，{l}）",
+  "These {n} faces aren't who they're suggested as": "这 {n} 张面孔不是建议的人物",
+  "Unnamed · looks like {s}": "未命名 · 像 {s}",
+  "name the {n} picked {what}": "为选中的 {n} 个{what}命名",
+  "{f} faces · {s} suggested": "{f} 张面孔 · {s} 个建议",
+  "{r} rejected, {p} picked": "已排除 {r} 张，已选中 {p} 张"
 }

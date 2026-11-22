@@ -362,6 +362,7 @@ pub(crate) fn prepare(
     q: Quality,
     planes: &mut Planes,
     tex_space: Option<&[[f32; 3]; 3]>,
+    adobe: bool,
 ) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
     let texture_detail = texture_level(s, px_per_long, native_long).map(|lv| match &planes.texture_detail {
@@ -431,7 +432,7 @@ pub(crate) fn prepare(
         (true, k) => k,
         (false, _) => None,
     };
-    let (need_map, need_haze) = crate::scene_cr::needs(s);
+    let (need_map, need_haze) = crate::scene_cr::needs(s, adobe);
     let scene_map = if need_map {
         planes.scene_map.get_or_insert_with(|| timed("scene map", || crate::scene_cr::MapBase::of(&img).map(Arc::new))).clone()
     } else {

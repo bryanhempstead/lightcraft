@@ -362,6 +362,23 @@ fn progress_strip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
         let s = task.status();
         let (done, total) = (s["done"].as_u64().unwrap_or(0), s["total"].as_u64().unwrap_or(0));
         (crate::i18n::tr("Reading photos…").to_string(), if total == 0 { 0.0 } else { done as f32 / total as f32 })
+    } else if let Some(job) = app.session.cull_job.as_ref() {
+        (crate::i18n::tr_format!("Culling {d} of {n}", d = job.done(), n = job.total), job.done() as f32 / job.total.max(1) as f32)
+    } else if app.session.vision.running(lightcraft_engine::vision::Kind::Faces) {
+        // Lightroom's activity area: face detection, with a click to stop it
+        let p = app.session.vision.progress(lightcraft_engine::vision::Kind::Faces);
+        let resp = ui.interact(r, egui::Id::new("progress-faces"), Sense::click());
+        let tip = if p.auto {
+            crate::i18n::tr("Finding faces in the background · click to stop (what's done is kept; People's find. starts it again)")
+        } else {
+            crate::i18n::tr("Finding faces · click to stop (what's done is kept)")
+        };
+        if resp.on_hover_text(tip).clicked() {
+            let _ = app.run("vision.cancel", json!({"kind": "faces"}));
+        }
+        register(ui.ctx(), "progress:faces", r);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+        (crate::i18n::tr_format!("Finding faces {d} of {n}", d = p.done, n = p.total), p.done as f32 / p.total.max(1) as f32)
     } else {
         return;
     };

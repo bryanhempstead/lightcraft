@@ -527,6 +527,7 @@ pub fn render(
     req: &RenderRequest,
     stages: Option<&GpuStages>,
     fault: Option<crate::Fault>,
+    globals: Option<&lightcraft_pipeline::Globals>,
 ) -> Option<Rendered> {
     let mut t = profiling().then(std::time::Instant::now);
     // Each stage is submitted on its own; under `LIGHTCRAFT_PROFILE` also waited for, so the
@@ -591,7 +592,25 @@ pub fn render(
         Some(p) if p.key == plan.lin_key => p,
         _ => Planes { key: plan.lin_key, ..Default::default() },
     };
-    let prep = prepare(&mut cx, &lin, &plan, req, info, &mut planes);
+    // a region render: what depends on the whole photo comes from a whole render (`region`)
+    if let Some(g) = globals {
+        if g.tone_stats.is_some() {
+            planes.tone_stats = g.tone_stats;
+        }
+        if g.p99.is_some() {
+            planes.p99 = g.p99;
+        }
+        if let Some(m) = &g.scene_map {
+            planes.scene_map = Some(Some(m.clone()));
+        }
+        if let Some(hz) = &g.haze {
+            planes.haze = Some(Some(hz.clone()));
+        }
+    }
+    let mut prep = prepare(&mut cx, &lin, &plan, req, info, &mut planes);
+    if let Some(a) = globals.and_then(|g| g.air).filter(|_| prep.dark.is_some()) {
+        prep.air = a;
+    }
     lap("planes", &mut t, &mut cx);
     if let Some(c) = stages {
         c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), planes });
@@ -712,7 +731,7 @@ pub fn render(
         }
         None => None,
     };
-    Some(Rendered { image, histogram, deep })
+    Some(lightcraft_pipeline::cut_region(Rendered { image, histogram, deep, region: None }, &plan))
 }
 
 /// Pixels whose alpha is not 255 (cheap: no early exit, so it vectorizes).
@@ -756,7 +775,8 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
 fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
-    let (lum, col) = local::nr_params(&plan.settings, plan.src_long, w.max(h));
+    let (fw, fh) = plan.frame.full_size(w, h);
+    let (lum, col) = local::nr_params(&plan.settings, plan.src_long, fw.max(fh));
     let mut img = img;
     if let Some(nr) = lum {
         let l = cx.gpu.buffer(n);
@@ -912,7 +932,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, inf
         })
     });
     // Camera Raw's scene tone map and haze: measured on the CPU (a small map, once per image)
-    let (need_map, need_haze) = lightcraft_pipeline::scene_cr::needs(&plan.settings);
+    let (need_map, need_haze) = lightcraft_pipeline::scene_cr::needs(&plan.settings, info.adobe.is_some());
     let missing = (need_map && planes.scene_map.is_none()) || (need_haze && planes.haze.is_none());
     if let Some(img) = missing.then(|| cx.read_rgb(lin, w, h)) {
         if need_map && planes.scene_map.is_none() {

@@ -606,6 +606,8 @@ fn main() -> eframe::Result {
             let mut app = LightcraftApp::new(session, services());
             app.hdr_view =
                 cc.wgpu_render_state.clone().and_then(edr::EdrView::new).map(|v| Box::new(v) as Box<dyn lightcraft_ui_egui::hdr_view::HdrView>);
+            // the SDR window surface tagged Display P3 (macOS colour-manages it onto the display)
+            app.window_space = Some(Box::new(edr::SurfaceTag));
             // shortcuts, mouse buttons and MIDI mappings (Settings ▸ shrt. / ctrl.): <config>/keymap.json,
             // or LIGHTCRAFT_KEYMAP; LIGHTCRAFT_NO_PREFS alone keeps them in memory (tests, scripts)
             if std::env::var_os("LIGHTCRAFT_KEYMAP").is_some() || std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none() {

@@ -216,16 +216,52 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<(RawImage, Decoder)> {
         return Err(RawError::Unsupported(format!("{format:?}: raw decoding turned off (LIGHTCRAFT_RAW_DECODER=none)")));
     }
     if order == libraw::Order::LibRawThenNative
-        && let Ok(img) = libraw::decode(bytes, format, mode)
+        && let Ok(img) = libraw_with_native_tags(bytes, format, mode)
     {
         return Ok((img, Decoder::LibRaw));
     }
     match decode_native(bytes, format, mode) {
         Ok(img) => Ok((img, Decoder::Native)),
         Err(e) if order == libraw::Order::NativeThenLibRaw && libraw::worth_trying(&e) => {
-            libraw::decode(bytes, format, mode).map(|img| (img, Decoder::LibRaw)).map_err(|_| e)
+            libraw_with_native_tags(bytes, format, mode).map(|img| (img, Decoder::LibRaw)).map_err(|_| e)
         }
         Err(e) => Err(e),
+    }
+}
+
+/// LibRaw's samples with what LightCraft's own parser reads from the file's tags when it can
+/// (its header pass, which needs no sample decoding): LibRaw reports levels, CFA, geometry and an
+/// Adobe matrix, but not a DNG's `BaselineExposure`, forward matrices, camera calibration, embedded
+/// profile look tables, ProRAW gain table map or opcode lists, nor Fujifilm's DR exposure bias —
+/// without them a DNG or RAF that only LibRaw could unpack rendered up to ~3 EV too dark (iPhone
+/// ProRAW, Blackmagic CinemaDNG, X100F DR400). Taken only when the header pass describes the same
+/// sensor array.
+fn libraw_with_native_tags(bytes: &[u8], format: RawFormat, mode: Mode) -> Result<RawImage> {
+    let mut img = libraw::decode(bytes, format, mode)?;
+    // the NEF decoder has no header-only pass (it would decode the samples again)
+    if !matches!(format, RawFormat::Nef | RawFormat::Nrw)
+        && let Ok(h) = decode_native(bytes, format, Mode::Header)
+    {
+        adopt_native_tags(&mut img, h);
+    }
+    Ok(img)
+}
+
+fn adopt_native_tags(img: &mut RawImage, native: RawImage) {
+    if (native.width, native.height, native.cpp) != (img.width, img.height, img.cpp) {
+        return;
+    }
+    let lacks_matrix = !crate::color::has_matrix(&native.color);
+    let (libraw_matrix, libraw_illuminant) = (img.color.color_matrix, img.color.illuminant);
+    img.color = native.color;
+    if lacks_matrix && crate::color::has_matrix(&ColorData { color_matrix: libraw_matrix, illuminant: libraw_illuminant, ..ColorData::default() }) {
+        // a vendor header pass without Adobe's matrix: keep LibRaw's
+        img.color.color_matrix = libraw_matrix;
+        img.color.illuminant = libraw_illuminant;
+    }
+    img.opcodes = native.opcodes;
+    if img.wb_multipliers.is_none() {
+        img.wb_multipliers = native.wb_multipliers;
     }
 }
 
@@ -685,5 +721,93 @@ mod tests {
         assert_eq!(probe(b"FUJIFILMCCD-RAW 0201"), Some(RawFormat::Raf));
         assert!(decode(b"FUJIFILMCCD-RAW 0201").is_err());
         assert_eq!(decode(b"junk"), Err(RawError::NotRaw));
+    }
+
+    /// A 16-bit RGGB DNG with the colour tags LibRaw doesn't report.
+    fn tagged_dng() -> Vec<u8> {
+        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+        let (w, h) = (48u32, 32u32); // LibRaw refuses sensors under 22 pixels
+        let strip: Vec<u8> = (0..w * h).flat_map(|i| ((300 + (i * 37) % 3000) as u16).to_le_bytes()).collect();
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        ifd0.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+        ifd0.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+        ifd0.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+        ifd0.set(t::COMPRESSION, Value::Short(vec![1]));
+        ifd0.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
+        ifd0.set(t::MAKE, Value::Ascii("Zzyzx".into()));
+        ifd0.set(t::MODEL, Value::Ascii("Tags One".into()));
+        ifd0.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![1]));
+        ifd0.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        ifd0.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+        ifd0.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
+        ifd0.set(t::DNG_BACKWARD_VERSION, Value::Byte(vec![1, 1, 0, 0]));
+        ifd0.set(t::UNIQUE_CAMERA_MODEL, Value::Ascii("Zzyzx Tags One".into()));
+        ifd0.set(t::CFA_PLANE_COLOR, Value::Byte(vec![0, 1, 2]));
+        ifd0.set(t::CFA_LAYOUT, Value::Short(vec![1]));
+        ifd0.set(t::BLACK_LEVEL, Value::Long(vec![256]));
+        ifd0.set(t::WHITE_LEVEL, Value::Long(vec![4000]));
+        let m = |v: [i32; 9]| Value::SRational(v.iter().map(|&x| (x, 10000)).collect());
+        ifd0.set(t::COLOR_MATRIX_1, m([9000, -2000, -500, -3000, 12000, 800, -200, 1200, 7000]));
+        ifd0.set(t::FORWARD_MATRIX_1, m([6000, 3000, 700, 2500, 7000, 500, 300, -800, 7800]));
+        ifd0.set(t::CALIBRATION_ILLUMINANT_1, Value::Short(vec![21]));
+        ifd0.set(t::AS_SHOT_NEUTRAL, Value::Rational(vec![(5, 10), (1, 1), (7, 10)]));
+        ifd0.set(t::BASELINE_EXPOSURE, Value::SRational(vec![(135, 100)]));
+        ifd0.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![strip] });
+        TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[ifd0]).unwrap()
+    }
+
+    #[test]
+    fn libraw_fallback_keeps_the_files_own_colour_tags() {
+        // before: a DNG only LibRaw could unpack lost BaselineExposure (rendered 1.35 EV too dark
+        // here), the forward matrix and the as-shot neutral
+        if !libraw::available() {
+            return;
+        }
+        let bytes = tagged_dng();
+        let bare = libraw::decode(&bytes, RawFormat::Dng, Mode::Full).unwrap();
+        assert_eq!(bare.color.baseline_exposure, 0.0, "LibRaw alone doesn't report it");
+        for mode in [Mode::Full, Mode::Header] {
+            let img = libraw_with_native_tags(&bytes, RawFormat::Dng, mode).unwrap();
+            assert!((img.color.baseline_exposure - 1.35).abs() < 1e-9);
+            assert!(img.color.forward_matrix[0].is_some());
+            assert_eq!(img.color.as_shot_neutral, Some([0.5, 1.0, 0.7]));
+        }
+        let full = libraw_with_native_tags(&bytes, RawFormat::Dng, Mode::Full).unwrap();
+        assert_eq!(full.data, bare.data, "the samples are still LibRaw's");
+    }
+
+    #[test]
+    fn native_tags_for_another_sensor_array_are_not_taken() {
+        let base = RawImage {
+            format: RawFormat::Raf,
+            width: 8,
+            height: 6,
+            cpp: 1,
+            data: RawData::U16(vec![0; 48]),
+            cfa: Cfa::bayer("RGGB"),
+            bits: 14,
+            black: BlackLevel::uniform(0.0),
+            white: vec![16383.0],
+            active_area: Rect::new(0, 0, 8, 6),
+            crop: Rect::new(0, 0, 8, 6),
+            orientation: Orientation::Normal,
+            color: ColorData { color_matrix: [Some(lightcraft_color::Mat3::IDENTITY), None], illuminant: [21, 0], ..ColorData::default() },
+            wb_multipliers: None,
+            linearized: false,
+            opcodes: OpcodeLists::default(),
+            metadata: Metadata::default(),
+        };
+        let native = RawImage { width: 10, color: ColorData { baseline_exposure: 1.0, ..ColorData::default() }, ..base.clone() };
+        let mut img = base.clone();
+        adopt_native_tags(&mut img, native);
+        assert_eq!(img.color, base.color);
+        // same array, no matrix in the vendor header: LibRaw's matrix stays, the exposure bias comes in
+        let native =
+            RawImage { color: ColorData { baseline_exposure: 1.0, ..ColorData::default() }, wb_multipliers: Some([2.0, 1.0, 1.5]), ..base.clone() };
+        adopt_native_tags(&mut img, native);
+        assert_eq!(img.color.baseline_exposure, 1.0);
+        assert_eq!(img.color.color_matrix, base.color.color_matrix);
+        assert_eq!(img.wb_multipliers, Some([2.0, 1.0, 1.5]));
     }
 }

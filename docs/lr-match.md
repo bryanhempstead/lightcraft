@@ -1216,3 +1216,126 @@ they go unmatched, which is why round 10's 41-photo gate sat at ~7 ΔE), CPU, Li
 
 Only 3 of the 183 photos use Clarity or Dehaze, so the acceptance set hardly sees this round's
 operators (one photo, Clarity −2 with a mask, 3.91 → 3.95); the oracle above is their measure.
+
+## Round 12 (2026-11-22): the default black, Highlights / Shadows switched on, Texture's colour, Calibration's order
+
+New oracle set `oracle/make_r12.py SET ACC` (168 Camera Raw renders): 22 of Bryan's split-A raws that
+carry Highlights / Shadows (18 Canon R6 — the cells that failed in round 11 —, 3 M262, 1 GR III) with
+sidecars holding **his own** Basic tone (`own`), the same without H / S (`own-noHS`), only his H and S
+(`HS0`), only his S / only his H, and on three photos a sweep of 12 Shadows × Highlights pairs. Round 8's
+real-raw H / S sets (`rhs`, `rhs2`: 26 raws, single sliders, his M262 recipe) and round 10 / 11's synthetic
+scenes were rendered again by Camera Raw (their TIFFs had been deleted). New analysis scripts:
+`r12ana.py` (per photo: ΔE and ΔL* by L* band, and each setting's *effect* — setting minus its reference —
+Camera Raw against LightCraft), `r12sum.py` (several LightCraft runs side by side per setting, R6 and
+the rest apart), `r12lift.py` (Shadows' lift per photo), `r12reg.py` (a local operator's change split into
+regional and detail parts), `r12grat.py` (full-frame gratings: mean and contrast change).
+
+### Why the rule lifted the R6 photos' shadows (R02)
+
+Three things, measured on the 40 raws (ΔE2000 against Camera Raw, mean over the photos with the setting):
+
+1. **Camera Raw's default black follows the photo.** A profile whose DefaultBlackRender is Auto gets a
+   toe that depends on the photo's *dark key* (its 0.1th luminance percentile, with Exposure): a photo
+   whose darkest tones sit higher gets a deeper toe. LightCraft's Basic-tone tables were measured on a
+   ramp reaching −14 EV, so every photo got the ramp's (gentlest) toe — the R6 night photos' darks
+   rendered 3–4 L* too bright even at default settings (BHM_8476 / 8490 base: +3.4 / +4.2 L* in the
+   darkest band). Camera Raw also reads the key *after* positive Shadows (moved by the Shadows gain's
+   median), so the toe deepens as Shadows lifts. Ported from RAWmakase (`black_cr.rs`, its measured
+   `default_black.bin`, MIT): the tone map's input gets the photo's response in place of the ramp's
+   (`black_cr::correction`, folded into the tone LUT, so CPU and GPU share it), faded out by positive
+   Blacks (Camera Raw removes the default black by +25). Base renders: R6 1.46 / 2.09 / 1.33 → 1.25 /
+   1.77 / 1.06 ΔE on the three sets, the others 0.99 / 1.06 / 1.01 → 0.67 / 0.82 / 0.74. Only the
+   Shadows shift of the key, without the photo's key, changes almost nothing (1.73 → 1.71 on `rhs2`).
+2. **The rule's positive Shadows lifts the darks ~12 % too far** on every camera (median ratio of
+   LightCraft's to Camera Raw's lift below L* 50: 1.13 R6, 1.13 M262, 1.05 GR III; `r12lift.py`), most
+   visibly on the R6's deep, clean shadows. `scene_cr::SHADOWS_UP_SCALE` = 0.89 centres it.
+3. Reading the photo before Exposure (`LIGHTCRAFT_HS_PRE=1`) helps Bryan's recipe (Exposure −1.1) a
+   little (`tone` effect 2.71 → 2.47 on the non-R6 raws) and nothing else: left at the render's Exposure.
+
+| set (raws) | setting | before (round 11 tables) | rule (round 11) | + photo black | + Shadows 0.89 |
+|---|---|---|---|---|---|
+| `rhs2` (16) | S+100 R6 / others | 5.00 / 4.11 | 2.77 / 1.89 | 2.58 / 1.73 | **1.87 / 1.82** |
+| | S+50 R6 / others | 2.49 / 2.31 | 2.06 / 1.31 | 1.78 / 1.10 | **1.44 / 1.13** |
+| | H−100 R6 / others | 2.61 / 2.53 | 1.69 / 1.50 | **1.43 / 1.32** | 1.43 / 1.32 |
+| | H+30 S+69 R6 / others | 3.63 / 2.98 | 3.22 / 1.72 | 2.98 / 1.50 | **2.34 / 1.50** |
+| | all 99 renders | 2.62 | 1.73 | 1.50 | **1.38** |
+| `rhs` (10) | S+100 R6 / others | 5.88 / 4.81 | 3.47 / 2.33 | 3.38 / 2.09 | **3.46 / 1.92** |
+| | H−100 S+100 R6 / others | 4.71 / 3.49 | 3.93 / 2.45 | 3.86 / 2.25 | 4.11 / 2.26 |
+| | his M262 tone recipe R6 / others | 4.63 / 3.38 | 3.70 / 2.93 | 3.70 / 2.93 | **3.42 / 2.67** |
+| | all 143 renders | 2.91 | 2.09 | 1.91 | **1.87** |
+| `r12` (22) | his own Basic tone R6 / others | — | 2.59 / 2.22 | 2.60 / 2.22 | **2.58 / 2.12** |
+| | his own S only, R6 / others | — | 2.21 / 1.42 | 2.06 / 1.09 | **1.99 / 1.13** |
+| | S+100 alone (pair sweep), R6 | — | 4.72 | 4.63 | **2.72** |
+| | all 168 renders | — | 2.07 | 1.92 | **1.77** |
+
+**Acceptance gate** (183 photos, Lightroom's previews, CPU; `r12g0` = this branch with every round-12
+switch off, identical to round 11's numbers cell for cell; `r12g4` = the photo's default black, the H/S
+rule with Shadows 0.89 and the hue/sat map after Calibration, all on):
+
+| recipe | n | before ΔE / p95 / pass | after ΔE / p95 / pass | ΔL* before → after |
+|---|---|---|---|---|
+| all | 183 | 3.99 / 10.8 / 25 | **3.77 / 10.0 / 31** | +0.10 → −1.16 |
+| edited / default | 137 / 46 | 4.56 / 2.28 | **4.29 / 2.21** (pass 6 → 12 / 19 → 19) | |
+| Summer Fields · R6 · PV6 | 20 | 5.83 / 13.7 / 0 | **4.63 / 11.6 / 0** | +1.39 → +0.11 |
+| Summer Fields · M262 · PV6 | 64 | 4.40 / 12.7 / 0 | 4.39 / 11.3 / 3 | −0.34 → −2.66 |
+| Summer Fields · GR III / X-T2 | 6 / 3 | 4.02 / 5.68 | 3.61 / 5.17 | |
+| Adobe Color · R6 · PV6 | 64 | 2.97 / 8.0 / 17 | 2.82 / 7.9 / 18 | |
+| Adobe Color · M262 · PV6 | 7 | 1.26 | 1.18 | |
+| Nautica · R6 · PV6 | 4 | 5.46 | 5.58 (+0.12, within the 0.15 tolerance) | |
+| Summer Fields · X100F PV5 / PV6 | 4 / 3 | 5.00 / 2.35 | 5.01 / 2.33 | |
+
+**GATE: pass.** So the rule, the default black and the hue/sat order are switched on
+(`scene_cr::HS_MEASURED`, `black_cr::MEASURED`, `engine::adobe::HUE_SAT_IN_FINISH_ALL`). The Summer Fields
+M262 cell now renders 2.3 L* darker overall (the deeper toe) at the same ΔE; that, the same-sign pairs on
+the R6's night photos (H+30 S+69 still 4.6 ΔE on BHM_8476 / 8490: the pair blend lifts their mid-darks
+7 L* past Camera Raw) and the masks are what is left in these cells. Texture's colour change (below) came
+after this gate run; the scratch acceptance folder was lost before it could be repeated, and only the
+oracle measures it (few of the 183 photos use Texture).
+
+### Texture's colour at colour edges (R21)
+
+Round 11 found Camera Raw's Texture changes the chroma of saturated colours (the grid's most saturated
+patches +8 C* at +50) where ours did not, because each channel's large log contrast between neighbouring
+saturated patches is compressed away. Now the detail is the luminance's (as measured on the gratings) plus
+each channel's *colour* detail — its log ratio to the luminance — at 0.7 of the weight, compressed only past
+3× the thresholds (`texture_cr::CHROMA_GAIN`, `CHROMA_SCALE`; `LIGHTCRAFT_TEX_CHROMA=gain,scale` for
+measurement). Fitted on the oracle grid at Texture ±25 / ±50 / ±100 (20 variants): **2.77 → 2.14** ΔE
+(+100 4.49 → 3.42, −100 3.39 → 2.78); held out, the PV 6 grid at +40 **2.72 → 2.09**; neutral scenes
+(spatial, frequency scenes, gratings) unchanged, since a neutral has no colour detail. Luminance-only
+detail would be 3.29; per channel uncompressed (scale 100) 5.19.
+
+### Clarity's regional moves and negative Dehaze on fine gratings (R21): measured, not changed
+
+- **Clarity +100** on the hazy landscape: Camera Raw darkens the ridges and foreground by 12–22 L*, we
+  by 5–10 (regional RMS error 6.9 L*, detail 2.4); the dark room's walls +4.3 vs +3.3. Scaling the fine
+  model's level row (`LIGHTCRAFT_CLA_LEVEL`) by 1.5 / 2 / 2.5 takes the landscape 3.93 → 3.55 / 3.22 /
+  3.15 ΔE (Clarity+ mean) but every other scene gets worse (spatial 1.97 → 2.59 / 3.29 / 4.03, room 1.41
+  → 1.42 / 1.76 / 2.37): the regional move is not a function of the level alone, it follows the scene's
+  large-scale layout. Left as it is.
+- **Negative Dehaze −50 on full-frame gratings** (`r12grat.py`): Camera Raw keeps ×0.50 of the log
+  contrast at every period and amplitude (ours ×0.62, ×0.72 at 0.1 EV), and lifts the mean by +0.27 EV
+  at periods of 21 px and more but by 0.00 at 8–13 px and −0.16 / −0.24 at 5 / 3 px (ours +0.30
+  everywhere). The lift is spatial (a window of ~15–20 px decides it), the contrast factor is not. Not
+  modelled yet: mean ΔE over the 21 gratings 2.89, grid / spatial / frequency scene −25 / −50 2.29 /
+  1.59 / 1.54.
+
+### Calibration before the profile's hue/sat map (R10): verified, switched on
+
+The oracle chart (135 Camera Raw renders, `ocol`) again, LightCraft with the map in the per-pixel stage
+after Calibration (`LIGHTCRAFT_HUE_SAT_FINISH=1`) against the decode (before Calibration):
+
+| setting | decode (before) | after Calibration (Camera Raw's order) |
+|---|---|---|
+| base | 1.58 | 1.54 |
+| Bryan's Summer Fields calibration | 4.23 | **2.20** |
+| Summer Fields colour (calibration + HSL) | 4.02 | **2.80** |
+| Red Hue ±100 / Saturation ±100 | 3.38 / 2.90, 3.40 / 5.26 | 1.58 / 1.18, 1.86 / 1.66 |
+| Green Hue ±100 / Saturation ±100 | 3.12 / 2.59, 3.15 / 3.96 | 1.69 / 1.36, 1.82 / 1.22 |
+| Blue Hue ±100 / Saturation ±100 | 2.64 / 4.10, 4.08 / 4.60 | 1.36 / 1.94, 1.76 / 1.52 |
+| Hue +50 R / G / B, Saturation +50 G / B | 2.56 / 2.25 / 2.33, 2.39 / 2.48 | 1.71 / 1.66 / 1.52, 1.73 / 1.22 |
+
+Every Calibration stop is closer, the base unchanged: Camera Raw does apply the primaries before
+the profile's hue/sat map. With the round's other changes the acceptance gate passes (above), so the map
+now runs after Calibration for every camera (`HUE_SAT_IN_FINISH_ALL`; custom white balance at the DNG
+spec's strength). The round-8 edge cases (X100F PV6, one default R6 photo at the pass line) are within
+tolerance now: X100F PV6 2.35 → 2.33, default photos 19 → 19 passing.

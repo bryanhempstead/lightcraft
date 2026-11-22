@@ -203,6 +203,7 @@ fn export_keywords_follow_the_metadata_options() {
         name: Some("Ann Lee".into()),
         description: None,
         rejected: Vec::new(),
+        drawn: false,
     }];
     let o = crate::export::ExportOptions::default();
     let (flat, hier) = crate::export::export_keywords(&p, &o);

@@ -22,10 +22,10 @@ duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 
 | Dimension | Estimate | What's true today | Biggest gaps |
 |---|---:|---|---|
-| **Feature checklist** | 79.7% | P0 core and P1 nearly complete: import (Add / Copy / Move, templates, devices), library, grid/loupe/compare/survey, every Edit slider, curves, colour grading, masking tools, crop/Upright, heal/clone, presets/profiles, versions/history, sync, export, menus, shortcuts | P0: full-resolution zoom detail; P1: lens-profile database, content-aware fill (patch synthesis), video playback/trim |
-| **RAW coverage** (formats people shoot) | ~80% | DNG (all kinds), CR2, CR3 lossless Bayer and version 0x100/0x200 C-RAW (M50/R100/R8 pixel-exact corpus; 2,451 of 2,451 of Bryan's R6 files), ARW, NEF (uncompressed + Huffman lossless/lossy), RAF (uncompressed, lossless/lossy compressed Bayer and X-Trans), uncompressed ORF, RW2 / RWL / Panasonic RAW (every raw format, checked on 178 files from 118 Panasonic and Leica bodies), PEF; every container's embedded preview (incl. CR3). **This fork: LibRaw 0.22.3 as the fallback decoder** (`crates/libraw-sys`, `tools/fetch-libraw.sh`; native decoder first, then LibRaw, then the embedded preview): every camera LibRaw lists (1,258 models) decodes from sensor data, developed by LightCraft's own pipeline (Adobe profile via the DNG SDK): checked on Canon sRAW, R6 crop-mode C-RAW, CRW, Minolta MRW, Samsung SRW | Per-model verification is thin (~55 corpus files vs >1,000 models); LibRaw-decoded files have no camera-JPEG colour fit (Adobe matrix / profile instead); JPEG XL DNG, Foveon X3F; HEIC/AVIF in pure Rust; without `vendor/` (and on the web) the old gaps return: compressed ORF variants, Nikon lossy-after-split, Canon sRAW, unverified CRX variants |
-| **Colour & image quality** | ~55–65% | Pipeline is complete and fast; GPU path CPU-exact within 1/255 | **No measured camera calibration database**: ARW, NEF, RW2, RAF and CR3 have guarded camera-JPEG colour estimates, with bundled ILCE-7M4, X-H2S and X-T4 profiles (docs/camera-preview-colour.md); other non-DNG raws and rejected estimates use a neutral matrix. Colour fidelity remains incomplete. No lens-profile database. Fidelity against Lightroom measured per slider with the Camera Raw oracle in this fork (`docs/lr-match.md`): Texture, Dehaze, Clarity (positive), Color Grading, Point Color, B&W and the masks' Contrast / Whites / Blacks now render as Camera Raw does or close to it (rounds 10–11); Basic tone (Highlights / Shadows: Camera Raw's rule measured, off) and Clarity's regional moves still differ |
-| **AI & computational** | ~45% | Assisted culling (focus, bursts, blinks and face focus), auto tone, HDR/panorama merge; AI masks in pure Rust with optional downloaded models: Sky, Landscape classes and People parts (SegFormer), Object / Describe / Subject (SAM 3), Update AI Settings; Super Resolution (~43 s per 24 MP photo); Lightroom's adaptive presets with their AI masks; faces / People (YuNet + SFace, named and unnamed people, suggestions, person keywords, XMP and Lightroom face regions) and natural-language search (CLIP) — `docs/people.md` | Adaptive profiles' per-photo part (Camera Raw's model is encrypted), diffusion-grade generative remove (LaMa fills and DSRNet reflection removal are in: `docs/remove.md`), finding faces at import, smiles / expressions. **Blocked on a model strategy** (licensable weights or our own training; pure-Rust inference is feasible) |
+| **Feature checklist** | 79.7% | P0 core and P1 nearly complete: import (Add / Copy / Move, templates, devices), library, grid/loupe/compare/survey, every Edit slider, curves, colour grading, masking tools, crop/Upright, heal/clone, presets/profiles, versions/history, sync, export, menus, shortcuts | P1: lens-profile database, content-aware fill (patch synthesis), video playback/trim |
+| **RAW coverage** (formats people shoot) | ~80% | DNG (all kinds, incl. DNG 1.7 JPEG XL: Lightroom smart previews), CR2, CR3 lossless Bayer and version 0x100/0x200 C-RAW (M50/R100/R8 pixel-exact corpus; 2,451 of 2,451 of Bryan's R6 files), ARW, NEF (uncompressed + Huffman lossless/lossy), RAF (uncompressed, lossless/lossy compressed Bayer and X-Trans), uncompressed ORF, RW2 / RWL / Panasonic RAW (every raw format, checked on 178 files from 118 Panasonic and Leica bodies), PEF; every container's embedded preview (incl. CR3). **This fork: LibRaw 0.22.3 as the fallback decoder** (`crates/libraw-sys`, `tools/fetch-libraw.sh`; native decoder first, then LibRaw, then the embedded preview): every camera LibRaw lists (1,258 models) decodes from sensor data, developed by LightCraft's own pipeline (Adobe profile via the DNG SDK): checked on Canon sRAW, R6 crop-mode C-RAW, CRW, Minolta MRW, Samsung SRW. **Every model in Bryan's library checked** (15 raw bodies, [docs/camera-coverage.md](docs/camera-coverage.md)): all decode natively, geometry matches Lightroom's default crop | Per-model verification is thin (~55 corpus files plus Bryan's 15 raw bodies vs >1,000 models); LibRaw-decoded files have no camera-JPEG colour fit (Adobe matrix / profile instead); Foveon X3F; HEIC/AVIF in pure Rust; without `vendor/` (and on the web) the old gaps return: compressed ORF variants, Nikon lossy-after-split, Canon sRAW, unverified CRX variants |
+| **Colour & image quality** | ~55–65% | Pipeline is complete and fast; GPU path CPU-exact within 1/255 | **No measured camera calibration database**: ARW, NEF, RW2, RAF and CR3 have guarded camera-JPEG colour estimates, with bundled ILCE-7M4, X-H2S and X-T4 profiles (docs/camera-preview-colour.md); other non-DNG raws and rejected estimates use a neutral matrix. Colour fidelity remains incomplete. No lens-profile database. Fidelity against Lightroom measured per slider with the Camera Raw oracle in this fork (`docs/lr-match.md`): Texture (with its colour at colour edges), Dehaze, Clarity (positive), Highlights / Shadows (Camera Raw's rule with its photo-adaptive default black), Calibration (before the profile's hue/sat map), Color Grading, Point Color, B&W and the masks' Contrast / Whites / Blacks now render as Camera Raw does or close to it (rounds 10–12; acceptance set 3.99 → 3.77 ΔE); heavily edited photos, Clarity's regional moves and negative Dehaze on fine detail still differ |
+| **AI & computational** | ~45% | Assisted culling (focus, bursts, blinks, face focus, smiles / expressions; at import too), auto tone, HDR/panorama merge; AI masks in pure Rust with optional downloaded models: Sky, Landscape classes and People parts (SegFormer), Object / Describe / Subject (SAM 3), Update AI Settings; Super Resolution (~43 s per 24 MP photo); Lightroom's adaptive presets with their AI masks; faces / People (YuNet + SFace, found by themselves in the background or as needed, drawn and moved in the loupe, named and unnamed people, bulk confirm / reject, person keywords kept in step, XMP and Lightroom face regions), Select Subject following the camera's focus point, and natural-language search (CLIP) — `docs/people.md` | Adaptive profiles' per-photo part (Camera Raw's model is encrypted), diffusion-grade generative remove (LaMa fills and DSRNet reflection removal are in: `docs/remove.md`), pets in People, the expression network checked on a labelled set of real photos. **Blocked on a model strategy** (licensable weights or our own training; pure-Rust inference is feasible) |
 | **Workflow & library** | ~85% (single machine) | Robust catalog (journal + snapshots, background compaction, crash-tested), 85k-photo libraries stay responsive, Local browsing with automatic cleanup, XMP interop, keywords, smart albums, Move import; Settings ▸ cams. (fork) shows per camera the decoder, the profile that colours it, lens profiles and the last Lightroom ΔE, and an import recognises a camera it hasn't seen | Opening an 85k library takes 1.7–4.7 s (catalog backups, Trash deletes and Lightroom naming landed 2026-11-21); no cloud sync (out of scope), no tablet companion (#74, roadmap), shared albums, online publish services (Hard Drive / Apple Photos publishing landed 2026-11-22), tethering |
 | **Classic modules** | ~30% | Geotagging from GPX track logs, the Map module (OpenStreetMap, drag to geotag, saved locations, the location filter bar), video Capture Frame, DNG export with embedded previews and lossy DNG (Adobe's DNG SDK), soft proofing (partial), slideshow (basic) | **Book, Print, Slideshow module, Web, online publish services**: ~40 tracker rows ⬜ |
 | **HDR & video** | HDR ~85%, video ~55% | HDR editing (Lightroom's HDR button, HDR Limit, SDR rendition with SDRBlend, Visualize HDR with beyond-the-display marks, Lightroom's split HDR histogram, `crs:` round trip), HDR export (gain map JPEG, gain map AVIF on macOS, PQ / HLG AVIF, PNG, JPEG XL, float TIFF; open as HDR in macOS), EDR loupe / Compare / Survey / Second Window on macOS, HDR renders on the GPU (draft drag ~13 ms at 2.5 MP); video (fork, 2026-11-22): import, Loupe playback with sound, trim, poster frame, Capture Frame, the whole Edit panel on frames (one GPU render for playback and export), trimmed and edited H.264 export (ffmpeg when installed, else macOS AVFoundation / avconvert) | HDR tone measured against Lightroom (and its SDR rendition is a local tone map, ours the HDR-off render), Windows / Linux HDR display; pure-Rust video decoding |
@@ -51,12 +51,17 @@ Priorities, in order. Each points at tracker rows in [`docs/parity.md`](docs/par
    (matrix + tone curve from their own JPEG); generalise it to the other makes' raws (PEF, ORF…), then validate fidelity.
 2. **Raw formats** (LR-IMP-FORMATS, P0): this fork falls back to LibRaw (2026-11-21; GPL/LGPL allowed for Bryan's
    personal build), so unverified CR3 CRX variants, compressed ORF, NEF lossy-after-split, sRAW, CRW/MRW/SRW and the
-   long tail decode when `tools/fetch-libraw.sh` has run. Left: JPEG XL DNG, Foveon, pure-Rust HEIC/AVIF, and native
+   long tail decode when `tools/fetch-libraw.sh` has run; JPEG XL DNG decodes natively (2026-11-22). Left: Foveon, pure-Rust HEIC/AVIF, and native
    (faster, wasm-capable) decoders for the variants that now only LibRaw reads.
-3. **Verified camera coverage** (LR-IMP-CAMERA-COVERAGE, P0): a CC0 sample per model in the corpus, each decoded and
-   checked for plausible colour; fix per-model bugs (#85).
+3. **Verified camera coverage** (LR-IMP-CAMERA-COVERAGE, P0): every camera in Bryan's library is checked
+   ([docs/camera-coverage.md](docs/camera-coverage.md): native vs LibRaw vs DNG SDK, Lightroom's default crop from
+   its smart previews, ΔE vs its previews; Canon CR2 black/white levels fixed on the way). Next: a CC0 sample per
+   model in the corpus, each decoded and checked for plausible colour, and Lightroom previews for the bodies that
+   have none stored (Q2, 5D Mark III, iPhone 17 Pro, Sony, Blackmagic).
 4. **Render fidelity suite** (LR-BEHAV-RENDER-FIDELITY, P1): measure our output against Lightroom on the same CC0 raws
-   (references stay in the local `plan/`), then tune against the numbers.
+   (references stay in the local `plan/`), then tune against the numbers. In this fork it exists (Lightroom's previews
+   + the Camera Raw oracle, `docs/lr-match.md`, 3.77 ΔE after round 12); next: masks and looks on edited photos,
+   Clarity's regional moves, negative Dehaze's spatial part.
 5. **Lens profiles of our own** (LR-EDIT-OPTICS-PROFILE, P1).
 6. **AI model strategy** (maintainer decision): which permissively licensed models (or our own training) for
    segmentation masks and denoise; then pure-Rust inference. Masks are done this way in Bryan's fork: SAM 3
@@ -65,7 +70,9 @@ Priorities, in order. Each points at tracker rows in [`docs/parity.md`](docs/par
    Resolution), Lens Blur and Depth Range run open models too (RawNIND GPL-3.0, Real-ESRGAN BSD-3,
    Depth Anything V2 Apache-2.0; `docs/enhance.md`); Super Resolution makes a 24 MP photo in ~43 s on an M3 Pro. Generative Remove
    runs LaMa big-lama (Apache-2.0), Remove Reflections DSRNet (Apache-2.0), and Remove ▸ Detect offers people / wires /
-   dust to pick (`docs/remove.md`).
+   dust to pick (`docs/remove.md`). People and AI culling are done the same way (YuNet, SFace, Intel's eye-state and
+   OpenCV Zoo's expression networks on our own ONNX interpreter; `docs/people.md`): faces are found by themselves,
+   culling runs at import, smiles count.
 7. **Then:** HDR tone measured against Lightroom, the Classic output modules (Print first, then Book,
    Slideshow; Map, Hard Drive publishing and video are in), localisation and accessibility.
 
@@ -73,9 +80,10 @@ Already closed in the week of 2026-10-03: compressed NEF (#10), Move import (#29
 Local roots / cleanup, grid and catalog performance at 85k photos (#35, #37), failed-save reporting, GPU export
 hardening (#78), copyright metadata (#51), GPX geotagging (#60), import tag help and folder templates (#31, #32).
 
-Image navigation now supports native pinch zoom and two-finger pan in Detail, Compare and Reference views.
-The whole-image preview still has a configurable size cap (2,560 px default), so 100% on larger photos does not
-yet guarantee original-pixel detail; visible-region rendering remains a gap (LR-VIEW-ZOOM).
+Image navigation supports native pinch zoom and two-finger pan in Detail, Compare and Reference views, and 1:1
+(and closer) now shows the photo's own pixels: the visible part is region-rendered at native resolution over the
+capped preview, equal to the full-size render (LR-VIEW-ZOOM; `docs/gpu-pipeline.md` → Region renders). On a Mac the
+window is colour-managed by the system (LR-VIEW-COLORMANAGED), so photos look as in Preview and Lightroom on any display.
 
 ## Milestones
 
@@ -128,7 +136,7 @@ trip, slideshow, auto import…) in ≈ 12 h on 2026-10-02; four to six parallel
 | Work package | Tracker rows | Agent-hours | Risk |
 |---|---|---:|---|
 | Remaining P0/P1 UI and library features (folder rename/move, keyword painter, people view…) | ≈ 8 | 5–10 | low |
-| Raw codecs: JPEG XL DNG, HEIC/AVIF decode (the CRX variants, compressed ORF, NEF lossy-after-split and sRAW are LibRaw-decoded in this fork) | LR-IMP-FORMATS | 15–30 | medium |
+| Raw codecs: HEIC/AVIF decode (the CRX variants, compressed ORF, NEF lossy-after-split and sRAW are LibRaw-decoded in this fork) | LR-IMP-FORMATS | 15–30 | medium |
 | Lens-profile database of our own (calibration targets, fitting, data) | LR-EDIT-OPTICS-PROFILE | 15–30 | data collection |
 | Video: playback, trim, edits, export (pure-Rust decode, ideally shared with FilmCraft) | R. Video | 20–40 | medium |
 | AI: subject / sky / background / people / object masks, object-aware remove, AI denoise, super resolution, lens blur, people & faces, natural-language search, culling | ≈ 30 | 80–150 | **high** — permissively licensed weights, pure-Rust inference, maybe training |
@@ -253,6 +261,10 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   place (Masking ▸ Effect ▸ import.).
 - 2026-11-21 (fork): crop extras: As Shot aspect, Aspect Ratios / Center / Fifths overlays, Choose Overlays to Cycle;
   the Before & After button cycles the layouts.
+- 2026-11-22 (fork): Highlights / Shadows render with Camera Raw's rule (on), Camera Raw's default black follows the
+  photo's dark key and Shadows (RAWmakase's measured toe), Calibration acts before the profile's hue/sat map (on for
+  every camera), Texture keeps colour contrast at colour edges: Bryan's acceptance set 3.99 → 3.77 ΔE, photos passing
+  25 → 31, Summer Fields R6 5.83 → 4.63 (`docs/lr-match.md` → Round 12).
 - 2026-11-22 (fork): Clarity and positive Dehaze render as Camera Raw does (RAWmakase's scene map: four-scale
   Clarity refit on our oracle, its haze model; Bryan's raws Clarity +100 3.75 → 2.51 ΔE, Dehaze +100 10.1 → 4.7);
   Camera Raw's Highlights / Shadows rule is in the code but off until it passes the acceptance gate on R6 photos

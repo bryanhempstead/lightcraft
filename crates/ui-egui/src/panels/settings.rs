@@ -148,6 +148,22 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if check(ui, "settings.autoVersions", &mut autos, "Keep an automatic version when leaving an edited photo (Lightroom doesn't)") {
         let _ = app.run("library.preferences", json!({"autoVersions": autos}));
     }
+    // Lightroom Classic: Catalog Settings ▸ Metadata ▸ Face Detection, and the People view's first-run choice
+    heading(ui, t, crate::i18n::tr("People"));
+    row(ui, t, crate::i18n::tr("Find faces"), |ui| {
+        use lightcraft_engine::vision::FaceDetect;
+        let mut mode = app.session.face_prefs.detect;
+        if choices(ui, "settingsFaces", &[(FaceDetect::Off, "off."), (FaceDetect::AsNeeded, "view."), (FaceDetect::All, "all.")], &mut mode) {
+            let _ = app.run("faces.auto", json!({"mode": mode.key()}));
+        }
+    });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "view.: in the photos the People view shows, while it is open (Lightroom's Only find faces as needed). all.: in every photo of the library, in the background, new imports first (Find faces in entire catalog). Needs the face finder (People ▸ get.).",
+        ),
+    );
     heading(ui, t, crate::i18n::tr("External Editor"));
     row(ui, t, crate::i18n::tr("Application"), |ui| {
         let r = ui
@@ -681,10 +697,16 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     ui.label(
         egui::RichText::new(crate::i18n::tr(
-            "Display P3 for Apple displays (Studio Display, MacBook, iMac) so photos look as they export; sRGB for an sRGB monitor. Auto: Display P3 on a Mac.",
+            "Auto: color-managed on a Mac (the window is tagged, and macOS shows photos through the display's own profile, as Preview and Lightroom do). Display P3 / sRGB: the values go to the display as they are, for a display of that space.",
         ))
         .color(t.text_dim),
     );
+    let state = match app.window_space.as_ref().and_then(|w| w.tagged()) {
+        Some("extendedSrgb") => "Window: color-managed (HDR, extended sRGB)",
+        Some(_) => "Window: color-managed (Display P3)",
+        None => "Window: not color-managed (values shown as they are)",
+    };
+    ui.label(egui::RichText::new(crate::i18n::tr(state)).color(t.text_dim));
     // L19: Loupe Info 1 / 2 lines (Library View Options ▸ Loupe View)
     loupe_info_rows(ui, t, &mut app.ui.settings.loupe_info, "", "settingsLoupeDefaults");
     check(ui, "settings.loadingMessage", &mut app.ui.settings.loading_message, "Show message when loading or rendering photos");

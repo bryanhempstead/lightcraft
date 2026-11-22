@@ -19,7 +19,7 @@
 //!   bytes (ColorData versions -3 and -4), which are paired up in the maker note's byte order first.
 //! - sRAW / mRAW (YCbCr, subsampled) are not supported yet.
 
-use super::{black_from_columns, white_from_data};
+use super::{black_columns, black_from_columns, white_from_data};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
 use lightcraft_geom::Orientation;
 use lightcraft_tiff::image::chunk_bytes;
@@ -56,6 +56,30 @@ fn words(v: &Value, order: ByteOrder) -> Vec<u64> {
         Value::Byte(b) | Value::Undefined(b) => b.as_chunks::<2>().0.iter().map(|c| u64::from(order.u16(*c))).collect(),
         _ => v.to_u64_vec(),
     }
+}
+
+/// Canon's specular white level (the clip point for the photo's ISO) from the `ColorData` array
+/// (maker note `0x4001`), found by its length and sub-version (word 0). Word offsets of the
+/// `NormalWhiteLevel, SpecularWhiteLevel` pair, as LibRaw 0.22 (`src/metadata/canon.cpp`, LGPL-2.1,
+/// used per this fork's rules) and the ExifTool Canon `ColorData4`–`ColorData8` tables list them;
+/// `None` for layouts without one (older bodies, PowerShots with sub-version -3).
+fn specular_white(v: &[u64]) -> Option<f32> {
+    let sub = *v.first()?;
+    let at = match (v.len(), sub) {
+        (674 | 692 | 702 | 1227 | 1250 | 1251 | 1337 | 1338 | 1346, 4 | 5) => 0x2b8,
+        (674 | 692 | 702 | 1227 | 1250 | 1251 | 1337 | 1338 | 1346, 6 | 7) => 0x2cf,
+        (674 | 692 | 702 | 1227 | 1250 | 1251 | 1337 | 1338 | 1346, 9) => 0x2d3,
+        (5120, 0xfffc) => 0x569,
+        (1273 | 1275, _) => 0x1e3,
+        (1312 | 1313 | 1316 | 1506, 10) => 0x1fc,
+        (1312 | 1313 | 1316 | 1506, 11) => 0x2dc,
+        (1560 | 1592 | 1353 | 1602, 14) => 0x230,
+        (1560 | 1592 | 1353 | 1602, _) => 0x30e,
+        _ => return None,
+    };
+    let white = *v.get(at + 1)? as f32;
+    // plausible for 12- to 14-bit data, above any black level
+    (4096.0..=16383.0).contains(&white).then_some(white)
 }
 
 /// As-shot WB multipliers (R, G, B; G = 1) from the ColorBalance array.
@@ -146,14 +170,28 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             active = Rect::new(l, tp, r - l + 1, b - tp + 1);
         }
     }
-    let wb = mn.as_ref().and_then(|m| m.ifd.value(COLOR_BALANCE).map(|v| words(v, m.order))).and_then(|v| wb_from_color_balance(&v));
+    let color_data = mn.as_ref().and_then(|m| m.ifd.value(COLOR_BALANCE).map(|v| words(v, m.order)));
+    let wb = color_data.as_deref().and_then(wb_from_color_balance);
+    let specular = color_data.as_deref().and_then(specular_white);
     let cfa = cfa_from_tag(raw.u64(CR2_CFA_PATTERN)).unwrap_or_else(|| Cfa::bayer_static("RGGB"));
     let black = if active.x >= 8 {
-        black_from_columns(&data, width, 2..active.x - 2, active.y..active.y + active.height, active)
+        let rows = active.y..active.y + active.height;
+        black_from_columns(&data, width, black_columns(&data, width, 2..active.x - 2, rows.clone()), rows, active)
     } else {
         BlackLevel::uniform(0.0)
     };
-    let white = white_from_data(&data, prec as u32);
+    // the camera's clip point for this ISO, like Lightroom's fixed level per model: without it an
+    // unclipped photo was normalised to the 14-bit maximum and a clipped one to its plateau, so
+    // frames of one shoot differed by up to ~0.1 EV; a plateau below it still wins (it's where
+    // this file really clips)
+    let plateau = white_from_data(&data, prec as u32);
+    let full = ((1u32 << (prec as u32).clamp(1, 16)) - 1) as f32;
+    let black_max = black.values.iter().copied().fold(0.0f32, f32::max);
+    let white = match specular.filter(|s| *s > black_max + 256.0 && *s <= full) {
+        Some(s) if plateau < full => plateau.min(s),
+        Some(s) => s,
+        None => plateau,
+    };
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
     metadata.width = Some(active.width as u32);
     metadata.height = Some(active.height as u32);
@@ -315,6 +353,26 @@ pub(crate) mod tests {
         let off = e.offset as usize;
         bytes[off + 10..off + 14].copy_from_slice(&(e.offset as u32 + 18).to_le_bytes());
         crate::decode(&bytes).unwrap()
+    }
+
+    /// The specular white level comes from `ColorData` (5D Mark III / 6D layout: 1312 words, sub-version 10,
+    /// `SpecularWhiteLevel` at word 0x1fd); before, an unclipped CR2 was normalised to the 14-bit maximum.
+    #[test]
+    fn white_level_from_color_data() {
+        let mut words = vec![0u16; 1312];
+        words[0] = 10;
+        words[0x1fd] = 15000;
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        assert_eq!(decode_with_color_data(3, &bytes).white, vec![15000.0]);
+        // another sub-version of that length has its levels elsewhere: 0x2dd
+        words[0] = 11;
+        words[0x2dd] = 13500;
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        assert_eq!(decode_with_color_data(3, &bytes).white, vec![13500.0]);
+        // an implausible value or an unknown layout keeps the data's own estimate
+        assert_eq!(specular_white(&[10; 1312]), None);
+        assert_eq!(specular_white(&[10; 1300]), None);
+        assert_eq!(specular_white(&[]), None);
     }
 
     /// `ColorData` stored as UNDEFINED bytes (versions -3 / -4: PowerShot, EOS M) gives the as-shot WB from word 71,

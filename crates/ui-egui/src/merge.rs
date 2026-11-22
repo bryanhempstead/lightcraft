@@ -282,6 +282,7 @@ pub fn start_last(app: &mut LightcraftApp, command: &str) -> Result<Value, Strin
 
 /// Per frame: keep the preview in sync with the dialog's options, collect finished jobs.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let p3 = app.renderer.display_p3;
     // preview for the open dialog
     let dialog_opts = match &app.ui.dialog {
         Some(crate::state::Dialog::Merge { opts }) => Some(opts.clone()),
@@ -320,7 +321,9 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let Some(t) = app.merge.preview_task.take() else { return };
                 if let Some(img) = out.preview {
                     let color = Arc::new(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.as_bytes()));
-                    let tex = ctx.load_texture("merge-preview", color.clone(), egui::TextureOptions::LINEAR);
+                    // (the screen gets the display's values; the kept pixels stay sRGB)
+                    let shown = crate::display_p3::screen_image(p3, [img.width, img.height], &img.as_bytes());
+                    let tex = ctx.load_texture("merge-preview", shown, egui::TextureOptions::LINEAR);
                     app.merge.preview_pixels = Some(color);
                     app.merge.preview = Some((tex, [img.width, img.height], t.options, out.info));
                 }

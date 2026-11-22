@@ -207,5 +207,16 @@
   "downloading the AI search model {d} / {n} MB…": "загрузка модели ИИ-поиска {d} / {n} МБ…",
   "AI search needs {m} ({mb} MB, {l}): Return downloads it": "Для ИИ-поиска нужна {m} ({mb} МБ, {l}): Return — загрузить",
   "Describe a photo… (indexing {d} / {n})": "Опишите фото… (индексация {d} / {n})",
-  "{n} photos match “{q}”, best first": "Подходит фото: {n} для «{q}», лучшие первыми"
+  "{n} photos match “{q}”, best first": "Подходит фото: {n} для «{q}», лучшие первыми",
+  "Assisted Culling: {n} photos, {g} groups of look-alikes": "Помощь в отборе: фото — {n}, групп похожих снимков — {g}",
+  "Confirm the {n} suggested faces as who they're suggested as": "Подтвердить предложенные лица ({n}) как предложенных людей",
+  "Culling {d} of {n}": "Отбор: {d} из {n}",
+  "Download {m} — {mb} MB, {l}": "Загрузить {m} — {mb} МБ, {l}",
+  "Finding faces {d} of {n}": "Поиск лиц: {d} из {n}",
+  "Smiles need the expression model ({mb} MB, {l})": "Для улыбок нужна модель выражений ({mb} МБ, {l})",
+  "These {n} faces aren't who they're suggested as": "Эти лица ({n}) — не предложенные люди",
+  "Unnamed · looks like {s}": "Без имени · похоже на {s}",
+  "name the {n} picked {what}": "назвать выбранные {what} ({n})",
+  "{f} faces · {s} suggested": "лиц: {f} · предложено: {s}",
+  "{r} rejected, {p} picked": "отклонено: {r}, отмечено: {p}"
 }

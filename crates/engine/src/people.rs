@@ -560,12 +560,58 @@ impl Session {
         self.name_faces(&refs, Some(to), "Rename Person")
     }
 
+    /// Keep face names in step with person keywords (in Lightroom a person keyword *is* the person). In `op` — a batch
+    /// of keyword edits (the keyword list's rename / merge / delete, keywords taken off photos) — a photo that loses
+    /// the person keyword of a name on one of its faces has that face renamed to the person keyword it gains in the
+    /// same edit (a rename or a merge), else the name taken off (the face goes back to the unnamed faces).
+    pub(crate) fn sync_faces_with_keywords(&self, op: Op) -> Op {
+        let Op::Batch { mut ops } = op else { return op };
+        let leaf = |p: &str| p.rsplit('|').next().unwrap_or(p).trim().to_lowercase();
+        // keywords this batch marks as people (a renamed person keyword's new path)
+        let marked: std::collections::HashSet<String> = ops
+            .iter()
+            .filter_map(|o| match o {
+                Op::SetKeyword { path, info: Some(i) } if i.person => Some(path.to_lowercase()),
+                _ => None,
+            })
+            .collect();
+        let is_person = |path: &str| self.catalog.keyword_info(path).is_some_and(|i| i.person) || marked.contains(&path.to_lowercase());
+        for o in &mut ops {
+            let Op::SetMeta { id, meta } = o else { continue };
+            let Some(old) = self.catalog.photo(*id) else { continue };
+            let has = |list: &[String], k: &str| list.iter().any(|x| x.eq_ignore_ascii_case(k));
+            let removed: Vec<String> = old.meta.keywords.iter().filter(|k| !has(&meta.keywords, k) && is_person(k)).map(|k| leaf(k)).collect();
+            if removed.is_empty() {
+                continue;
+            }
+            let added: Vec<&String> = meta.keywords.iter().filter(|k| !has(&old.meta.keywords, k) && is_person(k)).collect();
+            let rename_to = match added.as_slice() {
+                [one] => Some(one.rsplit('|').next().unwrap_or(one).trim().to_string()),
+                _ => None,
+            };
+            for r in &mut meta.regions {
+                let Some(n) = r.name.as_deref() else { continue };
+                if r.kind != RegionKind::Face || !removed.contains(&n.trim().to_lowercase()) {
+                    continue;
+                }
+                match &rename_to {
+                    Some(to) => {
+                        r.rejected.retain(|x| !x.eq_ignore_ascii_case(to));
+                        r.name = Some(to.clone());
+                    }
+                    None => r.name = None,
+                }
+            }
+        }
+        Op::Batch { ops }
+    }
+
     /// Draw a face region on photo `id` (optionally named); its embedding is computed with the photo's next
     /// indexing (queued at once when the face models are there).
     pub fn add_face(&mut self, id: PhotoId, rect: Rect, name: Option<&str>) -> Result<usize> {
         let p = self.catalog.photo(id).ok_or(EngineError::Catalog(lightcraft_catalog::CatalogError::NoPhoto(id)))?;
         let mut regions = p.meta.regions.clone();
-        regions.push(lightcraft_meta::Region::face(rect));
+        regions.push(lightcraft_meta::Region::drawn_face(rect));
         let index = regions.len() - 1;
         self.commit("Add Face", Op::SetRegions { id, regions })?;
         if let Some(n) = name.filter(|n| !n.trim().is_empty()) {

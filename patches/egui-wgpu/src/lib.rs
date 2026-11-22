@@ -615,3 +615,60 @@ pub fn parse_vendor_id(vendor_id: u32) -> &'static str {
         _ => "Unknown",
     }
 }
+
+// ----------------------------------------------------------------------------------------------
+// LightCraft patch (colour-managed SDR window, LR-VIEW-COLORMANAGED): wgpu configures an 8-bit
+// surface in `SurfaceColorSpace::Srgb` as an *untagged* `CAMetalLayer` on macOS, which the system
+// shows in the display's own space (sRGB values come out more saturated on a P3 display). An app
+// may ask for the SDR surface to be tagged with a colour space the surface supports for its format
+// (Display P3: macOS then colour-manages the window onto whatever display it is on, using that
+// display's profile, calibrated or not, P3 or sRGB). Read again at every surface configuration;
+// a changed request reconfigures the surfaces on the next frame.
+
+static SDR_REQUEST: Mutex<Option<wgpu::SurfaceColorSpace>> = Mutex::new(None);
+/// The tag the SDR surface was last configured with (`None`: untagged / not an SDR surface).
+static SDR_ACTIVE: Mutex<Option<wgpu::SurfaceColorSpace>> = Mutex::new(None);
+/// The request the surfaces were last configured for.
+static SDR_APPLIED: Mutex<Option<Option<wgpu::SurfaceColorSpace>>> = Mutex::new(None);
+
+/// Ask for the 8-bit window surface to be tagged with `color_space` (only
+/// [`wgpu::SurfaceColorSpace::DisplayP3`] is used; `None` = untagged, wgpu's default). Takes
+/// effect at the next frame, where the surface supports it.
+pub fn request_sdr_color_space(color_space: Option<wgpu::SurfaceColorSpace>) {
+    *SDR_REQUEST.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = color_space;
+}
+
+/// The colour space the 8-bit window surface is tagged with right now (`None`: untagged, or the
+/// surface is not 8-bit).
+pub fn sdr_color_space() -> Option<wgpu::SurfaceColorSpace> {
+    *SDR_ACTIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The requested tag, if `caps` support it for `format` (an 8-bit format: the HDR surface has
+/// its own colour space).
+pub(crate) fn sdr_choice(caps: &wgpu::SurfaceCapabilities, format: wgpu::TextureFormat) -> Option<wgpu::SurfaceColorSpace> {
+    let want = (*SDR_REQUEST.lock().unwrap_or_else(std::sync::PoisonError::into_inner))?;
+    if format == wgpu::TextureFormat::Rgba16Float {
+        return None;
+    }
+    let spaces = caps.color_spaces(format);
+    let ok = match want {
+        wgpu::SurfaceColorSpace::DisplayP3 => spaces.contains(wgpu::SurfaceColorSpaces::DISPLAY_P3),
+        _ => false,
+    };
+    ok.then_some(want)
+}
+
+/// Note what an SDR surface configuration used (see [`sdr_color_space`]).
+pub(crate) fn set_sdr_active(cs: Option<wgpu::SurfaceColorSpace>) {
+    *SDR_ACTIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = cs;
+    let req = *SDR_REQUEST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    *SDR_APPLIED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(req);
+}
+
+/// Has the request changed since the surfaces were configured?
+pub(crate) fn sdr_request_changed() -> bool {
+    let req = *SDR_REQUEST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let applied = *SDR_APPLIED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    applied.is_some_and(|a| a != req)
+}

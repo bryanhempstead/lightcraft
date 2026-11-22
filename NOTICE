@@ -43,8 +43,8 @@ authors, licensed under the MIT License or the Apache License 2.0, and the CLIP 
 tokenizer does; its face pre- and post-processing follows OpenCV's FaceDetectorYN and
 FaceRecognizerSF (https://github.com/opencv/opencv, modules/objdetect, Apache License 2.0). The
 ports were modified by the LightCraft contributors (2026); crates/vision is licensed under the
-Apache License 2.0 only. The models it runs (YuNet, SFace, open-closed-eye-0001, LAION's CLIP
-ViT-B/32) are not part of LightCraft: a user downloads them only when they choose to, under each
+Apache License 2.0 only. The models it runs (YuNet, SFace, open-closed-eye-0001, OpenCV Zoo's
+facial_expression_recognition_mobilefacenet_2022july, LAION's CLIP ViT-B/32) are not part of LightCraft: a user downloads them only when they choose to, under each
 model's own terms (see docs/people.md).
 patches/egui-wgpu is egui-wgpu 0.36.2 (https://github.com/emilk/egui, crates/egui-wgpu), Copyright
 the egui authors, licensed under the MIT License or the Apache License 2.0, at your option. It is
@@ -63,6 +63,10 @@ copied verbatim) ports RAWmakase's scene tone map from the same crate: local_ton
 map, guided base, grid sampling), clarity.rs and clarity_data.rs, scene_tone/haze.rs,
 local_tone_rule.rs and local_tone_rule_data.rs, local_tone_rule_ext_data.rs,
 local_tone_rule_pair_data.rs (fitted networks and tables), under the same MIT License.
+Round 12 (black_cr.rs, with black_cr.bin copied verbatim from scene_tone/default_black.bin) ports
+RAWmakase's default black point (scene_tone/global.rs: default_black, black_correction,
+without_black, evaluate; pipeline/tone.rs: the Shadows shift of the dark key), under the same MIT
+License, modified by the LightCraft contributors (2026).
 
 LibRaw (https://www.libraw.org, Copyright 2008-2025 LibRaw LLC; based on dcraw by Dave Coffin) is
 LightCraft's fallback raw decoder in this fork (crates/libraw-sys). It is not in this repository:

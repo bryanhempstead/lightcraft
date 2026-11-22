@@ -195,6 +195,12 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
         {
             let _ = app.run("view.faceBoxes", json!({}));
         }
+        if app.ui.view == ViewMode::Detail
+            && icon_button(&mut child, "drawFace", Icon::FaceDraw, vec2(30.0, 30.0), app.ui.draw_face, true, "Draw Face Region: drag on the photo")
+                .clicked()
+        {
+            let _ = app.run("view.drawFace", json!({}));
+        }
         if icon_button(&mut child, "filmstrip", Icon::Filmstrip, vec2(30.0, 30.0), app.ui.filmstrip, true, "Filmstrip (/)").clicked() {
             let _ = app.run("view.filmstrip", json!({}));
         }

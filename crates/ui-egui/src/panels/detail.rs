@@ -424,6 +424,49 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     app.hdr_view = hdr_shown.into_inner();
     app.loupe_shown = Some((id, shown));
+    // native-resolution detail over the preview at 1:1 and beyond the preview size (`tiles`):
+    // the after view (or the before view while it is shown alone); not over an HDR rendition
+    let hdr_view = d.hdr.enabled && hdr_headroom(app).is_some();
+    if !hdr_view && hover_key.is_none() && matches!(shown, "render" | "preview" | "thumb") {
+        let (view, before) = if show_before && !split { (3u8, true) } else { (0u8, false) };
+        let want = crate::tiles::Want {
+            view,
+            photo: id,
+            img: target_rect,
+            area: main_area.intersect(canvas),
+            ppp,
+            apply_crop: !crop_tool,
+            before,
+            preview_long: (target_rect.width().max(target_rect.height()) * ppp).min(max_edge) as usize,
+            interacting,
+            overlay: if before { lightcraft_pipeline::Overlay::None } else { view_overlay(app, &d) },
+            proof: app.ui.soft_proof.then_some(app.ui.proof),
+            now: ui.input(|i| i.time),
+        };
+        if crate::tiles::update(app, &want).is_some()
+            && let Some(t) = app.renderer.tiles.get_mut(&view)
+        {
+            t.draw(
+                &p.with_clip_rect(main_area.intersect(canvas)),
+                img_rect,
+                main_area,
+                interacting && want.overlay == lightcraft_pipeline::Overlay::None,
+            );
+        }
+        for other in [0u8, 3] {
+            if other != view
+                && let Some(t) = app.renderer.tiles.get_mut(&other)
+            {
+                t.look = None;
+            }
+        }
+    } else {
+        for v in [0u8, 3] {
+            if let Some(t) = app.renderer.tiles.get_mut(&v) {
+                t.look = None;
+            }
+        }
+    }
     if app.ui.before_after == BeforeAfter::Split {
         let mid = img_rect.center().x;
         if let Some(tex) = app.renderer.textures.get(&Slot::Before).filter(|t| t.photo == id) {
@@ -452,8 +495,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !fullscreen {
         filter_pill(app, ui, canvas);
     }
-    if app.ui.face_boxes {
-        match region_overlay(ui, &p, &map, &photo, d.orientation) {
+    if app.ui.face_boxes || app.ui.draw_face {
+        match region_overlay(ui, &p, &map, &photo, d.orientation, app.ui.draw_face && !fullscreen) {
             Some(RegionEdit::Remove(index)) => {
                 let _ = app.run("photo.removeRegion", json!({"id": id.0, "index": index}));
             }
@@ -488,6 +531,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             RightPanel::Masking => mask_overlay(app, ui, &resp, &map, &d),
             RightPanel::Remove => remove_overlay(app, ui, &resp, &map, &d),
             RightPanel::RedEye => eye_overlay(app, ui, &resp, &map, &d),
+            // Draw Face Region: a drag on the photo draws a face box (clicks still zoom)
+            _ if app.ui.draw_face && !fullscreen => {
+                draw_face_tool(app, ui, &resp, &map, &photo, d.orientation);
+                if !resp.dragged() && !resp.drag_stopped() {
+                    general_interaction(app, ui, &resp, &map, img_rect, main_area, native, aspect);
+                }
+            }
             _ => general_interaction(app, ui, &resp, &map, img_rect, main_area, native, aspect),
         }
     }
@@ -642,7 +692,8 @@ mod camera_model_tests {
 enum RegionEdit {
     /// The × was clicked.
     Remove(usize),
-    /// A handle drag ended: the region's new box (normalized, upright frame).
+    /// A handle drag or (with the Draw Face Region tool) a move ended: the region's new box (normalized, upright
+    /// frame).
     Resize(usize, lightcraft_geom::Rect),
 }
 
@@ -658,17 +709,53 @@ const REGION_HANDLES: [(f32, f32, egui::CursorIcon); 8] = [
     (0.0, 0.5, egui::CursorIcon::ResizeHorizontal),
 ];
 
-/// Face/pet/focus regions read from XMP (MWG-RS), drawn as boxes over the photo. Hovering a box shows
-/// a × in its corner and eight resize handles. A drag previews the new box live and is reported once,
-/// on release (one undo step); the × reports the region to remove. Both are catalog-only edits:
-/// LightCraft doesn't write regions to XMP. Regions are stored on the upright (EXIF-oriented) photo;
-/// `orient` is the user's Rotate / Flip on top of it, which the loupe's normalized frame includes.
+/// A screen box (`n`) back to the normalized, upright frame a region is stored in.
+fn upright_rect(map: &CanvasMap, orient: lightcraft_geom::Orientation, n: Rect) -> lightcraft_geom::Rect {
+    let (a, b) = (map.norm(n.min), map.norm(n.max));
+    let shown = lightcraft_geom::Rect {
+        x0: a.x.min(b.x).clamp(0.0, 1.0),
+        y0: a.y.min(b.y).clamp(0.0, 1.0),
+        x1: a.x.max(b.x).clamp(0.0, 1.0),
+        y1: a.y.max(b.y).clamp(0.0, 1.0),
+    };
+    orient.inverse().map_norm_rect(shown)
+}
+
+/// Where a region's box is on screen.
+fn region_screen_rect(map: &CanvasMap, orient: lightcraft_geom::Orientation, r: lightcraft_geom::Rect) -> Rect {
+    let norm = orient.map_norm_rect(r);
+    Rect::from_two_pos(map.screen(Point::new(norm.x0, norm.y0)), map.screen(Point::new(norm.x1, norm.y1)))
+}
+
+/// The dark name label of a face box: centred above it (below it when there is no room), kept inside `clip`. The
+/// label's rect, the caret's tip and base y, and the laid-out name.
+fn name_label(p: &egui::Painter, t: &Tokens, rect: Rect, name: &str, clip: Rect) -> (Rect, f32, f32, std::sync::Arc<egui::Galley>) {
+    let g = p.layout_no_wrap(name.to_string(), t.font(13.0), Color32::from_gray(225));
+    let (pad, caret) = (vec2(14.0, 7.0), 5.0);
+    let size = g.size() + pad * 2.0;
+    let above = rect.top() - caret - size.y >= clip.top();
+    let (top, tip, base) = if above {
+        (rect.top() - caret - size.y, rect.top() - 1.0, rect.top() - caret - 1.0)
+    } else {
+        (rect.bottom() + caret, rect.bottom() + 1.0, rect.bottom() + caret + 1.0)
+    };
+    let left = (rect.center().x - size.x / 2.0).clamp(clip.left(), (clip.right() - size.x).max(clip.left()));
+    (Rect::from_min_size(pos2(left, top), size), tip, base, g)
+}
+
+/// Face/pet/focus regions read from XMP (MWG-RS) or found or drawn here, drawn as boxes over the photo. Hovering a
+/// box shows a × in its corner and eight resize handles; with the Draw Face Region tool on (`tool`) the box itself
+/// can be dragged to move it. A drag previews the new box live and is reported once, on release (one undo step);
+/// the × reports the region to remove. Both are catalog-only edits: LightCraft doesn't write unnamed regions to
+/// XMP. Regions are stored on the upright (EXIF-oriented) photo; `orient` is the user's Rotate / Flip on top of it,
+/// which the loupe's normalized frame includes.
 fn region_overlay(
     ui: &egui::Ui,
     p: &egui::Painter,
     map: &CanvasMap,
     photo: &lightcraft_catalog::Photo,
     orient: lightcraft_geom::Orientation,
+    tool: bool,
 ) -> Option<RegionEdit> {
     let t = Tokens::get(p.ctx());
     let clip = p.clip_rect();
@@ -679,11 +766,38 @@ fn region_overlay(
     let mut edit = None;
     for (index, r) in photo.meta.regions.iter().enumerate() {
         let dragging = live.filter(|(i, _)| *i == index);
-        let norm = orient.map_norm_rect(dragging.map_or(r.rect, |(_, n)| n));
-        let rect = Rect::from_two_pos(map.screen(Point::new(norm.x0, norm.y0)), map.screen(Point::new(norm.x1, norm.y1)));
+        let rect = region_screen_rect(map, orient, dragging.map_or(r.rect, |(_, n)| n));
         // white with a black keyline just outside it, so the box shows on any background
         p.rect_stroke(rect.expand(1.0), 0.0, Stroke::new(1.0, Color32::from_black_alpha(190)), StrokeKind::Outside);
         p.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::WHITE), StrokeKind::Outside);
+        // the Draw Face Region tool: drag the box to move it (under the handles, which win at the edges)
+        if tool && rect.width() > 4.0 && rect.height() > 4.0 {
+            let body = ui.interact(rect, egui::Id::new(("region-body", index)), Sense::drag());
+            register(ui.ctx(), format!("regionBody:{index}"), rect);
+            if body.hovered() || body.dragged() {
+                ui.ctx().set_cursor_icon(if body.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+            }
+            if body.dragged() {
+                let d = body.drag_delta();
+                let base = dragging.map_or(rect, |_| rect);
+                let mut moved = base.translate(d);
+                // stay on the photo
+                let img = Rect::from_two_pos(map.screen(Point::new(0.0, 0.0)), map.screen(Point::new(1.0, 1.0)));
+                let shift = vec2(
+                    (img.left() - moved.left()).max(0.0) + (img.right() - moved.right()).min(0.0),
+                    (img.top() - moved.top()).max(0.0) + (img.bottom() - moved.bottom()).min(0.0),
+                );
+                moved = moved.translate(shift);
+                ui.data_mut(|dd| dd.insert_temp(drag_key, (index, upright_rect(map, orient, moved))));
+                ui.ctx().request_repaint();
+            }
+            if body.drag_stopped() {
+                if let Some((i, new)) = ui.data(|d| d.get_temp::<(usize, lightcraft_geom::Rect)>(drag_key)) {
+                    edit = Some(RegionEdit::Resize(i, new));
+                }
+                ui.data_mut(|d| d.remove_temp::<(usize, lightcraft_geom::Rect)>(drag_key));
+            }
+        }
         if dragging.is_some() || (live.is_none() && pointer.is_some_and(|h| rect.expand(8.0).contains(h))) {
             for (h, (fx, fy, cursor)) in REGION_HANDLES.iter().enumerate() {
                 let c = pos2(rect.left() + fx * rect.width(), rect.top() + fy * rect.height());
@@ -709,16 +823,7 @@ fn region_overlay(
                     } else if *fy == 1.0 {
                         n.max.y = pp.y.max(n.min.y + 12.0);
                     }
-                    let (a, b) = (map.norm(n.min), map.norm(n.max));
-                    let shown = lightcraft_geom::Rect {
-                        x0: a.x.min(b.x).clamp(0.0, 1.0),
-                        y0: a.y.min(b.y).clamp(0.0, 1.0),
-                        x1: a.x.max(b.x).clamp(0.0, 1.0),
-                        y1: a.y.max(b.y).clamp(0.0, 1.0),
-                    };
-                    // back to the upright frame the region is stored in
-                    let new = orient.inverse().map_norm_rect(shown);
-                    ui.data_mut(|d| d.insert_temp(drag_key, (index, new)));
+                    ui.data_mut(|d| d.insert_temp(drag_key, (index, upright_rect(map, orient, n))));
                     ui.ctx().request_repaint();
                 }
                 if resp.drag_stopped() {
@@ -745,42 +850,80 @@ fn region_overlay(
             }
         }
         let Some(name) = &r.name else { continue };
-        // the name in a dark label with a caret, centred above the box (below it when there is no room)
-        let g = p.layout_no_wrap(name.clone(), t.font(13.0), Color32::from_gray(225));
-        let (pad, caret) = (vec2(14.0, 7.0), 5.0);
-        let size = g.size() + pad * 2.0;
-        let above = rect.top() - caret - size.y >= clip.top();
-        let (top, tip, base) = if above {
-            (rect.top() - caret - size.y, rect.top() - 1.0, rect.top() - caret - 1.0)
-        } else {
-            (rect.bottom() + caret, rect.bottom() + 1.0, rect.bottom() + caret + 1.0)
-        };
-        let left = (rect.center().x - size.x / 2.0).clamp(clip.left(), (clip.right() - size.x).max(clip.left()));
-        let label = Rect::from_min_size(pos2(left, top), size);
+        let (label, tip, base, g) = name_label(p, &t, rect, name, clip);
         let fill = Color32::from_rgba_unmultiplied(56, 56, 56, 235);
         p.rect_filled(label, 3.0, fill);
         p.rect_stroke(label, 3.0, Stroke::new(1.0, Color32::from_black_alpha(160)), StrokeKind::Inside);
+        let caret = 5.0;
         let cx = rect.center().x.clamp(label.left() + caret + 4.0, label.right() - caret - 4.0);
         p.add(egui::Shape::convex_polygon(vec![pos2(cx - caret, base), pos2(cx + caret, base), pos2(cx, tip)], fill, Stroke::NONE));
-        p.galley(label.min + pad, g, Color32::from_gray(225));
+        p.galley(label.min + vec2(14.0, 7.0), g, Color32::from_gray(225));
     }
     edit
 }
 
+/// Lightroom's Draw Face Region tool: a drag on the photo (not on a box) draws a new face box, which is added (one
+/// undo step) and gets the name field at once. Esc leaves the tool (`shortcuts::handle`).
+fn draw_face_tool(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    map: &CanvasMap,
+    photo: &lightcraft_catalog::Photo,
+    orient: lightcraft_geom::Orientation,
+) {
+    let key = egui::Id::new("face-draw-start");
+    let img = Rect::from_two_pos(map.screen(Point::new(0.0, 0.0)), map.screen(Point::new(1.0, 1.0)));
+    if resp.hovered() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|h| img.contains(h)) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    // from where the button went down (the drag only counts as started once the pointer has moved)
+    if resp.drag_started()
+        && let Some(p) = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos()).filter(|p| img.contains(*p))
+    {
+        ui.data_mut(|d| d.insert_temp(key, p));
+    }
+    let Some(start) = ui.data(|d| d.get_temp::<egui::Pos2>(key)) else { return };
+    let end = resp.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.hover_pos())).unwrap_or(start);
+    let end = pos2(end.x.clamp(img.left(), img.right()), end.y.clamp(img.top(), img.bottom()));
+    let r = Rect::from_two_pos(start, end);
+    let p = ui.painter();
+    p.rect_stroke(r.expand(1.0), 0.0, Stroke::new(1.0, Color32::from_black_alpha(190)), StrokeKind::Outside);
+    p.rect_stroke(r, 0.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
+    register(ui.ctx(), "faceDraw:box", r);
+    ui.ctx().request_repaint();
+    if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
+        ui.data_mut(|d| d.remove_temp::<egui::Pos2>(key));
+        if r.width() >= 8.0 && r.height() >= 8.0 {
+            let u = upright_rect(map, orient, r);
+            let params = json!({"id": photo.id.0, "rect": {"x0": u.x0, "y0": u.y0, "x1": u.x1, "y1": u.y1}});
+            match app.run("photo.addFace", params) {
+                Ok(v) => {
+                    if let Some(i) = v["index"].as_u64().and_then(|i| usize::try_from(i).ok()) {
+                        app.ui.face_name_edit = Some((i, String::new()));
+                    }
+                }
+                Err(e) => app.toast_error(ui.ctx(), e),
+            }
+        }
+    }
+}
+
 /// Under each unnamed face box: `?` (Lightroom Classic's name field on a face region); a click opens a field, Enter
-/// names the face (a person keyword, as in the People view).
+/// names the face (a person keyword, as in the People view). A named box's label opens the same field with its name:
+/// Enter renames that face, an empty name takes the name off.
 fn face_names(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, photo: &lightcraft_catalog::Photo, orient: lightcraft_geom::Orientation) {
     let t = Tokens::get(ui.ctx());
+    let clip = ui.clip_rect();
     for (index, r) in photo.meta.regions.iter().enumerate() {
-        if r.name.is_some() || r.kind != lightcraft_meta::RegionKind::Face {
+        if r.kind != lightcraft_meta::RegionKind::Face {
             continue;
         }
-        let norm = orient.map_norm_rect(r.rect);
-        let rect = Rect::from_two_pos(map.screen(Point::new(norm.x0, norm.y0)), map.screen(Point::new(norm.x1, norm.y1)));
+        let rect = region_screen_rect(map, orient, r.rect);
         let editing = app.ui.face_name_edit.as_ref().is_some_and(|(i, _)| *i == index);
         if editing {
             let w = rect.width().max(140.0);
-            let fr = Rect::from_min_size(pos2(rect.center().x - w / 2.0, rect.bottom() + 6.0), vec2(w, 24.0));
+            let fr = Rect::from_min_size(pos2(rect.center().x - w / 2.0, rect.bottom() + 8.0), vec2(w, 24.0));
             let Some((_, text)) = app.ui.face_name_edit.as_mut() else { continue };
             let edit = ui.put(fr, egui::TextEdit::singleline(text).hint_text("name").font(t.font(12.5)).desired_width(w - 8.0));
             register(ui.ctx(), format!("faceName:{index}"), fr);
@@ -791,12 +934,25 @@ fn face_names(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, photo
                 let name = text.trim().to_string();
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                 app.ui.face_name_edit = None;
-                if enter
-                    && !name.is_empty()
-                    && let Err(e) = app.run("people.name", json!({"faces": [{"photo": photo.id.0, "index": index}], "name": name}))
-                {
+                let face = json!([{"photo": photo.id.0, "index": index}]);
+                let r = match (enter, name.is_empty(), r.name.as_deref()) {
+                    (true, false, old) if old != Some(name.as_str()) => Some(app.run("people.name", json!({"faces": face, "name": name}))),
+                    (true, true, Some(_)) => Some(app.run("people.unname", json!({"faces": face}))),
+                    _ => None,
+                };
+                if let Some(Err(e)) = r {
                     app.toast_error(ui.ctx(), e);
                 }
+            }
+            continue;
+        }
+        if let Some(name) = &r.name {
+            // the label drawn by `region_overlay`: a click renames
+            let (label, ..) = name_label(ui.painter(), &t, rect, name, clip);
+            let resp = ui.interact(label, egui::Id::new(("face-label", index)), Sense::click());
+            register(ui.ctx(), format!("faceLabel:{index}"), label);
+            if resp.on_hover_text(crate::i18n::tr("Click to rename this face")).clicked() {
+                app.ui.face_name_edit = Some((index, name.clone()));
             }
             continue;
         }

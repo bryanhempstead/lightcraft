@@ -446,7 +446,7 @@ fn parse_one_region(item: &XmpValue, px_dims: Option<(f64, f64)>) -> Option<Regi
         t if t.eq_ignore_ascii_case("barcode") => RegionKind::BarCode,
         t => RegionKind::Other(t.to_string()),
     };
-    Some(Region { rect, kind, name, description, rejected: Vec::new() })
+    Some(Region { rect, kind, name, description, rejected: Vec::new(), drawn: false })
 }
 
 fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
@@ -952,6 +952,7 @@ mod tests {
             name: name.map(str::to_string),
             description: None,
             rejected: vec!["Not me".into()],
+            drawn: false,
         };
         let meta = Metadata { regions: vec![face(Some("Ann <Lee>"), 0.1), face(None, 0.5)], region_dims: Some((4000, 3000)), ..Default::default() };
         let x = write_xmp(&meta, None);
@@ -1155,6 +1156,7 @@ mod tests {
             name: None,
             description: None,
             rejected: Vec::new(),
+            drawn: false,
         };
         let mut a = Metadata::default();
         let b = Metadata { regions: vec![with_region.clone()], ..Default::default() };

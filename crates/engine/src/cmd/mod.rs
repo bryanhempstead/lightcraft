@@ -11,7 +11,7 @@ pub(crate) mod cameras;
 mod color;
 pub(crate) mod convert;
 pub mod copy_subsets;
-mod cull;
+pub mod cull;
 pub(crate) use cull::scores_of as cull_scores;
 pub mod curves;
 mod delete;

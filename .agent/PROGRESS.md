@@ -6,6 +6,42 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (faces agent round 2, 2026-11-22, branch worktree-agent-a60c94c49b5526429, not merged) **People / culling
+  finished** (LR-PREF-PEOPLE, LR-LIB-PEOPLE, LRC-LIB-PEOPLE, LR-LIB-CULL, LR-FILT-CULL, LR-IMP-CULL-AT-IMPORT,
+  LRC-IMP-PREVIEWCULL, LR-MASK-SUBJECT; `docs/people.md`). **Catalog v10** (`Region.drawn`, `Analysis.smiles` /
+  `expression`; merge note: another branch bumping to v10 must renumber). Faces found by themselves
+  (`faces.auto`, Settings ▸ General ▸ Find faces off./view./all.; half the workers, waits while the user works,
+  top-bar activity strip with stop, `resume.`, imports join the front, failed photos skipped); Draw Face Region in
+  the loupe (draw / move / resize / rename); OpenCV Zoo FER expression model (4.8 MB, Apache-2.0, own package
+  `expressions`; identical to ONNX Runtime on 38 crops; face index record v2) → smiles / expression in culling,
+  rules and the dialog; culling on worker threads (`CullJob`, `cull_poll`) and at import as bookkeeping
+  (`library.import {cull}`); person keywords ↔ face names in step; People bulk row (name / yes. / no. / rm.) and
+  opened stacks; Select Subject uses the camera's focus point (`crates/meta/src/focus.rs`: upstream's Sony reader
+  + Canon AFInfo2/3 checked on Bryan's R6 CR3s, Nikon AFInfo2, Fujifilm FocusPixel from ExifTool docs only).
+  PRelu/per-channel broadcast fast path in the ONNX interpreter (PRelu 300 → 2 ms a face under load).
+  Left: pets, expression network on a labelled set of Bryan's photos, Nikon/Fuji focus on real files, 13k-library
+  throughput without the build load.
+- [ ] (cameras agent, 2026-11-22, branch worktree-agent-acff297ced8c6b589, not merged) **LR-IMP-CAMERA-COVERAGE +
+  LR-IMP-FORMATS from Bryan's real library** — `docs/camera-coverage.md`: all 15 raw bodies (catalog + drives) decode
+  natively, crop = Lightroom's (smart previews' OriginalDefaultFinalSize), levels = LibRaw, ΔE vs his stored previews.
+  69d692264 JPEG XL DNG native (jxl-oxide; his 3,745 JXL smart previews, ΔE 0.64 vs original), deba98211 LibRaw
+  fallback keeps the file's DNG/RAF tags (BaselineExposure, opcodes, gain map, DR bias: was up to 3 EV dark),
+  ee46520e8 + 9f58b2133 Canon black from the real masked columns (T3 2282→2048, CC0 6D 2591→2047…), 4378f2085 CR2
+  white = ColorData SpecularWhiteLevel, 32d96d428 Rebel/Kiss names → Camera Raw profile (T3 rendered washed out),
+  7e1f99a05 CinemaDNG make. lr-compare.json was briefly overwritten by my compare run (tag nat); a later r12g4 run by
+  another agent has replaced it since, so nothing to restore. needs.you #183 (rebuild Previews.lrdata), #184 (where the
+  //lot48/…/MY MEDIA originals are). Left: Lightroom ΔE for Q2 / 5D III / iPhone 17 / Sony / Nikon (no previews),
+  specular vs normal white for Canon, DNG SDK built without JXL.
+- [ ] (zoom agent, 2026-11-22, branch worktree-agent-a0b644f80b07fbd8d, not merged) **LR-VIEW-ZOOM ✅ + LR-VIEW-COLORMANAGED ✅**
+  — region renders (`crates/pipeline/src/region.rs`: `RenderRequest::region`, `Frame::window`, `Globals`,
+  `render_region`, `lightcraft_gpu::render_region`, `Session::detail_job`); the loupe / its before view / Compare
+  draw native-resolution 512 px pieces over the capped preview at 1:1 and closer (`crates/ui-egui/src/tiles.rs`,
+  `Slot::Detail(view)`, `ui.inspect` → `perf.detail`). Region = same pixels as the full-size render (CPU max 2 LSB,
+  GPU max 1). Colour: the 8-bit window surface is tagged Display P3 on a Mac (`patches/egui-wgpu`
+  `request_sdr_color_space`; `display_p3::WindowSpace`, `app.viewSpace` → `colorManaged`), video / previews / map
+  tiles converted like photos. Merge note: `Rendered` gained `region`, `RenderRequest` gained `region`,
+  `RenderJob` gained `context`; the finish kernel has 4 new params at the end (`WIN_*`). Left: Before half of
+  Before/After and HDR renditions at 1:1 stay at preview size.
 - [ ] (hdr2 agent, 2026-11-22, branch worktree-agent-ac64e49f32754ea1f, not merged) **HDR leftovers + LR-VID-EDIT** —
   e0f0ea988 HDR loupe on the GPU (finish kernel's float HDR output, `PEAK`/`SCENE_TOP` params appended; CPU/GPU
   equivalence crates/gpu/tests/hdr.rs; 1936x1290 draft drag 12–14 ms GPU vs 340–620 ms CPU under load ~100; UI

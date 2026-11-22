@@ -207,5 +207,16 @@
   "downloading the AI search model {d} / {n} MB…": "AI 検索モデルをダウンロード中 {d} / {n} MB…",
   "AI search needs {m} ({mb} MB, {l}): Return downloads it": "AI 検索には {m} が必要です ({mb} MB、{l}): Return でダウンロード",
   "Describe a photo… (indexing {d} / {n})": "写真を説明… (インデックス作成中 {d} / {n})",
-  "{n} photos match “{q}”, best first": "「{q}」に一致する写真 {n} 枚（一致度順）"
+  "{n} photos match “{q}”, best first": "「{q}」に一致する写真 {n} 枚（一致度順）",
+  "Assisted Culling: {n} photos, {g} groups of look-alikes": "アシスト選別: {n} 枚、似た写真のグループ {g} 個",
+  "Confirm the {n} suggested faces as who they're suggested as": "提案された {n} 件の顔を提案どおりの人物として確定",
+  "Culling {d} of {n}": "選別中 {d} / {n}",
+  "Download {m} — {mb} MB, {l}": "{m} をダウンロード — {mb} MB、{l}",
+  "Finding faces {d} of {n}": "顔を検出中 {d} / {n}",
+  "Smiles need the expression model ({mb} MB, {l})": "笑顔の判定には表情モデルが必要です ({mb} MB、{l})",
+  "These {n} faces aren't who they're suggested as": "この {n} 件の顔は提案された人物ではありません",
+  "Unnamed · looks like {s}": "名前なし · {s} に似ています",
+  "name the {n} picked {what}": "選んだ {n} 件の{what}に名前を付ける",
+  "{f} faces · {s} suggested": "顔 {f} 件 · 提案 {s} 件",
+  "{r} rejected, {p} picked": "除外 {r} 枚、採用 {p} 枚"
 }

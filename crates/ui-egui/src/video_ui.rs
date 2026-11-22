@@ -63,6 +63,11 @@ pub struct VideoView {
 }
 
 impl VideoView {
+    /// Drop the shown frame's texture (the screen's colour space changed: it is made again).
+    pub fn forget_textures(&mut self) {
+        self.tex = None;
+    }
+
     fn reset(&mut self, id: Option<PhotoId>) {
         *self = VideoView { trim_mode: self.trim_mode, muted: self.muted, ..Default::default() };
         self.id = id;
@@ -130,6 +135,7 @@ fn sync(app: &mut LightcraftApp, p: &Photo) {
 }
 
 fn poll(app: &mut LightcraftApp, ctx: &egui::Context, p: &Photo) {
+    let p3 = app.renderer.display_p3;
     let v = &mut app.video;
     if let Some(rx) = &v.probing {
         match rx.try_recv() {
@@ -149,7 +155,7 @@ fn poll(app: &mut LightcraftApp, ctx: &egui::Context, p: &Photo) {
         v.pos = (v.origin.1 + (now - v.origin.0)).max(a);
         if let Some(pl) = v.player.as_mut() {
             if let Some(f) = pl.frame_at(v.pos) {
-                let img = egui::ColorImage::from_rgba_unmultiplied([f.image.width, f.image.height], &f.image.as_bytes());
+                let img = crate::display_p3::screen_image(p3, [f.image.width, f.image.height], &f.image.as_bytes());
                 match v.tex.as_mut() {
                     Some((t, at)) => {
                         t.set(img, egui::TextureOptions::LINEAR);
@@ -179,7 +185,7 @@ fn poll(app: &mut LightcraftApp, ctx: &egui::Context, p: &Photo) {
         match rx.try_recv() {
             Ok(Ok(img)) => {
                 let at = *generation;
-                let ci = egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.as_bytes());
+                let ci = crate::display_p3::screen_image(p3, [img.width, img.height], &img.as_bytes());
                 if at == v.still_gen {
                     match v.tex.as_mut() {
                         Some((t, _)) => t.set(ci, egui::TextureOptions::LINEAR),

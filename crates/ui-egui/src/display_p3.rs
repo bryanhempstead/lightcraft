@@ -42,6 +42,40 @@ impl ViewSpace {
     }
 }
 
+impl ViewSpace {
+    /// Whether the window surface should be tagged Display P3 so the system colour-manages it
+    /// (Auto on macOS: the photo's P3 values are then shown right on any display — P3, sRGB, a
+    /// calibrated or a wide-gamut one — through that display's own profile, as Preview and
+    /// Lightroom show them). The manual choices leave the surface untagged: the values go to
+    /// the display as they are, for a display of that space.
+    pub fn tags_surface(self) -> bool {
+        self == ViewSpace::Auto && cfg!(target_os = "macos")
+    }
+}
+
+/// How the window's pixels reach the display, as the app set it up ([`crate::LightcraftApp::window_space`]).
+pub trait WindowSpace {
+    /// Ask for the (8-bit) window surface to be tagged Display P3 (`true`) or untagged.
+    fn request_p3_tag(&mut self, on: bool);
+    /// The colour space the window surface is tagged with now ("displayP3", "extendedSrgb" for
+    /// the HDR surface), `None` while untagged.
+    fn tagged(&self) -> Option<&'static str>;
+}
+
+/// An sRGB-encoded RGBA image ready for the screen: converted to Display P3 values with `p3`
+/// ([`crate::render::Renderer::display_p3`]: the window shows its pixels as P3), else as it is.
+/// Every photo-like texture goes through here or the renderer (photos, thumbnails, video
+/// frames, Enhance / Merge previews, map tiles).
+pub fn screen_image(p3: bool, size: [usize; 2], rgba: &[u8]) -> egui::ColorImage {
+    if p3 {
+        let mut b = rgba.to_vec();
+        srgb_to_p3(&mut b);
+        egui::ColorImage::from_rgba_unmultiplied(size, &b)
+    } else {
+        egui::ColorImage::from_rgba_unmultiplied(size, rgba)
+    }
+}
+
 /// Linear sRGB → linear Display P3 (both D65), rows summing to 1.
 const SRGB_TO_P3: [[f32; 3]; 3] = [[0.822_461_9, 0.177_538_1, 0.0], [0.033_194_2, 0.966_805_8, 0.0], [0.017_082_7, 0.072_397_4, 0.910_519_9]];
 

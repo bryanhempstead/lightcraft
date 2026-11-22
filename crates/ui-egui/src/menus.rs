@@ -54,6 +54,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.survey", "Survey", Some("N"), "View"),
     ("view.people", "People", None, "View"),
     ("view.faceBoxes", "Face Boxes", None, "View"),
+    ("view.drawFace", "Draw Face Region", None, "View"),
     ("view.reference", "Reference View", Some("Shift+R"), "View"),
     ("photo.setReference", "Set as Reference Photo", None, ""),
     ("compare.swap", "Swap Compare Photos", None, "View"),
@@ -651,7 +652,28 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.compare" => crate::panels::compare::enter_compare(app),
         "view.faceBoxes" => {
             app.ui.face_boxes = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.face_boxes);
+            if !app.ui.face_boxes {
+                app.ui.draw_face = false;
+            }
             Ok(json!({"show": app.ui.face_boxes}))
+        }
+        // Lightroom's Draw Face Region tool (the loupe): drag on the photo to draw a face box, then type the name;
+        // with the tool on, boxes move by dragging them
+        "view.drawFace" => {
+            let on = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.draw_face);
+            if on {
+                if app.session.active().is_none() {
+                    return Some(Err("no photo to draw a face on".into()));
+                }
+                if app.ui.view != ViewMode::Detail {
+                    enter_library(app, Some(ViewMode::Detail));
+                    app.ui.view = ViewMode::Detail;
+                    app.ui.library_view = ViewMode::Detail;
+                }
+                app.ui.face_boxes = true;
+            }
+            app.ui.draw_face = on;
+            Ok(json!({"on": on}))
         }
         "view.map" => {
             // Lightroom Classic's Map module (⌘⌥3): {lat?, lon?, zoom?} looks there
@@ -1119,11 +1141,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 Some(v) => match serde_json::from_value::<crate::display_p3::ViewSpace>(v.clone()) {
                     Ok(space) => {
                         app.ui.settings.view_space = space;
-                        Ok(json!({"space": space.id(), "displayP3": space.is_p3()}))
+                        Ok(view_space_state(app))
                     }
                     Err(e) => Err(format!("app.viewSpace: `space`: {e}")),
                 },
-                None => Ok(json!({"space": app.ui.settings.view_space.id(), "displayP3": app.ui.settings.view_space.is_p3()})),
+                None => Ok(view_space_state(app)),
             }
         }
         "view.beforeAfterCycle" => {
@@ -1466,7 +1488,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(r)
         }
         "dialog.cull" => {
-            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, reject_eyes: false, reject_face_below: 0.0 });
+            app.ui.dialog =
+                Some(Dialog::Cull { reject_below: 0.0, pick_best: true, reject_eyes: false, reject_face_below: 0.0, reject_expression_below: 0.0 });
             Ok(Value::Null)
         }
         "app.whatsNew" => {
@@ -2178,4 +2201,20 @@ fn show_in_finder(app: &mut LightcraftApp) -> Result<Value, String> {
     let reveal = app.services.reveal.as_mut().ok_or("not available here")?;
     reveal(&path)?;
     Ok(json!({"path": path}))
+}
+
+/// `app.viewSpace`'s answer: the setting, whether photo textures carry Display P3 values, and
+/// the window surface's tag (`tagged`: the system colour-manages the window onto the display;
+/// a new request takes effect on the next frame).
+fn view_space_state(app: &LightcraftApp) -> Value {
+    let space = app.ui.settings.view_space;
+    let tagged = app.window_space.as_ref().and_then(|w| w.tagged());
+    json!({
+        "space": space.id(),
+        "displayP3": space.is_p3(),
+        "tagsSurface": space.tags_surface(),
+        "tagged": tagged,
+        "colorManaged": tagged.is_some(),
+        "texturesP3": app.renderer.display_p3,
+    })
 }
