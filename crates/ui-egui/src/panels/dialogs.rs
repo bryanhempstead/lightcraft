@@ -19,6 +19,7 @@ pub(crate) fn rename_preview(
     ctx: &egui::Context,
     template: &str,
     start: usize,
+    text: &str,
 ) -> (Option<Vec<lightcraft_engine::rename::RenamePlan>>, usize) {
     use std::hash::{Hash, Hasher};
     type Rows = std::sync::Arc<std::sync::Mutex<Option<Vec<lightcraft_engine::rename::RenamePlan>>>>;
@@ -26,7 +27,7 @@ pub(crate) fn rename_preview(
     let photos = lightcraft_engine::rename::rename_photos(&app.session.catalog, &ids);
     let total = photos.len();
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (template, start, app.session.catalog.revision, &ids).hash(&mut h);
+    (template, start, text, app.session.catalog.revision, &ids).hash(&mut h);
     let key = h.finish();
     let id = egui::Id::new("rename-preview-rows");
     let read = |rows: &Rows| rows.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
@@ -39,8 +40,9 @@ pub(crate) fn rename_preview(
     let first: Vec<_> = photos.into_iter().take(RENAME_PREVIEW_ROWS).collect();
     let (out, template, repaint) = (rows.clone(), template.to_string(), ctx.clone());
     let exists = app.session.media.availability.probe();
+    let batch = lightcraft_engine::rename::Batch { total, text: lightcraft_engine::rename::Batch::clean(text), ..Default::default() };
     let work = move || {
-        let plans = lightcraft_engine::rename::plan_rename_photos(&first, &template, start, &|f| exists(f));
+        let plans = lightcraft_engine::rename::plan_rename_photos_in(&first, &template, start, &batch, &|f| exists(f));
         *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(plans);
         repaint.request_repaint();
     };
@@ -52,6 +54,95 @@ pub(crate) fn rename_preview(
     work();
     ctx.data_mut(|d| d.insert_temp(id, (key, rows.clone())));
     (read(&rows), total)
+}
+
+/// "Template" picker: Lightroom's built-in filename templates and the saved ones fill `template`;
+/// save. keeps the current one under a name (asked), del. drops a saved one. Shared by Rename and
+/// Export (`id` keeps their widgets apart).
+pub(crate) fn naming_template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, template: &mut String) {
+    let list = app.session.execute("naming.templates", &json!({})).unwrap_or_default();
+    let rows = list["templates"].as_array().cloned().unwrap_or_default();
+    let current = rows.iter().find(|r| r["template"].as_str() == Some(template.as_str()));
+    let shown = current.and_then(|r| r["name"].as_str()).unwrap_or("Custom Settings").to_string();
+    let user_current = current.filter(|r| r["builtin"] == false).and_then(|r| r["name"].as_str()).map(str::to_string);
+    field(ui, "Presets", |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let r = egui::ComboBox::from_id_salt(format!("{id}-naming-template")).selected_text(shown).width(240.0).show_ui(ui, |ui| {
+            for (i, row) in rows.iter().enumerate() {
+                let (name, tpl) = (row["name"].as_str().unwrap_or(""), row["template"].as_str().unwrap_or(""));
+                let r = ui.selectable_label(template == tpl, format!("{name}   {}", row["example"].as_str().unwrap_or("")));
+                crate::widgets::register(ui.ctx(), format!("button:{id}Template-{i}"), r.rect);
+                if r.clicked() {
+                    *template = tpl.to_string();
+                }
+            }
+        });
+        crate::widgets::register(ui.ctx(), format!("button:{id}Templates"), r.response.rect);
+        if current.is_none() && !template.trim().is_empty() {
+            let r = ui.button("save.");
+            crate::widgets::register(ui.ctx(), format!("button:{id}SaveTemplate"), r.rect);
+            if r.clicked() {
+                let t = template.clone();
+                // the rename / export dialog stays open: the name is asked in a toast-free prompt
+                // only from the Rename dialog; elsewhere a dated name is used
+                let name = format!("Template {}", rows.len().saturating_sub(lightcraft_engine::rename::BUILTIN_TEMPLATES.len()) + 1);
+                let _ = app.run("naming.saveTemplate", json!({"name": name, "template": t}));
+            }
+        }
+        if let Some(name) = user_current {
+            let r = ui.button("del.");
+            crate::widgets::register(ui.ctx(), format!("button:{id}DeleteTemplate"), r.rect);
+            if r.clicked() {
+                let _ = app.run("naming.deleteTemplate", json!({"name": name}));
+            }
+        }
+    });
+}
+
+/// Export ▸ Post-Processing ▸ After Export (E02): nothing. / show. (Finder) / open. in the external
+/// editor or another app, or one of the Export Actions (apps / scripts in that folder).
+fn after_export_row(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut lightcraft_engine::export::ExportOptions) {
+    use lightcraft_engine::export::AfterExport as A;
+    let actions = lightcraft_engine::export::export_actions();
+    let editor = app.ui.settings.external_editor.trim().to_string();
+    field(ui, "After export", |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let shown = match opts.after {
+            A::Nothing => "nothing.".to_string(),
+            A::ShowInFinder => crate::menus::reveal_label().to_lowercase().replace(' ', ".") + ".",
+            A::OpenInApp if opts.after_app.is_empty() => "open.".to_string(),
+            A::OpenInApp => {
+                format!("open in {}", std::path::Path::new(&opts.after_app).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
+            }
+        };
+        let r = egui::ComboBox::from_id_salt("export-after").selected_text(shown).width(220.0).show_ui(ui, |ui| {
+            let mut pick = |ui: &mut egui::Ui, id: &str, label: &str, after: A, app_name: &str| {
+                let on = opts.after == after && opts.after_app == app_name;
+                let r = ui.selectable_label(on, label);
+                crate::widgets::register(ui.ctx(), format!("button:exportAfter-{id}"), r.rect);
+                if r.clicked() {
+                    opts.after = after;
+                    opts.after_app = app_name.to_string();
+                }
+            };
+            pick(ui, "nothing", "Do nothing", A::Nothing, "");
+            pick(ui, "show", crate::menus::reveal_label(), A::ShowInFinder, "");
+            pick(ui, "open", "Open in the default app", A::OpenInApp, "");
+            if !editor.is_empty() {
+                pick(ui, "editor", &format!("Open in {editor}"), A::OpenInApp, &editor);
+            }
+            for (i, (name, path)) in actions.iter().enumerate() {
+                pick(ui, &format!("action{i}"), name, A::OpenInApp, path);
+            }
+        });
+        crate::widgets::register(ui.ctx(), "button:exportAfter", r.response.rect);
+    });
+    if opts.after == A::OpenInApp {
+        field(ui, "Application", |ui| {
+            let r = ui.add(egui::TextEdit::singleline(&mut opts.after_app).hint_text(crate::i18n::tr("default app")).desired_width(240.0));
+            crate::widgets::register(ui.ctx(), "field:exportAfterApp", r.rect);
+        });
+    }
 }
 
 /// About dialog tabs: (widget id suffix, label). The credits come from `crate::credits`.
@@ -103,9 +194,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
+        Dialog::DeletePhotos { rejected: true, .. } => "Delete Rejected Photos",
+        Dialog::DeletePhotos { count, copies, .. } if count == copies => "Remove Virtual Copies",
+        Dialog::DeletePhotos { .. } => "Delete Photos",
         Dialog::RemoveFolder { disk: true, .. } => "Remove Disk from Library",
         Dialog::RemoveFolder { .. } => "Remove Folder from Library",
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
+        Dialog::Backups { .. } => "Catalog Backups",
         Dialog::About => "About LightCraft",
         Dialog::Shortcuts => "Keyboard Shortcuts",
         Dialog::LightroomSync { .. } => "Sync from Lightroom Classic",
@@ -275,7 +370,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let n = app.session.targets(&json!({})).len();
                     field(ui, "Change", |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        for (i, (label, m)) in [("Set date & time", "set"), ("Shift by", "shift"), ("Time zone", "zone")].iter().enumerate() {
+                        for (i, (label, m)) in
+                            [("Set date & time", "set"), ("Shift by", "shift"), ("Time zone", "zone"), ("original.", "original"), ("file.date.", "file")].iter().enumerate()
+                        {
                             if crate::widgets::text_button(ui, &format!("captureMode-{i}"), label, mode == m).clicked() {
                                 *mode = m.to_string();
                             }
@@ -297,6 +394,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             });
                             json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60})
                         }
+                        "original" | "file" => {
+                            ui.label(
+                                egui::RichText::new(crate::i18n::tr(if mode == "original" {
+                                    "Each photo goes back to the capture time its file records."
+                                } else {
+                                    "Each photo takes its file's creation date (UTC)."
+                                }))
+                                .color(t.text_dim),
+                            );
+                            json!({})
+                        }
                         _ => {
                             field(ui, "Hours", |ui| ui.add(egui::DragValue::new(zone).range(-26.0..=26.0).speed(0.25).fixed_decimals(2)));
                             json!({"hours": zone})
@@ -304,7 +412,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     };
                     // preview on the active photo (the others move by the same amount)
                     let active = app.session.active().and_then(|id| app.session.catalog.photo(id)).map(|p| (p.file_name.clone(), p.date().to_string()));
-                    if let Some((name, cur)) = active {
+                    if let Some((name, cur)) = active.filter(|_| !matches!(mode.as_str(), "original" | "file")) {
                         let delta = match mode.as_str() {
                             "set" => lightcraft_catalog::dates::normalize_iso(time)
                                 .and_then(|t| Some(lightcraft_catalog::dates::iso_seconds(&t)? - lightcraft_catalog::dates::iso_seconds(&cur)?)),
@@ -355,7 +463,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             .color(t.text_dim),
                     );
                 }
-                Dialog::Rename { template, start } => {
+                Dialog::Rename { template, start, text } => {
                     let n = app.session.targets(&json!({})).len();
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
                     let template_id = egui::Id::new("rename-template");
@@ -370,22 +478,17 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         crate::import::tag_help(ui, "renameTemplate", template, template_id);
                     }
                     crate::import::unknown_tags_warning(ui, template);
-                    field(ui, "Presets", |ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        for (i, (label, tpl)) in
-                            [("Name", "{name}"), ("Date–Name", "{date}_{name}"), ("Title–Seq", "{title}-{seq:3}"), ("Custom–Seq", "Photo-{seq:3}")].iter().enumerate()
-                        {
-                            if crate::widgets::text_button(ui, &format!("renamePreset-{i}"), label, template == tpl).clicked() {
-                                *template = tpl.to_string();
-                            }
-                        }
+                    naming_template_row(app, ui, "rename", template);
+                    field(ui, "Custom Text", |ui| {
+                        let r = ui.add(egui::TextEdit::singleline(text).hint_text("{text}").desired_width(200.0));
+                        crate::widgets::register(ui.ctx(), "field:renameText", r.rect);
                     });
                     field(ui, "Start at", |ui| ui.add(egui::DragValue::new(start).range(0..=999_999)));
                     ui.label(
                         egui::RichText::new(crate::i18n::tr("Tags: see Tags beside the template. Files are renamed on disk (with their XMP sidecars); existing names get -1, -2…"))
                             .color(t.text_dim),
                     );
-                    let (preview, total) = rename_preview(app, ui.ctx(), template, *start as usize);
+                    let (preview, total) = rename_preview(app, ui.ctx(), template, *start as usize, text);
                     match &preview {
                         Some(rows) => {
                             egui::Grid::new("rename-preview").num_columns(3).spacing([8.0, 2.0]).show(ui, |ui| {
@@ -503,18 +606,36 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     // Preset: load a built-in or saved set of options into the dialog
                     field(ui, "Preset", |ui| {
                         let mut chosen = None;
+                        let mut delete = None;
                         let c = egui::ComboBox::from_id_salt("exportPreset").width(220.0).selected_text(crate::i18n::tr("Choose…")).show_ui(ui, |ui| {
                             let mut builtin = true;
-                            for (p, b) in app.session.all_export_presets() {
+                            for (i, (p, b)) in app.session.all_export_presets().into_iter().enumerate() {
                                 if builtin && !b {
                                     ui.separator();
                                 }
                                 builtin = b;
-                                if ui.selectable_label(false, crate::i18n::builtin_label(&p.name, b)).clicked() {
-                                    chosen = Some(p.name);
-                                }
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    if ui.selectable_label(false, crate::i18n::builtin_label(&p.name, b)).clicked() {
+                                        chosen = Some(p.name.clone());
+                                    }
+                                    // a saved preset can be deleted right here (E13)
+                                    if !b {
+                                        let r = ui.small_button("del.");
+                                        crate::widgets::register(ui.ctx(), format!("button:exportPresetDelete-{i}"), r.rect);
+                                        if r.clicked() {
+                                            delete = Some(p.name.clone());
+                                        }
+                                    }
+                                });
                             }
                         });
+                        if let Some(name) = delete {
+                            match app.run("export.deletePreset", json!({"name": name})) {
+                                Ok(_) => app.toast(ui.ctx(), format!("Deleted export preset “{name}”")),
+                                Err(e) => app.toast(ui.ctx(), e),
+                            }
+                        }
                         crate::widgets::register(ui.ctx(), "combo:exportPreset", c.response.rect);
                         if let Some(name) = chosen
                             && let Ok(params) = app.session.export_params(&json!({"preset": name}))
@@ -616,10 +737,48 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     );
                     if !matches!(opts.metadata, M::None | M::Copyright) {
                         ui.checkbox(&mut opts.remove_location, crate::i18n::tr("Remove location info"));
+                        let r = ui.checkbox(&mut opts.remove_people, crate::i18n::tr("Remove person info"));
+                        crate::widgets::register(ui.ctx(), "check:exportRemovePeople", r.rect);
+                        let r = ui.checkbox(&mut opts.keyword_hierarchy, crate::i18n::tr("Write keywords as Lightroom hierarchy"));
+                        crate::widgets::register(ui.ctx(), "check:exportKeywordHierarchy", r.rect);
                     }
                     let mut wm_on = opts.watermark.is_some();
                     if ui.checkbox(&mut wm_on, crate::i18n::tr("Watermark")).changed() {
                         opts.watermark = wm_on.then(|| lightcraft_engine::export::Watermark { text: "© ".into(), ..Default::default() });
+                    }
+                    if opts.watermark.is_some() {
+                        // named watermarks (E09): pick one, save the current one
+                        field(ui, "Watermark", |ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            let saved = app.session.watermark_presets.clone();
+                            let r = egui::ComboBox::from_id_salt("export-watermark-preset").selected_text(crate::i18n::tr("Saved…")).width(160.0).show_ui(ui, |ui| {
+                                for (i, w) in saved.iter().enumerate() {
+                                    let r = ui.selectable_label(opts.watermark.as_ref() == Some(&w.watermark), &w.name);
+                                    crate::widgets::register(ui.ctx(), format!("button:watermarkPreset-{i}"), r.rect);
+                                    if r.clicked() {
+                                        opts.watermark = Some(w.watermark.clone());
+                                    }
+                                }
+                                if saved.is_empty() {
+                                    ui.label(crate::i18n::tr("No saved watermarks yet"));
+                                }
+                            });
+                            crate::widgets::register(ui.ctx(), "button:watermarkPresets", r.response.rect);
+                            let nid = egui::Id::new("watermark-preset-name");
+                            let mut name = ui.data(|d| d.get_temp::<String>(nid)).unwrap_or_default();
+                            let f = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("name")).desired_width(110.0));
+                            crate::widgets::register(ui.ctx(), "field:watermarkPresetName", f.rect);
+                            let s = ui.add_enabled(!name.trim().is_empty(), egui::Button::new("save."));
+                            crate::widgets::register(ui.ctx(), "button:watermarkPresetSave", s.rect);
+                            if s.clicked() {
+                                let w = serde_json::to_value(&opts.watermark).unwrap_or_default();
+                                match app.run("watermark.save", json!({"name": name.trim(), "watermark": w})) {
+                                    Ok(_) => name.clear(),
+                                    Err(e) => app.toast(ui.ctx(), e),
+                                }
+                            }
+                            ui.data_mut(|d| d.insert_temp(nid, name));
+                        });
                     }
                     if let Some(wm) = &mut opts.watermark {
                         // text, or a graphic (a logo with transparency)
@@ -694,12 +853,32 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         crate::import::tag_help(ui, "exportNaming", &mut opts.naming, naming_id);
                     }
                     crate::import::unknown_tags_warning(ui, &opts.naming);
+                    naming_template_row(app, ui, "export", &mut opts.naming);
+                    if opts.naming.contains("{text") || opts.naming.contains("{custom") {
+                        field(ui, "Custom Text", |ui| {
+                            let r = ui.add(egui::TextEdit::singleline(&mut opts.custom_text).desired_width(200.0));
+                            crate::widgets::register(ui.ctx(), "field:exportText", r.rect);
+                        });
+                    }
+                    {
+                        use lightcraft_engine::rename::ExtCase as X;
+                        choices(ui, "Extensions", "exportExtCase", &[(X::Keep, "keep."), (X::Lower, "lower."), (X::Upper, "upper.")], &mut opts.ext_case);
+                    }
                     if opts.naming.contains("{seq") {
                         let mut v = opts.start_number as f64;
                         if num(ui, &START_NUMBER, &mut v) {
                             opts.start_number = v as u32;
                         }
                     }
+                    field(ui, "Export to", |ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        for (i, (label, same)) in [("chosen.folder.", false), ("same.folder.", true)].iter().enumerate() {
+                            if crate::widgets::text_button(ui, &format!("exportTo-{i}"), label, opts.same_folder == *same).clicked() {
+                                opts.same_folder = *same;
+                            }
+                        }
+                    });
+                    if !opts.same_folder {
                     field(ui, "Folder", |ui| {
                         trailing_button_row(ui, |ui| {
                             if app.services.pick_folder.is_some()
@@ -712,6 +891,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             ui.add(egui::TextEdit::singleline(dir).desired_width(ui.available_width()));
                         });
                     });
+                    }
                     field(ui, "Subfolder", |ui| {
                         ui.add(egui::TextEdit::singleline(&mut opts.subfolder).hint_text(crate::i18n::tr("none")).desired_width(f32::INFINITY))
                     });
@@ -723,6 +903,22 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         &[(K::Unique, "Add number"), (K::Overwrite, "Overwrite"), (K::Skip, "Skip")],
                         &mut opts.conflict,
                     );
+                    after_export_row(app, ui, opts);
+                    field(ui, "Catalog", |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let r = ui.checkbox(&mut opts.add_to_catalog, crate::i18n::tr("Add to this catalog"));
+                        crate::widgets::register(ui.ctx(), "check:exportAddToCatalog", r.rect);
+                        if opts.add_to_catalog {
+                            use lightcraft_engine::export::StackPlace as P;
+                            let mut st = opts.add_to_stack;
+                            for (i, (label, v)) in [("no.stack.", None), ("stack.above.", Some(P::Above)), ("stack.below.", Some(P::Below))].iter().enumerate() {
+                                if crate::widgets::text_button(ui, &format!("exportStack-{i}"), label, st == *v).clicked() {
+                                    st = *v;
+                                }
+                            }
+                            opts.add_to_stack = st;
+                        }
+                    });
                     ui.add_space(4.0);
                     field(ui, "Save preset", |ui| {
                         trailing_button_row(ui, |ui| {
@@ -750,6 +946,32 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
                     ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
                 }
+                Dialog::DeletePhotos { count, copies, rejected } => {
+                    let (count, copies) = (*count, *copies);
+                    let masters = count - copies.min(count);
+                    let what = match (*rejected, count) {
+                        (true, 1) => crate::i18n::tr("the rejected photo").to_string(),
+                        (true, n) => format!("the {n} rejected photos", n = n),
+                        (false, 1) => crate::i18n::tr("the selected photo").to_string(),
+                        (false, n) => crate::i18n::tr_format!("the {n} selected photos", n = n),
+                    };
+                    if masters == 0 {
+                        ui.label(format!("Remove {what} from the library?", what = what));
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr("Virtual copies have no file of their own: only the copy goes, the original stays."))
+                                .color(t.text_dim),
+                        );
+                    } else {
+                        ui.label(format!("Delete {what} from disk, or just remove {} from the library?", if count == 1 { "it" } else { "them" }, what = what));
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr(
+                                "delete.from.disk. moves the original files and their XMP sidecars to the Trash. remove. keeps the files. Either way their virtual copies go too.",
+                            ))
+                            .color(t.text_dim),
+                        );
+                    }
+                }
+                Dialog::Backups { pick } => backups_body(app, ui, pick),
                 Dialog::RemoveFolder { name, count, path, disk } => {
                     ui.label(crate::i18n::tr_format!(
                         "Remove “{name}” and its {count} photo{} from the library?",
@@ -876,6 +1098,20 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         close = true;
                     }
                 }
+                // Lightroom's middle choice: out of the library, files kept
+                if let Dialog::DeletePhotos { count, copies, rejected } = &dlg
+                    && count > copies
+                {
+                    let r = ui.button("remove.");
+                    crate::widgets::register(ui.ctx(), "button:dialogRemove", r.rect);
+                    if r.clicked() {
+                        let res = if *rejected { app.run("library.deleteRejected", json!({})) } else { app.run("photo.removeFromLibrary", json!({})) };
+                        if let Err(e) = res {
+                            app.toast(ui.ctx(), e);
+                        }
+                        close = true;
+                    }
+                }
                 let add_label;
                 let ok = match &dlg {
                     Dialog::Import { opts } => {
@@ -886,6 +1122,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     Dialog::Merge { .. } => "Merge",
                     Dialog::ConfirmDelete { .. } => "Delete",
+                    Dialog::DeletePhotos { count, copies, .. } if count == copies => "remove.",
+                    Dialog::DeletePhotos { .. } => "delete.from.disk.",
+                    Dialog::Backups { pick: Some(_) } => "restore.",
+                    Dialog::Backups { .. } => "",
                     Dialog::RemoveFolder { .. } => "Remove",
                     Dialog::SamModel { then: Some(_), .. } if sam_installed => "Continue",
                     Dialog::SamModel { .. } if sam_installed || sam_running || sam_nowhere => "",
@@ -1059,6 +1299,8 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             match mode.as_str() {
                 "set" => json!({"time": time}),
                 "shift" => json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60}),
+                "original" => json!({"revert": true}),
+                "file" => json!({"fileDate": true}),
                 _ => json!({"hours": zone}),
             },
         ),
@@ -1073,7 +1315,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
             r
         }
-        Dialog::Rename { template, start } => app.run("photo.rename", json!({"template": template, "start": start})),
+        Dialog::Rename { template, start, text } => app.run("photo.rename", json!({"template": template, "start": start, "text": text})),
         Dialog::RenameKeyword { from, to } => app.run("keyword.rename", json!({"from": from, "to": to})),
         Dialog::MergeKeywords { from, into } => app.run("keyword.merge", json!({"from": from, "into": into})),
         Dialog::AutoStack { gap } => app.run("stack.auto", json!({"gap": gap})),
@@ -1121,8 +1363,72 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::Merge { opts } => crate::merge::start_final(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
+        Dialog::DeletePhotos { count, copies, rejected } => {
+            let r = match (*rejected, count == copies) {
+                (true, _) => app.run("library.deleteRejected", json!({"fromDisk": true})),
+                (false, true) => app.run("photo.removeFromLibrary", json!({})),
+                (false, false) => app.run("photo.deleteFromDisk", json!({})),
+            }?;
+            // files that couldn't go to the Trash keep their photos: say so
+            match r.get("failed").and_then(serde_json::Value::as_array).map(Vec::len).unwrap_or(0) {
+                0 => Ok(r),
+                n => Err(format!(
+                    "{n} file{} couldn't be moved to the Trash: {e}",
+                    if n == 1 { "" } else { "s" },
+                    n = n,
+                    e = r["failed"][0]["error"].as_str().unwrap_or("")
+                )),
+            }
+        }
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
+        Dialog::Backups { pick: Some(path) } => {
+            let r = app.run("library.restoreBackup", json!({"path": path}))?;
+            app.renderer.forget_all();
+            app.ui.compare = None;
+            Ok(r)
+        }
+        Dialog::Backups { pick: None } => Ok(serde_json::Value::Null),
         Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. } => Ok(serde_json::Value::Null),
+    }
+}
+
+/// The backup list: date, photos, size, note; click one to pick it for restore. The picked row
+/// says what restoring does (the current state is backed up first).
+fn backups_body(app: &mut LightcraftApp, ui: &mut egui::Ui, pick: &mut Option<String>) {
+    let t = Tokens::get(ui.ctx());
+    let list = app.session.execute("library.backups", &json!({})).unwrap_or_default();
+    ui.label(egui::RichText::new(list["dir"].as_str().unwrap_or("")).color(t.text_dim));
+    let rows = list["backups"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        ui.label(crate::i18n::tr("No backups yet. Back Up Library… (File menu) or the bkup. settings tab makes one."));
+        return;
+    }
+    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 4.0;
+        for (i, b) in rows.iter().enumerate() {
+            let path = b["path"].as_str().unwrap_or("").to_string();
+            let when = b["created"].as_str().map(lightcraft_engine::catalog::dates::display_time).unwrap_or_default();
+            let bytes = b["bytes"].as_u64().unwrap_or(0) as f64;
+            let size = if bytes < 1_048_576.0 { format!("{:.0} KB", bytes / 1024.0) } else { format!("{:.1} MB", bytes / 1_048_576.0) };
+            let mut text = format!("{when} · {n} photos · {size}", when = when, n = b["photos"].as_u64().unwrap_or(0), size = size);
+            if let Some(note) = b["note"].as_str() {
+                text = format!("{text} · {note}");
+            }
+            let selected = pick.as_deref() == Some(path.as_str());
+            let r = ui.add(egui::Button::selectable(selected, text).min_size(egui::vec2(ui.available_width(), 24.0)));
+            crate::widgets::register(ui.ctx(), format!("button:backup-{i}"), r.rect);
+            if r.clicked() {
+                *pick = if selected { None } else { Some(path) };
+            }
+        }
+    });
+    if pick.is_some() {
+        ui.label(
+            egui::RichText::new(crate::i18n::tr(
+                "restore. replaces the catalog with this backup. The current catalog is backed up first, so restoring that backup undoes it.",
+            ))
+            .color(t.text_dim),
+        );
     }
 }
 

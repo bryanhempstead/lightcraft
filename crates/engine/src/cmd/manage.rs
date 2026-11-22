@@ -7,10 +7,12 @@ use lightcraft_catalog::{ColorLabel, Op};
 use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, has_selection, str_param};
 use crate::Result;
 
-fn rename_args(s: &crate::Session, p: &Value, c: &str) -> Result<(Vec<lightcraft_catalog::PhotoId>, String, usize)> {
-    let template = str_param(p, "template").ok_or_else(|| bad(c, "missing `template`"))?.to_string();
+fn rename_args(s: &crate::Session, p: &Value, c: &str) -> Result<(Vec<lightcraft_catalog::PhotoId>, String, usize, crate::rename::Batch)> {
+    let template =
+        super::naming::template_param(s, p, "template", "templateName", c)?.ok_or_else(|| bad(c, "missing `template` (or `templateName`)"))?;
     let start = p.get("start").and_then(Value::as_u64).unwrap_or(1) as usize;
-    Ok((s.targets(p), template, start))
+    let batch = super::naming::batch_param(p, c)?;
+    Ok((s.targets(p), template, start, batch))
 }
 
 /// A named set of colour-label names (red, yellow, green, blue, purple; empty = the colour's name).
@@ -150,25 +152,64 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// Edit Capture Time ▸ Revert to Original / Change to File's Creation Date (L16): each photo's time
+/// from its file (the metadata it records, or the file system's creation date). Photos without a
+/// readable file are skipped. One undo step.
+fn capture_time_from_files(s: &mut crate::Session, targets: &[lightcraft_catalog::PhotoId], file_date: bool) -> Result<Value> {
+    let mut ops = Vec::new();
+    let mut skipped = Vec::new();
+    for id in targets {
+        let Some(ph) = s.catalog.photo(*id) else { continue };
+        let lightcraft_catalog::Source::File { path } = &ph.source else {
+            skipped.push(json!({"id": id.0, "reason": "no file"}));
+            continue;
+        };
+        let path = path.clone();
+        let new = if file_date {
+            std::fs::metadata(&path)
+                .and_then(|m| m.created().or_else(|_| m.modified()))
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| lightcraft_catalog::dates::civil(d.as_secs() as i64))
+        } else {
+            crate::import::probe_paths(s, std::slice::from_ref(&path)).into_iter().next().and_then(|r| r.ok()).and_then(|i| i.captured)
+        };
+        match new {
+            Some(t) if s.catalog.photo(*id).and_then(|p| p.captured.as_deref()) != Some(t.as_str()) => {
+                ops.push(Op::SetCaptured { id: *id, captured: Some(t) })
+            }
+            Some(_) => {}
+            None => {
+                skipped.push(json!({"id": id.0, "reason": if file_date { "the file can't be read" } else { "the file records no capture time" }}))
+            }
+        }
+    }
+    let n = ops.len();
+    if n > 0 {
+        s.commit(if file_date { "Change Capture Time to File Date" } else { "Revert Capture Time" }, Op::Batch { ops })?;
+    }
+    Ok(json!({"changed": n, "skipped": skipped}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "photo.renameTokens", "Rename Template Tags", [], None, "{} → {tokens: [{tag, aliases, meaning, example}], dateDirectives: [{directive, meaning}], notes: [..], sample} — the file-name template tags shared by photo.rename, library.import (rename) and app.export (naming); examples are for a sample photo", always, |_, _| {
             Ok(crate::rename::token_help_json())
         }),
-        cmd!(query "photo.renamePreview", "Rename Preview", [], None, "{template: e.g. `{date}_{name}`, `Trip-{seq:3}` (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each), start?: first sequence number (1), ids?} — renames the files on disk (sidecars too, never overwriting: collisions get -1, -2…); undoable", has_selection, |s, p| {
-            let (ids, template, start) = rename_args(s, p, "photo.renamePreview")?;
-            Ok(serde_json::to_value(s.plan_rename(&ids, &template, start)).unwrap_or_default())
+        cmd!(query "photo.renamePreview", "Rename Preview", [], None, "{template: e.g. `{date}_{name}`, `Trip-{seq:3}` (tokens: {name} {num} {seq} {date} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext} {EXT} {original} {originalnum} {copyname} {text} {shoot} {total} {import} {image} {yyyymmdd} {yymmdd} {yyyy} {yy} {month} {mon} {mm} {dd} {julian} {hour} {minute} {second} {longdate} {caption} {copyright} {location} {city} {state} {country} {make} {model} {focal} {aperture} {shutter} {dimensions} {label}, {seq:N}, {date:%Y%m%d}; photo.renameTokens explains each), or templateName: a naming.templates name (Lightroom's ten built-ins or a saved one), text?: Custom Text, shoot?: Shoot Name, extCase?: keep|lower|upper, start?: first sequence number (1), ids?} — renames the files on disk (sidecars too, never overwriting: collisions get -1, -2…); undoable", has_selection, |s, p| {
+            let (ids, template, start, batch) = rename_args(s, p, "photo.renamePreview")?;
+            Ok(serde_json::to_value(s.plan_rename_in(&ids, &template, start, &batch)).unwrap_or_default())
         }),
         cmd!(
             "photo.rename",
             "Rename Photos",
             [],
             None,
-            "{template: e.g. `{date}_{name}`, `Trip-{seq:3}` (tokens: {name} {num} {seq} {seq:N} {date} {date:%Y%m%d} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext}; photo.renameTokens explains each), start?: first sequence number (1), ids?} — renames the files on disk (sidecars too, never overwriting: collisions get -1, -2…); undoable",
+            "{template: e.g. `{date}_{name}`, `Trip-{seq:3}` (tokens: {name} {num} {seq} {date} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext} {EXT} {original} {originalnum} {copyname} {text} {shoot} {total} {import} {image} {yyyymmdd} {yymmdd} {yyyy} {yy} {month} {mon} {mm} {dd} {julian} {hour} {minute} {second} {longdate} {caption} {copyright} {location} {city} {state} {country} {make} {model} {focal} {aperture} {shutter} {dimensions} {label}, {seq:N}, {date:%Y%m%d}; photo.renameTokens explains each), or templateName: a naming.templates name (Lightroom's ten built-ins or a saved one), text?: Custom Text, shoot?: Shoot Name, extCase?: keep|lower|upper, start?: first sequence number (1), ids?} — renames the files on disk (sidecars too, never overwriting: collisions get -1, -2…); undoable",
             has_selection,
             |s, p| {
-                let (ids, template, start) = rename_args(s, p, "photo.rename")?;
-                let plans = s.plan_rename(&ids, &template, start);
+                let (ids, template, start, batch) = rename_args(s, p, "photo.rename")?;
+                let plans = s.plan_rename_in(&ids, &template, start, &batch);
                 let n = s.apply_rename(&plans)?;
                 Ok(json!({"renamed": n, "plans": plans}))
             }
@@ -178,7 +219,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Capture Time",
             [],
             None,
-            "{ids?, time?: `2026-09-30T14:05:00` (the active photo gets it, the others shift by the same amount), each?: bool (every photo gets `time`), shift?: seconds, hours?: time-zone shift in hours} → {changed, captured: [..]}",
+            "{ids?, time?: `2026-09-30T14:05:00` (the active photo gets it, the others shift by the same amount), each?: bool (every photo gets `time`), shift?: seconds, hours?: time-zone shift in hours, revert?: bool (each photo back to the time its file records — Lightroom's Revert Capture Time to Original), fileDate?: bool (each photo to its file's creation date, UTC)} → {changed, captured: [..]}",
             has_selection,
             |s, p| {
                 use lightcraft_catalog::dates::{iso_seconds, normalize_iso, shift_iso};
@@ -186,6 +227,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let targets: Vec<_> = s.targets(p).into_iter().filter(|id| s.catalog.photo(*id).is_some()).collect();
                 if targets.is_empty() {
                     return Err(bad(c, "no photos"));
+                }
+                if bool_or(p, "revert", false) || bool_or(p, "fileDate", false) {
+                    return capture_time_from_files(s, &targets, bool_or(p, "fileDate", false));
                 }
                 // photos without a capture time start from their import time
                 let base = |s: &crate::Session, id| s.catalog.photo(id).map(|p| p.date().to_string()).unwrap_or_default();

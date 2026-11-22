@@ -24,6 +24,7 @@ lightcraft-raw = { workspace = true }
 lightcraft-meta = { workspace = true }
 lightcraft-dng-sdk-sys = { workspace = true }
 miniz_oxide = { workspace = true }
+crc32fast = { workspace = true }
 lightcraft-merge = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }

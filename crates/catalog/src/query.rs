@@ -20,6 +20,16 @@ pub struct Filter {
     /// Free-text search: every token must match filename, title, caption, keywords, camera, lens,
     /// location or format. Tokens like `rating:3`, `flag:pick`, `iso:>800`, `camera:x2` are fielded.
     pub text: String,
+    /// Lightroom's Text filter target: `any` (default: every searchable field), `fileName`,
+    /// `copyName`, `title`, `caption`, `keywords`, `metadata` (IPTC text), `exif` (camera, lens,
+    /// format).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_target: Option<String>,
+    /// Its rule: `containsAll` (default: every word appears), `contains` (any word), `words`
+    /// (whole words), `notContains`, `startsWith`, `endsWith`. A word starting with `!` must not
+    /// appear (any rule).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_rule: Option<String>,
     pub rating: u8,
     pub rating_op: RatingOp,
     pub flag: Option<Flag>,
@@ -32,6 +42,22 @@ pub struct Filter {
     pub labels: Vec<ColorLabel>,
     pub kind: Option<MediaKind>,
     pub edited: Option<bool>,
+    /// Photos without a colour label (with `labels`: those labels or none — Lightroom's No Label).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_label: bool,
+    /// `true`: virtual copies only, `false`: originals only (Lightroom's Kind filter).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub virtual_copy: Option<bool>,
+    /// `true`: photos in a stack, `false`: photos in none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stacked: Option<bool>,
+    /// Exported (`true`) or never exported (`false`). The export record lives with the library,
+    /// not the catalog: the engine applies this one ([`Filter::matches`] ignores it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exported: Option<bool>,
+    /// The metadata column browser's picks ([`crate::columns`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<crate::columns::ColumnPick>,
     pub album: Option<AlbumId>,
     /// Show "Recently Deleted" instead of the library.
     pub deleted: bool,
@@ -83,6 +109,17 @@ pub enum SortKey {
     /// A shuffle fixed by [`Sort::seed`]: the same seed always gives the same order, and photos
     /// added or edited later never reshuffle the others. Pick a new seed to reshuffle.
     Random,
+    /// Lightroom's other sort orders (L17): colour label (red … purple, none first), label name,
+    /// edit count (history steps), aspect ratio, file type, extension, pixel count, pick flag
+    /// (rejected, unflagged, flagged).
+    LabelColor,
+    LabelText,
+    EditCount,
+    AspectRatio,
+    FileType,
+    Extension,
+    PixelCount,
+    Pick,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +192,52 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
     hay.iter().any(|h| h.to_lowercase().contains(&t)) || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(&t))
 }
 
+/// The text a Text filter target searches, lower-cased.
+fn target_text(p: &Photo, target: &str) -> Vec<String> {
+    let m = &p.meta;
+    let v: Vec<&str> = match target {
+        "fileName" => vec![&p.file_name],
+        "copyName" => vec![p.copy_name.as_deref().unwrap_or("")],
+        "title" => vec![&m.title],
+        "caption" => vec![&m.caption],
+        "keywords" => m.keywords.iter().map(String::as_str).collect(),
+        "metadata" => {
+            vec![&m.title, &m.caption, &m.creator, &m.copyright, &m.location, &m.city, &m.state, &m.country, &m.alt_text, &m.extended_description]
+        }
+        "exif" => vec![&m.camera, &m.lens, &p.format, &m.shutter],
+        _ => {
+            let mut v: Vec<&str> =
+                vec![&p.file_name, &m.title, &m.caption, &m.camera, &m.lens, &m.location, &m.city, &m.state, &m.country, &m.creator, &p.format];
+            v.extend(m.keywords.iter().map(String::as_str));
+            v.extend(p.copy_name.as_deref());
+            v
+        }
+    };
+    v.into_iter().map(str::to_lowercase).collect()
+}
+
+/// Lightroom's Text filter with a target and a rule (L29). Words starting with `!` exclude.
+fn text_rule_matches(p: &Photo, text: &str, target: &str, rule: &str) -> bool {
+    let hay = target_text(p, target);
+    let (not, want): (Vec<String>, Vec<String>) = text.split_whitespace().map(str::to_lowercase).partition(|w| w.starts_with('!') && w.len() > 1);
+    let not: Vec<String> = not.into_iter().map(|w| w[1..].to_string()).collect();
+    if not.iter().any(|w| hay.iter().any(|h| h.contains(w.as_str()))) {
+        return false;
+    }
+    if want.is_empty() {
+        return true;
+    }
+    let is_word = |h: &str, w: &str| h.split(|c: char| !c.is_alphanumeric()).any(|x| x == w);
+    match rule {
+        "contains" => want.iter().any(|w| hay.iter().any(|h| h.contains(w.as_str()))),
+        "words" => want.iter().all(|w| hay.iter().any(|h| is_word(h, w))),
+        "notContains" => !want.iter().any(|w| hay.iter().any(|h| h.contains(w.as_str()))),
+        "startsWith" => want.iter().all(|w| hay.iter().any(|h| h.split(|c: char| !c.is_alphanumeric()).any(|x| x.starts_with(w.as_str())))),
+        "endsWith" => want.iter().all(|w| hay.iter().any(|h| h.split(|c: char| !c.is_alphanumeric()).any(|x| x.ends_with(w.as_str())))),
+        _ => want.iter().all(|w| hay.iter().any(|h| h.contains(w.as_str()))),
+    }
+}
+
 /// Whether `p` has a named face region called `name` (case-insensitive).
 fn has_person(p: &Photo, name: &str) -> bool {
     let name = name.trim().to_lowercase();
@@ -179,8 +262,28 @@ impl Filter {
         if let Some(l) = self.label {
             v.push(format!("label {}", format!("{l:?}").to_lowercase()));
         }
-        if !self.labels.is_empty() {
-            v.push(format!("label {}", self.labels.iter().map(|l| format!("{l:?}").to_lowercase()).collect::<Vec<_>>().join(" or ")));
+        if !self.labels.is_empty() || self.no_label {
+            let mut names: Vec<String> = self.labels.iter().map(|l| format!("{l:?}").to_lowercase()).collect();
+            if self.no_label {
+                names.push("none".into());
+            }
+            v.push(format!("label {}", names.join(" or ")));
+        }
+        if let Some(c) = self.virtual_copy {
+            v.push(if c { "virtual copies".into() } else { "originals".into() });
+        }
+        if let Some(st) = self.stacked {
+            v.push(if st { "stacked".into() } else { "not stacked".into() });
+        }
+        if let Some(e) = self.exported {
+            v.push(if e { "exported".into() } else { "not exported".into() });
+        }
+        for c in self.columns.iter().filter(|c| !c.values.is_empty()) {
+            v.push(format!(
+                "{} {}",
+                c.column,
+                c.values.iter().map(|x| if x.is_empty() { "unknown" } else { x.as_str() }).collect::<Vec<_>>().join(" or ")
+            ));
         }
         if let Some(k) = self.kind {
             v.push(format!("kind {}", format!("{k:?}").to_lowercase()));
@@ -270,7 +373,17 @@ impl Filter {
         {
             return false;
         }
-        if !self.labels.is_empty() && !p.label.is_some_and(|l| self.labels.contains(&l)) {
+        if (!self.labels.is_empty() || self.no_label) && !(p.label.is_some_and(|l| self.labels.contains(&l)) || (self.no_label && p.label.is_none()))
+        {
+            return false;
+        }
+        if self.virtual_copy.is_some_and(|c| c != p.copy_of.is_some()) {
+            return false;
+        }
+        if self.stacked.is_some_and(|st| st != cat.stack_of(p.id).is_some()) {
+            return false;
+        }
+        if !self.columns.is_empty() && !crate::columns::matches(&self.columns, p, cat) {
             return false;
         }
         if !self.only.is_empty() && !self.only.contains(&p.id) {
@@ -337,7 +450,10 @@ impl Filter {
         {
             return false;
         }
-        self.text.split_whitespace().all(|tok| token_matches(p, tok))
+        if self.text_target.is_none() && self.text_rule.is_none() {
+            return self.text.split_whitespace().all(|tok| token_matches(p, tok));
+        }
+        text_rule_matches(p, &self.text, self.text_target.as_deref().unwrap_or("any"), self.text_rule.as_deref().unwrap_or("containsAll"))
     }
 }
 
@@ -355,6 +471,28 @@ impl Catalog {
                 SortKey::Rating => a.rating.cmp(&b.rating),
                 SortKey::FileSize => a.file_size.cmp(&b.file_size),
                 SortKey::Random => shuffle_rank(sort.seed, a.id).cmp(&shuffle_rank(sort.seed, b.id)),
+                SortKey::LabelColor => a.label.map(|l| l as u8).cmp(&b.label.map(|l| l as u8)),
+                SortKey::LabelText => {
+                    let name = |p: &Photo| p.label.map(|l| self.label_name(l).to_lowercase()).unwrap_or_default();
+                    name(a).cmp(&name(b))
+                }
+                SortKey::EditCount => a.history.len().cmp(&b.history.len()),
+                // w₁/h₁ vs w₂/h₂ without division (a zero height sorts as the widest)
+                SortKey::AspectRatio => (u64::from(a.width) * u64::from(b.height.max(1))).cmp(&(u64::from(b.width) * u64::from(a.height.max(1)))),
+                SortKey::FileType => a.format.to_lowercase().cmp(&b.format.to_lowercase()),
+                SortKey::Extension => {
+                    let ext = |p: &Photo| p.file_name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
+                    ext(a).cmp(&ext(b))
+                }
+                SortKey::PixelCount => (u64::from(a.width) * u64::from(a.height)).cmp(&(u64::from(b.width) * u64::from(b.height))),
+                SortKey::Pick => {
+                    let rank = |p: &Photo| match p.flag {
+                        Flag::Reject => 0u8,
+                        Flag::None => 1,
+                        Flag::Pick => 2,
+                    };
+                    rank(a).cmp(&rank(b))
+                }
             }
             .then(a.id.cmp(&b.id));
             if sort.ascending { o } else { o.reverse() }

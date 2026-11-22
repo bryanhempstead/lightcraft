@@ -49,6 +49,9 @@ pub const CLASSIC: &[(&str, &str, &str)] = &[
     ("Cmd+Shift+U", "develop.wb", r#"{"mode": "auto"}"#),
     // library
     ("B", "album.toggleTarget", "{}"),
+    ("`", "photo.toggleFlag", "{}"),
+    ("Cmd+Up", "photo.increaseFlag", "{}"),
+    ("Cmd+Down", "photo.decreaseFlag", "{}"),
     ("Cmd+K", "panel.keywords", "{}"),
     ("Cmd+Shift+V", "develop.paste", "{}"),
     ("Cmd+Shift+S", "dialog.syncSettings", "{}"),
@@ -64,8 +67,6 @@ pub const CLASSIC: &[(&str, &str, &str)] = &[
 
 /// Classic shortcuts with no LightCraft command (shown on the shrt. page and in the report).
 pub const CLASSIC_SKIPPED: &[(&str, &str)] = &[
-    ("`", "toggle flag"),
-    ("Cmd+J", "Library view options"),
     ("Cmd+Shift+M", "email photos"),
     ("Cmd+Alt+3…7", "Map, Book, Slideshow, Print, Web modules"),
     ("Cmd+N (Develop)", "new snapshot — Cmd+N stays New Album (Classic's Library: New Collection)"),

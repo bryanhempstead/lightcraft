@@ -13,6 +13,7 @@
 pub mod adobe;
 pub mod availability;
 pub mod camera_match;
+pub mod backup;
 mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -49,6 +50,7 @@ pub mod rename;
 pub mod segment;
 pub mod sidecar;
 pub mod smart;
+pub mod trash;
 mod view;
 
 use std::sync::Arc;
@@ -185,6 +187,22 @@ pub struct Session {
     pub library_folder_subfolders: Option<bool>,
     /// Library ▸ Shoots: pinned and removed shoots, names of their own, the sort (prefs.json).
     pub shoot_prefs: cmd::shoots::ShootPrefs,
+    /// Catalog backup settings (prefs.json; see [`backup`]).
+    pub backup: backup::BackupPrefs,
+    /// The user's file-name templates (Lightroom's Filename Template presets; prefs.json).
+    pub naming_templates: Vec<rename::NamingTemplate>,
+    /// Import # / Image # counters (imports made, photos imported; prefs.json).
+    pub naming_counters: cmd::naming::Counters,
+    /// Keep an automatic version when leaving an edited photo ([`Session::auto_version`]; off by
+    /// default, like Lightroom, which never snapshots by itself; prefs.json).
+    pub auto_versions: bool,
+    /// When each photo was last exported (photo id → ISO time; the library's `exports.json`).
+    pub export_log: std::collections::BTreeMap<u64, String>,
+    /// Named watermarks (Lightroom's Watermark Editor presets; prefs.json).
+    pub watermark_presets: Vec<cmd::naming::WatermarkPreset>,
+    /// Delete from Disk moves files into this folder instead of the system Trash (tests, scripts;
+    /// also `LIGHTCRAFT_TRASH_DIR`).
+    pub trash_dir: Option<std::path::PathBuf>,
     /// Copied metadata (`photo.copyMetadata`): photo.setMeta params.
     pub meta_clipboard: Option<Value>,
     /// The photo that was active before the current one (Paste Settings from Previous).
@@ -291,6 +309,13 @@ impl Session {
             folder_parents: Vec::new(),
             library_folder_subfolders: None,
             shoot_prefs: Default::default(),
+            backup: Default::default(),
+            naming_templates: Vec::new(),
+            naming_counters: Default::default(),
+            auto_versions: false,
+            export_log: Default::default(),
+            watermark_presets: Vec::new(),
+            trash_dir: None,
             previous_active: None,
             copy_groups: lightcraft_develop::SettingsGroup::default_copy(),
             presets: presets::builtin(),
@@ -430,6 +455,9 @@ impl Session {
     /// differ from its latest version; at most [`AUTO_VERSIONS`] auto versions, oldest dropped).
     /// Saved with the library but not an undo step.
     pub fn auto_version(&mut self, id: PhotoId) {
+        if !self.auto_versions {
+            return;
+        }
         let Some(p) = self.catalog.photo(id) else { return };
         if !p.is_edited() || p.versions.last().is_some_and(|v| *v.settings == *p.develop) || self.interaction.is_some() {
             return;
@@ -691,6 +719,10 @@ impl Session {
                 self.source, self.filter, self.sort, self.browse, self.library_folder, self.library_subfolders, self.library_folder_subfolders
             ),
         );
+        if self.filter.exported.is_some() {
+            // the export record isn't the catalog's: its changes don't move the revision
+            key.1.push_str(&format!("|exports {}", self.export_log.len()));
+        }
         if self.source == LibrarySource::Missing && self.media.availability.is_background() {
             // the view fills in as the background checks find files gone
             key.1.push_str(&format!("|{}", self.media.availability.generation()));
@@ -711,6 +743,10 @@ impl Session {
                 f.library_folder_only = !self.library_folder_subfolders.unwrap_or(self.library_subfolders);
             }
             let mut visible = self.catalog.query(&f, &self.sort);
+            // Exported / not exported: the export record is the library's, not the catalog's
+            if let Some(e) = self.filter.exported {
+                visible.retain(|id| self.export_log.contains_key(&id.0) == e);
+            }
             if visible.is_empty() && self.source == LibrarySource::LibraryFolder && !self.folder_holds_photos() {
                 // the shown folder lost its last photo (deleted, moved, removed): everything, not
                 // an empty grid under the name of a folder that is gone from the sidebar
@@ -831,7 +867,11 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_backup;
+#[cfg(test)]
 mod tests_color;
+#[cfg(test)]
+mod tests_delete;
 #[cfg(test)]
 mod tests_export;
 #[cfg(test)]
@@ -849,6 +889,8 @@ mod tests_library;
 #[cfg(test)]
 mod tests_merge;
 #[cfg(test)]
+mod tests_naming;
+#[cfg(test)]
 mod tests_organize;
 #[cfg(test)]
 mod tests_persist;
@@ -856,6 +898,7 @@ mod tests_persist;
 mod tests_prefs;
 #[cfg(test)]
 mod tests_recheck;
+mod tests_rating_keys;
 #[cfg(test)]
 mod tests_segment;
 #[cfg(test)]

@@ -301,7 +301,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         source_column(app, ui, src, &mut d);
         grid_column(app, ui, grid, &mut d);
         options_column(app, ui, opt, &mut d);
-        let (c, k) = bottom_bar(ui, bottom, &d);
+        let (c, k) = bottom_bar(app, ui, bottom, &mut d);
         close = c;
         confirm = k;
     });
@@ -778,6 +778,10 @@ fn options_column(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, d: &mut I
                 if !smart_ok && d.prefs.smart_previews {
                     ui.label(egui::RichText::new(crate::i18n::tr("This library keeps no smart previews.")).small().color(t.caution));
                 }
+                if crate::import::volume_of(&d.prefs.source).is_some() {
+                    let r = ui.checkbox(&mut d.prefs.eject, crate::i18n::tr("Eject after import"));
+                    register(ui.ctx(), "check:importEject", r.rect);
+                }
                 ui.label(
                     egui::RichText::new(crate::i18n::tr("Suspected duplicates are never imported twice: they show dimmed and unchecked."))
                         .small()
@@ -966,7 +970,7 @@ fn album_choice(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog
 
 /// The bottom bar: the count and size of the checked photos, Cancel and Import. Returns
 /// (cancel, import) clicked.
-fn bottom_bar(ui: &mut egui::Ui, r: Rect, d: &ImportDialog) -> (bool, bool) {
+fn bottom_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, d: &mut ImportDialog) -> (bool, bool) {
     let t = Tokens::get(ui.ctx());
     ui.painter().text(pos2(r.left() + 16.0, r.center().y), Align2::LEFT_CENTER, checked_summary(d), t.font(12.5), t.text_label);
     let n = d.selected_paths().len();
@@ -979,7 +983,62 @@ fn bottom_bar(ui: &mut egui::Ui, r: Rect, d: &ImportDialog) -> (bool, bool) {
         crate::widgets::register(ui.ctx(), "note:importNothing", r);
     }
     let cancel = crate::panels::right::wide_button(&mut row, "dialogCancel", "Cancel", 110.0).clicked();
+    row.add_space(14.0);
+    import_presets(app, &mut row, d);
     (cancel, import)
+}
+
+/// The Import Preset popup (I01): pick one (the window's choices follow, the source stays), save
+/// the current choices under a name, or delete one.
+fn import_presets(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
+    let names: Vec<String> = app.ui.import_presets.iter().map(|x| x.name.clone()).collect();
+    let current = app
+        .ui
+        .import_presets
+        .iter()
+        .find(|x| ImportPrefs { source: d.prefs.source.clone(), subfolders: d.prefs.subfolders, ..x.prefs.clone() } == d.prefs)
+        .map(|x| x.name.clone());
+    let shown = current.clone().unwrap_or_else(|| "None".to_string());
+    let name_id = egui::Id::new("import-preset-name");
+    let r = egui::ComboBox::from_id_salt("import-presets").selected_text(format!("Import Preset: {shown}")).width(220.0).show_ui(ui, |ui| {
+        for (i, n) in names.iter().enumerate() {
+            let r = ui.selectable_label(Some(n) == current.as_ref(), n);
+            register(ui.ctx(), format!("button:importPreset-{i}"), r.rect);
+            if r.clicked()
+                && let Some(p) = app.ui.import_presets.iter().find(|x| &x.name == n)
+            {
+                d.prefs = ImportPrefs { source: d.prefs.source.clone(), subfolders: d.prefs.subfolders, ..p.prefs.clone() };
+            }
+        }
+        if !names.is_empty() {
+            ui.separator();
+        }
+        let mut typed = ui.data(|x| x.get_temp::<String>(name_id)).unwrap_or_default();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let f = ui.add(egui::TextEdit::singleline(&mut typed).hint_text("preset name").desired_width(130.0));
+            register(ui.ctx(), "field:importPresetName", f.rect);
+            let s = ui.add_enabled(!typed.trim().is_empty(), egui::Button::new("save."));
+            register(ui.ctx(), "button:importPresetSave", s.rect);
+            if s.clicked() {
+                let name = typed.trim().to_string();
+                match app.ui.import_presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
+                    Some(x) => x.prefs = d.prefs.clone(),
+                    None => app.ui.import_presets.push(crate::import::ImportPreset { name, prefs: d.prefs.clone() }),
+                }
+                typed.clear();
+            }
+        });
+        ui.data_mut(|x| x.insert_temp(name_id, typed));
+        if let Some(c) = current.clone() {
+            let del = ui.button(format!("del. {c}"));
+            register(ui.ctx(), "button:importPresetDelete", del.rect);
+            if del.clicked() {
+                app.ui.import_presets.retain(|x| x.name != c);
+            }
+        }
+    });
+    register(ui.ctx(), "button:importPresets", r.response.rect);
 }
 
 #[cfg(test)]
@@ -1058,5 +1117,15 @@ mod tests {
         assert!(w.copy && w.move_files);
         d.prefs.mode = "add".into();
         assert!(!crate::import::from_prefs(&d).copy);
+    }
+
+    /// I02: Eject after import names the card's volume.
+    #[test]
+    fn eject_volume_of_a_source() {
+        assert_eq!(crate::import::volume_of("/Volumes/EOS_DIGITAL/DCIM/100CANON").as_deref(), Some("/Volumes/EOS_DIGITAL"));
+        assert_eq!(crate::import::volume_of("/Volumes/CARD").as_deref(), Some("/Volumes/CARD"));
+        assert_eq!(crate::import::volume_of("/Users/me/Pictures"), None);
+        assert_eq!(crate::import::volume_of("/Volumes/"), None);
+        assert!(!ImportPrefs::default().eject, "off unless asked");
     }
 }

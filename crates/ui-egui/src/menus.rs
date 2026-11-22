@@ -177,6 +177,14 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("file.addFolder", "Import from Folder…", None, "File"),
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "File"),
+    ("dialog.deleteRejected", "Delete Rejected Photos…", Some("Cmd+Delete"), "Photo"),
+    ("tool.painter", "Painter", None, ""),
+    ("view.gridOptions", "Grid View Options…", Some("Cmd+J"), "View"),
+    // the Import window's Import Preset popup ({name})
+    ("import.presets", "Import Presets", None, ""),
+    ("import.savePreset", "Save Import Preset", None, ""),
+    ("import.applyPreset", "Apply Import Preset", None, ""),
+    ("import.deletePreset", "Delete Import Preset", None, ""),
     ("file.backupLibrary", "Back Up Library…", None, "File"),
     ("file.restoreLibrary", "Restore Library from Backup…", None, "File"),
     ("photo.locate", "Locate Missing File…", None, ""),
@@ -523,6 +531,37 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.show_filenames = true;
             Ok(json!({"info": app.ui.grid_info}))
         }
+        "tool.painter" => {
+            // {mode?: keyword|label|flag|rating|preset|metadata|rotate|album, value}: Lightroom's
+            // Painter; no mode stops it
+            let mode = p.get("mode").and_then(Value::as_str).unwrap_or("").to_string();
+            let value = match p.get("value") {
+                Some(Value::String(v)) => v.trim().to_string(),
+                Some(Value::Number(n)) => n.to_string(),
+                _ => String::new(),
+            };
+            app.ui.keyword_painter = None;
+            app.ui.painter = None;
+            if mode.is_empty() {
+                return Some(Ok(json!({"painter": null})));
+            }
+            if !["keyword", "label", "flag", "rating", "preset", "metadata", "rotate", "album"].contains(&mode.as_str()) {
+                return Some(Err(format!("unknown painter mode `{mode}` (keyword|label|flag|rating|preset|metadata|rotate|album)")));
+            }
+            if value.is_empty() {
+                return Some(Err("the painter needs a `value` (a label, flag, rating, preset, direction or album)".into()));
+            }
+            if mode == "keyword" {
+                app.ui.keyword_painter = Some(value.clone());
+            } else {
+                app.ui.painter = Some((mode.clone(), value.clone()));
+            }
+            if !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
+                app.ui.view = ViewMode::PhotoGrid;
+            }
+            app.toast(&ctx, format!("Painting {mode} “{value}”: click photos · Esc stops"));
+            Ok(json!({"painter": {"mode": mode, "value": value}}))
+        }
         "tool.keywordPainter" => {
             // {keyword?}: paint that keyword onto photos in the grid by clicking them; no keyword stops
             app.ui.keyword_painter = p.get("keyword").and_then(Value::as_str).map(str::trim).filter(|k| !k.is_empty()).map(str::to_string);
@@ -602,8 +641,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.back" => {
             if app.ui.dialog.is_some() {
                 app.ui.dialog = None;
-            } else if app.ui.keyword_painter.is_some() {
+            } else if app.ui.keyword_painter.is_some() || app.ui.painter.is_some() {
                 app.ui.keyword_painter = None;
+                app.ui.painter = None;
             } else if app.ui.fullscreen {
                 app.ui.fullscreen = false;
                 app.ui.slideshow = None;
@@ -682,17 +722,33 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.settings" => {
             let tab = p.get("tab").and_then(Value::as_str).unwrap_or("general");
             if !crate::panels::settings::TABS.iter().any(|(id, _)| *id == tab) {
-                return Some(Err(format!("unknown settings tab `{tab}` (general|import|performance|interface|shortcuts|controllers)")));
+                return Some(Err(format!("unknown settings tab `{tab}` (general|import|performance|backup|interface|shortcuts|controllers)")));
             }
             app.ui.dialog = Some(Dialog::Settings { tab: tab.into() });
             Ok(Value::Null)
         }
         "app.openLibrary" => crate::panels::settings::open_library(app, p),
+        "dialog.deleteRejected" => delete_rejected(app),
+        // Lightroom's View Options (⌘J): the grid's options live on Settings ▸ Interface
+        "view.gridOptions" => {
+            app.ui.dialog = Some(Dialog::Settings { tab: "interface".into() });
+            Ok(Value::Null)
+        }
+        "import.presets" | "import.savePreset" | "import.applyPreset" | "import.deletePreset" => crate::import::preset_command(app, id, p),
         "file.backupLibrary" | "file.restoreLibrary" => {
             let action = if id == "file.backupLibrary" { app.services.backup_library.as_mut() } else { app.services.restore_library.as_mut() };
             match action {
                 Some(f) => f(&mut app.session),
-                None => Err("not available here: on the desktop the library is a folder; back it up with your other files".into()),
+                // a library folder on disk: dated catalog backups (L02)
+                None if app.session.backup_root().is_some() => {
+                    if id == "file.backupLibrary" {
+                        app.session.execute("library.backup", &json!({})).map_err(|e| e.to_string())
+                    } else {
+                        app.ui.dialog = Some(Dialog::Backups { pick: None });
+                        Ok(Value::Null)
+                    }
+                }
+                None => Err("not available here: this library isn't a folder on disk".into()),
             }
         }
         "view.filmstrip" => {
@@ -1128,7 +1184,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "dialog.rename" => {
             let template = p.get("template").and_then(Value::as_str).unwrap_or("{name}").to_string();
-            app.ui.dialog = Some(Dialog::Rename { template, start: p.get("start").and_then(Value::as_u64).unwrap_or(1) as u32 });
+            let text = p.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+            app.ui.dialog = Some(Dialog::Rename { template, start: p.get("start").and_then(Value::as_u64).unwrap_or(1) as u32, text });
             Ok(Value::Null)
         }
         "dialog.createPreset" => {
@@ -1682,15 +1739,65 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
 /// With Settings → General → "Confirm before deleting" on, open the confirmation dialog instead
 /// of deleting; true when it did (the dialog's OK runs `photo.delete`).
 pub fn confirm_delete(app: &mut LightcraftApp) -> bool {
+    let targets = app.session.targets(&json!({}));
+    if targets.is_empty() {
+        return false;
+    }
+    if app.ui.settings.trash_delete {
+        let copies = targets.iter().filter(|id| app.session.catalog.photo(**id).is_some_and(|p| p.copy_of.is_some())).count();
+        app.ui.dialog = Some(Dialog::DeletePhotos { count: targets.len(), copies, rejected: false });
+        return true;
+    }
     if !app.ui.settings.confirm_delete {
         return false;
     }
-    let count = app.session.targets(&json!({})).len();
-    if count == 0 {
-        return false;
-    }
-    app.ui.dialog = Some(Dialog::ConfirmDelete { count });
+    app.ui.dialog = Some(Dialog::ConfirmDelete { count: targets.len() });
     true
+}
+
+/// Photo ▸ Delete Rejected Photos (⌘⌫): ask Delete from Disk / Remove for the view's rejects.
+fn delete_rejected(app: &mut LightcraftApp) -> Result<Value, String> {
+    let r = app.session.execute("library.rejected", &json!({})).map_err(|e| e.to_string())?;
+    let count = r["count"].as_u64().unwrap_or(0) as usize;
+    if count == 0 {
+        return Err(crate::i18n::tr("There are no rejected photos here.").into());
+    }
+    let copies = r["virtualCopies"].as_u64().unwrap_or(0) as usize;
+    app.ui.dialog = Some(Dialog::DeletePhotos { count, copies, rejected: true });
+    Ok(json!({"count": count}))
+}
+
+/// One Painter click on photo `id` (L12): apply `mode`'s `value`; a label or album the photo
+/// already has comes off again (like the keyword painter).
+pub fn paint(app: &mut LightcraftApp, id: lightcraft_catalog::PhotoId, mode: &str, value: &str) -> Result<Value, String> {
+    let photo = app.session.catalog.photo(id).cloned().ok_or("no such photo")?;
+    let ids = json!([id.0]);
+    match mode {
+        "label" => {
+            let has = photo.label.is_some_and(|l| format!("{l:?}").eq_ignore_ascii_case(value));
+            app.run("photo.label", json!({"ids": ids, "label": if has { "none" } else { value }}))
+        }
+        "flag" => app.run("photo.flag", json!({"ids": ids, "flag": value})),
+        "rating" => app.run("photo.rate", json!({"ids": ids, "rating": value.parse::<u64>().map_err(|_| "rating is 0..5")?})),
+        "preset" => app.run("preset.apply", json!({"ids": ids, "id": value})),
+        "metadata" => app.run("metadata.applyPreset", json!({"ids": ids, "name": value})),
+        "rotate" => {
+            let cmd = match value {
+                "left" => "photo.rotateLeft",
+                "right" => "photo.rotateRight",
+                "flipH" => "photo.flipHorizontal",
+                "flipV" => "photo.flipVertical",
+                _ => return Err("rotate is left|right|flipH|flipV".into()),
+            };
+            app.run(cmd, json!({"ids": ids}))
+        }
+        "album" => {
+            let aid = value.parse::<u64>().map_err(|_| "album is an album id")?;
+            let has = app.session.catalog.album(lightcraft_catalog::AlbumId(aid)).is_some_and(|a| a.photos.contains(&id));
+            app.run(if has { "album.removePhotos" } else { "album.addPhotos" }, json!({"id": aid, "ids": ids}))
+        }
+        _ => Err(format!("unknown painter mode `{mode}`")),
+    }
 }
 
 /// Platform-appropriate label for revealing a file in the system file manager.

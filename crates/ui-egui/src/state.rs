@@ -185,8 +185,11 @@ pub struct AppSettings {
     /// Library opened at launch when no `--library` is given (empty = the default location).
     pub library_path: String,
     pub startup_view: StartupView,
-    /// Ask before moving photos to Recently Deleted (keyboard and menu).
+    /// Ask before moving photos to Recently Deleted (keyboard and menu; with `trash_delete` off).
     pub confirm_delete: bool,
+    /// Delete (⌫) asks like Lightroom: Delete from Disk (files to the Trash) or Remove (out of the
+    /// library). Off: it moves photos to Recently Deleted.
+    pub trash_delete: bool,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
     /// Largest long edge (pixels) the loupe renders at.
@@ -201,6 +204,8 @@ pub struct AppSettings {
     pub film_badges: bool,
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
+    /// Square Grid: each cell's index number in front of its caption (Lightroom's Index Number).
+    pub grid_index: bool,
 }
 
 impl Default for AppSettings {
@@ -209,6 +214,7 @@ impl Default for AppSettings {
             library_path: String::new(),
             startup_view: StartupView::Last,
             confirm_delete: false,
+            trash_delete: true,
             gpu: true,
             preview_edge: 2560,
             external_editor: String::new(),
@@ -216,6 +222,7 @@ impl Default for AppSettings {
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
+            grid_index: false,
         }
     }
 }
@@ -301,6 +308,8 @@ pub struct UiState {
     pub preset_groups_open: Vec<String>,
     /// The Import window's last choices (source, mode, destination, options).
     pub import_prefs: crate::import::ImportPrefs,
+    /// Named Import window choices (Import Presets).
+    pub import_presets: Vec<crate::import::ImportPreset>,
     /// Sync Settings: what was checked last time (kept between runs and restarts).
     pub sync_prefs: SyncPrefs,
     pub right: RightPanel,
@@ -435,6 +444,9 @@ pub struct UiState {
     pub spots_threshold: f32,
     /// The library filter bar above the grid.
     pub filter_bar: bool,
+    /// Its metadata column browser (Lightroom's Metadata filter) and the columns shown.
+    pub column_browser: bool,
+    pub metadata_columns: Vec<String>,
     /// Folders kept in Local (Browse Folder…, Keep in Local / Add to Local; `local.addRoot`):
     /// listed after the built-in locations, across restarts, whatever is browsed.
     pub local_roots: Vec<String>,
@@ -451,6 +463,11 @@ pub struct UiState {
     /// The keyword painter: clicking a photo in the grid toggles this keyword on it.
     #[serde(skip)]
     pub keyword_painter: Option<String>,
+    /// The Painter's other modes (L12): `(mode, value)` — label, flag, rating, preset (develop
+    /// preset id), metadata (metadata preset name), rotate (left / right / flipH / flipV),
+    /// album (album id). A click on a grid photo applies it (label / album toggle off again).
+    #[serde(skip)]
+    pub painter: Option<(String, String)>,
     /// A running slideshow (full screen): seconds per photo, when the next one is due (egui
     /// time), paused.
     #[serde(skip)]
@@ -544,6 +561,8 @@ pub enum Dialog {
     Rename {
         template: String,
         start: u32,
+        /// `{text}`: Lightroom's Custom Text.
+        text: String,
     },
     /// Rename a keyword on every photo (children included).
     RenameKeyword {
@@ -644,6 +663,14 @@ pub enum Dialog {
     ConfirmDelete {
         count: usize,
     },
+    /// Lightroom's delete question: Delete from Disk (`photo.deleteFromDisk`, OK) or Remove
+    /// (`photo.removeFromLibrary`). `copies` of the `count` are virtual copies (only removable);
+    /// `rejected`: the rejected photos of the view (Delete Rejected Photos, ⌘⌫).
+    DeletePhotos {
+        count: usize,
+        copies: usize,
+        rejected: bool,
+    },
     /// Confirm taking a folder's photos out of the library (`library.removeFolder`).
     RemoveFolder {
         path: String,
@@ -652,6 +679,10 @@ pub enum Dialog {
         count: usize,
         /// A whole disk or share (`library.removeFolder` takes it only on request).
         disk: bool,
+    },
+    /// File ▸ Restore Library from Backup…: the catalog backups, one picked to restore.
+    Backups {
+        pick: Option<String>,
     },
     About,
     Shortcuts,
@@ -688,6 +719,7 @@ impl Default for UiState {
             develop_left_sections: vec!["navigator".into(), "presets".into(), "history".into()],
             solo_left: false,
             import_prefs: Default::default(),
+            import_presets: Vec::new(),
             sync_prefs: Default::default(),
             preset_groups_open: Vec::new(),
             left_width: LEFT_WIDTH.default,
@@ -760,11 +792,14 @@ impl Default for UiState {
             slideshow: None,
             second_window: false,
             keyword_painter: None,
+            painter: None,
             info_overlay: InfoOverlay::Off,
             navigator: true,
             settings: AppSettings::default(),
             window_fullscreen: None,
             filter_bar: false,
+            column_browser: false,
+            metadata_columns: lightcraft_engine::catalog::columns::DEFAULT_COLUMNS.iter().map(|c| c.to_string()).collect(),
             local_roots: Vec::new(),
             local_browse_root: None,
             compare: None,
@@ -844,6 +879,14 @@ impl UiState {
         self.film_height = FILM_HEIGHT.clamp(self.film_height);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
+        {
+            use lightcraft_engine::catalog::columns::{COLUMNS, DEFAULT_COLUMNS};
+            self.metadata_columns.retain(|c| COLUMNS.iter().any(|(id, _)| id == c));
+            self.metadata_columns.truncate(8);
+            if self.metadata_columns.is_empty() {
+                self.metadata_columns = DEFAULT_COLUMNS.iter().map(|c| c.to_string()).collect();
+            }
+        }
         self.dialog = None;
         self.fullscreen = false;
         if !crate::state::PREVIEW_EDGES.contains(&self.settings.preview_edge) {

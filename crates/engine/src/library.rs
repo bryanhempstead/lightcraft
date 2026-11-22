@@ -97,6 +97,13 @@ struct PresetsFile {
     profile_recent: Vec<String>,
 }
 
+/// `exports.json`: when each photo was last exported (L31).
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct ExportsFile {
+    photos: std::collections::BTreeMap<u64, String>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
 struct ViewFile {
@@ -168,6 +175,15 @@ struct PrefsFile {
     folder_parents: Vec<String>,
     /// Library ▸ Shoots: pins, removed shoots, own names, sort.
     shoots: crate::cmd::shoots::ShootPrefs,
+    /// Catalog backups: schedule, folder, how many to keep, last one.
+    backup: crate::backup::BackupPrefs,
+    /// File-name templates and the Import # / Image # counters.
+    naming_templates: Vec<crate::rename::NamingTemplate>,
+    naming_counters: crate::cmd::naming::Counters,
+    /// Automatic versions when leaving an edited photo (off = Lightroom's behaviour).
+    auto_versions: bool,
+    /// Named watermarks.
+    watermark_presets: Vec<crate::cmd::naming::WatermarkPreset>,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -349,10 +365,16 @@ impl Session {
         self.empty_folders = prefs.empty_folders;
         self.folder_parents = prefs.folder_parents;
         self.shoot_prefs = prefs.shoots;
+        self.backup = prefs.backup;
+        self.naming_templates = prefs.naming_templates;
+        self.naming_counters = prefs.naming_counters;
+        self.auto_versions = prefs.auto_versions;
+        self.watermark_presets = prefs.watermark_presets;
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
         }
+        self.export_log = settings.read::<ExportsFile>(files.as_mut(), "exports.json").map(|e| e.photos).unwrap_or_default();
         // presets
         if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
             for p in &mut self.presets {
@@ -581,6 +603,11 @@ impl Session {
             empty_folders: self.empty_folders.clone(),
             folder_parents: self.folder_parents.clone(),
             shoots: self.shoot_prefs.clone(),
+            backup: self.backup.clone(),
+            naming_templates: self.naming_templates.clone(),
+            naming_counters: self.naming_counters,
+            auto_versions: self.auto_versions,
+            watermark_presets: self.watermark_presets.clone(),
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
@@ -645,5 +672,179 @@ impl Session {
             lib.journal.snapshot(&self.catalog)?;
         }
         Ok(())
+    }
+
+    // ------------------------------------------------------------------ export status (L31)
+
+    /// Remember that the photos of an export's per-photo results (`{photo, path}`) were exported
+    /// now, and save `exports.json`.
+    pub fn record_exports(&mut self, files: &[serde_json::Value]) {
+        let now = (self.clock)();
+        let mut n = 0;
+        for f in files.iter().filter(|f| f.get("path").is_some()) {
+            if let Some(id) = f.get("photo").and_then(serde_json::Value::as_u64) {
+                self.export_log.insert(id, now.clone());
+                n += 1;
+            }
+        }
+        if n > 0 {
+            self.save_exports();
+        }
+    }
+
+    /// Write `exports.json` (no-op for in-memory sessions).
+    pub fn save_exports(&mut self) {
+        let v = serde_json::to_vec(&ExportsFile { photos: self.export_log.clone() }).unwrap_or_default();
+        let Some(lib) = self.library.as_mut() else { return };
+        if let Err(e) = lib.files.write_atomic("exports.json", &v) {
+            log::error!("library: exports.json: {e}");
+        }
+    }
+
+    // ------------------------------------------------------------------ catalog backups
+
+    /// Where backups go: the chosen folder, else `Backups` in the library (`None` when the library
+    /// isn't a folder on disk).
+    pub fn backup_root(&self) -> Option<PathBuf> {
+        let lib = self.library.as_ref().filter(|l| l.on_disk)?;
+        Some(match self.backup.dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+            Some(d) => PathBuf::from(d),
+            None => lib.dir.join(crate::backup::DIR_NAME),
+        })
+    }
+
+    /// A backup is due now, by the schedule (asked when quitting).
+    pub fn backup_due(&self) -> bool {
+        self.backup_root().is_some() && self.backup.due(&(self.clock)())
+    }
+
+    /// Back up the catalog and the library's settings now (see [`crate::backup`]): saved first,
+    /// then written from memory, verified and pruned per [`crate::backup::BackupPrefs`], then
+    /// compacted if `optimize`. Returns the new backup's folder.
+    pub fn backup_now(&mut self, note: Option<String>, verify: bool, optimize: bool) -> Result<serde_json::Value> {
+        let root = self.backup_root().ok_or_else(|| EngineError::Other("backup: this library isn't a folder on disk".into()))?;
+        if self.interaction.is_some() {
+            return Err(EngineError::Other("backup: finish the slider drag or brush stroke first".into()));
+        }
+        // everything in memory goes into the backup, saved or not; save what can be saved
+        let _ = self.persist();
+        self.save_view();
+        let _ = self.save_prefs();
+        let created = (self.clock)();
+        let Some(lib) = self.library.as_mut() else { return Err(EngineError::Other("backup: no library".into())) };
+        let seq = lib.journal.seq() + self.pending_log.len() as u64;
+        let mut settings = Vec::new();
+        for name in crate::backup::SETTINGS_FILES {
+            if let Ok(Some(b)) = lib.files.read(name) {
+                settings.push((name, b));
+            }
+        }
+        let library = lib.dir.display().to_string();
+        let contents = crate::backup::Contents { catalog: &self.catalog, seq, settings, created: &created, library: &library, note };
+        let t0 = web_time::Instant::now();
+        let dir = crate::backup::write(&root, &contents).map_err(|e| EngineError::Other(format!("backup: {e}")))?;
+        let bytes: u64 = std::fs::read_dir(&dir).map(|rd| rd.flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()).unwrap_or(0);
+        if verify && let Err(e) = crate::backup::verify(&dir) {
+            return Err(EngineError::Other(format!("backup written to {} but it doesn't read back: {e}", dir.display())));
+        }
+        self.backup.last = Some(created.clone());
+        if self.backup.schedule == crate::backup::Schedule::NextExit {
+            self.backup.schedule = crate::backup::Schedule::Weekly;
+        }
+        // older backups go only once the new one is known good
+        let removed = if verify { crate::backup::prune(&root, self.backup.keep) } else { vec![] };
+        let _ = self.save_prefs();
+        let optimized = optimize && self.compact_library().is_ok();
+        Ok(serde_json::json!({
+            "path": dir.display().to_string(),
+            "created": created,
+            "photos": self.catalog.len(),
+            "bytes": bytes,
+            "verified": verify,
+            "optimized": optimized,
+            "removed": removed.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+            "ms": (t0.elapsed().as_secs_f64() * 1e3).round(),
+        }))
+    }
+
+    /// Test the catalog on disk: read `catalog.snap` + `catalog.log` again from scratch (as when
+    /// the library opens) and compare with what is in memory.
+    pub fn check_integrity(&mut self) -> Result<serde_json::Value> {
+        let _ = self.persist();
+        let Some(lib) = self.library.as_mut() else { return Err(EngineError::Other("no library is open".into())) };
+        if let Err(e) = lib.journal.wait() {
+            log::warn!("library: {e}");
+        }
+        let copy = lightcraft_catalog::MemStore::new();
+        for name in [lightcraft_catalog::journal::SNAPSHOT, lightcraft_catalog::journal::LOG] {
+            match lib.files.read(name) {
+                Ok(Some(b)) => copy.set(name, b),
+                Ok(None) => {}
+                Err(e) => return Ok(serde_json::json!({"ok": false, "problems": [format!("{name}: {e}")]})),
+            }
+        }
+        let mut problems = Vec::new();
+        let (photos, albums) = match Journal::open(Box::new(copy)) {
+            Ok((_, cat, report)) => {
+                if report.torn_bytes > 0 || report.damaged.is_some() || report.failed > 0 {
+                    problems.push(format!(
+                        "catalog.log: {} torn bytes, {} op(s) that don't apply{}",
+                        report.torn_bytes,
+                        report.failed,
+                        if report.damaged.is_some() { ", damaged records" } else { "" }
+                    ));
+                }
+                (cat.len(), cat.albums().count())
+            }
+            Err(e) => {
+                problems.push(format!("the catalog on disk doesn't load: {e}"));
+                (0, 0)
+            }
+        };
+        let mem = (self.catalog.len(), self.catalog.albums().count());
+        if problems.is_empty() && self.pending_log.is_empty() && (photos, albums) != mem {
+            problems.push(format!("the catalog on disk has {photos} photos / {albums} albums, memory {} / {}", mem.0, mem.1));
+        }
+        Ok(
+            serde_json::json!({"ok": problems.is_empty(), "photos": photos, "albums": albums, "unsaved": self.pending_log.len(), "problems": problems}),
+        )
+    }
+
+    /// Replace the open library's catalog and settings with a backup's. The backup is verified
+    /// first and the current state is backed up (note "before restoring …"), so a restore can be
+    /// undone by restoring that one. The library is then reopened.
+    pub fn restore_backup(&mut self, dir: &Path) -> Result<serde_json::Value> {
+        let v = crate::backup::verify(dir).map_err(|e| EngineError::Other(format!("restore: {e}")))?;
+        let lib_dir = match self.library.as_ref().filter(|l| l.on_disk) {
+            Some(l) => l.dir.clone(),
+            None => return Err(EngineError::Other("restore: this library isn't a folder on disk".into())),
+        };
+        let safety = self.backup_now(Some(format!("before restoring the backup of {}", v.manifest.created)), true, false)?;
+        self.close_library()?;
+        if let Some(lib) = self.library.as_mut()
+            && let Err(e) = lib.journal.wait()
+        {
+            log::warn!("restore: {e}");
+        }
+        let err = |what: &str, e: std::io::Error| EngineError::Other(format!("restore: {what}: {e}"));
+        let mut store = FsStore::open(&lib_dir).map_err(|e| err("library folder", e))?;
+        store.write_atomic(lightcraft_catalog::journal::SNAPSHOT, &v.snapshot).map_err(|e| err("catalog.snap", e))?;
+        store.write_atomic(lightcraft_catalog::journal::LOG, b"").map_err(|e| err("catalog.log", e))?;
+        for (name, data) in &v.settings {
+            if let Err(e) = store.write_atomic(name, data) {
+                log::error!("restore: {name}: {e}");
+            }
+        }
+        // the backup's prefs carry the backup settings of its day: keep today's
+        let backup_prefs = self.backup.clone();
+        self.open_library(&lib_dir, false)?;
+        self.backup = backup_prefs;
+        let _ = self.save_prefs();
+        Ok(serde_json::json!({
+            "restored": dir.display().to_string(),
+            "created": v.manifest.created,
+            "photos": self.catalog.len(),
+            "safetyBackup": safety.get("path").cloned().unwrap_or_default(),
+        }))
     }
 }

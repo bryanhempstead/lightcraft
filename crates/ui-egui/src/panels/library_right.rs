@@ -86,7 +86,19 @@ fn note(ui: &mut egui::Ui, text: &str) {
 
 /// The Quick Develop rows: (label, control, small step, big step). Classic's buttons are ⅓ and 1
 /// stop for Exposure and 5 / 20 for the rest.
-pub const QUICK_ROWS: [(&str, &str, f64, f64); 10] = [
+/// Quick Develop ▸ Crop Ratio choices (label, `crop.aspect` value).
+pub const QUICK_CROPS: [(&str, &str); 8] = [
+    ("Original", "original"),
+    ("1 x 1", "1x1"),
+    ("4 x 5", "4x5"),
+    ("8.5 x 11", "8.5x11"),
+    ("5 x 7", "5x7"),
+    ("2 x 3", "2x3"),
+    ("16 x 9", "16x9"),
+    ("4 x 3", "4x3"),
+];
+
+pub const QUICK_ROWS: [(&str, &str, f64, f64); 11] = [
     ("Temperature", "wb.temp", 100.0, 500.0),
     ("Tint", "wb.tint", 5.0, 20.0),
     ("Exposure", "light.exposure", 1.0 / 3.0, 1.0),
@@ -95,6 +107,7 @@ pub const QUICK_ROWS: [(&str, &str, f64, f64); 10] = [
     ("Shadows", "light.shadows", 5.0, 20.0),
     ("Whites", "light.whites", 5.0, 20.0),
     ("Blacks", "light.blacks", 5.0, 20.0),
+    ("Texture", "effects.texture", 5.0, 20.0),
     ("Clarity", "effects.clarity", 5.0, 20.0),
     ("Vibrance", "color.vibrance", 5.0, 20.0),
 ];
@@ -148,6 +161,28 @@ fn quick_develop(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     Ok(_) => app
                         .toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name} · {n} photo{}", if n == 1 { "" } else { "s" }, name = name, n = n)),
                     Err(e) => app.toast(ui.ctx(), e),
+                }
+            }
+        });
+    });
+    // Crop Ratio and Treatment (L13)
+    row(ui, "Crop Ratio", &mut |ui| {
+        let r = crate::widgets::dropdown(ui, "quickCrop", crate::i18n::tr("Choose…"), t.font(12.0), t.text);
+        egui::Popup::menu(&r).show(|ui| {
+            for (label, aspect) in QUICK_CROPS {
+                if ui.button(label).clicked() {
+                    let _ = on_selection(app, "crop.aspect", json!({"aspect": aspect}));
+                }
+            }
+        });
+    });
+    row(ui, "Treatment", &mut |ui| {
+        let bw = app.session.active().and_then(|id| app.session.develop_of(id)).is_some_and(|d| d.treatment == lightcraft_develop::Treatment::Bw);
+        let r = crate::widgets::dropdown(ui, "quickTreatment", crate::i18n::tr(if bw { "Black & White" } else { "Color" }), t.font(12.0), t.text);
+        egui::Popup::menu(&r).show(|ui| {
+            for (label, want) in [("Color", false), ("Black & White", true)] {
+                if ui.selectable_label(bw == want, crate::i18n::tr(label)).clicked() {
+                    let _ = on_selection(app, "develop.treatment", json!({"bw": want}));
                 }
             }
         });

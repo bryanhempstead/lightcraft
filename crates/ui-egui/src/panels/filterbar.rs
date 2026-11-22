@@ -13,7 +13,7 @@ use crate::widgets::register;
 
 pub const HEIGHT: f32 = 40.0;
 /// Bar width (points) below which the controls take two rows.
-const WIDE: f32 = 1240.0;
+const WIDE: f32 = 1800.0;
 
 /// Colour-label swatches (UI colours, our own choice).
 pub use crate::theme::label_color;
@@ -94,9 +94,10 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    // one row when there is room, else the metadata pickers and actions go to a second row
+    // one row when there is room, else three: attributes / kind and metadata / text and actions
     let two_rows = ui.available_width() < WIDE;
-    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), if two_rows { 2.0 * HEIGHT - 8.0 } else { HEIGHT }), Sense::hover());
+    let rows = if two_rows { 3.0 } else { 1.0 };
+    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), rows * (HEIGHT - 8.0) + 8.0), Sense::hover());
     ui.painter().rect_filled(bar, 0.0, t.chrome);
     ui.painter().line_segment([bar.left_bottom(), bar.right_bottom()], Stroke::new(1.0, t.divider));
     register(ui.ctx(), "filterbar", bar);
@@ -109,6 +110,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let mut row1 = row(ui, 0.0);
     let mut row2 = row(ui, 1.0);
+    let mut row3 = row(ui, 2.0);
     let ui = &mut row1;
 
     // rating: operator + stars
@@ -195,9 +197,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             filter(app, json!({"label": Value::Null, "labels": names}));
         }
     }
+    // No Label: photos without one (with others on: those or none)
+    let resp = toggle(ui, "label-none", f.no_label, "No label (click colours too to show those or none)", |p, r, c| {
+        p.circle_stroke(r.center(), 5.0, egui::Stroke::new(1.2, c));
+    });
+    if resp.clicked() {
+        filter(app, json!({"noLabel": !f.no_label}));
+    }
     ui.add_space(14.0);
 
     // kind + edited
+    let ui: &mut egui::Ui = if two_rows { &mut row2 } else { &mut row1 };
     let kind_label = match f.kind {
         None => "All types",
         Some(MediaKind::Image) => "Photos",
@@ -232,6 +242,30 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         )
         .collect(),
     );
+    let copy_label = match (f.virtual_copy, f.stacked) {
+        (Some(true), _) => "Virtual copies",
+        (Some(false), _) => "Originals",
+        (None, Some(true)) => "Stacked",
+        (None, Some(false)) => "Not stacked",
+        (None, None) => "All copies",
+    };
+    picker(
+        app,
+        ui,
+        "copies",
+        copy_label,
+        f.virtual_copy.is_some() || f.stacked.is_some(),
+        [
+            ("All copies", json!({"virtualCopy": null, "stacked": null}), f.virtual_copy.is_none() && f.stacked.is_none()),
+            ("Originals", json!({"virtualCopy": false, "stacked": null}), f.virtual_copy == Some(false)),
+            ("Virtual copies", json!({"virtualCopy": true, "stacked": null}), f.virtual_copy == Some(true)),
+            ("Stacked", json!({"virtualCopy": null, "stacked": true}), f.virtual_copy.is_none() && f.stacked == Some(true)),
+            ("Not stacked", json!({"virtualCopy": null, "stacked": false}), f.virtual_copy.is_none() && f.stacked == Some(false)),
+        ]
+        .into_iter()
+        .map(|(l, v, on)| (l.to_string(), v, on))
+        .collect(),
+    );
     let edited_label = match f.edited {
         None => "Edited or not",
         Some(true) => "Edited",
@@ -249,8 +283,24 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .collect(),
     );
 
+    let exported_label = match f.exported {
+        None => "Exported or not",
+        Some(true) => "Exported",
+        Some(false) => "Not exported",
+    };
     // metadata pickers
     let ui: &mut egui::Ui = if two_rows { &mut row2 } else { &mut row1 };
+    picker(
+        app,
+        ui,
+        "exported",
+        exported_label,
+        f.exported.is_some(),
+        [("Exported or not", Value::Null, None), ("Exported", json!(true), Some(true)), ("Not exported", json!(false), Some(false))]
+            .into_iter()
+            .map(|(l, v, e)| (l.to_string(), json!({"exported": v}), f.exported == e))
+            .collect(),
+    );
     let values = app.caches.filter_values(&app.session.catalog);
     let (cameras, lenses, keywords) = (values.cameras.clone(), values.lenses.clone(), values.keywords.clone());
     for (id, key, all_label, current, values) in [
@@ -263,6 +313,55 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let shown = current.clone().unwrap_or_else(|| all_label.to_string());
         let shown = if shown.chars().count() > 22 { format!("{}…", shown.chars().take(21).collect::<String>()) } else { shown };
         picker(app, ui, id, &shown, current.is_some(), items);
+    }
+
+    let ui: &mut egui::Ui = if two_rows { &mut row3 } else { &mut row1 };
+    // the Text filter's target and rule (the search field above the grid types the words)
+    let targets = [
+        ("any", "Any field"),
+        ("fileName", "Filename"),
+        ("copyName", "Copy name"),
+        ("title", "Title"),
+        ("caption", "Caption"),
+        ("keywords", "Keywords"),
+        ("metadata", "Metadata"),
+        ("exif", "EXIF"),
+    ];
+    let cur_t = f.text_target.clone().unwrap_or_else(|| "any".into());
+    let shown_t = targets.iter().find(|(k, _)| *k == cur_t).map_or("Any field", |x| x.1);
+    picker(
+        app,
+        ui,
+        "textTarget",
+        shown_t,
+        f.text_target.is_some(),
+        targets.iter().map(|(k, l)| (l.to_string(), json!({"textTarget": if *k == "any" { Value::Null } else { json!(k) }}), cur_t == *k)).collect(),
+    );
+    let rules = [
+        ("containsAll", "Contains all"),
+        ("contains", "Contains"),
+        ("words", "Contains words"),
+        ("notContains", "Doesn't contain"),
+        ("startsWith", "Starts with"),
+        ("endsWith", "Ends with"),
+    ];
+    let cur_r = f.text_rule.clone().unwrap_or_else(|| "containsAll".into());
+    let shown_r = rules.iter().find(|(k, _)| *k == cur_r).map_or("Contains all", |x| x.1);
+    picker(
+        app,
+        ui,
+        "textRule",
+        shown_r,
+        f.text_rule.is_some(),
+        rules
+            .iter()
+            .map(|(k, l)| (l.to_string(), json!({"textRule": if *k == "containsAll" { Value::Null } else { json!(k) }}), cur_r == *k))
+            .collect(),
+    );
+    // the metadata column browser under the bar
+    let r = crate::widgets::text_button(ui, "filterColumns", "columns.", app.ui.column_browser);
+    if r.clicked() {
+        app.ui.column_browser = !app.ui.column_browser;
     }
 
     // save / clear

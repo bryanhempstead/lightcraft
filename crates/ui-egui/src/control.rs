@@ -84,6 +84,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "status": app.ui.status,
         "notices": app.notices,
         "quitPrompt": app.quit_prompt,
+        "backupPrompt": app.backup_prompt,
         "unsaved": app.session.unsaved().map(|(n, e)| json!({"ops": n, "error": e})),
         "libraryProblem": app.library_problem.as_ref().map(crate::panels::library_problem::LibraryProblem::to_json),
         "scan": app.scan.as_ref().map(crate::import::ScanTask::status),
@@ -375,6 +376,29 @@ pub fn default_export_dir() -> String {
 /// (exact output file, single photo), `ids` (default: the selection, else the active photo).
 pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     use lightcraft_engine::export::{Destination, ExportOptions, export_batch};
+    // E05: several presets at once (Lightroom's checked presets), each into a subfolder named
+    // after it under `dir`; run one after another
+    if let Some(names) = p.get("presets").and_then(Value::as_array) {
+        let names: Vec<String> = names.iter().filter_map(Value::as_str).map(str::to_string).collect();
+        if names.is_empty() {
+            return Err("`presets` names no preset".into());
+        }
+        let mut out = Vec::new();
+        for name in names {
+            let mut q = p.clone();
+            if let Some(o) = q.as_object_mut() {
+                o.remove("presets");
+                o.insert("preset".into(), json!(name));
+                o.insert("background".into(), json!(false));
+                o.entry("subfolder").or_insert_with(|| json!(name.replace(['/', '\\', ':'], "-")));
+            }
+            match export_active(app, &q) {
+                Ok(r) => out.push(json!({"preset": name, "files": r["files"]})),
+                Err(e) => out.push(json!({"preset": name, "error": e})),
+            }
+        }
+        return Ok(json!({"presets": out}));
+    }
     let p = &app.session.export_params(p)?;
     let mut opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
     if let (Some(path), None) = (p.get("path").and_then(Value::as_str), p.get("format")) {
@@ -409,7 +433,7 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
             last_dir.map(str::to_string).unwrap_or_else(default_export_dir)
         }
     };
-    if dir.is_empty() && exact.is_none() {
+    if dir.is_empty() && exact.is_none() && !opts.same_folder {
         return Err(NO_EXPORT_FOLDER.into());
     }
     let to = Destination { dir: dir.clone(), exact };
@@ -419,7 +443,11 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
         crate::export_task::start(app, items, opts, to)?
     } else {
         let w = app.services.write.as_mut().ok_or("no writer")?;
-        json!({"files": export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?})
+        let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
+        let after = lightcraft_engine::export::post_process(&opts, &files);
+        app.session.record_exports(&files);
+        let added = lightcraft_engine::export::add_to_catalog(&mut app.session, &opts, &files);
+        json!({"files": files, "postProcessing": after, "addedToCatalog": added})
     };
     // remember for Export with Previous (and to prefill the dialog)
     let mut last = p.clone();

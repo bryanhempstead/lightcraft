@@ -101,6 +101,44 @@ fn virtual_copy(s: &mut Session, src: PhotoId, name: Option<&str>) -> Result<Opt
     Ok(Some(id))
 }
 
+/// Lightroom's Set Copy as Master (L04): virtual copy `vc` becomes the original and its original a
+/// virtual copy (with the copy's old name); the master's other copies follow the new original, and
+/// it takes the old master's place on top of their stack. Every record keeps its own settings,
+/// rating, flag, metadata, albums and history — only the roles swap. One undo step.
+fn set_copy_as_original(s: &mut Session, vc: PhotoId) -> Result<Option<PhotoId>> {
+    let Some(v) = s.catalog.photo(vc).cloned() else { return Ok(None) };
+    let Some(master) = v.copy_of else { return Ok(None) };
+    let Some(m) = s.catalog.photo(master).cloned() else { return Ok(None) };
+    let mut ops = Vec::new();
+    let mut readd = Vec::new();
+    let mut nm = (*m).clone();
+    nm.copy_of = Some(vc);
+    nm.copy_name = v.copy_name.clone().or_else(|| Some("Copy 1".into()));
+    readd.push(nm);
+    let mut nv = (*v).clone();
+    nv.copy_of = None;
+    nv.copy_name = None;
+    readd.push(nv);
+    for o in s.catalog.photos().filter(|p| p.copy_of == Some(master) && p.id != vc) {
+        let mut no = (**o).clone();
+        no.copy_of = Some(vc);
+        readd.push(no);
+    }
+    for p in &readd {
+        ops.push(Op::RemovePhoto { id: p.id });
+    }
+    ops.extend(readd.into_iter().map(|p| Op::AddPhoto { photo: Box::new(p) }));
+    if let Some(st) = s.catalog.stack_of(master).cloned()
+        && let (Some(a), Some(b)) = (st.position(master), st.position(vc))
+    {
+        let mut photos = st.photos.clone();
+        photos.swap(a, b);
+        ops.push(Op::SetStack { id: st.id, photos, collapsed: st.collapsed });
+    }
+    s.commit("Set Copy as Original", Op::Batch { ops })?;
+    Ok(Some(master))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -124,6 +162,28 @@ pub fn specs() -> Vec<CommandSpec> {
                     s.selection = Selection { ids: made.clone(), active: Some(*last) };
                 }
                 Ok(json!({"ids": made.iter().map(|i| i.0).collect::<Vec<_>>()}))
+            }
+        ),
+        cmd!(
+            "photo.setCopyAsOriginal",
+            "Set Copy as Original",
+            ["Photo"],
+            None,
+            "{ids?} — each virtual copy becomes the original (its original becomes a virtual copy with the copy's name; the other copies follow); settings, ratings and albums stay with each photo → {changed, ids: [new originals]}",
+            has_selection,
+            |s, p| {
+                let mut done = Vec::new();
+                for t in s.targets(p) {
+                    // two copies of one original in the selection: the first one wins
+                    if s.catalog.photo(t).is_some_and(|ph| ph.copy_of.is_some()) && set_copy_as_original(s, t)?.is_some() {
+                        done.push(t.0);
+                    }
+                }
+                if done.is_empty() {
+                    return Err(bad("photo.setCopyAsOriginal", "select a virtual copy"));
+                }
+                s.merge_undo(done.len(), "Set Copy as Original");
+                Ok(json!({"changed": done.len(), "ids": done}))
             }
         ),
         cmd!(

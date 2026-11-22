@@ -4,12 +4,14 @@
 //! delete), `album.*`, `develop.*` (settings), `crop.*`, `mask.*`, `preset.*`, `version.*`,
 //! `edit.*` (undo/redo), and queries (`catalog.query`, `photo.inspect`, `develop.get`…).
 
+mod backup;
 mod before;
 pub(crate) mod browse;
 mod color;
 pub(crate) mod convert;
 mod cull;
 pub mod curves;
+mod delete;
 pub(crate) mod develop;
 mod edit;
 mod export;
@@ -24,6 +26,7 @@ mod masks;
 mod merge;
 pub mod metadata;
 pub mod missing;
+pub mod naming;
 mod organize;
 mod prefs;
 mod preset_files;
@@ -150,6 +153,9 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(lightroom::specs());
         v.extend(shoot::specs());
         v.extend(shoots::specs());
+        v.extend(backup::specs());
+        v.extend(delete::specs());
+        v.extend(naming::specs());
         v
     })
 }

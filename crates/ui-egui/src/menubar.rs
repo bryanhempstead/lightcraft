@@ -98,6 +98,11 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "library.selectAll",
             "library.selectNone",
+            "library.invertSelection",
+            "library.selectFlagged",
+            "library.deselectUnflagged",
+            "library.selectEdited",
+            "library.deselectActive",
             "@Select by",
             "---",
             "view.focusSearch",
@@ -286,8 +291,8 @@ pub(crate) fn selection_deleted(app: &LightcraftApp) -> bool {
 /// Restore and Delete Permanently replace Delete for photos in Recently Deleted.
 fn host_supports(app: &LightcraftApp, id: &str) -> bool {
     match id {
-        "file.backupLibrary" => app.services.backup_library.is_some(),
-        "file.restoreLibrary" => app.services.restore_library.is_some(),
+        "file.backupLibrary" => app.services.backup_library.is_some() || app.session.backup_root().is_some(),
+        "file.restoreLibrary" => app.services.restore_library.is_some() || app.session.backup_root().is_some(),
         "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
         "photo.delete" => !selection_deleted(app),
         // only where the trash is on screen
@@ -493,6 +498,14 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
                 ("File Name", FileName, "fileName"),
                 ("Rating", Rating, "rating"),
                 ("File Size", FileSize, "fileSize"),
+                ("Pick", Pick, "pick"),
+                ("Label Color", LabelColor, "labelColor"),
+                ("Label Text", LabelText, "labelText"),
+                ("Edit Count", EditCount, "editCount"),
+                ("Aspect Ratio", AspectRatio, "aspectRatio"),
+                ("File Type", FileType, "fileType"),
+                ("File Extension", Extension, "extension"),
+                ("Pixel Dimensions", PixelCount, "pixelCount"),
                 ("Random", Random, "random"),
             ]
             .into_iter()

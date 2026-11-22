@@ -289,6 +289,14 @@ fn write_snapshot(store: &mut dyn Store, seq: u64, catalog: &Catalog) -> std::io
     Ok(SnapshotTiming { serialize_ms, write_sync_ms: (ms_since(t0) - serialize_ms).max(0.0), bytes, ..Default::default() })
 }
 
+/// The bytes of a `catalog.snap` holding `catalog` as the state after op `seq` — the same bytes
+/// [`Journal::snapshot`] writes (catalog backups keep them; [`Journal::open`] reads them back).
+pub fn snapshot_bytes(seq: u64, catalog: &Catalog) -> std::io::Result<Vec<u8>> {
+    let mut m = crate::store::MemStore::new();
+    write_snapshot(&mut m, seq, catalog)?;
+    m.files.lock().unwrap_or_else(|e| e.into_inner()).remove(SNAPSHOT).ok_or_else(|| std::io::Error::other("snapshot not written"))
+}
+
 /// Just the identification of `catalog.snap` (read before the catalog itself).
 #[derive(serde::Deserialize)]
 struct SnapHeader {

@@ -795,6 +795,12 @@ fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Album) {
         if a.quick && ui.button(crate::i18n::tr("Clear Quick Collection")).clicked() {
             let _ = app.run("album.clearQuick", json!({}));
         }
+        if a.quick && ui.button(crate::i18n::tr("Save Quick Collection…")).clicked() {
+            crate::panels::dialogs::prompt(app, "Save Quick Collection", "Album name", "", "album.saveQuick", json!({}), "name");
+        }
+        if !a.folder && !a.quick && ui.button(crate::i18n::tr("Duplicate Album")).clicked() {
+            let _ = app.run("album.duplicate", json!({"id": a.id.0}));
+        }
         if a.is_smart() && ui.button(crate::i18n::tr("Edit Smart Album…")).clicked() {
             // older smart albums keep their filter fields; the editor works on the rule set
             let rules = a.smart.as_ref().and_then(|f| f.rule_set.clone()).unwrap_or_default();
@@ -1436,6 +1442,13 @@ fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &F
         ui.separator();
         if ui.button(crate::i18n::tr("Synchronize Folder…")).clicked() {
             synchronize(app, ui.ctx(), path, None);
+            ui.close();
+        }
+        if ui.button(crate::i18n::tr("Create Album from Folder")).clicked() {
+            match app.run("album.fromFolder", json!({"path": path})) {
+                Ok(r) => app.toast(ui.ctx(), format!("Album “{name}” with {} photos", r["photos"].as_u64().unwrap_or(0))),
+                Err(e) => app.toast(ui.ctx(), e),
+            }
             ui.close();
         }
         if app.services.pick_folder.is_some()

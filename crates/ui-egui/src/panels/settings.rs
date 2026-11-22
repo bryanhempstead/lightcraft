@@ -21,6 +21,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("general", "General"),
     ("import", "Import"),
     ("performance", "Performance"),
+    ("backup", "bkup."),
     ("interface", "Interface"),
     ("shortcuts", "shrt."),
     ("controllers", "ctrl."),
@@ -49,6 +50,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
     match tab.as_str() {
         "import" => import_tab(app, ui, &t),
         "performance" => performance_tab(app, ui, &t),
+        "backup" => backup_tab(app, ui, &t),
         "interface" => interface_tab(app, ui, &t),
         "shortcuts" => shortcuts_tab(app, ui, &t),
         "controllers" => controllers_tab(app, ui, &t),
@@ -134,7 +136,14 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     heading(ui, t, crate::i18n::tr("Culling"));
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
-    check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
+    check(ui, "settings.trashDelete", &mut app.ui.settings.trash_delete, "Delete asks like Lightroom: Delete from Disk (to the Trash) or Remove");
+    if !app.ui.settings.trash_delete {
+        check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
+    }
+    let mut autos = app.session.auto_versions;
+    if check(ui, "settings.autoVersions", &mut autos, "Keep an automatic version when leaving an edited photo (Lightroom doesn't)") {
+        let _ = app.run("library.preferences", json!({"autoVersions": autos}));
+    }
     heading(ui, t, crate::i18n::tr("External Editor"));
     row(ui, t, crate::i18n::tr("Application"), |ui| {
         let r = ui
@@ -205,6 +214,17 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Raw photos"), |ui| {
         if let Some(v) = preset_combo(app, ui, "settingsRawPreset", d.raw_preset.as_deref(), "LightCraft Default") {
             let _ = app.run("library.preferences", json!({"import": {"rawPreset": v}}));
+        }
+    });
+    let (mut lens, mut ca) = (d.lens_corrections, d.remove_ca);
+    row(ui, t, "", |ui| {
+        if check(ui, "settings.lensCorrections", &mut lens, "Enable lens profile corrections") {
+            let _ = app.run("library.preferences", json!({"import": {"lensCorrections": lens}}));
+        }
+    });
+    row(ui, t, "", |ui| {
+        if check(ui, "settings.removeCa", &mut ca, "Remove chromatic aberration") {
+            let _ = app.run("library.preferences", json!({"import": {"removeCa": ca}}));
         }
     });
     let mut per = d.per_camera;
@@ -363,6 +383,102 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if app.session.library.is_none() {
         hint(ui, t, crate::i18n::tr("In-memory session: these settings last until LightCraft quits."));
     }
+}
+
+// -------------------------------------------------------------------------------------- Backup
+
+/// Lightroom's Catalog Settings ▸ Backup: when LightCraft offers to back up (on quit), where, how
+/// many to keep, test + optimize; Back Up Now and the backup list (restore).
+fn backup_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let cur = app.session.execute("library.backupSettings", &json!({})).unwrap_or_default();
+    if cur["available"] != true {
+        heading(ui, t, crate::i18n::tr("Catalog backup"));
+        hint(ui, t, crate::i18n::tr("This library isn't a folder on disk, so there is nothing to back up here."));
+        return;
+    }
+    heading(ui, t, crate::i18n::tr("Catalog backup"));
+    row(ui, t, crate::i18n::tr("Back up"), |ui| {
+        use lightcraft_engine::backup::Schedule as S;
+        let mut v = app.session.backup.schedule;
+        let opts = [
+            (S::Never, "never."),
+            (S::EveryExit, "each.quit."),
+            (S::Daily, "daily."),
+            (S::Weekly, "weekly."),
+            (S::Monthly, "monthly."),
+            (S::NextExit, "next.quit."),
+        ];
+        if choices(ui, "settingsBackupWhen", &opts, &mut v) {
+            let _ = app.run("library.backupSettings", json!({"schedule": v.id()}));
+        }
+    });
+    hint(ui, t, crate::i18n::tr("Asked when LightCraft quits, like Lightroom; the catalog and the library's settings are copied, never the photos."));
+    row(ui, t, crate::i18n::tr("Folder"), |ui| {
+        ui.add(egui::Label::new(RichText::new(cur["dir"].as_str().unwrap_or("")).color(t.text)).truncate());
+    });
+    row(ui, t, "", |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let can = app.services.pick_folder.is_some();
+        let r = ui.add_enabled(can, egui::Button::new("chg."));
+        register(ui.ctx(), "button:settingsBackupFolder", r.rect);
+        if r.clicked()
+            && let Some(dir) = app.services.pick_folder.as_mut().and_then(|f| f())
+        {
+            let _ = app.run("library.backupSettings", json!({"dir": dir}));
+        }
+        if cur["customDir"].is_string() {
+            let r = ui.button("default.");
+            register(ui.ctx(), "button:settingsBackupDefault", r.rect);
+            if r.clicked() {
+                let _ = app.run("library.backupSettings", json!({"dir": null}));
+            }
+        }
+    });
+    row(ui, t, crate::i18n::tr("Keep"), |ui| {
+        let opts = [(5u32, "5"), (10, "10"), (20, "20"), (50, "50"), (0, "all.")];
+        let mut v = app.session.backup.keep;
+        if choices(ui, "settingsBackupKeep", &opts, &mut v) {
+            let _ = app.run("library.backupSettings", json!({"keep": v}));
+        }
+    });
+    let mut verify = app.session.backup.verify;
+    if check(ui, "settings.backupVerify", &mut verify, "Test each backup after writing it (sizes, checksums, the catalog loads)") {
+        let _ = app.run("library.backupSettings", json!({"verify": verify}));
+    }
+    let mut optimize = app.session.backup.optimize;
+    if check(ui, "settings.backupOptimize", &mut optimize, "Optimize the catalog after backing up") {
+        let _ = app.run("library.backupSettings", json!({"optimize": optimize}));
+    }
+    let last = cur["last"].as_str().map(lightcraft_engine::catalog::dates::display_time).unwrap_or_else(|| crate::i18n::tr("never").to_string());
+    row(ui, t, crate::i18n::tr("Last backup"), |ui| {
+        ui.label(RichText::new(last).color(t.text));
+    });
+    ui.add_space(4.0);
+    row(ui, t, "", |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let r = ui.button("back.up.now.");
+        register(ui.ctx(), "button:settingsBackupNow", r.rect);
+        if r.clicked() {
+            match app.run("library.backup", json!({})) {
+                Ok(v) => app.toast(ui.ctx(), format!("Backed up {n} photos", n = v["photos"].as_u64().unwrap_or(0))),
+                Err(e) => app.toast_error(ui.ctx(), e),
+            }
+        }
+        let r = ui.button("backups.");
+        register(ui.ctx(), "button:settingsBackups", r.rect);
+        if r.clicked() {
+            let _ = app.run("file.restoreLibrary", json!({}));
+        }
+        let r = ui.button("test.catalog.");
+        register(ui.ctx(), "button:settingsCheckIntegrity", r.rect);
+        if r.clicked() {
+            match app.run("library.checkIntegrity", json!({})) {
+                Ok(v) if v["ok"] == true => app.toast(ui.ctx(), crate::i18n::tr("The catalog on disk is complete and matches.")),
+                Ok(v) => app.toast_error(ui.ctx(), v["problems"][0].as_str().unwrap_or("problem").to_string()),
+                Err(e) => app.toast_error(ui.ctx(), e),
+            }
+        }
+    });
 }
 
 // --------------------------------------------------------------------------------- Performance
@@ -539,6 +655,7 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         );
     });
     check(ui, "settings.showFilenames", &mut app.ui.show_filenames, "Square Grid: show file names and formats");
+    check(ui, "settings.gridIndex", &mut app.ui.settings.grid_index, "Square Grid: show each photo's index number");
     heading(ui, t, crate::i18n::tr("Detail"));
     check(ui, "settings.navigator", &mut app.ui.navigator, "Show the Navigator while zoomed in");
     row(ui, t, crate::i18n::tr("Info overlay"), |ui| {

@@ -646,6 +646,13 @@ fn leaving_an_edited_photo_keeps_an_auto_version() {
     use lightcraft_catalog::PhotoId;
     let mut s = demo();
     let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    // off by default, like Lightroom: leaving an edited photo adds nothing
+    let none_before = s.catalog.photo(PhotoId(ids[0])).unwrap().versions.len();
+    s.execute("library.select", &json!({"ids": [ids[0]]})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.3})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[1]]})).unwrap();
+    assert_eq!(s.catalog.photo(PhotoId(ids[0])).unwrap().versions.len(), none_before);
+    s.execute("library.preferences", &json!({"autoVersions": true})).unwrap();
     s.execute("library.select", &json!({"ids": [ids[0]]})).unwrap();
     let before = s.catalog.photo(PhotoId(ids[0])).unwrap().versions.len();
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.4})).unwrap();

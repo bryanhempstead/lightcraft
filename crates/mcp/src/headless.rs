@@ -89,6 +89,13 @@ impl Headless {
         // Single-photo exports also report path/width/height at the top level (back-compat).
         let mut out = files.first().cloned().unwrap_or_else(|| json!({}));
         out["files"] = json!(files);
+        self.session.record_exports(&files);
+        if let Some(added) = lightcraft_engine::export::add_to_catalog(&mut self.session, &opts, &files) {
+            out["addedToCatalog"] = added;
+        }
+        if let Some(after) = lightcraft_engine::export::post_process(&opts, &files) {
+            out["postProcessing"] = after;
+        }
         Ok(out)
     }
 }

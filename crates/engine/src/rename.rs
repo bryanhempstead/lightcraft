@@ -75,6 +75,9 @@ fn format_date(iso: &str, fmt: &str) -> String {
             Some('H') => out.push_str(&part(11, 13)),
             Some('M') => out.push_str(&part(14, 16)),
             Some('S') => out.push_str(&part(17, 19)),
+            Some('B') => out.push_str(month_name(&part(5, 7)).0),
+            Some('b') => out.push_str(month_name(&part(5, 7)).1),
+            Some('j') => out.push_str(&julian_day(iso).map(|d| format!("{d:03}")).unwrap_or_default()),
             Some('%') => out.push('%'),
             Some(o) => {
                 out.push('%');
@@ -84,6 +87,120 @@ fn format_date(iso: &str, fmt: &str) -> String {
         }
     }
     out
+}
+
+/// `"01"` → ("January", "Jan").
+fn month_name(mm: &str) -> (&'static str, &'static str) {
+    const M: [(&str, &str); 12] = [
+        ("January", "Jan"),
+        ("February", "Feb"),
+        ("March", "Mar"),
+        ("April", "Apr"),
+        ("May", "May"),
+        ("June", "Jun"),
+        ("July", "Jul"),
+        ("August", "Aug"),
+        ("September", "Sep"),
+        ("October", "Oct"),
+        ("November", "Nov"),
+        ("December", "Dec"),
+    ];
+    mm.parse::<usize>().ok().and_then(|m| m.checked_sub(1)).and_then(|i| M.get(i).copied()).unwrap_or(("", ""))
+}
+
+/// Day of the year (1–366) of an ISO date.
+fn julian_day(iso: &str) -> Option<u32> {
+    let y: u32 = iso.get(0..4)?.parse().ok()?;
+    let m: usize = iso.get(5..7)?.parse().ok()?;
+    let d: u32 = iso.get(8..10)?.parse().ok()?;
+    let leap = (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400);
+    const BEFORE: [u32; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let before = *BEFORE.get(m.checked_sub(1)?)?;
+    Some(before + d + u32::from(leap && m > 2))
+}
+
+/// How the extension of a generated name is written (Lightroom's Extensions popup).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExtCase {
+    /// As the original (or the format) spells it.
+    #[default]
+    Keep,
+    Lower,
+    Upper,
+}
+
+impl ExtCase {
+    pub fn parse(s: &str) -> Option<ExtCase> {
+        Some(match s {
+            "keep" | "leave" | "asIs" => ExtCase::Keep,
+            "lower" | "lowercase" => ExtCase::Lower,
+            "upper" | "uppercase" => ExtCase::Upper,
+            _ => return None,
+        })
+    }
+    pub fn apply(self, ext: &str) -> String {
+        match self {
+            ExtCase::Keep => ext.to_string(),
+            ExtCase::Lower => ext.to_lowercase(),
+            ExtCase::Upper => ext.to_uppercase(),
+        }
+    }
+}
+
+/// What a template can use beyond the photo: Lightroom's Custom Text, Shoot Name, Total #,
+/// Import # and Image #, and the extension case.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Batch {
+    /// `{total}`: how many photos the batch names.
+    pub total: usize,
+    /// `{text}`: Custom Text.
+    pub text: String,
+    /// `{shoot}`: Shoot Name (import).
+    pub shoot: String,
+    /// `{import}`: this import's number (counts imports).
+    pub import_no: u64,
+    /// `{image}`: the first photo's number in the photos-imported count; each next photo +1.
+    pub image_start: u64,
+    pub ext_case: ExtCase,
+}
+
+impl Batch {
+    /// Custom text / shoot name with `{` `}` taken out, so a value can't turn into a token.
+    pub fn clean(s: &str) -> String {
+        s.replace(['{', '}'], "").trim().to_string()
+    }
+}
+
+/// A named file-name template (Lightroom's Filename Template presets).
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+pub struct NamingTemplate {
+    pub name: String,
+    pub template: String,
+}
+
+/// Lightroom Classic's built-in filename templates, as LightCraft tokens.
+pub const BUILTIN_TEMPLATES: &[(&str, &str)] = &[
+    ("Custom Name", "{text}"),
+    ("Custom Name (x of y)", "{text} ({seq} of {total})"),
+    ("Custom Name - Original File Number", "{text}-{num}"),
+    ("Custom Name - Sequence", "{text}-{seq}"),
+    ("Date - Filename", "{date:%Y%m%d}-{name}"),
+    ("Filename", "{name}"),
+    ("Filename - Sequence", "{name}-{seq}"),
+    ("Original Filename", "{original}"),
+    ("Shoot Name - Original File Number", "{shoot}-{num}"),
+    ("Shoot Name - Sequence", "{shoot}-{seq}"),
+];
+
+/// A template by name: built-in first, then `user` (case-insensitive).
+pub fn named_template<'a>(user: &'a [NamingTemplate], name: &str) -> Option<std::borrow::Cow<'a, str>> {
+    let n = name.trim();
+    BUILTIN_TEMPLATES
+        .iter()
+        .find(|(b, _)| b.eq_ignore_ascii_case(n) || b.replace(" - ", " – ").eq_ignore_ascii_case(n))
+        .map(|(_, t)| std::borrow::Cow::Borrowed(*t))
+        .or_else(|| user.iter().find(|u| u.name.eq_ignore_ascii_case(n)).map(|u| std::borrow::Cow::Borrowed(u.template.as_str())))
 }
 
 /// One template token, for help texts and tag pickers. [`TOKENS`] is the single list every UI and
@@ -113,6 +230,41 @@ pub const TOKENS: &[TokenHelp] = &[
     TokenHelp { tag: "{title}", aliases: &[], meaning: "Title metadata" },
     TokenHelp { tag: "{creator}", aliases: &[], meaning: "Creator metadata" },
     TokenHelp { tag: "{ext}", aliases: &[], meaning: "Original extension without the dot" },
+    TokenHelp { tag: "{EXT}", aliases: &[], meaning: "Original extension in capitals" },
+    TokenHelp { tag: "{original}", aliases: &["{originalname}"], meaning: "Original file name (the name it was imported with)" },
+    TokenHelp { tag: "{originalnum}", aliases: &[], meaning: "Original number suffix (the number at the end of the original name)" },
+    TokenHelp { tag: "{copyname}", aliases: &[], meaning: "Virtual copy name" },
+    TokenHelp { tag: "{text}", aliases: &["{custom}"], meaning: "Custom Text (typed in the rename / export / import options)" },
+    TokenHelp { tag: "{shoot}", aliases: &[], meaning: "Shoot Name (import)" },
+    TokenHelp { tag: "{total}", aliases: &["{total:3}"], meaning: "Total #: how many photos are named (zero-padded with :N)" },
+    TokenHelp { tag: "{import}", aliases: &["{import:3}"], meaning: "Import #: the number of this import" },
+    TokenHelp { tag: "{image}", aliases: &["{image:5}"], meaning: "Image #: the photos-imported count, one more per photo" },
+    TokenHelp { tag: "{yyyymmdd}", aliases: &[], meaning: "Capture date, 20260114" },
+    TokenHelp { tag: "{yymmdd}", aliases: &[], meaning: "Capture date, 260114" },
+    TokenHelp { tag: "{yyyy}", aliases: &[], meaning: "Year, 4 digits" },
+    TokenHelp { tag: "{yy}", aliases: &[], meaning: "Year, 2 digits" },
+    TokenHelp { tag: "{month}", aliases: &[], meaning: "Month name (January)" },
+    TokenHelp { tag: "{mon}", aliases: &[], meaning: "Month, short (Jan)" },
+    TokenHelp { tag: "{mm}", aliases: &[], meaning: "Month 01–12" },
+    TokenHelp { tag: "{dd}", aliases: &[], meaning: "Day 01–31" },
+    TokenHelp { tag: "{julian}", aliases: &[], meaning: "Day of the year, 001–366" },
+    TokenHelp { tag: "{hour}", aliases: &[], meaning: "Hour 00–23" },
+    TokenHelp { tag: "{minute}", aliases: &[], meaning: "Minute" },
+    TokenHelp { tag: "{second}", aliases: &[], meaning: "Second" },
+    TokenHelp { tag: "{longdate}", aliases: &[], meaning: "Date as January 14, 2026" },
+    TokenHelp { tag: "{caption}", aliases: &[], meaning: "Caption metadata" },
+    TokenHelp { tag: "{copyright}", aliases: &[], meaning: "Copyright metadata" },
+    TokenHelp { tag: "{location}", aliases: &["{sublocation}"], meaning: "Sublocation" },
+    TokenHelp { tag: "{city}", aliases: &[], meaning: "City" },
+    TokenHelp { tag: "{state}", aliases: &[], meaning: "State / Province" },
+    TokenHelp { tag: "{country}", aliases: &[], meaning: "Country" },
+    TokenHelp { tag: "{make}", aliases: &[], meaning: "Camera make" },
+    TokenHelp { tag: "{model}", aliases: &[], meaning: "Camera model" },
+    TokenHelp { tag: "{focal}", aliases: &[], meaning: "Focal length in mm" },
+    TokenHelp { tag: "{aperture}", aliases: &[], meaning: "Aperture (f-number)" },
+    TokenHelp { tag: "{shutter}", aliases: &[], meaning: "Shutter speed (1-250)" },
+    TokenHelp { tag: "{dimensions}", aliases: &["{width}", "{height}"], meaning: "Pixel dimensions, 6000x4000" },
+    TokenHelp { tag: "{label}", aliases: &[], meaning: "Colour label" },
 ];
 
 /// The `%` directives of `{date:…}`.
@@ -153,12 +305,28 @@ pub fn sample_photo() -> Photo {
     p.meta.iso = Some(400);
     p.meta.title = "Harbour".into();
     p.meta.creator = "Ann Lee".into();
+    p.meta.caption = "Dawn over the harbour".into();
+    p.meta.copyright = "2026 Ann Lee".into();
+    p.meta.location = "Pier 3".into();
+    p.meta.city = "Lisbon".into();
+    p.meta.state = "Lisboa".into();
+    p.meta.country = "Portugal".into();
+    p.meta.focal_mm = Some(35.0);
+    p.meta.aperture = Some(2.8);
+    p.meta.shutter = "1/250".into();
+    p.copy_name = Some("Warm".into());
+    p.label = Some(lightcraft_catalog::ColorLabel::Red);
     p
+}
+
+/// The Custom Text, Shoot Name and numbers the help's examples use.
+pub fn sample_batch() -> Batch {
+    Batch { total: 24, text: "Wedding".into(), shoot: "Smith".into(), import_no: 7, image_start: 120, ext_case: ExtCase::Keep }
 }
 
 /// The token as expanded for [`sample_photo`] (sequence number 1), for the help's example column.
 pub fn token_example(tag: &str) -> String {
-    expand_tokens(tag, &sample_photo(), 1, 1)
+    expand_tokens_in(tag, &sample_photo(), 1, 1, &sample_batch())
 }
 
 /// Why a folder template (`{date:%Y}/{date:%Y%m%d}`) can't be used, if it can't: it must be
@@ -224,14 +392,21 @@ pub fn token_help_json() -> serde_json::Value {
         "tokens": tokens,
         "dateDirectives": directives,
         "notes": TEMPLATE_NOTES,
-        "sample": "IMG_0042.CR3, captured 2026-01-14 05:58:48",
+        "sample": "IMG_0042.CR3, captured 2026-01-14 05:58:48; Custom Text Wedding, Shoot Name Smith, 24 photos, Import # 7",
     })
 }
 
 /// Expand `template` for `p` (sequence number `seq`) into a file name with `p`'s extension.
 pub fn expand(template: &str, p: &Photo, seq: usize) -> String {
+    expand_in(template, p, seq, &Batch::default())
+}
+
+/// [`expand`] with the batch's values and extension case.
+pub fn expand_in(template: &str, p: &Photo, seq: usize, b: &Batch) -> String {
     let (stem, ext) = split_ext(&p.file_name);
-    let out = expand_tokens(template, p, seq, 1);
+    let ext = b.ext_case.apply(ext);
+    let ext = ext.as_str();
+    let out = expand_tokens_in(template, p, seq, 1, b);
     let mut stem_out = sanitize(&out);
     if stem_out.is_empty() {
         stem_out = sanitize(stem);
@@ -245,6 +420,47 @@ pub fn expand(template: &str, p: &Photo, seq: usize) -> String {
 /// The template's tokens replaced for `p` (no extension added, nothing sanitized). A bare `{seq}`
 /// is zero-padded to `seq_width` digits.
 pub fn expand_tokens(template: &str, p: &Photo, seq: usize, seq_width: usize) -> String {
+    expand_tokens_in(template, p, seq, seq_width, &Batch::default())
+}
+
+/// `(make, model)` from LightCraft's one camera string: the make is the first word unless the
+/// model repeats it (`Canon EOS R6` → Canon / EOS R6; `X100F` → "" / X100F).
+fn make_model(camera: &str) -> (String, String) {
+    let c = camera.trim();
+    const MAKES: &[&str] = &[
+        "Canon",
+        "Nikon",
+        "Sony",
+        "Fujifilm",
+        "FUJIFILM",
+        "LEICA",
+        "Leica",
+        "RICOH",
+        "Ricoh",
+        "Panasonic",
+        "OLYMPUS",
+        "Olympus",
+        "OM",
+        "Apple",
+        "Hasselblad",
+        "SIGMA",
+        "Sigma",
+        "Pentax",
+        "PENTAX",
+        "DJI",
+        "Google",
+        "Samsung",
+        "GoPro",
+        "Phase",
+    ];
+    match c.split_once(' ') {
+        Some((m, rest)) if MAKES.iter().any(|x| x.eq_ignore_ascii_case(m)) => (m.to_string(), rest.trim().to_string()),
+        _ => (String::new(), c.to_string()),
+    }
+}
+
+/// [`expand_tokens`] with the batch's Custom Text, Shoot Name, Total #, Import # and Image #.
+pub fn expand_tokens_in(template: &str, p: &Photo, seq: usize, seq_width: usize, b: &Batch) -> String {
     let (stem, ext) = split_ext(&p.file_name);
     let mut out = String::new();
     let mut rest = template;
@@ -257,8 +473,58 @@ pub fn expand_tokens(template: &str, p: &Photo, seq: usize, seq_width: usize) ->
         };
         let tok = &rest[i + 1..i + j];
         let (name, arg) = tok.split_once(':').map(|(a, b)| (a, Some(b))).unwrap_or((tok, None));
+        let width = |d: usize| arg.and_then(|a| a.parse::<usize>().ok()).unwrap_or(d).min(9);
+        let date = p.date();
+        if name.trim() == "EXT" {
+            out.push_str(&ext.to_uppercase());
+            rest = &rest[i + j + 1..];
+            continue;
+        }
         let v = match name.trim().to_ascii_lowercase().as_str() {
             "name" | "filename" => stem.to_string(),
+            "original" | "originalname" => split_ext(p.file_name.as_str()).0.to_string(),
+            "originalnum" => {
+                let o = split_ext(p.file_name.as_str()).0;
+                let digits = o.chars().rev().take_while(char::is_ascii_digit).count();
+                o[o.len() - digits..].to_string()
+            }
+            "copyname" => p.copy_name.clone().unwrap_or_default(),
+            "text" | "custom" => b.text.clone(),
+            "shoot" => b.shoot.clone(),
+            "total" => format!("{:0w$}", b.total.max(seq), w = width(1)),
+            "import" => format!("{:0w$}", b.import_no, w = width(1)),
+            "image" => format!("{:0w$}", b.image_start + (seq as u64).saturating_sub(1), w = width(1)),
+            "yyyymmdd" => format_date(date, "%Y%m%d"),
+            "yymmdd" => format_date(date, "%y%m%d"),
+            "yyyy" => format_date(date, "%Y"),
+            "yy" => format_date(date, "%y"),
+            "month" => format_date(date, "%B"),
+            "mon" => format_date(date, "%b"),
+            "mm" => format_date(date, "%m"),
+            "dd" => format_date(date, "%d"),
+            "julian" => format_date(date, "%j"),
+            "hour" => format_date(date, "%H"),
+            "minute" => format_date(date, "%M"),
+            "second" => format_date(date, "%S"),
+            "longdate" => {
+                let day = format_date(date, "%d");
+                format!("{} {}, {}", format_date(date, "%B"), day.trim_start_matches('0'), format_date(date, "%Y"))
+            }
+            "caption" => p.meta.caption.clone(),
+            "copyright" => p.meta.copyright.clone(),
+            "location" | "sublocation" => p.meta.location.clone(),
+            "city" => p.meta.city.clone(),
+            "state" => p.meta.state.clone(),
+            "country" => p.meta.country.clone(),
+            "make" => make_model(&p.meta.camera).0,
+            "model" => make_model(&p.meta.camera).1,
+            "focal" => p.meta.focal_mm.filter(|f| f.is_finite()).map(|f| format!("{}", f.round() as i64)).unwrap_or_default(),
+            "aperture" => p.meta.aperture.filter(|f| f.is_finite()).map(|f| format!("{f}")).unwrap_or_default(),
+            "shutter" => p.meta.shutter.replace('/', "-"),
+            "dimensions" => format!("{}x{}", p.width, p.height),
+            "width" => p.width.to_string(),
+            "height" => p.height.to_string(),
+            "label" => p.label.map(|l| format!("{l:?}").to_lowercase()).unwrap_or_default(),
             "num" => {
                 let digits = stem.chars().rev().take_while(char::is_ascii_digit).count();
                 stem[stem.len() - digits..].to_string()
@@ -323,6 +589,12 @@ pub(crate) trait MoveFs {
 
 /// The real file system.
 pub(crate) struct RealFs;
+
+/// `a` and `b` name the same file on disk (by identity: also two spellings on a
+/// case-insensitive volume).
+pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
+    RealFs.same_file(a, b)
+}
 
 impl MoveFs for RealFs {
     fn exists(&self, p: &Path) -> bool {
@@ -561,7 +833,19 @@ pub fn rename_photos(cat: &lightcraft_catalog::Catalog, ids: &[PhotoId]) -> Vec<
 /// supplied: the Rename dialog plans its preview on a worker thread (a check can block on a slow
 /// drive). Whether a case-only change names this very file is decided on the disk.
 pub fn plan_rename_photos(photos: &[std::sync::Arc<Photo>], template: &str, start: usize, exists: &dyn Fn(&str) -> bool) -> Vec<RenamePlan> {
-    plan_rename_core(photos, template, start, &|p| exists(&p.to_string_lossy()), &|a, b| RealFs.same_file(a, b))
+    plan_rename_photos_in(photos, template, start, &Batch::default(), exists)
+}
+
+/// [`plan_rename_photos`] with Custom Text, Shoot Name and the extension case (`{total}` = the
+/// photos planned).
+pub fn plan_rename_photos_in(
+    photos: &[std::sync::Arc<Photo>],
+    template: &str,
+    start: usize,
+    b: &Batch,
+    exists: &dyn Fn(&str) -> bool,
+) -> Vec<RenamePlan> {
+    plan_rename_core(photos, template, start, b, &|p| exists(&p.to_string_lossy()), &|a, b| RealFs.same_file(a, b))
 }
 
 /// Plan renaming `photos`: `exists` says whether something answers to a path, `same_file` whether
@@ -570,13 +854,15 @@ fn plan_rename_core(
     photos: &[std::sync::Arc<Photo>],
     template: &str,
     start: usize,
+    batch: &Batch,
     exists: &dyn Fn(&Path) -> bool,
     same_file: &dyn Fn(&Path, &Path) -> bool,
 ) -> Vec<RenamePlan> {
     let mut taken: HashSet<String> = HashSet::new(); // lower-case target paths/names claimed in this batch
     let mut out = Vec::new();
+    let batch = Batch { total: if batch.total == 0 { photos.len() } else { batch.total }, ..batch.clone() };
     for (seq, p) in (start..).zip(photos) {
-        let want = expand(template, p, seq);
+        let want = expand_in(template, p, seq, &batch);
         let (stem, ext) = split_ext(&want);
         let (stem, ext) = (stem.to_string(), ext.to_string());
         let candidate = |k: usize| {
@@ -635,9 +921,14 @@ impl Session {
         self.plan_rename_with(&RealFs, ids, template, start)
     }
 
+    /// [`Session::plan_rename`] with Custom Text / Shoot Name / extension case.
+    pub fn plan_rename_in(&self, ids: &[PhotoId], template: &str, start: usize, b: &Batch) -> Vec<RenamePlan> {
+        plan_rename_core(&rename_photos(&self.catalog, ids), template, start, b, &|p| RealFs.exists(p), &|a, c| RealFs.same_file(a, c))
+    }
+
     /// [`Session::plan_rename`] on the file system `fs`.
     pub(crate) fn plan_rename_with(&self, fs: &dyn MoveFs, ids: &[PhotoId], template: &str, start: usize) -> Vec<RenamePlan> {
-        plan_rename_core(&rename_photos(&self.catalog, ids), template, start, &|p| fs.exists(p), &|a, b| fs.same_file(a, b))
+        plan_rename_core(&rename_photos(&self.catalog, ids), template, start, &Batch::default(), &|p| fs.exists(p), &|a, b| fs.same_file(a, b))
     }
 
     /// Carry out `plans`: move the files (rolled back on failure), then commit one undoable op
@@ -1069,7 +1360,7 @@ mod tests {
         let p = sample_photo();
         for t in TOKENS {
             for tag in std::iter::once(&t.tag).chain(t.aliases) {
-                let v = expand_tokens(tag, &p, 1, 1);
+                let v = expand_tokens_in(tag, &p, 1, 1, &sample_batch());
                 assert!(!v.contains('{'), "{tag} is not a known token (expanded to {v:?})");
                 assert!(!v.is_empty(), "{tag}: the sample photo should give an example");
             }

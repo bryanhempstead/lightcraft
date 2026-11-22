@@ -23,6 +23,8 @@ pub struct ExportTask {
     pub progress: Arc<Mutex<(usize, String)>>,
     pub cancel: Arc<AtomicBool>,
     rx: Receiver<Result<Vec<Value>, String>>,
+    /// The batch's options (Add to This Catalog runs here once the files are written).
+    opts: ExportOptions,
 }
 
 impl ExportTask {
@@ -44,21 +46,29 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
     let (p, c) = (progress.clone(), cancel.clone());
+    let task_opts = opts.clone();
     let work = move || {
         let mut w = |path: &str, bytes: &[u8]| write(path, bytes);
-        let r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
+        let mut r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
             if let Ok(mut g) = p.lock() {
                 *g = (done, name.to_string());
             }
             !c.load(Ordering::Relaxed)
         });
+        // Post-Processing (Show in Finder, open in an app, an Export Action), not after a cancel
+        if let Ok(files) = &mut r
+            && !c.load(Ordering::Relaxed)
+            && let Some(after) = lightcraft_engine::export::post_process(&opts, files)
+        {
+            files.push(json!({"postProcessing": after}));
+        }
         let _ = tx.send(r);
     };
     #[cfg(not(target_arch = "wasm32"))]
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    app.export = Some(ExportTask { total, progress, cancel, rx });
+    app.export = Some(ExportTask { total, progress, cancel, rx, opts: task_opts });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -69,6 +79,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Ok(r) => {
             let cancelled = task.cancel.load(Ordering::Relaxed);
             let total = task.total;
+            let task_opts = task.opts.clone();
             app.export = None;
             let msg = match r {
                 Ok(files) => {
@@ -85,6 +96,10 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     if cancelled {
                         m += " · cancelled";
+                    }
+                    app.session.record_exports(&files);
+                    if let Some(added) = lightcraft_engine::export::add_to_catalog(&mut app.session, &task_opts, &files) {
+                        log::info!("export: added to the catalog: {added}");
                     }
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled}));
                     m

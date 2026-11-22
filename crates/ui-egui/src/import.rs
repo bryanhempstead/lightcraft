@@ -133,6 +133,8 @@ pub struct ImportPrefs {
     pub preset: String,
     pub metadata_preset: String,
     pub keywords: String,
+    /// Eject the card (or disk) imported from once the import is done (I02).
+    pub eject: bool,
 }
 
 impl Default for ImportPrefs {
@@ -153,7 +155,66 @@ impl Default for ImportPrefs {
             preset: String::new(),
             metadata_preset: String::new(),
             keywords: String::new(),
+            eject: false,
         }
+    }
+}
+
+/// A named set of Import window choices (Lightroom's Import Presets): everything but the source.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ImportPreset {
+    pub name: String,
+    pub prefs: ImportPrefs,
+}
+
+/// `import.presets` / `import.savePreset {name}` / `import.applyPreset {name}` /
+/// `import.deletePreset {name}` (I01). Saving takes the open Import window's choices (else the
+/// remembered ones); applying keeps the source and Include Subfolders.
+pub fn preset_command(app: &mut crate::LightcraftApp, id: &str, p: &serde_json::Value) -> Result<serde_json::Value, String> {
+    use crate::state::Dialog;
+    let name = p.get("name").and_then(serde_json::Value::as_str).map(str::trim).unwrap_or("").to_string();
+    let open = match app.ui.dialog.as_ref() {
+        Some(Dialog::Import { opts }) => Some(opts.prefs.clone()),
+        _ => None,
+    };
+    match id {
+        "import.presets" => Ok(serde_json::json!(app.ui.import_presets.iter().map(|x| x.name.clone()).collect::<Vec<_>>())),
+        "import.savePreset" => {
+            if name.is_empty() || name.chars().count() > 80 {
+                return Err("give the preset a name (up to 80 characters)".into());
+            }
+            let prefs = open.unwrap_or_else(|| app.ui.import_prefs.clone());
+            match app.ui.import_presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&name)) {
+                Some(x) => x.prefs = prefs,
+                None => app.ui.import_presets.push(ImportPreset { name: name.clone(), prefs }),
+            }
+            Ok(serde_json::json!({"saved": name}))
+        }
+        "import.applyPreset" => {
+            let preset = app
+                .ui
+                .import_presets
+                .iter()
+                .find(|x| x.name.eq_ignore_ascii_case(&name))
+                .cloned()
+                .ok_or_else(|| format!("no import preset `{name}`"))?;
+            let apply = |cur: &ImportPrefs| ImportPrefs { source: cur.source.clone(), subfolders: cur.subfolders, ..preset.prefs.clone() };
+            if let Some(Dialog::Import { opts }) = app.ui.dialog.as_mut() {
+                opts.prefs = apply(&opts.prefs);
+            }
+            app.ui.import_prefs = apply(&app.ui.import_prefs);
+            Ok(serde_json::json!({"applied": preset.name}))
+        }
+        "import.deletePreset" => {
+            let n = app.ui.import_presets.len();
+            app.ui.import_presets.retain(|x| !x.name.eq_ignore_ascii_case(&name));
+            if app.ui.import_presets.len() == n {
+                return Err(format!("no import preset `{name}`"));
+            }
+            Ok(serde_json::json!({"deleted": name}))
+        }
+        _ => Err(format!("unknown command {id}")),
     }
 }
 
@@ -893,7 +954,25 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
 }
 
 /// The import is done (or cancelled): one undo step, select the first photo, say what happened.
+/// The removable volume a source lies on (`/Volumes/CARD/DCIM/100` → `/Volumes/CARD`), if any.
+pub fn volume_of(source: &str) -> Option<String> {
+    let rest = source.strip_prefix("/Volumes/")?;
+    let name = rest.split('/').next().filter(|n| !n.is_empty())?;
+    Some(format!("/Volumes/{name}"))
+}
+
 fn finish(app: &mut LightcraftApp, ctx: &egui::Context, mut task: ImportTask) {
+    // Eject after import (I02): the card goes once its photos are in
+    #[cfg(target_os = "macos")]
+    if let Some(vol) = task.window.as_ref().filter(|w| w.eject).and_then(|w| volume_of(&w.source)) {
+        match std::process::Command::new("/usr/sbin/diskutil").args(["eject", &vol]).spawn() {
+            Ok(mut child) => {
+                let _ = std::thread::Builder::new().name("eject".into()).spawn(move || child.wait());
+                app.toast(ctx, format!("Ejecting {vol}"));
+            }
+            Err(e) => app.toast_error(ctx, format!("Couldn't eject {vol}: {e}")),
+        }
+    }
     let steps = app.session.undo.len().saturating_sub(task.undo0);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let label = if task.imported == 0 && task.restored > 0 {
