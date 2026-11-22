@@ -1,0 +1,30 @@
+[package]
+name = "lightcraft-vision"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "LightCraft recognition (L3): face detection (YuNet), face recognition (SFace), eye state and CLIP image/text embeddings for People, Assisted Culling and natural-language search"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+crc32fast = { workspace = true }
+
+# the models run natively only (the web build has no face recognition or AI search)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+rayon = { workspace = true }
+lightcraft-fetch = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { workspace = true, features = ["metal"] }
+candle-nn = { workspace = true, features = ["metal"] }
+
+[dev-dependencies]
+image = { workspace = true }
