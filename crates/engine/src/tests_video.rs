@@ -365,3 +365,24 @@ fn missing_files_and_tools_are_errors() {
     assert_eq!(r["imported"].as_array().map(Vec::len), Some(0), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// LRC-DEV-VIEWOPTIONS ▸ Show frame number when displaying video time: `m:ss:ff`.
+#[test]
+fn frame_timecode_counts_frames_in_each_second() {
+    use crate::cmd::video_frame_timecode as tc;
+    assert_eq!(tc(0.0, 25.0), "0:00:00");
+    assert_eq!(tc(1.52, 25.0), "0:01:13");
+    assert_eq!(tc(61.999, 30.0), "1:01:29");
+    assert_eq!(tc(3725.5, 24.0), "1:02:05:12");
+    // 29.97 fps: frames 0…29, never 30
+    for i in 0..300 {
+        let t = tc(i as f64 / 29.97, 29.97);
+        let f: u32 = t.rsplit(':').next().unwrap().parse().unwrap();
+        assert!(f < 30, "{t}");
+    }
+    // nonsense rates and times don't panic
+    assert_eq!(tc(f64::NAN, 25.0), "0:00:00");
+    assert_eq!(tc(2.0, 0.0), "0:02:00");
+    assert_eq!(tc(2.0, f64::INFINITY), "0:02:00");
+    assert_eq!(tc(-5.0, -1.0), "0:00:00");
+}

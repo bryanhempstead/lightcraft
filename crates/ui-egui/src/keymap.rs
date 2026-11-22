@@ -20,8 +20,14 @@ use egui::{Key, Modifiers, PointerButton};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-/// Key profiles: `(id, label)`.
-pub const PROFILES: &[(&str, &str)] = &[("lightroom", "Lightroom (desktop)"), ("classic", "Lightroom Classic")];
+/// Key profiles: `(id, button label)`. `lightroom`: the built-ins (Lightroom desktop's keys, with
+/// Classic's P = pick and Z = zoom); `desktop`: Lightroom desktop exactly (Z picks, P = photos
+/// panel, [`DESKTOP`]); `classic`: Lightroom Classic ([`CLASSIC`]).
+pub const PROFILES: &[(&str, &str)] = &[("lightroom", "lr.p.picks."), ("desktop", "lr.z.picks."), ("classic", "lr.classic.")];
+
+/// Lightroom desktop's own keys where the built-ins keep Classic's (KEY-PICK, KEY-PHOTOSPANEL): Z
+/// flags a pick and P shows / hides the left (photos) panel; Space still toggles zoom.
+pub const DESKTOP: &[(&str, &str, &str)] = &[("Z", "photo.pick", "{}"), ("P", "view.leftPanel", "{}")];
 
 /// Lightroom Classic's standard keys where they differ from the built-in (Lightroom desktop)
 /// ones: `(keys, command, params)`; `""` command = unbound (Classic uses the key for something
@@ -560,6 +566,7 @@ pub fn command_label(id: &str) -> String {
 pub fn profile_bindings(profile: &str) -> Vec<Binding> {
     match profile {
         "classic" => CLASSIC.iter().map(|(k, c, p)| Binding::new(k, c, serde_json::from_str(p).unwrap_or(json!({})), "")).collect(),
+        "desktop" => DESKTOP.iter().map(|(k, c, p)| Binding::new(k, c, serde_json::from_str(p).unwrap_or(json!({})), "")).collect(),
         _ => vec![],
     }
 }
@@ -2129,6 +2136,35 @@ mod tests {
         assert_eq!(menu_shortcut(&ov, "panel.crop", Some("C")), None, "Classic C = compare");
         assert_eq!(menu_shortcut(&ov, "view.compare", Some("Shift+C")).as_deref(), Some("C"));
         assert_eq!(menu_shortcut(&ov, "photo.pick", Some("P")), None);
+    }
+
+    /// KEY-PICK / KEY-PHOTOSPANEL / KEY-HISTOGRAM: the `desktop` profile is Lightroom desktop's
+    /// keys (Z picks, P shows the photos panel, Space toggles zoom); the built-ins keep P = pick and
+    /// Z = zoom; ⌘0 is the histogram in every profile (Classic's ⌘0 … ⌘9 panel numbering).
+    #[test]
+    fn desktop_profile_has_lightroom_desktop_keys() {
+        let ov = overlay(&KeymapFile { profile: "desktop".into(), ..Default::default() });
+        assert_eq!(resolve(&ov, "Z").unwrap().0, "photo.pick");
+        assert_eq!(resolve(&ov, "P").unwrap().0, "view.leftPanel");
+        assert_eq!(menu_shortcut(&ov, "photo.pick", Some("P")).as_deref(), Some("Z"));
+        assert_eq!(menu_shortcut(&ov, "view.zoomToggle", Some("Z")), None, "Space toggles zoom there");
+        assert_eq!(menu_shortcut(&ov, "view.leftPanel", Some("Cmd+Shift+L")).as_deref(), Some("P"));
+        for profile in ["", "lightroom", "desktop", "classic"] {
+            let ov = overlay(&KeymapFile { profile: profile.into(), ..Default::default() });
+            assert_eq!(resolve(&ov, "Cmd+0").unwrap().0, "view.histogram", "{profile}");
+            assert_eq!(resolve(&ov, "Cmd+Shift+0").unwrap().0, "view.zoomFit", "{profile}");
+        }
+        let ov = overlay(&KeymapFile::default());
+        assert_eq!(resolve(&ov, "P").unwrap().0, "photo.pick");
+        assert_eq!(resolve(&ov, "Z").unwrap().0, "view.zoomToggle");
+        // every profile names commands that exist, and its keys parse
+        let ui: Vec<&str> = crate::menus::ui_commands().map(|c| c.0).collect();
+        for (k, c, p) in DESKTOP.iter().chain(CLASSIC) {
+            assert!(parse_combo(k).is_some(), "{k}");
+            assert!(c.is_empty() || ui.contains(c) || lightcraft_engine::find_command(c).is_some(), "{k} → {c}");
+            assert!(serde_json::from_str::<Value>(p).is_ok());
+        }
+        assert!(PROFILES.iter().all(|(_, l)| l.ends_with('.') && !l.contains(' ')), "button labels: lower-case, periods");
     }
 
     #[test]

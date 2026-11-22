@@ -101,6 +101,16 @@ void lc_free(void *ptr);
 // 2 no digest to check against.
 int lc_validate_dng(const uint8_t *dng, size_t dng_len, int *result);
 
+// LR-EXP-DNGOPT: re-save a DNG through the SDK with embedded previews; mode 0 keeps the raw data
+// (lossless JPEG), 2 stores it uncompressed, 1 = Lightroom's lossy DNG (the demosaiced image as 8-bit lossy JPEG tiles, at most `lossy_size`
+// px on the long edge, 0 = full size). thumb (tw x th) and prev (pw x ph) are interleaved 8-bit
+// sRGB RGB renders for the IFD0 thumbnail and the JPEG preview; thumb NULL = the SDK renders the
+// thumbnail; prev NULL = a preview of `sdk_preview` px rendered by the SDK, or none when 0.
+// The SDK is built without XMP: the caller puts its XMP packet back. *out malloc'd (lc_free).
+int lc_dng_finish(const uint8_t *dng, size_t dng_len, const uint8_t *thumb, uint32_t tw, uint32_t th,
+                  const uint8_t *prev, uint32_t pw, uint32_t ph, uint32_t sdk_preview, int mode,
+                  uint32_t lossy_size, uint8_t **out, size_t *out_len);
+
 #ifdef __cplusplus
 }
 #endif

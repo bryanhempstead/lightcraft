@@ -2992,6 +2992,7 @@ dependencies = [
  "lightcraft-raw",
  "lightcraft-scenes",
  "lightcraft-segment",
+ "lightcraft-tiff",
  "lightcraft-vision",
  "log",
  "miniz_oxide 0.8.9",

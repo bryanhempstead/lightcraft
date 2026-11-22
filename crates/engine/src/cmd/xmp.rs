@@ -3,7 +3,7 @@
 use lightcraft_catalog::Op;
 use serde_json::{Value, json};
 
-use super::{CommandSpec, always, bad, cmd, has_selection, str_param};
+use super::{CommandSpec, always, bad, cmd, has_active, has_selection, str_param};
 use crate::sidecar::SidecarNaming;
 use crate::{Result, Session};
 
@@ -145,6 +145,71 @@ fn validate_dngs(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"checked": checked, "valid": valid, "damaged": damaged, "noDigest": none, "failed": failed}))
 }
 
+/// LRC-LIB-METAVIEWS ▸ DNG view: what a DNG file's header says (read from the file; nothing of
+/// it is kept in the catalog).
+fn dng_info(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "photo.dngInfo";
+    let id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
+    let ph = s.catalog.photo(id).ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
+    let lightcraft_catalog::Source::File { path } = &ph.source else { return Ok(json!({"id": id.0, "dng": false})) };
+    let is_dng = ph.format.eq_ignore_ascii_case("dng") || path.to_ascii_lowercase().ends_with(".dng");
+    if !is_dng {
+        return Ok(json!({"id": id.0, "dng": false}));
+    }
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() > 2 << 30 => return Err(bad(C, "the DNG is larger than 2 GB")),
+        Ok(_) => {}
+        Err(_) => return Err(bad(C, "original offline")),
+    }
+    let bytes = std::fs::read(path).map_err(|e| bad(C, e.to_string()))?;
+    let t = lightcraft_tiff::Tiff::parse(&bytes).map_err(|e| bad(C, format!("not a readable DNG: {e}")))?;
+    let mut all = Vec::new();
+    fn walk<'a>(i: &'a lightcraft_tiff::Ifd, out: &mut Vec<&'a lightcraft_tiff::Ifd>) {
+        out.push(i);
+        for s in &i.sub_ifds {
+            walk(s, out);
+        }
+    }
+    for i in &t.ifds {
+        walk(i, &mut all);
+    }
+    let ifd0 = t.ifds.first().ok_or_else(|| bad(C, "no IFD0"))?;
+    let num = |i: &lightcraft_tiff::Ifd, tag: u16| i.value(tag).and_then(|v| v.get_u64(0));
+    let text = |tag: u16| ifd0.value(tag).and_then(|v| v.as_str()).map(|s| s.trim_end_matches('\0').trim().to_string()).filter(|s| !s.is_empty());
+    let version = |tag: u16| {
+        ifd0.value(tag).map(|v| (0..4).filter_map(|k| v.get_u64(k)).map(|x| x.to_string()).collect::<Vec<_>>().join(".")).filter(|s| !s.is_empty())
+    };
+    let compression = |c: u64| match c {
+        1 => "uncompressed",
+        7 => "lossless JPEG",
+        8 | 32946 => "ZIP",
+        34892 => "lossy JPEG",
+        52546 => "JPEG XL",
+        _ => "other",
+    };
+    // the raw image: the full-resolution IFD (NewSubfileType 0) that isn't an RGB preview
+    let raw = all.iter().find(|i| num(i, 254).unwrap_or(0) == 0 && matches!(num(i, 262), Some(32803 | 34892)));
+    let previews: Vec<Value> = all
+        .iter()
+        .filter(|i| num(i, 254) == Some(1) && num(i, 262) != Some(32803) && num(i, 262) != Some(34892))
+        .map(|i| json!({"width": num(i, 256), "height": num(i, 257), "jpeg": num(i, 259) == Some(7) || num(i, 259) == Some(6)}))
+        .collect();
+    Ok(json!({
+        "id": id.0,
+        "dng": true,
+        "version": version(lightcraft_tiff::tags::DNG_VERSION),
+        "backwardVersion": version(lightcraft_tiff::tags::DNG_BACKWARD_VERSION),
+        "uniqueCameraModel": text(lightcraft_tiff::tags::UNIQUE_CAMERA_MODEL),
+        "originalRawFileName": text(50827),
+        "profileName": text(50936),
+        "rawWidth": raw.and_then(|r| num(r, 256)),
+        "rawHeight": raw.and_then(|r| num(r, 257)),
+        "mosaic": raw.map(|r| num(r, 262) == Some(32803)),
+        "compression": raw.and_then(|r| num(r, 259)).map(compression),
+        "previews": previews,
+    }))
+}
+
 fn resolve(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.resolveMetadata";
     let ids: Vec<u64> = s.targets(p).iter().map(|i| i.0).collect();
@@ -177,6 +242,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?} — checks each DNG's raw data against the digest in the file (Adobe's DNG SDK); the selected photos, else every DNG in view → {checked, valid, damaged: [id], noDigest: [id], failed: [{id, error}]}",
             always,
             validate_dngs
+        ),
+        cmd!(
+            query "photo.dngInfo",
+            "DNG Info",
+            [],
+            None,
+            "{id?} — a DNG's header, read from the file (the Metadata panel's DNG view) → {dng, version, backwardVersion, uniqueCameraModel, originalRawFileName, profileName, rawWidth, rawHeight, mosaic, compression, previews: [{width, height, jpeg}]}; dng: false for other files",
+            has_active,
+            dng_info
         ),
         cmd!(
             "library.scanMetadata",

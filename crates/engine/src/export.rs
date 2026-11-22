@@ -597,6 +597,11 @@ pub struct ExportOptions {
     pub tiff_compression: TiffCompression,
     /// DNG export: how the raw data is stored.
     pub dng_compression: DngCompression,
+    /// DNG export: the embedded JPEG preview (Lightroom's JPEG Preview: None / Medium / Full Size).
+    pub dng_preview: DngPreview,
+    /// DNG export: Lightroom's Use Lossy Compression (demosaiced, 8-bit lossy JPEG tiles; the
+    /// Image Sizing size applies). Both need Adobe's DNG SDK; without it the DNG is written as before.
+    pub dng_lossy: bool,
     pub metadata: MetadataPolicy,
     /// Strip GPS / location even when the policy would include it.
     pub remove_location: bool,
@@ -858,6 +863,8 @@ impl Default for ExportOptions {
             conflict: Conflict::Unique,
             tiff_compression: TiffCompression::Deflate,
             dng_compression: DngCompression::Lossless,
+            dng_preview: DngPreview::Medium,
+            dng_lossy: false,
             metadata: MetadataPolicy::All,
             remove_location: false,
             remove_people: false,
@@ -908,6 +915,8 @@ pub const OPTION_PARAMS: &[&str] = &[
     "conflict",
     "tiffCompression",
     "dngCompression",
+    "dngPreview",
+    "dngLossy",
     "metadata",
     "removeLocation",
     "removePeople",
@@ -1057,7 +1066,7 @@ impl ExportOptions {
                     }
                     serde_json::from_value::<Resize>(v.clone()).map_err(|e| bad(format!("`{k}`: {e}")))?;
                 }
-                "dontEnlarge" | "removeLocation" | "removePeople" | "keywordHierarchy" | "background" | "hdr" | "hdrCompat" => {
+                "dontEnlarge" | "dngLossy" | "removeLocation" | "removePeople" | "keywordHierarchy" | "background" | "hdr" | "hdrCompat" => {
                     boolean(k, v)?;
                 }
                 "extCase" => one_of(k, v, &["keep", "lower", "upper"])?,
@@ -1082,6 +1091,7 @@ impl ExportOptions {
                     serde_json::from_value::<DngCompression>(v.clone())
                         .map_err(|_| bad(format!("`{k}` must be one of lossless|deflate|uncompressed")))?;
                 }
+                "dngPreview" => one_of(k, v, &["none", "medium", "full"])?,
                 "metadata" => one_of(k, v, &["all", "allExceptCamera", "copyright", "none"])?,
                 "colorSpace" => {
                     if OutputSpace::parse(string(cmd, k, v)?).is_none() {
@@ -1198,6 +1208,8 @@ impl ExportOptions {
                 _ => d.tiff_compression,
             },
             dng_compression: enm(p, "dngCompression").unwrap_or(d.dng_compression),
+            dng_preview: enm(p, "dngPreview").unwrap_or(d.dng_preview),
+            dng_lossy: p.get("dngLossy").and_then(Value::as_bool).unwrap_or(d.dng_lossy),
             metadata: enm(p, "metadata").unwrap_or(d.metadata),
             remove_location: p.get("removeLocation").and_then(Value::as_bool).unwrap_or(d.remove_location),
             remove_people: p.get("removePeople").and_then(Value::as_bool).unwrap_or(d.remove_people),
@@ -1944,7 +1956,7 @@ enum Work {
         path: String,
         read: Option<crate::merge::ByteReader>,
         packet: String,
-        dng: Option<DngCompression>,
+        dng: Option<Box<DngWork>>,
         label: String,
         size: (usize, usize),
     },
@@ -2028,6 +2040,8 @@ fn prepare_guarded(
         let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
         Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts }))
     } else {
+        let dng = if o.format == ExportFormat::Dng { Some(Box::new(DngWork::prepare(session, id, o)?)) } else { None };
+        let p = session.catalog.photo(id).ok_or("no such photo")?;
         let lightcraft_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
         };
@@ -2035,7 +2049,7 @@ fn prepare_guarded(
             path: path.clone(),
             read: session.media.file_bytes.clone(),
             packet: crate::sidecar::sidecar_packet(p, &session.catalog),
-            dng: (o.format == ExportFormat::Dng).then_some(o.dng_compression),
+            dng,
             label: p.file_name.clone(),
             size: (p.width as usize, p.height as usize),
         }
@@ -2109,15 +2123,119 @@ impl PreparedExport {
                 }
                 let raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{label}: {e}"))?;
                 drop(bytes);
-                let compression = match dng {
-                    DngCompression::Lossless => lightcraft_raw::DngCompression::Lj92 { tile: 256 },
-                    DngCompression::Deflate => lightcraft_raw::DngCompression::Deflate { tile: 256, half: false },
-                    DngCompression::Uncompressed => lightcraft_raw::DngCompression::Uncompressed,
-                };
-                let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: Some(packet), compression, ..Default::default() })
-                    .map_err(|e| e.to_string())?;
-                Ok(Exported { file_name, bytes: dng, width: raw.width, height: raw.height, sidecars: Vec::new() })
+                let (bytes, notice) = dng.write(&raw, packet, &label)?;
+                if let Some(n) = notice {
+                    log::warn!("{n}");
+                }
+                Ok(Exported { file_name, bytes, width: raw.width, height: raw.height, sidecars: Vec::new() })
             }
+        }
+    }
+}
+
+/// LR-EXP-DNGOPT: the JPEG preview a DNG export embeds (Lightroom's File Handling ▸ JPEG Preview).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DngPreview {
+    /// Only the small IFD0 thumbnail.
+    None,
+    /// 1024 px on the long edge.
+    #[default]
+    Medium,
+    /// The photo's full size.
+    Full,
+}
+
+/// Long edge of a DNG's Medium Size preview and of its thumbnail.
+const DNG_MEDIUM: usize = 1024;
+const DNG_THUMB: usize = 256;
+
+/// A DNG export's extras: the previews (rendered with the photo's edits, as Lightroom embeds
+/// them) and lossy output, both written by Adobe's DNG SDK.
+struct DngWork {
+    compression: DngCompression,
+    preview: DngPreview,
+    lossy: bool,
+    /// Long edge of a lossy DNG (0 = full size): the Image Sizing size.
+    lossy_size: u32,
+    thumb_job: Option<crate::media::RenderJob>,
+    preview_job: Option<crate::media::RenderJob>,
+}
+
+impl DngWork {
+    fn prepare(session: &mut crate::Session, id: lightcraft_catalog::PhotoId, o: &ExportOptions) -> Result<DngWork, String> {
+        let p = session.catalog.photo(id).ok_or("no such photo")?;
+        let lossy_size = if o.dng_lossy && o.resize.is_some() {
+            let (w, h) = output_size(p, o);
+            w.max(h).min(65_000) as u32
+        } else {
+            0
+        };
+        let full = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
+        let preview_edge = match o.dng_preview {
+            DngPreview::None => 0,
+            DngPreview::Medium => DNG_MEDIUM,
+            DngPreview::Full => full.0.max(full.1) as usize,
+        };
+        // (renders are only worth making when the SDK is there to embed them)
+        let sdk = lightcraft_dng_sdk_sys::available();
+        let mut job = |edge: usize| -> Option<crate::media::RenderJob> {
+            (sdk && edge > 0).then(|| session.export_job(id, edge, edge, OutputSpace::Srgb, OutputDepth::U8).ok()).flatten()
+        };
+        let thumb_job = if o.dng_preview != DngPreview::None || o.dng_lossy { job(DNG_THUMB) } else { None };
+        let preview_job = job(preview_edge);
+        Ok(DngWork { compression: o.dng_compression, preview: o.dng_preview, lossy: o.dng_lossy, lossy_size, thumb_job, preview_job })
+    }
+
+    /// The rendered image as 8-bit RGB (`None` when the render failed: the SDK renders instead).
+    fn rgb(job: Option<crate::media::RenderJob>) -> Option<(u32, u32, Vec<u8>)> {
+        let r = job?.run().rendered.ok()?;
+        let img = &r.image;
+        let rgb: Vec<u8> = img.data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+        Some((img.width as u32, img.height as u32, rgb))
+    }
+
+    /// `raw` written as a DNG with the previews / lossy data asked for and `packet` as its XMP; the
+    /// plain LightCraft DNG (no preview, not lossy) when the SDK isn't there or fails, with why.
+    fn write(self, raw: &lightcraft_raw::RawImage, packet: String, label: &str) -> Result<(Vec<u8>, Option<String>), String> {
+        let compression = match self.compression {
+            DngCompression::Lossless => lightcraft_raw::DngCompression::Lj92 { tile: 256 },
+            DngCompression::Deflate => lightcraft_raw::DngCompression::Deflate { tile: 256, half: false },
+            DngCompression::Uncompressed => lightcraft_raw::DngCompression::Uncompressed,
+        };
+        let plain = lightcraft_raw::write_dng(raw, &lightcraft_raw::DngWriteOptions { xmp: Some(packet.clone()), compression, ..Default::default() })
+            .map_err(|e| e.to_string())?;
+        if self.preview == DngPreview::None && !self.lossy {
+            return Ok((plain, None));
+        }
+        if !lightcraft_dng_sdk_sys::available() {
+            return Ok((plain, Some(format!("{label}: embedded preview / lossy DNG need Adobe's DNG SDK (not in this build): written without"))));
+        }
+        let medium = if self.preview == DngPreview::Medium { DNG_MEDIUM as u32 } else { 0 };
+        let sdk_preview = match self.preview {
+            DngPreview::None => 0,
+            DngPreview::Medium => medium,
+            DngPreview::Full => raw.width.max(raw.height) as u32,
+        };
+        let thumb = Self::rgb(self.thumb_job);
+        let preview = Self::rgb(self.preview_job);
+        fn img(x: &Option<(u32, u32, Vec<u8>)>) -> Option<lightcraft_dng_sdk_sys::Rgb8<'_>> {
+            x.as_ref().map(|(w, h, rgb)| lightcraft_dng_sdk_sys::Rgb8 { width: *w, height: *h, rgb })
+        }
+        let finish = lightcraft_dng_sdk_sys::DngFinish {
+            thumbnail: img(&thumb),
+            preview: img(&preview),
+            sdk_preview,
+            lossy: self.lossy,
+            lossy_size: self.lossy_size,
+            uncompressed: self.compression == DngCompression::Uncompressed,
+        };
+        let done = lightcraft_dng_sdk_sys::finish_dng(&plain, &finish)
+            .map_err(|e| e.to_string())
+            .and_then(|d| lightcraft_tiff::set_ifd0_tag(&d, lightcraft_tiff::tags::XMP, 1, packet.as_bytes()).map_err(|e| e.to_string()));
+        match done {
+            Ok(d) => Ok((d, None)),
+            Err(e) => Ok((plain, Some(format!("{label}: the DNG SDK couldn't add the preview / lossy data ({e}): written without")))),
         }
     }
 }

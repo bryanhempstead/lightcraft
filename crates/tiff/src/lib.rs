@@ -26,7 +26,7 @@ pub mod tags;
 pub mod writer;
 
 pub use reader::{ParseOptions, parse_ifd_at};
-pub use writer::{IfdBuilder, ImageData, TiffWriter};
+pub use writer::{IfdBuilder, ImageData, TiffWriter, set_ifd0_tag};
 
 use serde::{Deserialize, Serialize};
 

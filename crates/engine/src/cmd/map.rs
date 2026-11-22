@@ -5,7 +5,7 @@
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, has_selection, str_param};
-use crate::map::{self, SavedLocation};
+use crate::map::{self, LocationFilter, SavedLocation};
 use crate::{Result, Session};
 use lightcraft_catalog::{Op, PhotoId};
 
@@ -93,8 +93,40 @@ fn location_or_place(s: &Session, p: &Value, c: &str) -> Result<(f64, f64, f64)>
     Ok((lat, lon, r))
 }
 
+/// `map.locationFilter`: set (with `mode`) or read the Map module's location filter.
+fn location_filter(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "map.locationFilter";
+    if let Some(mode) = p.get("mode") {
+        let mode = mode.as_str().ok_or_else(|| bad(C, "`mode` is none|visible|tagged|untagged|saved"))?;
+        s.location_filter = match mode {
+            "none" => LocationFilter::None,
+            "tagged" => LocationFilter::Tagged,
+            "untagged" => LocationFilter::Untagged,
+            "saved" => LocationFilter::Saved,
+            "visible" => {
+                let b: Vec<f64> = p.get("bounds").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+                let [south, west, north, east] = b[..] else {
+                    return Err(bad(C, "`visible` needs `bounds`: [south, west, north, east] in degrees (the map's view)"));
+                };
+                LocationFilter::visible(south, west, north, east)
+                    .ok_or_else(|| bad(C, "`bounds` are [south, west, north, east] with south ≤ north and west ≤ east"))?
+            }
+            m => return Err(bad(C, format!("unknown mode `{m}` (none|visible|tagged|untagged|saved)"))),
+        };
+    }
+    let f = s.location_filter;
+    let shown = s.visible().len();
+    let of = s.visible_unlocated().len();
+    let mut out = json!({"mode": f.mode(), "photos": shown, "of": of, "on": s.location_filter_on});
+    if let LocationFilter::Visible { south, west, north, east } = f {
+        out["bounds"] = json!([south, west, north, east]);
+    }
+    Ok(out)
+}
+
 fn pins(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids: Vec<PhotoId> = if p.get("ids").is_some() { s.targets(p) } else { s.visible_cloned() };
+    // the pins are the view's, before the location filter narrows the filmstrip
+    let ids: Vec<PhotoId> = if p.get("ids").is_some() { s.targets(p) } else { s.visible_unlocated().to_vec() };
     let mut pins = Vec::new();
     let mut without = 0usize;
     for id in ids {
@@ -138,6 +170,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.execute("photo.setMeta", &json!({"ids": ids, "gps": null}))?;
                 Ok(json!({"photos": ids.len()}))
             }
+        ),
+        cmd!(
+            "map.locationFilter",
+            "Location Filter",
+            [],
+            None,
+            "{mode?: none|visible|tagged|untagged|saved, bounds?: [south, west, north, east] (degrees, for visible)} — the Map module's location filter bar: Visible on Map, Tagged, Untagged, in a saved location, or none (applies while the Map shows) → {mode, photos, of, bounds?}",
+            always,
+            location_filter
         ),
         cmd!(query "map.pins", "Map Pins", [], None, "{ids?} → {pins: [{id, lat, lon}], withoutGps}: photos in view (or `ids`) with a GPS position", always, pins),
         cmd!(query "map.locations", "Saved Locations", [], None, "{} → [{id, name, lat, lon, radius (m), private, photos}]", always, |s, _| {

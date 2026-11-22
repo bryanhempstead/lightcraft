@@ -169,6 +169,16 @@ pub struct Session {
     /// Identifies the current `visible` list: a new value (unique in the process) every time it
     /// is recomputed, so frontends can key their per-view caches on it instead of hashing the ids.
     visible_gen: u64,
+    /// The list before the Map module's location filter (`visible` when it is off), and its
+    /// generation; `located_key` is what `visible` was narrowed from.
+    visible_base: Arc<[PhotoId]>,
+    base_gen: u64,
+    located_key: Option<(u64, String)>,
+    /// LRC-MAP-FILTER: the Map module's location filter bar (Visible on Map / Tagged / Untagged /
+    /// in a saved location). It narrows the view only while `location_filter_on` (the frontend
+    /// turns that on while the Map module shows, as Lightroom's bar belongs to the Map).
+    pub location_filter: map::LocationFilter,
+    pub location_filter_on: bool,
     /// Photos in the current source with no filter on (cached like `visible`).
     total: Option<((u64, String), usize)>,
     pub undo: Vec<UndoEntry>,
@@ -340,6 +350,11 @@ impl Session {
             visible: Vec::new().into(),
             visible_key: None,
             visible_gen: 0,
+            visible_base: Arc::from(Vec::new()),
+            base_gen: 0,
+            located_key: None,
+            location_filter: map::LocationFilter::None,
+            location_filter_on: true,
             total: None,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -809,8 +824,34 @@ impl Session {
 
     // ---------------------------------------------------------------- library view
 
-    /// Photos shown in the grid/filmstrip for the current source, filter and sort.
+    /// Photos shown in the grid/filmstrip for the current source, filter and sort (and the Map
+    /// module's location filter while it is on).
     pub fn visible(&mut self) -> &[PhotoId] {
+        self.refresh_visible_base();
+        let lf = if self.location_filter_on { self.location_filter } else { map::LocationFilter::None };
+        let key = (self.base_gen, format!("{lf:?}"));
+        if self.located_key.as_ref() != Some(&key) {
+            self.visible = match lf {
+                map::LocationFilter::None => self.visible_base.clone(),
+                f => {
+                    let saved = if f == map::LocationFilter::Saved { map::locations(&self.catalog) } else { Vec::new() };
+                    let cat = &self.catalog;
+                    self.visible_base.iter().copied().filter(|id| cat.photo(*id).is_some_and(|p| f.matches(p.meta.gps, &saved))).collect()
+                }
+            };
+            self.visible_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.located_key = Some(key);
+        }
+        &self.visible
+    }
+
+    /// The view before the Map module's location filter (what the map's pins show).
+    pub fn visible_unlocated(&mut self) -> Arc<[PhotoId]> {
+        self.refresh_visible_base();
+        self.visible_base.clone()
+    }
+
+    fn refresh_visible_base(&mut self) {
         let mut key = (
             self.catalog.revision,
             format!(
@@ -850,7 +891,7 @@ impl Session {
                 // an empty grid under the name of a folder that is gone from the sidebar
                 self.source = LibrarySource::All;
                 self.library_folder = None;
-                return self.visible();
+                return self.refresh_visible_base();
             }
             if matches!(self.source, LibrarySource::Album(_))
                 && self.sort.key == lightcraft_catalog::SortKey::CaptureDate
@@ -884,11 +925,10 @@ impl Session {
             } else if self.source != LibrarySource::RecentlyDeleted {
                 visible = self.catalog.arrange_stacks(&visible);
             }
-            self.visible = visible.into();
-            self.visible_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.visible_base = visible.into();
+            self.base_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.visible_key = Some(key);
         }
-        &self.visible
     }
 
     /// The filter the grid applies for the current source (a folder, collection or library folder chosen in the
@@ -970,6 +1010,11 @@ impl Session {
 /// Automatic versions kept per photo.
 pub const AUTO_VERSIONS: usize = 20;
 
+/// Adobe's DNG SDK is built into this binary (DNG export's preview and lossy options need it).
+pub fn dng_sdk_available() -> bool {
+    lightcraft_dng_sdk_sys::available()
+}
+
 /// The parts of `new` that differ from `old` (objects recurse; anything else is taken whole).
 pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
     match (old, new) {
@@ -995,6 +1040,8 @@ mod tests_cameras;
 mod tests_color;
 #[cfg(test)]
 mod tests_delete;
+#[cfg(test)]
+mod tests_dng_export;
 #[cfg(test)]
 mod tests_enhance;
 #[cfg(test)]

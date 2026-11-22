@@ -404,10 +404,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     );
                     p.text(canvas.center() + vec2(0.0, 12.0), Align2::CENTER_CENTER, e, t.font(12.0), t.text_dim);
                 }
-                None => {
+                None if app.ui.loading_message() => {
                     p.text(canvas.center(), Align2::CENTER_CENTER, crate::i18n::tr("Rendering…"), t.font(13.0), t.text_dim);
                 }
+                None => {}
             }
+        } else if app.ui.loading_message()
+            && !fullscreen
+            && app.renderer.textures.get(&Slot::Main).is_some_and(|x| x.photo == id && x.quick.is_some())
+        {
+            // View Options ▸ Show message when loading or rendering photos: a stand-in (embedded
+            // preview, thumbnail) shows while the real render is on its way (Lightroom's "Loading…")
+            let g = p.layout_no_wrap(crate::i18n::tr("Loading…").to_string(), t.font(12.0), Color32::WHITE);
+            let r = Rect::from_center_size(pos2(canvas.center().x, canvas.bottom() - 28.0), g.size() + vec2(20.0, 10.0));
+            p.rect_filled(r, 5.0, Color32::from_black_alpha(170));
+            p.galley(r.min + vec2(10.0, 5.0), g, Color32::WHITE);
+            register(ui.ctx(), "canvas:loading", r);
         }
     }
     app.hdr_view = hdr_shown.into_inner();
@@ -511,7 +523,9 @@ fn brief_info(app: &mut LightcraftApp, ctx: &egui::Context, id: lightcraft_catal
         brief.since = now;
     }
     let left = crate::state::BRIEF_INFO_SECS - (now - brief.since);
-    brief.shown = app.ui.settings.loupe_info.briefly != crate::state::InfoOverlay::Off && left > 0.0;
+    let on = app.ui.loupe_info().briefly != crate::state::InfoOverlay::Off;
+    let brief = &mut app.ui.brief_info;
+    brief.shown = on && left > 0.0;
     if brief.shown {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(left.max(0.01)));
     }
@@ -573,12 +587,14 @@ pub(crate) fn info_line(field: crate::state::LoupeInfoField, photo: &lightcraft_
 /// chose them; Show Briefly shows one for a moment when the photo changes), or `None` when off.
 pub(crate) fn info_overlay_lines(app: &LightcraftApp, photo: &lightcraft_catalog::Photo) -> Option<Vec<String>> {
     use crate::state::InfoOverlay;
-    let brief = app.ui.info_overlay == InfoOverlay::Off && app.ui.brief_info.shown;
-    let mode = if brief { app.ui.settings.loupe_info.briefly } else { app.ui.info_overlay };
+    // (Library and Develop each have their own overlay and lines: LRC-DEV-VIEWOPTIONS)
+    let info = app.ui.loupe_info();
+    let brief = app.ui.info_mode() == InfoOverlay::Off && app.ui.brief_info.shown;
+    let mode = if brief { info.briefly } else { app.ui.info_mode() };
     let fields = match mode {
         InfoOverlay::Off => return None,
-        InfoOverlay::Basic => &app.ui.settings.loupe_info.info1,
-        InfoOverlay::Exposure => &app.ui.settings.loupe_info.info2,
+        InfoOverlay::Basic => &info.info1,
+        InfoOverlay::Exposure => &info.info2,
     };
     let lines: Vec<String> = fields.iter().filter_map(|f| info_line(*f, photo)).collect();
     (!lines.is_empty()).then_some(lines)

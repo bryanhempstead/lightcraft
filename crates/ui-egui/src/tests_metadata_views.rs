@@ -56,6 +56,57 @@ fn metadata_views_mixed_values_and_arrows() {
     assert!(h.app.session.filter.camera.is_some());
 }
 
+/// LRC-LIB-METAVIEWS: the DNG and Video views, and the field arrows beyond camera / lens (the
+/// capture day, the folder, the location fields) filter the library to the photos sharing them.
+#[test]
+fn dng_and_video_views_and_field_arrows() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    s.execute("photo.setMeta", &json!({"ids": [ids[0], ids[1]], "city": "Lisbon", "country": "Portugal"})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[0]]})).unwrap();
+    let mut h = headless(s);
+    h.app.ui.library_sections = vec!["metadata".into()];
+    for (v, grid) in [("dng", "metadata:metadata-dng"), ("video", "metadata:metadata-video")] {
+        h.app.ui.metadata_view = v.into();
+        settle(&mut h);
+        let w = h.request("ui.widgets", json!({}), T).to_string();
+        assert!(w.contains(grid), "{v} view shows its rows");
+        assert!(!w.contains("field:title"), "{v}: no IPTC fields");
+        shot(&mut h, &format!("metaviews-{v}.png"));
+    }
+    assert!(crate::panels::right::METADATA_VIEWS.iter().any(|v| v.0 == "dng") && crate::panels::right::METADATA_VIEWS.iter().any(|v| v.0 == "video"));
+    // the city arrow: the two Lisbon photos
+    h.app.ui.metadata_view = "location".into();
+    settle(&mut h);
+    shot(&mut h, "metaviews-location-arrows.png");
+    click(&mut h, "button:metaArrow-city");
+    let mut vis: Vec<u64> = h.app.session.visible_cloned().iter().map(|p| p.0).collect();
+    vis.sort();
+    let mut want = vec![ids[0], ids[1]];
+    want.sort();
+    assert_eq!(vis, want);
+    h.app.run("library.clearFilter", json!({})).unwrap();
+    // the day arrow (the file section, alone in a Custom view so it is on screen): that day's photos
+    h.app.ui.metadata_view = "custom".into();
+    h.app.ui.metadata_custom = vec!["file".into()];
+    settle(&mut h);
+    shot(&mut h, "metaviews-file-arrows.png");
+    let day = h.app.session.catalog.photo(lightcraft_catalog::PhotoId(ids[0])).and_then(|p| p.captured.clone()).map(|c| c[..10].to_string());
+    if let Some(day) = day {
+        click(&mut h, "button:metaArrow-date");
+        assert_eq!(h.app.session.filter.date.as_deref(), Some(day.as_str()));
+        assert!(
+            h.app.session.visible_cloned().iter().all(|id| h
+                .app
+                .session
+                .catalog
+                .photo(*id)
+                .and_then(|p| p.captured.clone())
+                .is_some_and(|c| c.starts_with(&day)))
+        );
+    }
+}
+
 /// L21: the IPTC Extension view edits Person Shown (a list) and shows the release status (a popup).
 #[test]
 fn iptc_extension_view() {
