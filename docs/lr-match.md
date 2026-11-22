@@ -768,3 +768,32 @@ position on the Purple (240–360°) or Green (90–210°) Hue slider, and a 24-
 on it; Amount becomes 5 when it was 0; a neutral or other hue is refused with a message. The
 defringe itself (`optics::defringe`, LightCraft's own edge-gated desaturation) was not measured
 against Camera Raw: Bryan uses Purple Amount on 473 photos, at one preset value.
+
+### Noise reduction at 1:1 (R24)
+
+Synthetic flats are no use here: they carry no noise profile and Camera Raw's luminance NR barely
+acts on them. `oracle/make_nr_real.py` + `nr_real_ana.py`: two of Bryan's ISO 6400 R6 raws
+(Iceland, `BHM_6642`, `BHM_9406`) at full size with no NR, Color 25 / 50 and Luminance 15 / 30 /
+60 (+ Color 25); the high-pass noise (pixel − 3×3 mean) in L* and in a*b* over the flattest
+third of 32 px tiles. With NR off LightCraft starts noisier (L* 1.59 / 2.62 vs 1.29 / 2.11;
+chroma 3× — AHD vs Adobe's demosaic). The fork's NR was weak at 1:1: Luminance blended its
+filter by √Luminance (55 % at 30) and Color mixed 75 % of the blurred chromaticity at 25. Now
+(`local::nr_params`, CPU + GPU through the same numbers): Luminance blends `min(5 × L/100, 1)`,
+radius `1 + 3.5 L/100`, edge threshold ×2.4; Color mixes `min(4 × C/100, 1) × (1 − 0.05 ×
+Detail/100)` with a `1.5 + 14 C/100` px blur. Renders below 40 % of the source keep the
+preview-fitted round-2 numbers and blend to these by full size (the first try, at every scale,
+cost the acceptance gate 2 passing photos: 4.00 → 4.02 ΔE). Noise left at 1:1, LightCraft /
+Camera Raw (L* · chroma):
+
+| | before | after |
+|---|---|---|
+| Color 25, BHM_6642 | 1.57 / 1.35 · 1.24 / 0.54 | 1.57 / 1.34 · 0.59 / 0.54 |
+| Color 25, BHM_9406 | 2.57 / 2.05 · 1.78 / 0.28 | 2.53 / 2.05 · 0.77 / 0.28 |
+| Luminance 30, BHM_6642 | 1.17 / 0.63 · 1.14 / 0.27 | 0.61 / 0.63 · 0.21 / 0.27 |
+| Luminance 30, BHM_9406 | 2.19 / 0.97 · 1.75 / 0.15 | 1.42 / 0.97 · 0.46 / 0.15 |
+| mean \|log ratio\| (10 settings × 2 photos) | 1.099 | **0.399** |
+
+Left: the darker photo keeps ~1.5× Camera Raw's luminance noise and ~3× its chroma noise (our
+demosaic starts 3× noisier in colour); Color 50 and 25 leave the same fine chroma in both
+renderers (the metric sees only the finest scale). Upstream's process V6 "joint" colour NR was
+not merged (its own process version, a larger change than these constants).
