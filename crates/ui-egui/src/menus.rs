@@ -1113,11 +1113,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 Some(v) => match serde_json::from_value::<crate::display_p3::ViewSpace>(v.clone()) {
                     Ok(space) => {
                         app.ui.settings.view_space = space;
-                        Ok(json!({"space": space.id(), "displayP3": space.is_p3()}))
+                        Ok(view_space_state(app))
                     }
                     Err(e) => Err(format!("app.viewSpace: `space`: {e}")),
                 },
-                None => Ok(json!({"space": app.ui.settings.view_space.id(), "displayP3": app.ui.settings.view_space.is_p3()})),
+                None => Ok(view_space_state(app)),
             }
         }
         "view.beforeAfterCycle" => {
@@ -2148,4 +2148,20 @@ fn show_in_finder(app: &mut LightcraftApp) -> Result<Value, String> {
     let reveal = app.services.reveal.as_mut().ok_or("not available here")?;
     reveal(&path)?;
     Ok(json!({"path": path}))
+}
+
+/// `app.viewSpace`'s answer: the setting, whether photo textures carry Display P3 values, and
+/// the window surface's tag (`tagged`: the system colour-manages the window onto the display;
+/// a new request takes effect on the next frame).
+fn view_space_state(app: &LightcraftApp) -> Value {
+    let space = app.ui.settings.view_space;
+    let tagged = app.window_space.as_ref().and_then(|w| w.tagged());
+    json!({
+        "space": space.id(),
+        "displayP3": space.is_p3(),
+        "tagsSurface": space.tags_surface(),
+        "tagged": tagged,
+        "colorManaged": tagged.is_some(),
+        "texturesP3": app.renderer.display_p3,
+    })
 }

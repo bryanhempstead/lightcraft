@@ -43,6 +43,11 @@ pub struct MapRuntime {
 }
 
 impl MapRuntime {
+    /// Drop the tile textures (the screen's colour space changed: they are made again).
+    pub fn forget_textures(&mut self) {
+        self.textures.clear();
+    }
+
     /// `{online, inMemory, fetched, pending, error}` of the tile store (null before the map was shown).
     pub fn status(&self) -> Value {
         self.store.as_ref().map(|s| s.status()).unwrap_or(Value::Null)
@@ -176,6 +181,7 @@ fn zoom_at(app: &mut LightcraftApp, area: Rect, anchor: egui::Pos2, z: f64) {
 }
 
 fn canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, area: Rect, pins: &[(u64, f64, f64)], t: &Tokens) {
+    let p3 = app.renderer.display_p3;
     let resp = ui.interact(area, egui::Id::new("map-canvas"), Sense::click_and_drag());
     register(ui.ctx(), "map:canvas", area);
     let dragging_photos = app.ui.dragging_photos.clone();
@@ -227,7 +233,7 @@ fn canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, area: Rect, pins: &[(u64, 
                     }
                     None => match store.get(id) {
                         Tile::Ready(img) => {
-                            let color = Arc::new(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.as_bytes()));
+                            let color = Arc::new(crate::display_p3::screen_image(p3, [img.width, img.height], &img.as_bytes()));
                             let tex = ui.ctx().load_texture(format!("map-{}-{}-{}", id.z, id.x, id.y), color, egui::TextureOptions::LINEAR);
                             let tid = tex.id();
                             app.map.textures.insert(id, (tex, frame));

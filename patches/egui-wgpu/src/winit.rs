@@ -139,6 +139,16 @@ impl Painter {
         {
             surf_config.color_space = cs;
         }
+        // LightCraft patch: an 8-bit surface tagged with the colour space the app asked for
+        // (`request_sdr_color_space`), where the surface supports it
+        if render_state.target_format != wgpu::TextureFormat::Rgba16Float {
+            let caps = surface_state.surface.get_capabilities(&render_state.adapter);
+            let cs = crate::sdr_choice(&caps, render_state.target_format);
+            if let Some(cs) = cs {
+                surf_config.color_space = cs;
+            }
+            crate::set_sdr_active(cs);
+        }
 
         surface_state
             .surface
@@ -593,6 +603,10 @@ impl Painter {
             )
         };
 
+        // LightCraft patch: a changed SDR colour-space request reconfigures the surface
+        if crate::sdr_request_changed() {
+            surface_state.needs_reconfigure = true;
+        }
         if surface_state.needs_reconfigure {
             Self::configure_surface(surface_state, render_state, &self.config.surface);
             surface_state.needs_reconfigure = false;

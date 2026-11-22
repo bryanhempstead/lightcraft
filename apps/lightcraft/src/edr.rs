@@ -103,6 +103,29 @@ impl HdrView for EdrView {
     }
 }
 
+/// The window surface's colour space (LR-VIEW-COLORMANAGED, `patches/egui-wgpu`): an 8-bit
+/// surface tagged Display P3 on request, so macOS colour-manages the window — the photos'
+/// P3 values (`lightcraft_ui_egui::display_p3`) reach any display through its own profile. The
+/// HDR surface is always tagged (extended sRGB).
+pub struct SurfaceTag;
+
+impl lightcraft_ui_egui::display_p3::WindowSpace for SurfaceTag {
+    fn request_p3_tag(&mut self, on: bool) {
+        egui_wgpu::request_sdr_color_space(on.then_some(wgpu::SurfaceColorSpace::DisplayP3));
+    }
+
+    fn tagged(&self) -> Option<&'static str> {
+        if egui_wgpu::hdr_surface().is_some() {
+            return Some("extendedSrgb");
+        }
+        match egui_wgpu::sdr_color_space() {
+            Some(wgpu::SurfaceColorSpace::DisplayP3) => Some("displayP3"),
+            Some(_) => Some("other"),
+            None => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
