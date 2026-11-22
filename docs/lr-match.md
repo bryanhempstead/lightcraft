@@ -480,3 +480,16 @@ curve editor draws the same spline). Oracle renders of LightCraft against Camera
 curve on the grid 1.17 → 0.43 ΔE (the base itself is 0.42), with his parametric preset 1.26 →
 0.46, ramps 0.24 → 0.05. Acceptance set: 4.01 / 10.9 / 23 → 4.02 / 10.9 / **25** (gate passes;
 Summer Fields M262 4.45 → 4.45, X100F −0.2, R6 +0.06).
+
+### Calibration (R10)
+
+The oracle chart (`make_color.py`, 135 renders; `chartcmp.py` by hue): LightCraft's base is 1.58
+ΔE per patch, Bryan's Summer Fields calibration (Red Hue +3, Green Hue / Sat +44, Blue Hue −19 /
+Sat +38) 4.23: teals (180–210°) come out 18.5 C* too dull, blues (210–270°) 20° off in hue and
+4–7 L* dark. Real Summer Fields photos (`lr_compare hues`, acceptance set) show the same: greens
+to blues −3…−8.5° and −1…−4 C*, while Adobe Color photos are within ±1.5° everywhere. Fitting
+the best white-keeping primaries matrix *at LightCraft's position* (scene-linear, after the
+profile's hue/sat map) with LightCraft in the loop (`calfit_lc.py`) only reaches 3.27: a matrix
+there can't reproduce it. Camera Raw's calibration edits the camera profile, i.e. acts before the
+DCP hue/sat map and look table; moving it there (decode stage, `engine::adobe`) is the fix to try
+next.
