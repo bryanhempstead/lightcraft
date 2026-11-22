@@ -39,6 +39,8 @@ pub mod depth;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod esrgan;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod job;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod netrun;
 
 pub use lightcraft_denoise_core as denoise;

@@ -1,0 +1,12 @@
+[package]
+name = "lightcraft-rcd"
+version.workspace = true
+edition.workspace = true
+license = "GPL-3.0-or-later"
+description = "Ratio Corrected Demosaicing (Luis Sanz Rodríguez, RawTherapee) ported to Rust: LightCraft's Raw Details demosaic (L0)"
+
+[lints]
+workspace = true
+
+[dependencies]
+rayon = { workspace = true }

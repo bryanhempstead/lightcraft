@@ -5,6 +5,8 @@
 //! - [`Method::Ppg`] — Patterned Pixel Grouping (Chuan-kai Lin): gradient-selected green, colour-difference R/B.
 //! - [`Method::Ahd`] — Adaptive Homogeneity-Directed (Hirakawa & Parks, IEEE TIP 2005): horizontal/vertical
 //!   candidates chosen per pixel by CIELab homogeneity. The quality default for Bayer sensors.
+//! - [`Method::Rcd`] — Ratio Corrected Demosaicing (Luis Sanz Rodríguez, as in RawTherapee; GPL-3.0-or-later, in
+//!   `lightcraft-rcd`): LightCraft's Raw Details (Photo ▸ Enhance), finer detail with fewer maze and zipper artefacts.
 //! - Non-Bayer patterns (X-Trans, …) always use `xtrans::directional`, our own edge-weighted colour-difference
 //!   interpolation.
 //!
@@ -24,6 +26,7 @@ pub enum Method {
     Ppg,
     #[default]
     Ahd,
+    Rcd,
 }
 
 /// Mirror-reflected access to a single-plane mosaic (reflection keeps Bayer parity: −k → k, w−1+k → w−1−k).
@@ -88,6 +91,13 @@ pub fn demosaic(n: &Normalized, method: Method) -> Rgb32f {
                 Method::Bilinear => bilinear::bilinear(&m),
                 Method::Ppg => ppg::ppg(&m),
                 Method::Ahd => ahd::ahd(&m),
+                Method::Rcd => {
+                    let pattern = [[cfa.color_at(0, 0), cfa.color_at(1, 0)], [cfa.color_at(0, 1), cfa.color_at(1, 1)]];
+                    match lightcraft_rcd::rcd(&n.data, w, h, pattern) {
+                        Some(data) => Rgb32f { width: w, height: h, data },
+                        None => ahd::ahd(&m),
+                    }
+                }
             }
         }
     }
@@ -158,7 +168,7 @@ mod tests {
         let img = Rgb32f::filled(17, 13, [0.3, 0.55, 0.8]);
         for pat in ["RGGB", "BGGR", "GRBG", "GBRG"] {
             let cfa = Cfa::bayer(pat).unwrap();
-            for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
+            for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Rcd] {
                 let out = run(&img, &cfa, m);
                 for p in &out.data {
                     for c in 0..3 {
@@ -175,7 +185,7 @@ mod tests {
     fn known_samples_are_preserved() {
         let img = edgy_scene(40, 32);
         let cfa = Cfa::bayer("GRBG").unwrap();
-        for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
+        for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Rcd] {
             let out = run(&img, &cfa, m);
             for y in 0..32 {
                 for x in 0..40 {
@@ -199,6 +209,10 @@ mod tests {
         assert!(eb > 20.0, "edgy bilinear {eb:.1}");
         assert!(ep > eb + 6.0, "ppg {ep:.1} vs bilinear {eb:.1}");
         assert!(ea > eb + 6.0, "ahd {ea:.1} vs bilinear {eb:.1}");
+        // Raw Details: RCD on both scenes, at least as good as AHD on the edges
+        let (sr, er) = (p(&smooth, Method::Rcd), p(&edgy, Method::Rcd));
+        eprintln!("rcd: smooth {sr:.1} edgy {er:.1}");
+        assert!(sr > 38.0 && er > ea - 1.0, "rcd smooth {sr:.1} edgy {er:.1} vs ahd {ea:.1}");
         let xt = Cfa::xtrans();
         let xp = psnr(&edgy, &run(&edgy, &xt, Method::Ahd), 6);
         let xb = psnr(&edgy, &run(&edgy, &xt, Method::Bilinear), 6);
@@ -210,7 +224,7 @@ mod tests {
         let cfa = Cfa::bayer("RGGB").unwrap();
         for (w, h) in [(1, 1), (2, 2), (3, 5), (5, 3), (1, 7)] {
             let img = Rgb32f::filled(w, h, [0.5; 3]);
-            for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
+            for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Rcd] {
                 let out = run(&img, &cfa, m);
                 assert_eq!((out.width, out.height), (w, h));
                 assert!(out.data.iter().all(|p| p.iter().all(|v| v.is_finite())));
@@ -239,7 +253,7 @@ mod tests {
         let img = smooth_scene(w, h);
         let cfa = Cfa::bayer("RGGB").unwrap();
         let n = mosaic_from_rgb(&img, &cfa);
-        for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
+        for m in [Method::Bilinear, Method::Ppg, Method::Ahd, Method::Rcd] {
             let t = std::time::Instant::now();
             let _ = demosaic(&n, m);
             let s = t.elapsed().as_secs_f64();

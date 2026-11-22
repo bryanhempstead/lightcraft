@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 lightcraft-raster = { workspace = true }
+lightcraft-raw = { workspace = true }
 # the fork offers the RawNIND (GPL-3.0) download: Bryan's decision, 2026-11-21 (CLAUDE.md, Fork rules)
 lightcraft-denoise-core = { workspace = true, features = ["rawnind-model"] }
 serde = { workspace = true }
@@ -30,3 +31,4 @@ candle-nn = { workspace = true, features = ["metal"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
+png = { workspace = true }

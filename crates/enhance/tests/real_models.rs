@@ -38,6 +38,71 @@ fn rawnind_runs_a_tile_on_candle() {
     assert!(mean.is_finite());
 }
 
+/// `LC_RAW=<a Bayer raw> LC_MODELS=… LC_OUT=<dir>`: Enhance timings on a real photo, and 512² crops (plain AHD,
+/// Raw Details, built-in denoise, RawNIND) as PNGs through a plain gamma, for looking at.
+#[test]
+#[ignore]
+fn enhance_a_real_raw() {
+    use lightcraft_enhance::job::{self, Models, Options};
+    let (Some(dir), Some(raw)) = (models(), std::env::var_os("LC_RAW")) else { return };
+    let out = std::env::var_os("LC_OUT").map(PathBuf::from);
+    let bytes = std::fs::read(&raw).unwrap();
+    let t = Instant::now();
+    let img = lightcraft_raw::decode(&bytes).unwrap();
+    eprintln!("decode {:.2} s, {}×{}", t.elapsed().as_secs_f64(), img.width, img.height);
+    let onnx = std::env::temp_dir().join(format!("lc-rawnind-job-{}.onnx", std::process::id()));
+    lightcraft_denoise_core::archive::extract(&dir.join("rawdenoise-nind.dtmodel"), "model_bayer.onnx", &onnx, 512 << 20).unwrap();
+    let model = job::DenoiseModel::load(&onnx, lightcraft_enhance::best_device()).unwrap();
+    let _ = std::fs::remove_file(&onnx);
+    let with_model = Models { denoise: Some(std::sync::Arc::new(model)), super_resolution: None };
+    let runs: [(&str, Options, &Models); 4] = [
+        ("ahd", Options { denoise: 0.0, raw_details: false, super_resolution: false }, &Models::default()),
+        ("rcd", Options { denoise: 0.0, raw_details: true, super_resolution: false }, &Models::default()),
+        ("builtin", Options { denoise: 100.0, ..Default::default() }, &Models::default()),
+        ("rawnind", Options { denoise: 100.0, ..Default::default() }, &with_model),
+    ];
+    for (name, o, m) in runs {
+        if name == "builtin" && std::env::var_os("LC_SKIP_BUILTIN").is_some() {
+            continue;
+        }
+        let t = Instant::now();
+        let r = match name {
+            "ahd" => job::Output { image: img.develop(lightcraft_raw::Method::Ahd).unwrap(), denoiser: None, timings: Vec::new() },
+            _ => job::run(&img, &o, m, &|_, _| true).unwrap(),
+        };
+        eprintln!("{name}: {:.2} s ({:?}) {:?}", t.elapsed().as_secs_f64(), r.denoiser, r.timings);
+        if let Some(out) = &out {
+            let (w, h) = (r.image.width, r.image.height);
+            let (x0, y0, s) = (w / 2 - 256, h / 2 - 256, 512);
+            // grey-world white balance over the crop, then a plain gamma
+            let mut sum = [0f64; 3];
+            for y in y0..y0 + s {
+                for x in x0..x0 + s {
+                    for c in 0..3 {
+                        sum[c] += r.image.data[y * w + x][c] as f64;
+                    }
+                }
+            }
+            let g = sum[1] / (s * s) as f64;
+            let wb: [f32; 3] = std::array::from_fn(|c| (0.18 / g.max(1e-6) * sum[1] / sum[c].max(1e-9)) as f32);
+            let mut px = Vec::with_capacity(s * s * 3);
+            for y in y0..y0 + s {
+                for x in x0..x0 + s {
+                    let p = r.image.data[y * w + x];
+                    for c in 0..3 {
+                        px.push(((p[c] * wb[c]).clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8);
+                    }
+                }
+            }
+            std::fs::create_dir_all(out).unwrap();
+            let f = std::fs::File::create(out.join(format!("{name}.png"))).unwrap();
+            let mut e = png::Encoder::new(std::io::BufWriter::new(f), s as u32, s as u32);
+            e.set_color(png::ColorType::Rgb);
+            e.write_header().unwrap().write_image_data(&px).unwrap();
+        }
+    }
+}
+
 #[test]
 #[ignore]
 fn metal_op_speed() {
