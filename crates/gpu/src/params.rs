@@ -66,6 +66,8 @@ const FIELDS: &[(&str, usize)] = &[
     // Camera Raw's measured Color Grading and B&W mix (Bryan's fork, round 10:
     // `lightcraft_pipeline::grading_cr` channel curves, `bw_cr` grey grid) in aux, and the linear
     // Rec.2020 ↔ ProPhoto matrices they work through
+    ("LT_CR", 1),
+    ("LT_CR_OFF", 1),
     ("DZ_CR", 1),
     ("DZ_KEY", 1),
     ("DZ_OFF", 1),
@@ -241,6 +243,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     if let Some((l, _)) = lut {
         aux.extend(l.data.iter().flatten());
     }
+    let lt_cr_off = aux.len();
+    if lightcraft_pipeline::local_tone_cr::MEASURED && !masks.is_empty() {
+        aux.extend(lightcraft_pipeline::local_tone_cr::words());
+    }
     let dz_off = aux.len();
     if fp.dz_key.is_some() {
         aux.extend(lightcraft_pipeline::dehaze_cr::words());
@@ -320,6 +326,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.f("BALANCE", *balance);
     }
     p.f("SKIN", ops.skin);
+    p.b("LT_CR", lightcraft_pipeline::local_tone_cr::MEASURED && !masks.is_empty());
+    p.u("LT_CR_OFF", lt_cr_off as u32);
     p.b("DZ_CR", fp.dz_key.is_some());
     p.f("DZ_KEY", fp.dz_key.unwrap_or(0.0));
     p.u("DZ_OFF", dz_off as u32);

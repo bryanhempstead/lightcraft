@@ -198,6 +198,20 @@ if "pc2" in WHAT:
     sw.append(("pc_two", {}, points_xml([point_string(0.3, 0.6, 0.25, hue=0.5), point_string(4.0, 0.6, 0.25, lum=-0.5)])))
     sw.append(("pc_narrow", {}, points_xml([point_string(2.0, 0.6, 0.25, sat=-1.0, ranges={"HueRange": [0.3, 0.45, 0.55, 0.7]})])))
     jobs.append(("grid", scenes.grid()[0], sw))
+if "mask2" in WHAT:
+    # the local tone sliders' curves over the gradient, both signs and full strength (R16)
+    sw = [("base", {}, "")]
+    for k, lk in (("Con", "LocalContrast2012"), ("Whi", "LocalWhites2012"), ("Bla", "LocalBlacks2012"), ("Hig", "LocalHighlights2012"),
+                  ("Sha", "LocalShadows2012")):
+        for v in (-100, -50, 50, 100):
+            sw.append((f"l{k}{v:+d}", {}, mask_xml({lk: f"{v / 100:.2f}"}, GRAD_ALL)))
+    for v in (-2, 2):
+        sw.append((f"lExp{v:+d}", {}, mask_xml({"LocalExposure2012": f"{v / 4:.2f}"}, GRAD_ALL)))
+    jobs.append(("spatial", scenes.spatial(), sw))
+    # the same curves on a darker and a brighter scene (is the pivot the image's?)
+    for name, off in (("spatialD", -2.0), ("spatialB", 1.0)):
+        img = scenes.spatial() * 2.0 ** off
+        jobs.append((name, img, [x for x in sw if x[0] in ("base", "lCon+50", "lCon-50", "lWhi+50", "lBla+50", "lBla-50", "lWhi-50")]))
 if "look" in WHAT:
     sw = [("base", {}, "")]
     for a in (1.0, 0.5):

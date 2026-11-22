@@ -832,14 +832,20 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 };
                 delta += wb * legacy(base) + (1.0 - wb) * legacy(l1);
             }
-            if l_wh != 0.0 {
-                delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);
-            }
-            if l_bl != 0.0 {
-                delta += l_bl * 0.8 * (1.0 - smooth(-6.0, -1.5, l1));
-            }
-            if l_con != 0.0 {
-                delta += l_con * 0.14 * l1.clamp(-6.0, 4.0);
+            if crate::local_tone_cr::MEASURED {
+                // Camera Raw's local Contrast / Whites / Blacks (`local_tone_cr`): curves of the level
+                use crate::local_tone_cr::{BLACKS, CONTRAST, WHITES, at};
+                delta += at(&WHITES, l_wh, l1) + at(&BLACKS, l_bl, l1) + at(&CONTRAST, l_con, l1);
+            } else {
+                if l_wh != 0.0 {
+                    delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);
+                }
+                if l_bl != 0.0 {
+                    delta += l_bl * 0.8 * (1.0 - smooth(-6.0, -1.5, l1));
+                }
+                if l_con != 0.0 {
+                    delta += l_con * 0.14 * l1.clamp(-6.0, 4.0);
+                }
             }
             let cl = clar + l_clar;
             if cl != 0.0

@@ -768,6 +768,30 @@ fn dz_cr(s: f32, v: f32) -> f32 {
     return v * exp2(g);
 }
 
+// `local_tone_cr::at`: table `k` (0 Contrast, 1 Whites, 2 Blacks) at amount `a`, level `l1`.
+fn lt_cr(k: u32, a_in: f32, l1: f32) -> f32 {
+    if (a_in == 0.0) {
+        return 0.0;
+    }
+    let f = clamp((l1 + 5.5) / 0.5, 0.0, 15.0);
+    let i = min(u32(f), 14u);
+    let t = f - f32(i);
+    let o = pu(F_LT_CR_OFF) + k * 64u;
+    let r0 = aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+    let r1 = aux[o + 16u + i] + (aux[o + 16u + i + 1u] - aux[o + 16u + i]) * t;
+    let r2 = aux[o + 32u + i] + (aux[o + 32u + i + 1u] - aux[o + 32u + i]) * t;
+    let r3 = aux[o + 48u + i] + (aux[o + 48u + i + 1u] - aux[o + 48u + i]) * t;
+    let a = clamp(a_in, -1.0, 1.0);
+    if (a <= -0.5) {
+        return r1 + (r0 - r1) * (-a - 0.5) / 0.5;
+    } else if (a < 0.0) {
+        return r1 * (-a / 0.5);
+    } else if (a <= 0.5) {
+        return r2 * (a / 0.5);
+    }
+    return r2 + (r3 - r2) * (a - 0.5) / 0.5;
+}
+
 fn legacy_hs(b: f32, hh: f32, ss: f32) -> f32 {
     let ws = 1.0 - sstep(-4.8, 0.3, b);
     let wh = sstep(-1.0, 2.8, b);
@@ -1001,14 +1025,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (hh != 0.0 || ss != 0.0) {
         delta += wb * legacy_hs(base, hh, ss) + (1.0 - wb) * legacy_hs(l1, hh, ss);
     }
-    if (lt[6] != 0.0) {
-        delta += lt[6] * 0.8 * sstep(0.5, 3.0, l1);
-    }
-    if (lt[7] != 0.0) {
-        delta += lt[7] * 0.8 * (1.0 - sstep(-6.0, -1.5, l1));
-    }
-    if (lt[3] != 0.0) {
-        delta += lt[3] * 0.14 * clamp(l1, -6.0, 4.0);
+    if (pu(F_LT_CR) != 0u) {
+        // Camera Raw's local Contrast / Whites / Blacks (`local_tone_cr`)
+        delta += lt_cr(1u, lt[6], l1) + lt_cr(2u, lt[7], l1) + lt_cr(0u, lt[3], l1);
+    } else {
+        if (lt[6] != 0.0) {
+            delta += lt[6] * 0.8 * sstep(0.5, 3.0, l1);
+        }
+        if (lt[7] != 0.0) {
+            delta += lt[7] * 0.8 * (1.0 - sstep(-6.0, -1.5, l1));
+        }
+        if (lt[3] != 0.0) {
+            delta += lt[3] * 0.14 * clamp(l1, -6.0, 4.0);
+        }
     }
     let cl = pf(F_CLAR) + lt[9];
     if (cl != 0.0 && pu(F_HAS_CLAR) != 0u) {

@@ -36,6 +36,7 @@ pub mod finish;
 pub mod geometry;
 pub mod grading_cr;
 pub mod local;
+pub mod local_tone_cr;
 pub mod lut;
 pub mod masks;
 pub mod optics;
