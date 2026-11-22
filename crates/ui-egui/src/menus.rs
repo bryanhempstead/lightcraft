@@ -192,6 +192,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // Metadata ▸ keyword list (L11)
     ("dialog.importKeywords", "Import Keywords…", None, "Metadata"),
     ("dialog.importCatalog", "Import from Another Library…", None, "File"),
+    // E12: File ▸ Email Photos…
+    ("file.emailPhotos", "Email Photos…", Some("Cmd+Shift+M"), "File"),
     // L26: Compare ▸ Link Focus
     ("compare.linkFocus", "Link Focus", None, ""),
     ("dialog.exportKeywords", "Export Keywords…", None, "Metadata"),
@@ -1355,6 +1357,32 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.quit" => {
             app.ui.quit = true;
             Ok(Value::Null)
+        }
+        "file.emailPhotos" => {
+            // export the selection small (JPEG, 1600 px, quality 80) into a temporary folder, then
+            // a new mail message with them attached — nothing is sent
+            if app.services.compose_email.is_none() {
+                return Some(Err("Email Photos needs the desktop app (Mail)".into()));
+            }
+            let dir = std::env::temp_dir().join(format!("LightCraft Email {}", (app.session.clock)().replace([':', 'T'], "-")));
+            let mut q = json!({"format": "jpeg", "longEdge": p.get("longEdge").and_then(Value::as_u64).unwrap_or(1600), "quality": 80, "dir": dir.to_string_lossy(), "background": false, "metadata": "copyright"});
+            if let Some(ids) = p.get("ids") {
+                q["ids"] = ids.clone();
+            }
+            let r = match app.run("app.export", q) {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e)),
+            };
+            let files: Vec<String> =
+                r["files"].as_array().into_iter().flatten().filter_map(|f| f["path"].as_str().or(f.as_str())).map(str::to_string).collect();
+            if files.is_empty() {
+                return Some(Err("nothing was exported to attach".into()));
+            }
+            let sent = app.services.compose_email.as_mut().map(|f| f(&files));
+            match sent {
+                Some(Err(e)) => Err(e),
+                _ => Ok(json!({"attached": files})),
+            }
         }
         "compare.linkFocus" => {
             app.ui.compare_frozen = match (p.get("on").and_then(Value::as_bool), app.ui.compare_frozen) {

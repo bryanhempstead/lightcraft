@@ -297,3 +297,30 @@ fn compare_link_focus_and_navigator_zooms() {
     assert!(w.contains("button:navZoomMore"), "{w}");
     shot(&mut h, "l26-navigator.png");
 }
+
+/// E12: File ▸ Email Photos… exports the selection small and opens a mail message with them
+/// attached (here a stand-in for Mail records the files).
+#[test]
+fn email_photos_attaches_small_exports() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    s.execute("library.select", &json!({"ids": ids})).unwrap();
+    let got: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let mut h = headless(s);
+    let g = got.clone();
+    h.app.services.compose_email = Some(Box::new(move |files: &[String]| {
+        g.lock().unwrap().extend(files.iter().cloned());
+        Ok(())
+    }));
+    let r = h.app.run("file.emailPhotos", json!({"longEdge": 400})).unwrap();
+    let files = got.lock().unwrap().clone();
+    assert_eq!(files.len(), 2, "{r}");
+    for f in &files {
+        let bytes = std::fs::read(f).unwrap();
+        let d = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::default()).unwrap();
+        assert_eq!(d.image.width.max(d.image.height), 400);
+        let _ = std::fs::remove_file(f);
+    }
+    h.app.services.compose_email = None;
+    assert!(h.app.run("file.emailPhotos", json!({})).is_err(), "no Mail here: an error, not a crash");
+}

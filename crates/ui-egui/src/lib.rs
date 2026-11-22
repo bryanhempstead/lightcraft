@@ -125,6 +125,8 @@ pub struct Services {
     pub pick_text_file: Option<PickFiles>,
     /// Save dialog for a text file (Metadata ▸ Export Keywords…), the suggested name given.
     pub save_text_file: Option<SaveFile>,
+    /// E12 Email Photos: open a new mail message with these files attached (desktop: Mail).
+    pub compose_email: Option<Box<dyn FnMut(&[String]) -> Result<(), String>>>,
     pub write: Option<WriteFn>,
     /// Thread-safe writer: with it, UI-started exports run in the background (desktop only).
     pub write_shared: Option<SharedWrite>,
