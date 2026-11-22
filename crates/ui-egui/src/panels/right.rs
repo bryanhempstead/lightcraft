@@ -194,8 +194,9 @@ fn padded(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
 }
 
 /// The aspect presets of the Crop panel: (menu label, `crop.aspect` value).
-const ASPECT_PRESETS: [(&str, &str); 10] = [
+const ASPECT_PRESETS: [(&str, &str); 11] = [
     ("Free", "free"),
+    ("As Shot", "asShot"),
     ("Original", "original"),
     ("1 × 1", "1x1"),
     ("4 × 5 / 8 × 10", "4x5"),
@@ -335,20 +336,33 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.label(crate::i18n::tr("Overlay"));
         {
             use crate::state::CropOverlay as O;
-            let opts = [
-                (O::Thirds, "Thirds", "thirds"),
-                (O::Grid, "Grid", "grid"),
-                (O::Golden, "Golden", "golden"),
-                (O::Diagonal, "Diagonal", "diagonal"),
-                (O::Triangle, "Triangle", "triangle"),
-                (O::Spiral, "Spiral", "spiral"),
-                (O::None, "None", "none"),
-            ];
-            let items: Vec<(&str, &str)> = opts.iter().map(|(_, l, k)| (*l, *k)).collect();
-            let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
-            if let Some(i) = crate::widgets::segmented(ui, "cropOverlay", &items, active, 4) {
-                app.ui.crop_overlay = opts[i].0;
+            let ids: Vec<String> = O::ALL.iter().map(|o| o.id()).collect();
+            // (a chip's text must fit it: "Aspect Ratios" is "Aspects" here)
+            let chip = |o: &O| if *o == O::AspectRatios { "Aspects" } else { o.label() };
+            let items: Vec<(&str, &str)> = O::ALL.iter().zip(&ids).map(|(o, k)| (chip(o), k.as_str())).collect();
+            let active = O::ALL.iter().position(|o| *o == app.ui.crop_overlay);
+            if let Some(o) = crate::widgets::segmented(ui, "cropOverlay", &items, active, 3).and_then(|i| O::ALL.get(i)) {
+                app.ui.crop_overlay = *o;
             }
+            // Lightroom's Choose Overlays to Cycle: which ones O steps through
+            let cycle = ui.button("cycle.").on_hover_text(crate::i18n::tr("Choose the overlays O cycles through"));
+            crate::widgets::register(ui.ctx(), "button:cropOverlayCycle", cycle.rect);
+            egui::Popup::menu(&cycle).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                let mut chosen = if app.ui.crop_overlay_cycle.is_empty() { O::ALL.to_vec() } else { app.ui.crop_overlay_cycle.clone() };
+                for o in O::ALL {
+                    let mut on = chosen.contains(&o);
+                    let r = ui.checkbox(&mut on, crate::i18n::tr(o.label()));
+                    crate::widgets::register(ui.ctx(), format!("cropOverlayCycle:{}", o.id()), r.rect);
+                    if r.changed() {
+                        chosen.retain(|x| *x != o);
+                        if on {
+                            chosen.push(o);
+                        }
+                        let ids: Vec<String> = chosen.iter().map(|x| x.id()).collect();
+                        let _ = app.run("view.cropOverlaysToCycle", json!({"overlays": ids}));
+                    }
+                }
+            });
             if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
                 && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
             {

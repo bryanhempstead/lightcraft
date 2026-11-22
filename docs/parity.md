@@ -301,13 +301,13 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-CROP-RECT | Crop rectangle | P0 | ✅ | `cmd:crop.set`, `cmd:crop.drag`, `crates/geom/src/crop_drag.rs`, `crates/ui-egui/src/panels/detail.rs` | double-click inside the box applies the crop (like Return) |
-| LR-CROP-ASPECT | Aspect ratios | P0 | ✅ | `cmd:crop.aspect`, `cmd:crop.rotateAspect`, `crates/ui-egui/src/panels/right.rs` | menu with presets + custom W × H, visible Lock toggle (also A), button names the active ratio; every handle honours the lock and the drag stops at the image edge instead of shifting the frame (issue #295); "Original" is the photo's own shape (no separate As Shot) |
+| LR-CROP-ASPECT | Aspect ratios | P0 | ✅ | `cmd:crop.aspect`, `cmd:crop.rotateAspect`, `crates/ui-egui/src/panels/right.rs` | menu with presets + custom W × H, visible Lock toggle (also A), button names the active ratio; every handle honours the lock and the drag stops at the image edge instead of shifting the frame (issue #295); "Original" is the photo's own shape; As Shot (the camera's framing: raws decode inside the in-camera crop, so it equals Original) |
 | LR-CROP-STRAIGHTEN | Straighten tool | P0 | ✅ | `cmd:crop.straighten`, `cmd:crop.autoStraighten` | Straighten Tool button: drag along a horizon/vertical; double-click or Auto levels automatically |
 | LR-CROP-AUTO | Auto straighten | P1 | ✅ | `cmd:crop.autoStraighten` | crop-angle leveling from detected horizon/plumb lines (consensus required) |
 | LR-CROP-ANGLE | Angle slider | P0 | ✅ | `ctl:crop.angle` | |
 | LR-CROP-ROTATE90 | Rotate 90° | P0 | ✅ | `cmd:photo.rotateLeft`, `cmd:photo.rotateRight` | |
 | LR-CROP-FLIP | Flip | P0 | ✅ | `cmd:photo.flipHorizontal`, `cmd:photo.flipVertical` | |
-| LR-CROP-OVERLAY | Crop overlays | P1 | ✅ | `cmd:view.cropOverlay`, `cmd:view.cropOverlayOrientation`, `crates/ui-egui/src/panels/crop_overlay.rs` | thirds, grid, golden ratio, diagonal, triangle, golden spiral (mirrored with ⇧O while cropping); no aspect-ratio overlays |
+| LR-CROP-OVERLAY | Crop overlays | P1 | ✅ | `cmd:view.cropOverlay`, `cmd:view.cropOverlayOrientation`, `cmd:view.cropOverlaysToCycle`, `crates/ui-egui/src/panels/crop_overlay.rs` | thirds, grid, golden ratio, diagonal, triangle, golden spiral (mirrored with ⇧O), Aspect Ratios (1:1, 4:5, 2:3, 16:9 outlines), Center, Fifths; Choose Overlays to Cycle (cycle. in the Crop panel) |
 | LR-CROP-ZOOM | Zoom while cropping | P1 | ✅ | `cmd:view.zoom100`, `cmd:view.zoomIn`, `crates/ui-egui/src/panels/detail.rs` | zoom levels apply with the crop tool open (verified: 100% shows the photo at native size with the crop frame) |
 | LR-CROP-GENEXPAND | Generative expand | OOS | 🚫 | | |
 
@@ -700,7 +700,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-RATEADVANCE | Rate and advance — ⇧0…5 | P1 | ✅ | `crates/ui-egui/src/shortcuts.rs` → `cmd:photo.rate` (`advance`) | |
 | KEY-FLAGADVANCE | Flag and advance — ⇧Z / ⇧X / ⇧U | P1 | ✅ | `cmd:photo.flag` (`advance`), `crates/ui-egui/src/shortcuts.rs` | Shift+Z pick, Shift+X reject, Shift+U clear; Shift+P also picks and advances in the library grids; exactly one step with Auto Advance enabled |
 | KEY-NEXTPREV | Next / previous — → / ← | P0 | ✅ | `cmd:library.next`, `cmd:library.previous` | |
-| KEY-BA-CYCLE | Before/after — Y | P0 | ✅ | `cmd:view.beforeAfter` | toggles side by side (no cycling) |
+| KEY-BA-CYCLE | Before/after — Y | P0 | ✅ | `cmd:view.beforeAfter`, `cmd:view.beforeAfterCycle` | Y toggles Left / Right as in Lightroom; the toolbar's Before & After button cycles the layouts (Left / Right → Top / Bottom → Left / Right Split → Top / Bottom Split) |
 | KEY-BA-TOPBOTTOM | Before/after top/bottom — ⌥Y | P1 | ✅ | `cmd:view.beforeAfterTopBottom`, `cmd:view.beforeAfterSplitTopBottom` | ⌥Y, ⇧⌥Y |
 | KEY-BA-SPLIT | Split before/after — ⇧Y | P0 | ✅ | `cmd:view.beforeAfterSplit` | |
 | KEY-CHOOSECOPY | Choose settings to copy — ⇧⌘C | P0 | ✅ | `cmd:dialog.copySettings` | |

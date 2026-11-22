@@ -72,8 +72,10 @@ fn develop_views(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         app.ui.before_after = BeforeAfter::Off;
     }
     let on = !matches!(app.ui.before_after, BeforeAfter::Off | BeforeAfter::Original);
-    if icon_button(ui, "beforeAfterBar", Icon::BeforeAfter, vec2(32.0, 32.0), on, true, "Before & After (Y)").clicked() {
-        let _ = app.run("view.beforeAfter", json!({}));
+    if icon_button(ui, "beforeAfterBar", Icon::BeforeAfter, vec2(32.0, 32.0), on, true, "Before & After (Y); click again for the next layout")
+        .clicked()
+    {
+        let _ = app.run("view.beforeAfterCycle", json!({}));
     }
     let r = crate::widgets::dropdown(ui, "beforeAfterMode", "", t.font(12.0), t.text_label).on_hover_text(crate::i18n::tr("Before & After layouts"));
     egui::Popup::menu(&r).show(|ui| {

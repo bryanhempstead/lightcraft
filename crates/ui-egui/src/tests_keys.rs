@@ -530,3 +530,43 @@ fn selection_actions_show_for_two_or_more_photos() {
     // the module tabs are there and the active one is known
     assert!(has(&h, "module:library") && has(&h, "module:develop"));
 }
+
+/// U05: crop extras — the overlays to cycle (Choose Overlays to Cycle), the Aspect Ratios / Center
+/// / Fifths overlays, As Shot aspect, and the Before & After button cycling the layouts.
+#[test]
+fn crop_overlays_cycle_the_chosen_ones_and_before_after_cycles_layouts() {
+    use crate::state::{BeforeAfter, CropOverlay};
+    let mut h = demo();
+    let first = h.app.session.catalog.photos().next().unwrap().id.0;
+    exec(&mut h, "library.select", json!({"ids": [first]}));
+    let r = h.request("ui.set", json!({"view": "detail", "right": "crop"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(Duration::from_secs(60));
+    exec(&mut h, "view.cropOverlaysToCycle", json!({"overlays": ["thirds", "aspectRatios", "fifths"]}));
+    h.app.ui.crop_overlay = CropOverlay::Thirds;
+    for want in [CropOverlay::AspectRatios, CropOverlay::Fifths, CropOverlay::Thirds] {
+        exec(&mut h, "view.cropOverlay", json!({}));
+        assert_eq!(h.app.ui.crop_overlay, want);
+    }
+    exec(&mut h, "view.cropOverlay", json!({"overlay": "center"}));
+    assert_eq!(h.app.ui.crop_overlay, CropOverlay::Center);
+    let r = h.request("engine.execute", json!({"command": "view.cropOverlay", "params": {"overlay": "nope"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    // the panel's cycle. menu ticks one off
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "button:cropOverlayCycle"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "cropOverlayCycle:fifths"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.ui.crop_overlay_cycle, [CropOverlay::Thirds, CropOverlay::AspectRatios]);
+    // As Shot locks the photo's own shape
+    exec(&mut h, "crop.aspect", json!({"aspect": "asShot"}));
+    let id = h.app.session.active().unwrap();
+    assert!(h.app.session.develop_of(id).unwrap().crop.aspect.is_some());
+    // Before & After: the button steps through the layouts
+    for want in [BeforeAfter::SideBySide, BeforeAfter::TopBottom, BeforeAfter::Split, BeforeAfter::SplitTopBottom, BeforeAfter::SideBySide] {
+        exec(&mut h, "view.beforeAfterCycle", json!({}));
+        assert_eq!(h.app.ui.before_after, want);
+    }
+}

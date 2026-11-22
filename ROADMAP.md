@@ -235,6 +235,8 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   mask on Detail), ported from upstream.
 - 2026-11-21 (fork): local adjustment ("Effect") presets ported from upstream; his Lightroom local presets import in
   place (Masking ▸ Effect ▸ import.).
+- 2026-11-21 (fork): crop extras: As Shot aspect, Aspect Ratios / Center / Fifths overlays, Choose Overlays to Cycle;
+  the Before & After button cycles the layouts.
 
 ## Chinese and Japanese interfaces, and text watermarks
 

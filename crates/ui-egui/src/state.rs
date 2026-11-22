@@ -129,7 +129,65 @@ pub enum CropOverlay {
     Diagonal,
     Triangle,
     Spiral,
+    /// Common print / screen shapes (1:1, 4:5, 2:3, 16:9) centred in the crop.
+    AspectRatios,
+    /// The centre lines and a mark at the middle.
+    Center,
+    /// Fifths across and down.
+    Fifths,
     None,
+}
+
+impl CropOverlay {
+    /// Every overlay in menu order (None last).
+    pub const ALL: [CropOverlay; 10] = [
+        CropOverlay::Thirds,
+        CropOverlay::Grid,
+        CropOverlay::Golden,
+        CropOverlay::Diagonal,
+        CropOverlay::Triangle,
+        CropOverlay::Spiral,
+        CropOverlay::AspectRatios,
+        CropOverlay::Center,
+        CropOverlay::Fifths,
+        CropOverlay::None,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CropOverlay::Thirds => "Thirds",
+            CropOverlay::Grid => "Grid",
+            CropOverlay::Golden => "Golden",
+            CropOverlay::Diagonal => "Diagonal",
+            CropOverlay::Triangle => "Triangle",
+            CropOverlay::Spiral => "Spiral",
+            CropOverlay::AspectRatios => "Aspect Ratios",
+            CropOverlay::Center => "Center",
+            CropOverlay::Fifths => "Fifths",
+            CropOverlay::None => "None",
+        }
+    }
+
+    /// The id used in commands (`thirds`, `aspectRatios`, …).
+    pub fn id(self) -> String {
+        serde_json::to_value(self).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+    }
+
+    /// The overlay after `self` among `cycle` (Lightroom's "Choose Overlays to Cycle"; empty or
+    /// none of them current: every overlay).
+    pub fn next_in(self, cycle: &[CropOverlay]) -> CropOverlay {
+        let list: Vec<CropOverlay> =
+            if cycle.is_empty() { CropOverlay::ALL.to_vec() } else { CropOverlay::ALL.into_iter().filter(|o| cycle.contains(o)).collect() };
+        match list.iter().position(|o| *o == self) {
+            Some(i) => list.get((i + 1) % list.len()).copied().unwrap_or(self),
+            None => list
+                .iter()
+                .copied()
+                .find(|o| CropOverlay::ALL.iter().position(|x| x == o) > CropOverlay::ALL.iter().position(|x| *x == self))
+                .or_else(|| list.first().copied())
+                .unwrap_or(self),
+        }
+    }
 }
 
 /// Which view the app opens in.
@@ -348,6 +406,8 @@ pub struct UiState {
     /// Mirroring of the triangle / spiral crop guides (0..4).
     pub crop_overlay_orient: u8,
     pub crop_overlay: CropOverlay,
+    /// The overlays O cycles through (empty: all of them).
+    pub crop_overlay_cycle: Vec<CropOverlay>,
     pub show_filenames: bool,
     /// What the square grid's caption shows: `filename`, `exposure` (shutter · aperture · ISO ·
     /// focal length) or `date`.
@@ -755,6 +815,7 @@ impl Default for UiState {
             mask_overlay_opacity: 50.0,
             mask_pins: true,
             crop_overlay: CropOverlay::Thirds,
+            crop_overlay_cycle: Vec::new(),
             crop_overlay_orient: 0,
             show_filenames: true,
             grid_info: "filename".into(),

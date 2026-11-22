@@ -94,6 +94,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.visualizeSpots", "Visualize Spots", Some("A"), "View"),
     ("view.cropOverlay", "Cycle Crop Overlay", Some("Shift+O"), "View"),
     ("view.cropOverlayOrientation", "Cycle Crop Overlay Orientation", None, "View"),
+    ("view.cropOverlaysToCycle", "Choose Crop Overlays to Cycle", None, ""),
+    ("view.beforeAfterCycle", "Cycle Before/After Layouts", None, "View"),
     ("view.back", "Back to Grid", Some("Escape"), ""),
     ("tool.done", "Done", Some("Enter"), ""),
     ("view.filterBar", "Filter Bar", Some("Shift+F"), "View"),
@@ -898,17 +900,43 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "view.cropOverlay" => {
-            use crate::state::CropOverlay::*;
-            app.ui.crop_overlay = match app.ui.crop_overlay {
-                Thirds => Grid,
-                Grid => Golden,
-                Golden => Diagonal,
-                Diagonal => Triangle,
-                Triangle => Spiral,
-                Spiral => None,
-                None => Thirds,
+            // {overlay?: thirds|grid|golden|diagonal|triangle|spiral|aspectRatios|center|fifths|none}:
+            // that one, else the next of the overlays chosen to cycle
+            match p.get("overlay") {
+                Some(v) => match serde_json::from_value::<crate::state::CropOverlay>(v.clone()) {
+                    Ok(o) => {
+                        app.ui.crop_overlay = o;
+                        Ok(json!({"overlay": app.ui.crop_overlay}))
+                    }
+                    Err(e) => Err(format!("view.cropOverlay: `overlay`: {e}")),
+                },
+                None => {
+                    app.ui.crop_overlay = app.ui.crop_overlay.next_in(&app.ui.crop_overlay_cycle);
+                    Ok(json!({"overlay": app.ui.crop_overlay}))
+                }
+            }
+        }
+        "view.cropOverlaysToCycle" => {
+            // {overlays: [id]} — Lightroom's Choose Overlays to Cycle (empty: all)
+            match p.get("overlays").map(|v| serde_json::from_value::<Vec<crate::state::CropOverlay>>(v.clone())) {
+                Some(Ok(list)) => {
+                    app.ui.crop_overlay_cycle = crate::state::CropOverlay::ALL.into_iter().filter(|o| list.contains(o)).collect();
+                    Ok(json!({"overlays": app.ui.crop_overlay_cycle}))
+                }
+                Some(Err(e)) => Err(format!("view.cropOverlaysToCycle: `overlays`: {e}")),
+                None => Ok(json!({"overlays": app.ui.crop_overlay_cycle})),
+            }
+        }
+        "view.beforeAfterCycle" => {
+            // the toolbar's Before & After button: the next layout (Left / Right → Top / Bottom →
+            // Left / Right Split → Top / Bottom Split → …), as Lightroom's button cycles them
+            app.ui.before_after = match app.ui.before_after {
+                BeforeAfter::SideBySide => BeforeAfter::TopBottom,
+                BeforeAfter::TopBottom => BeforeAfter::Split,
+                BeforeAfter::Split => BeforeAfter::SplitTopBottom,
+                _ => BeforeAfter::SideBySide,
             };
-            Ok(json!({"overlay": app.ui.crop_overlay}))
+            Ok(json!({"layout": app.ui.before_after}))
         }
         "view.cropOverlayOrientation" => {
             app.ui.crop_overlay_orient = (app.ui.crop_overlay_orient + 1) % 4;
