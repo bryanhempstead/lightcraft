@@ -290,6 +290,28 @@ pub struct Photo {
     /// whether the user changed anything since (see [`crate::local`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_baseline: Option<u64>,
+    /// Its XMP sidecar when LightCraft last wrote or read it (L22 metadata status): what the
+    /// library would write then, and the file's bytes, both hashed. `None`: never synced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmp_sync: Option<XmpSync>,
+}
+
+/// Hashes of a photo's metadata as the library would write it and of its sidecar file, taken
+/// when they last matched (written or read). FNV-1a 64, stable across builds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct XmpSync {
+    pub packet: u64,
+    pub file: u64,
+}
+
+/// FNV-1a 64 of `bytes` (stable: the hashes are stored in the catalog).
+pub fn fnv64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
 }
 
 /// The stamp of this build's raw decoders, compared with [`Photo::preview_checked`]. The fork's
@@ -350,6 +372,7 @@ impl Photo {
             preview_only: None,
             preview_checked: String::new(),
             local_baseline: None,
+            xmp_sync: None,
         }
     }
     /// Sets [`Photo::preview_only`] as this build decided it, with its stamp.

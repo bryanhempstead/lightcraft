@@ -127,6 +127,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "file.findMissing",
             "---",
             "library.syncMetadata",
+            "library.scanMetadata",
         ],
     ),
     (

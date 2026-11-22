@@ -48,6 +48,7 @@
 //! | 3 | the keyword list (Bryan's fork; upstream calls its own v5 this) | `Op::SetKeyword`, `Catalog.keyword_list` |
 //! | 4 | folder and collection labels / favourites (fork) | `Op::SetFolderRecord`, `Op::SetAlbumMarks`, `Catalog.folder_records`, `Album.label`, `Album.favorite` |
 //! | 5 | IPTC Extension fields (fork) | `Meta.iptc_ext` |
+//! | 6 | metadata status (fork) | `Op::SetXmpSync`, `Photo.xmp_sync` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -72,7 +73,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

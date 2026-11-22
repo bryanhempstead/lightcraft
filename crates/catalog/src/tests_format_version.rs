@@ -181,9 +181,10 @@ fn op_variants_are_versioned() {
             Op::SetBrowsed { .. } => 2,
             Op::SetKeyword { .. } => 3,
             Op::SetFolderRecord { .. } | Op::SetAlbumMarks { .. } => 4,
+            Op::SetXmpSync { .. } => 6,
         }
     }
-    let newest = since(&Op::SetFolderRecord { folder: String::new(), record: None });
+    let newest = since(&Op::SetXmpSync { id: PhotoId(1), sync: None });
     // a format can also add a field (v5: `Meta.iptc_ext`), so the newest op may be older
     assert!(newest <= VERSION, "an op newer than the current format version");
 }

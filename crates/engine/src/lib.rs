@@ -280,6 +280,11 @@ pub struct Session {
     pub cameras_file: Option<std::path::PathBuf>,
     /// The camera records of a session with nowhere to keep them (in memory, no library).
     pub cameras_mem: Vec<cameras::Record>,
+    /// L22: metadata status by photo from the last Scan for Metadata Updates (the grid's badges),
+    /// kept up to date by later edits, saves and reads. Not saved.
+    pub metadata_status: std::collections::HashMap<PhotoId, sidecar::MetadataStatus>,
+    /// Photos whose sidecar the running command wrote or read (they match it now).
+    xmp_synced_now: Vec<PhotoId>,
 }
 
 impl Default for Session {
@@ -358,6 +363,8 @@ impl Session {
             forget_local_days: lightcraft_catalog::DEFAULT_FORGET_DAYS,
             cameras_file: None,
             cameras_mem: Vec::new(),
+            metadata_status: Default::default(),
+            xmp_synced_now: Vec::new(),
         }
     }
 
@@ -408,8 +415,23 @@ impl Session {
         }
         if self.depth == 0 {
             let skip = std::mem::take(&mut self.skip_auto_write);
+            let synced_now = std::mem::take(&mut self.xmp_synced_now);
             if r.is_ok() && !skip && self.xmp.auto_write && self.interaction.is_none() && self.pending_log.len() > log_start {
-                self.auto_write_sidecars(&self.pending_log[log_start..]);
+                let synced = self.auto_write_sidecars(&self.pending_log[log_start..]);
+                self.record_xmp_sync(synced);
+            } else if r.is_ok() && !self.metadata_status.is_empty() && self.pending_log.len() > log_start {
+                // L22: photos changed in the library since the last scan say so in the grid
+                let mut ids = Vec::new();
+                self.pending_log[log_start..].iter().for_each(|o| sidecar::op_photos(o, &mut ids));
+                for id in ids.into_iter().filter(|i| !synced_now.contains(i)) {
+                    if let Some(st) = self.metadata_status.get_mut(&id) {
+                        *st = match *st {
+                            sidecar::MetadataStatus::UpToDate | sidecar::MetadataStatus::NotWritten => sidecar::MetadataStatus::Changed,
+                            sidecar::MetadataStatus::ChangedOnDisk => sidecar::MetadataStatus::Conflict,
+                            other => other,
+                        };
+                    }
+                }
             }
         }
         if self.depth == 0 && self.library.is_some() {
@@ -488,6 +510,29 @@ impl Session {
     /// Apply an op that is LightCraft's own bookkeeping rather than something the user did (raws
     /// rechecked after a decoder update): journaled like any op, but not an undo step, and it
     /// leaves the redo stack alone.
+    /// L22: note what sidecars hold after LightCraft wrote or read them (bookkeeping).
+    pub(crate) fn record_xmp_sync(&mut self, synced: Vec<(PhotoId, lightcraft_catalog::XmpSync)>) {
+        if synced.is_empty() {
+            return;
+        }
+        let ops: Vec<Op> = synced
+            .iter()
+            .filter(|(id, sync)| self.catalog.photo(*id).is_some_and(|p| p.xmp_sync != Some(*sync)))
+            .map(|(id, sync)| Op::SetXmpSync { id: *id, sync: Some(*sync) })
+            .collect();
+        for (id, _) in &synced {
+            self.xmp_synced_now.push(*id);
+            if self.metadata_status.contains_key(id) {
+                self.metadata_status.insert(*id, sidecar::MetadataStatus::UpToDate);
+            }
+        }
+        if !ops.is_empty()
+            && let Err(e) = self.apply_bookkeeping(Op::Batch { ops })
+        {
+            log::warn!("metadata status: {e}");
+        }
+    }
+
     pub(crate) fn apply_bookkeeping(&mut self, op: Op) -> Result<()> {
         let fwd = op.clone();
         self.catalog.apply(op)?;
@@ -901,6 +946,8 @@ mod tests_libops;
 mod tests_library;
 #[cfg(test)]
 mod tests_merge;
+#[cfg(test)]
+mod tests_metadata_status;
 #[cfg(test)]
 mod tests_naming;
 #[cfg(test)]

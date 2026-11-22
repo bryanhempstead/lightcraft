@@ -233,6 +233,12 @@ pub enum Op {
         folder: String,
         record: Option<folders::FolderRecord>,
     },
+    /// What a photo's XMP sidecar held when last written or read (L22; bookkeeping, not an undo
+    /// step). Format version 6.
+    SetXmpSync {
+        id: PhotoId,
+        sync: Option<XmpSync>,
+    },
     /// An album's (collection's or set's) colour label and favourite mark. Format version 4.
     SetAlbumMarks {
         id: AlbumId,
@@ -625,6 +631,10 @@ impl Catalog {
                     None => self.folder_records.remove(&key),
                 };
                 Op::SetFolderRecord { folder: key, record: old }
+            }
+            Op::SetXmpSync { id, sync } => {
+                let p = self.photo_mut(id)?;
+                Op::SetXmpSync { id, sync: std::mem::replace(&mut p.xmp_sync, sync) }
             }
             Op::SetAlbumMarks { id, label, favorite } => {
                 let a = self.album_mut(id)?;

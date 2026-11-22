@@ -301,7 +301,8 @@ impl Op {
             | Op::SetBrowsed { .. }
             | Op::SetKeyword { .. }
             | Op::SetFolderRecord { .. }
-            | Op::SetAlbumMarks { .. } => {}
+            | Op::SetAlbumMarks { .. }
+            | Op::SetXmpSync { .. } => {}
         }
     }
 }

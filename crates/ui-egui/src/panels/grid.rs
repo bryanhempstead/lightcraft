@@ -638,6 +638,40 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         ui.interact(br, egui::Id::new(("preview-only-badge", id.0)), Sense::hover())
             .on_hover_text(crate::i18n::tr_format!("Preview only — {}", crate::widgets::preview_only_explanation(why)));
     }
+    // L22: metadata status from the last Scan for Metadata Updates — ↑ needs saving, ↓ changed on
+    // disk, ! both; a click offers which one wins
+    let meta_status = app.session.metadata_status.get(&id).copied();
+    if let Some((glyph, tip)) = meta_status.and_then(|st| {
+        use lightcraft_engine::sidecar::MetadataStatus as M;
+        match st {
+            M::Changed => Some(("xmp ↑", "Metadata changed in the library: Save Metadata to File writes it")),
+            M::ChangedOnDisk => Some(("xmp ↓", "The XMP file changed on disk: import its settings, or overwrite it")),
+            M::Conflict => Some(("xmp !", "Changed in the library and on disk: choose which one to keep")),
+            _ => None,
+        }
+    }) {
+        let g = p.layout_no_wrap(glyph.into(), t.semibold(9.5), Color32::PLACEHOLDER);
+        let br = Rect::from_min_size(pos2(img_rect.right() - g.size().x - 18.0, img_rect.top() + 6.0), vec2(g.size().x + 12.0, 16.0));
+        p.rect_filled(br, 8.0, Color32::from_black_alpha(170));
+        let colour = if meta_status == Some(lightcraft_engine::sidecar::MetadataStatus::Changed) { Color32::WHITE } else { t.caution };
+        p.galley(pos2(br.left() + 6.0, br.center().y - g.size().y / 2.0), g, colour);
+        register(ui.ctx(), format!("badge:metadataStatus:{}", id.0), br);
+        let r = ui.interact(br, egui::Id::new(("meta-status-badge", id.0)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
+        egui::Popup::menu(&r).show(|ui| {
+            if ui.button(crate::i18n::tr("Import Settings from Disk")).clicked() {
+                if let Err(e) = app.run("photo.resolveMetadata", json!({"ids": [id.0], "keep": "disk"})) {
+                    app.toast(ui.ctx(), e);
+                }
+                ui.close();
+            }
+            if ui.button(crate::i18n::tr("Overwrite Settings")).clicked() {
+                if let Err(e) = app.run("photo.resolveMetadata", json!({"ids": [id.0], "keep": "library"})) {
+                    app.toast(ui.ctx(), e);
+                }
+                ui.close();
+            }
+        });
+    }
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }
