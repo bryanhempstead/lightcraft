@@ -195,6 +195,7 @@ pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
         info: None,
         camera_tone,
         own_profile: false,
+        base: None,
         enhanced: None,
     })
 }

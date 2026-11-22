@@ -63,6 +63,9 @@ pub struct Camera {
     pub path: PathBuf,
     pub info: sdk::ProfileInfo,
     profile: sdk::Profile,
+    /// A Legacy profile (`legacy:` ids): the profile's matrices only (no hue/sat map, no look
+    /// table) with the ACR3 default tone curve.
+    pub legacy: bool,
 }
 
 impl std::fmt::Debug for Camera {
@@ -158,7 +161,7 @@ pub fn camera_matching(make: Option<&str>, model: &str) -> Vec<String> {
             for f in files.flatten().take(200) {
                 let n = f.file_name().to_string_lossy().into_owned();
                 let Some(stem) = n.strip_suffix(".dcp") else { continue };
-                let name = stem.strip_prefix(cam.as_str()).map(str::trim).filter(|s| !s.is_empty()).unwrap_or(stem);
+                let name = strip_camera(stem, &cam);
                 if !out.iter().any(|x: &String| x.eq_ignore_ascii_case(name)) {
                     out.push(name.to_string());
                 }
@@ -167,6 +170,209 @@ pub fn camera_matching(make: Option<&str>, model: &str) -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// A profile file's name without its camera (`RICOH GR III Camera Standard` in folder `Ricoh GR
+/// III` → `Camera Standard`; the case of the two differs in Camera Raw's own data).
+fn strip_camera<'a>(stem: &'a str, cam: &str) -> &'a str {
+    let rest = stem.get(..cam.len()).filter(|p| p.eq_ignore_ascii_case(cam)).and_then(|_| stem.get(cam.len()..));
+    rest.map(str::trim).filter(|s| !s.is_empty()).unwrap_or(stem)
+}
+
+// ------------------------------------------------------- camera matching, imported, legacy
+
+/// Lightroom's profile-browser groups for the camera profiles [`camera_profiles`] lists.
+pub const GROUP_CAMERA: &str = "Camera Matching";
+pub const GROUP_IMPORTED: &str = "Profiles";
+pub const GROUP_LEGACY: &str = "Legacy";
+
+/// Legacy profiles offered for every camera with an Adobe Standard profile: Camera Raw's
+/// pre-DCP matrix rendering ("ACR 4.4" and older), drawn from the camera's own Adobe Standard
+/// matrices without its hue/sat map and look table, on the ACR3 default curve. Older names
+/// (`ACR 3.3`, `Camera Raw 2.4`, …) in Lightroom catalogs render the same way.
+pub const LEGACY_PROFILES: &[&str] = &["ACR 4.4"];
+
+/// A camera profile other than the camera's Adobe Standard: a Camera Matching DCP, one imported
+/// into Camera Raw or LightCraft, or a Legacy profile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CameraProfileEntry {
+    /// `cam:<profile name>` / `legacy:<name>` (the name is `crs:CameraProfile`'s).
+    pub id: String,
+    pub name: String,
+    pub group: &'static str,
+    pub path: PathBuf,
+}
+
+/// Whether `name` (a `crs:CameraProfile`) is a Legacy profile name.
+pub fn is_legacy_name(name: &str) -> bool {
+    let l = name.trim().to_ascii_lowercase();
+    let versioned = |p: &str| l.strip_prefix(p).is_some_and(|r| r.trim().chars().next().is_some_and(|c| c.is_ascii_digit()));
+    versioned("acr ") || versioned("camera raw ") || l == "adobe standard v1"
+}
+
+/// Folders LightCraft keeps imported camera profiles in (the library's `Profiles/`), set when a
+/// library opens; read along with Camera Raw's `CameraProfiles/Imported`.
+static EXTRA_DIRS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// An imported DCP: the camera it is for (lower case), its name and file.
+#[derive(Clone, Debug)]
+struct ImportedDcp {
+    model: String,
+    name: String,
+    path: PathBuf,
+}
+
+type Cached<T> = Mutex<Option<Arc<T>>>;
+static IMPORTED: Cached<Vec<ImportedDcp>> = Mutex::new(None);
+static BY_CAMERA: Mutex<Option<HashMap<String, Arc<Vec<CameraProfileEntry>>>>> = Mutex::new(None);
+static PROFILES_LOADED: Mutex<Option<HashMap<String, Option<Arc<Camera>>>>> = Mutex::new(None);
+
+/// Read LightCraft's imported camera profiles from `dirs` too (and list them again).
+pub fn set_imported_dirs(dirs: Vec<PathBuf>) {
+    *EXTRA_DIRS.lock().unwrap_or_else(PoisonError::into_inner) = dirs;
+    invalidate_profiles();
+}
+
+/// Forget the camera-profile listings (after an import or delete).
+pub fn invalidate_profiles() {
+    *IMPORTED.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    *BY_CAMERA.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    *PROFILES_LOADED.lock().unwrap_or_else(PoisonError::into_inner) = None;
+}
+
+/// A DCP's facts: (camera it is for, profile name), read with the SDK.
+pub fn dcp_facts(bytes: &[u8]) -> Result<(String, String), String> {
+    let p = sdk::Profile::parse(bytes).map_err(|e| e.to_string())?;
+    let info = p.info().map_err(|e| e.to_string())?;
+    Ok((info.unique_model, info.name))
+}
+
+fn imported_index() -> Arc<Vec<ImportedDcp>> {
+    if let Some(i) = IMPORTED.lock().unwrap_or_else(PoisonError::into_inner).clone() {
+        return i;
+    }
+    let mut dirs: Vec<PathBuf> = camera_raw_dirs().into_iter().map(|d| d.join("CameraProfiles/Imported")).collect();
+    dirs.extend(EXTRA_DIRS.lock().unwrap_or_else(PoisonError::into_inner).iter().cloned());
+    let mut out = Vec::new();
+    if sdk::available() {
+        for d in dirs {
+            let Ok(rd) = std::fs::read_dir(&d) else { continue };
+            for e in rd.flatten().take(5_000) {
+                let path = e.path();
+                if !path.extension().is_some_and(|x| x.eq_ignore_ascii_case("dcp")) {
+                    continue;
+                }
+                let facts = read_capped(&path, MAX_DCP).and_then(|b| dcp_facts(&b));
+                match facts {
+                    Ok((model, name)) => {
+                        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                        let name = if name.trim().is_empty() {
+                            stem.strip_prefix(model.as_str()).map(str::trim).filter(|s| !s.is_empty()).unwrap_or(&stem).to_string()
+                        } else {
+                            name.trim().to_string()
+                        };
+                        if !model.trim().is_empty() && !name.is_empty() {
+                            out.push(ImportedDcp { model: lower(&model), name, path });
+                        }
+                    }
+                    Err(e) => log::warn!("adobe: {}: {e}", path.display()),
+                }
+            }
+        }
+    }
+    let out = Arc::new(out);
+    *IMPORTED.lock().unwrap_or_else(PoisonError::into_inner) = Some(out.clone());
+    out
+}
+
+/// Whether some installed or imported camera profile is called `name` (any camera).
+pub fn known_profile_name(name: &str) -> bool {
+    let n = name.trim();
+    imported_index().iter().any(|e| e.name.eq_ignore_ascii_case(n))
+}
+
+/// The camera profiles for a camera beyond its Adobe Standard: Camera Matching (Camera Raw's
+/// `CameraProfiles/Camera/<camera>/`), imported (Camera Raw's `CameraProfiles/Imported`, then
+/// LightCraft's) and Legacy. Cached per camera.
+pub fn camera_profiles(make: Option<&str>, model: &str) -> Arc<Vec<CameraProfileEntry>> {
+    if model.trim().is_empty() {
+        return Arc::default();
+    }
+    let key = format!("{}\u{0}{}", make.unwrap_or(""), model);
+    if let Some(hit) = BY_CAMERA.lock().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(|m| m.get(&key).cloned()) {
+        return hit;
+    }
+    let want = candidates(make, model);
+    let mut out: Vec<CameraProfileEntry> = Vec::new();
+    let push = |out: &mut Vec<CameraProfileEntry>, prefix: &str, name: String, group: &'static str, path: PathBuf| {
+        if !out.iter().any(|x| x.id.strip_prefix(prefix).is_some_and(|n| n.eq_ignore_ascii_case(&name))) {
+            out.push(CameraProfileEntry { id: format!("{prefix}{name}"), name, group, path });
+        }
+    };
+    for d in camera_raw_dirs() {
+        let Ok(rd) = std::fs::read_dir(d.join("CameraProfiles/Camera")) else { continue };
+        for e in rd.flatten().take(20_000) {
+            let cam = e.file_name().to_string_lossy().into_owned();
+            if !want.contains(&lower(&cam)) {
+                continue;
+            }
+            let Ok(files) = std::fs::read_dir(e.path()) else { continue };
+            for f in files.flatten().take(200) {
+                let n = f.file_name().to_string_lossy().into_owned();
+                let Some(stem) = n.strip_suffix(".dcp") else { continue };
+                let name = strip_camera(stem, &cam);
+                push(&mut out, "cam:", name.to_string(), GROUP_CAMERA, f.path());
+            }
+        }
+    }
+    out.sort_by_key(|e| (e.name != "Camera Standard", e.name.to_lowercase()));
+    let mut imported: Vec<&ImportedDcp> = Vec::new();
+    let index = imported_index();
+    for e in index.iter().filter(|e| want.contains(&e.model)) {
+        imported.push(e);
+    }
+    imported.sort_by_key(|e| e.name.to_lowercase());
+    for e in imported {
+        push(&mut out, "cam:", e.name.clone(), GROUP_IMPORTED, e.path.clone());
+    }
+    if let Some(std_path) = standard_path(make, model) {
+        for n in LEGACY_PROFILES {
+            push(&mut out, "legacy:", (*n).to_string(), GROUP_LEGACY, std_path.clone());
+        }
+    }
+    let out = Arc::new(out);
+    BY_CAMERA.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(HashMap::new).insert(key, out.clone());
+    out
+}
+
+/// The camera profile `id` (`cam:` / `legacy:`) for a camera, parsed and registered (`None`: no
+/// SDK, not installed for this camera, or unreadable — the photo then renders on its Adobe
+/// Standard with our nearest look). Parsed once per camera and profile per process.
+pub fn profile_for(make: Option<&str>, model: &str, id: &str) -> Option<Arc<Camera>> {
+    if !sdk::available() || model.trim().is_empty() || !lightcraft_pipeline::adobe::is_camera_profile(id) {
+        return None;
+    }
+    let key = format!("{id}\u{0}{}\u{0}{model}", make.unwrap_or(""));
+    if let Some(hit) = PROFILES_LOADED.lock().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(|m| m.get(&key)) {
+        return hit.clone();
+    }
+    let path = if let Some(name) = id.strip_prefix("legacy:") {
+        is_legacy_name(name).then(|| standard_path(make, model)).flatten()
+    } else {
+        camera_profiles(make, model).iter().find(|e| e.id.eq_ignore_ascii_case(id)).map(|e| e.path.clone())
+    };
+    let found = path.and_then(|path| match load_camera(&path, Some(id)) {
+        Ok(c) => Some(Arc::new(c)),
+        Err(e) => {
+            log::warn!("adobe: {}: {e}; {model} renders on its Adobe Standard", path.display());
+            None
+        }
+    });
+    if found.is_none() {
+        log::info!("adobe: no {id} profile for {model}");
+    }
+    PROFILES_LOADED.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(HashMap::new).insert(key, found.clone());
+    found
 }
 
 /// The camera's Adobe Standard profile (`None`: no SDK, no installed profile, or unreadable).
@@ -181,7 +387,7 @@ pub fn standard_for(make: Option<&str>, model: &str) -> Option<Arc<Camera>> {
     if let Some(hit) = cache.lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
         return hit.clone();
     }
-    let found = candidates(make, model).iter().find_map(|c| standard_index().get(c).cloned()).and_then(|path| match load_camera(&path) {
+    let found = candidates(make, model).iter().find_map(|c| standard_index().get(c).cloned()).and_then(|path| match load_camera(&path, None) {
         Ok(c) => Some(Arc::new(c)),
         Err(e) => {
             log::warn!("adobe: {}: {e}; using LightCraft's own colour for {model}", path.display());
@@ -241,13 +447,17 @@ pub fn photo_base(key: u64, hue_sat: &HsvTable, gain_ev: f64) -> u64 {
     if lightcraft_pipeline::adobe::register_base(k, b) { k } else { key }
 }
 
-fn load_camera(path: &Path) -> Result<Camera, String> {
+/// Parse the DCP at `path` and register its base. `as_profile`: the camera-profile id it renders
+/// ([`lightcraft_pipeline::adobe::is_camera_profile`]; `legacy:` = matrices only with the ACR3
+/// default curve), `None` for the camera's Adobe Standard.
+fn load_camera(path: &Path, as_profile: Option<&str>) -> Result<Camera, String> {
+    let legacy = as_profile.is_some_and(|id| id.starts_with("legacy:"));
     let bytes = read_capped(path, MAX_DCP)?;
     let profile = sdk::Profile::parse(&bytes).map_err(|e| e.to_string())?;
     let info = profile.info().map_err(|e| e.to_string())?;
     let xs: Vec<f64> = (0..=lightcraft_pipeline::adobe::CURVE_N).map(|i| i as f64 / lightcraft_pipeline::adobe::CURVE_N as f64).collect();
-    let (curve, _own) = profile.tone_curve(&xs).map_err(|e| e.to_string())?;
-    let look = profile.look_table().map_err(|e| e.to_string())?.as_ref().and_then(hsv_table);
+    let curve = if legacy { sdk::acr3_tone_curve(&xs).map_err(|e| e.to_string())? } else { profile.tone_curve(&xs).map_err(|e| e.to_string())?.0 };
+    let look = if legacy { None } else { profile.look_table().map_err(|e| e.to_string())?.as_ref().and_then(hsv_table) };
     let base = lightcraft_pipeline::adobe::Base {
         hue_sat: None,
         hue_sat_ev: 0.0,
@@ -261,13 +471,17 @@ fn load_camera(path: &Path) -> Result<Camera, String> {
         path.hash(&mut h);
         bytes.len().hash(&mut h);
         VERSION.hash(&mut h);
+        as_profile.hash(&mut h);
         h.finish()
     };
     if !lightcraft_pipeline::adobe::register_base(key, base) {
         return Err("the profile's tone curve is not usable".into());
     }
+    if let Some(id) = as_profile {
+        lightcraft_pipeline::adobe::register_base_profile(key, id);
+    }
     register_standard_looks();
-    Ok(Camera { key, path: path.to_path_buf(), info, profile })
+    Ok(Camera { key, path: path.to_path_buf(), info, profile, legacy })
 }
 
 /// The exposure ramp's black for `DefaultBlackRender` auto: 0 — Lightroom's PV2012 default tone,
@@ -338,7 +552,11 @@ pub fn decode_color(cam: &Arc<Camera>, raw: &lightcraft_raw::RawImage) -> Option
     // distinct maps (`photo_base` keeps one per map)
     let late = hue_sat_in_finish(&cam.info.unique_model);
     let q = |v: f64| if late { (v / 0.0005).round() * 0.0005 } else { v };
-    let hue_sat = cam.profile.hue_sat_map([q(spec.white_xy[0]), q(spec.white_xy[1])]).ok().flatten().as_ref().and_then(hsv_table);
+    let hue_sat = if cam.legacy {
+        None
+    } else {
+        cam.profile.hue_sat_map([q(spec.white_xy[0]), q(spec.white_xy[1])]).ok().flatten().as_ref().and_then(hsv_table)
+    };
     let [temp, tint] = sdk::xy_to_temp_tint(spec.white_xy[0], spec.white_xy[1]).ok()?;
     // the file's baseline exposure (DNG tag; Fujifilm's raw exposure bias), the profile's offset
     // (a DNG carries its own baseline exposure: the measured offsets are for the camera's own format)
@@ -539,10 +757,15 @@ pub fn exposure_offset(unique_model: &str, iso: Option<u32>) -> f64 {
 /// camera base is.
 pub const ADOBE_RAW_LOOKS: &[&str] = &["Adobe Color", "Adobe Monochrome", "Adobe Neutral", "Adobe Portrait", "Adobe Landscape", "Adobe Vivid"];
 
+/// Adobe's Adaptive profiles (`…/Settings/Adobe/Profiles/Adaptive`): a look table, plus a per-photo gain
+/// table map and RGB tables that Camera Raw computes with its own model (`ModelZoo/ai_look`, an
+/// encrypted Core ML bundle we can't run). LightCraft renders the look table only.
+pub const ADAPTIVE_LOOKS: &[&str] = &["Adaptive Color", "Adaptive B&W"];
+
 fn register_standard_looks() {
     static DONE: OnceLock<()> = OnceLock::new();
     DONE.get_or_init(|| {
-        for name in ADOBE_RAW_LOOKS {
+        for name in ADOBE_RAW_LOOKS.iter().chain(ADAPTIVE_LOOKS) {
             if let Err(e) = register_look(name) {
                 log::warn!("adobe: look {name}: {e}");
             }
@@ -553,13 +776,15 @@ fn register_standard_looks() {
 /// Find the look profile `name` among Camera Raw's settings folders.
 pub fn find_look(name: &str) -> Option<PathBuf> {
     for d in camera_raw_dirs() {
-        let p = d.join("Settings/Adobe/Profiles/Adobe Raw").join(format!("{name}.xmp"));
-        if p.is_file() {
-            return Some(p);
+        for sub in ["Adobe Raw", "Adaptive"] {
+            let p = d.join("Settings/Adobe/Profiles").join(sub).join(format!("{name}.xmp"));
+            if p.is_file() {
+                return Some(p);
+            }
         }
     }
     // a bounded walk of every settings folder for a Look profile of that name
-    let needle = format!(">{name}<");
+    let needle = format!(">{}<", name.replace('&', "&amp;"));
     for d in camera_raw_dirs() {
         let mut stack = vec![(d.join("Settings"), 0usize)];
         let mut seen = 0usize;
@@ -640,6 +865,16 @@ pub fn parse_look(xmp: &str) -> Result<lightcraft_pipeline::adobe::Look, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_names_lose_their_camera_in_any_case() {
+        assert_eq!(strip_camera("RICOH GR III Camera Standard", "Ricoh GR III"), "Camera Standard");
+        assert_eq!(strip_camera("Canon EOS R6 Camera Neutral", "Canon EOS R6"), "Camera Neutral");
+        assert_eq!(strip_camera("Camera Standard", "Canon EOS R6"), "Camera Standard");
+        assert_eq!(strip_camera("Canon EOS R6", "Canon EOS R6"), "Canon EOS R6");
+        assert_eq!(strip_camera("Ä", "AB"), "Ä", "never slices inside a character");
+        assert!(is_legacy_name("ACR 4.4") && is_legacy_name("Camera Raw 2.4") && !is_legacy_name("ACR") && !is_legacy_name("Camera Standard"));
+    }
 
     #[test]
     fn camera_names_follow_camera_raw() {

@@ -6,6 +6,17 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (profiles agent, 2026-11-22, branch worktree-agent-a5465a93af5a64b95, not merged) **Profiles + adaptive presets +
+  SR speed** — 05f28a03c SR channels-last on Metal (24 MP 217 → 43 s, PSNR 73–79 dB vs the old path); LR-PROF-CAMERA /
+  LEGACY / ADAPTIVE: Camera Matching + imported DCPs (Camera Raw `CameraProfiles/Camera|Imported`, `.dcp` import into
+  the library) decode on their own DCP through the SDK (`cam:<name>`, `files::with_base_profile`, sources cached per
+  base), Legacy `legacy:ACR 4.4` (matrices only + ACR3 curve), Adaptive Color / B&W look tables (per-photo part needs
+  Camera Raw's encrypted `ai_look` model); GR III vs the SDK's reference render ΔE76 1.0–1.8; U09: browser filter
+  all./clr./b&w., views grid./lrg./lst., mng. (hide groups), imp., profile groups per photo in menu + browser;
+  LR-PRE-ADAPTIVE / LR-MASK-ADAPTIVE: Camera Raw's Premium + Adobe presets offered read only (`adobe.<uuid>`,
+  `presets.adobe`, app loads at start), Landscape / People `MaskSubCategoryID` mapped, preset.apply computes new AI
+  masks. Bryan's catalog: 16,823 photos all resolve (no Camera Matching used). Left: Fujifilm film sims (no DCPs
+  installed here), Snow class, Facial Hair = hair, People masks = first person, Adaptive per-photo tables.
 - [ ] (AI masks agent, 2026-11-22, branch worktree-agent-af352bb019bacca9d, not merged) **AI masks — parity K + REM rows**
   Done: 08552d289 SAM 3 downloads work (5 ungated HF copies, every file hash-pinned; DEFAULT_MIRRORS was empty);
   365717b7c SegFormer in pure Rust (crates/segment/src/segformer.rs, ported from candle-transformers) + three

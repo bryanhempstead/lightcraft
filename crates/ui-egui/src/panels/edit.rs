@@ -321,7 +321,7 @@ fn basic(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, raw: b
             }
         });
     });
-    if d.profile.id != "lc.color" {
+    if lightcraft_engine::presets::profile_has_amount(&d.profile.id) {
         control(app, ui, d, "profile.amount", true);
     }
     ui.add_space(4.0);
@@ -460,7 +460,6 @@ fn lens_corrections(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
 /// The profile dropdown: Favorites, Recent, one submenu per group, then favourite toggle and
 /// Browse….
 fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
-    use lightcraft_engine::presets::{PROFILES, profile_groups};
     let t = Tokens::get(ui.ctx());
     ui.set_min_width(200.0);
     let cur = d.profile.id.as_str();
@@ -490,28 +489,19 @@ fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         }
         ui.separator();
     }
-    for g in profile_groups() {
-        let r = ui.menu_button(crate::i18n::tr(g), |ui| {
+    // every shown group: ours, Adobe Raw, the photo's camera profiles (Camera Matching, Legacy,
+    // imported DCPs), Adaptive, our creative groups, imported ones
+    for g in app.session.profile_groups_for(app.session.active(), false) {
+        // an imported folder's name as it is, and its own widget id even when it matches a built-in group
+        let title = if g.imported { g.name.clone() } else { crate::i18n::tr(&g.name).to_string() };
+        let r = ui.menu_button(title, |ui| {
             ui.set_min_width(170.0);
-            for p in PROFILES.iter().filter(|p| p.group == g) {
-                item(ui, "group", p.id, p.name, &mut pick);
-            }
-        });
-        register(ui.ctx(), format!("profileMenu:groupMenu:{g}"), r.response.rect);
-    }
-    // imported LUT profile groups
-    let mut lut_groups: Vec<String> = app.session.lut_profiles.iter().map(|p| p.group.clone()).collect();
-    lut_groups.sort_unstable();
-    lut_groups.dedup();
-    for g in &lut_groups {
-        // a folder's name as it is, and its own widget id even when it matches a built-in group
-        let r = ui.menu_button(g.as_str(), |ui| {
-            ui.set_min_width(170.0);
-            for p in app.session.lut_profiles.iter().filter(|p| &p.group == g) {
+            for p in &g.profiles {
                 item(ui, "group", &p.id, &p.name, &mut pick);
             }
         });
-        register(ui.ctx(), format!("profileMenu:lutGroupMenu:{g}"), r.response.rect);
+        let key = if g.imported { format!("profileMenu:lutGroupMenu:{}", g.name) } else { format!("profileMenu:groupMenu:{}", g.name) };
+        register(ui.ctx(), key, r.response.rect);
     }
     ui.separator();
     if let Some((name, _)) = app.session.profile_info(cur) {

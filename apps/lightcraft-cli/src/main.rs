@@ -837,6 +837,9 @@ fn render(args: &[String]) -> Result<(), String> {
     let input = input.ok_or("render: missing input file")?;
     let output = output.ok_or("render: missing -o OUTPUT")?;
     let mut s = Session::new().with_fs();
+    if preset.as_deref().is_some_and(|p| p.starts_with("adobe.")) {
+        s.add_adobe_presets();
+    }
     let abs = expand_paths(std::slice::from_ref(&input));
     let r = s.execute("library.import", &json!({"paths": abs})).map_err(|e| e.to_string())?;
     let id = r["imported"][0].as_u64().ok_or_else(|| format!("{input}: not a readable photo"))?;

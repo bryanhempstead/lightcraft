@@ -121,13 +121,15 @@ pub struct DecodedSource {
     pub camera_tone: Option<lightcraft_pipeline::tone::CameraTone>,
     /// Decoded for a photo on the file's own profile ([`own_profile_source`]).
     pub own_profile: bool,
+    /// Decoded on this camera profile instead of Adobe Standard ([`base_profile_source`]).
+    pub base: Option<Arc<str>>,
     /// Decoded from this in-place Enhance result ([`crate::enhance::enhanced_source`]).
     pub enhanced: Option<crate::enhance::Enhanced>,
 }
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, own_profile: false, enhanced: None }
+        DecodedSource { image, info, camera_tone: None, own_profile: false, base: None, enhanced: None }
     }
 
     /// What to render these pixels against: the decoder's facts, else `header` (the catalog's)
@@ -153,6 +155,8 @@ pub enum SourceRef {
         fallback: Option<std::path::PathBuf>,
         /// Decode on the file's own profile ([`own_profile_source`]).
         own_profile: bool,
+        /// Decode on this camera profile ([`base_profile_source`]).
+        base: Option<Arc<str>>,
         /// Decode from this in-place Enhance result, when it is there ([`crate::enhance::enhanced_source`]).
         enhanced: Option<crate::enhance::Enhanced>,
     },
@@ -171,17 +175,17 @@ impl SourceRef {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
             SourceRef::Demo { scene, max_edge } => Arc::new(scene.render_fit(*max_edge)),
-            SourceRef::File { path, max_edge, loader, fallback, own_profile, enhanced } => {
+            SourceRef::File { path, max_edge, loader, fallback, own_profile, base, enhanced } => {
                 let r = match loader {
-                    Some(l) => {
-                        crate::files::with_own_profile(*own_profile, || crate::enhance::with_enhanced(enhanced.clone(), || l(path, *max_edge))).map(
-                            |(image, info)| DecodedSource {
-                                own_profile: *own_profile,
-                                enhanced: enhanced.clone(),
-                                ..DecodedSource::new(Arc::new(image), Some(info))
-                            },
-                        )
-                    }
+                    Some(l) => crate::files::with_own_profile(*own_profile, || {
+                        crate::files::with_base_profile(base.clone(), || crate::enhance::with_enhanced(enhanced.clone(), || l(path, *max_edge)))
+                    })
+                    .map(|(image, info)| DecodedSource {
+                        own_profile: *own_profile,
+                        base: base.clone(),
+                        enhanced: enhanced.clone(),
+                        ..DecodedSource::new(Arc::new(image), Some(info))
+                    }),
                     None => Err(format!("no decoder available for {path}")),
                 };
                 // An offline original renders from its smart preview (no decoder facts: header ones).
@@ -414,16 +418,25 @@ impl MediaCache {
     }
 
     pub fn source_ref(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        let own = own_profile_source(p);
+        self.source_ref_as(p, level, &p.develop.profile.id)
+    }
+
+    /// [`Self::source_ref`] for `p` rendered on profile `profile` (a hover preview or a profile
+    /// browser variant on another profile than its own).
+    pub fn source_ref_as(&mut self, p: &Photo, level: SourceLevel, profile: &str) -> SourceRef {
+        let own = own_profile_source_as(p, profile);
+        let base = base_profile_source(p, profile);
         let enh = crate::enhance::enhanced_source(p);
-        if let Some(a) =
-            self.get_source(p.id, level).filter(|a| (a.own_profile == own && a.enhanced == enh) || !matches!(p.source, Source::File { .. }))
+        if let Some(a) = self
+            .get_source(p.id, level)
+            .filter(|a| (a.own_profile == own && a.base == base && a.enhanced == enh) || !matches!(p.source, Source::File { .. }))
         {
             return SourceRef::Loaded(Box::new(a));
         }
         let mut r = self.source_ref_uncached(p, level);
-        if let SourceRef::File { own_profile, enhanced, .. } = &mut r {
+        if let SourceRef::File { own_profile, base: b, enhanced, .. } = &mut r {
             *own_profile = own;
+            *b = base;
             *enhanced = enh;
         }
         r
@@ -438,7 +451,15 @@ impl MediaCache {
         // a video: its poster frame (LR-VID-COVER), whose time travels with the path
         if let (MediaKind::Video, Source::File { path }) = (p.kind, &p.source) {
             let path = crate::video::frame_source(path, p.video.and_then(|v| v.poster));
-            return SourceRef::File { path, max_edge, loader: self.file_loader.clone(), fallback: None, own_profile: false, enhanced: None };
+            return SourceRef::File {
+                path,
+                max_edge,
+                loader: self.file_loader.clone(),
+                fallback: None,
+                own_profile: false,
+                base: None,
+                enhanced: None,
+            };
         }
         // the original is offline: its smart preview, when there is one. Only cached answers are
         // used here (no file-system call on the UI thread in the app); an original not known to
@@ -470,14 +491,26 @@ impl MediaCache {
                 }
                 match self.scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => SourceRef::Demo { scene: Box::new(s.clone()), max_edge },
-                    None => {
-                        SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, own_profile: false, enhanced: None }
-                    }
+                    None => SourceRef::File {
+                        path: format!("demo:{scene}"),
+                        max_edge,
+                        loader: None,
+                        fallback: None,
+                        own_profile: false,
+                        base: None,
+                        enhanced: None,
+                    },
                 }
             }
-            Source::File { path } => {
-                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, own_profile: false, enhanced: None }
-            }
+            Source::File { path } => SourceRef::File {
+                path: path.clone(),
+                max_edge,
+                loader: self.file_loader.clone(),
+                fallback: None,
+                own_profile: false,
+                base: None,
+                enhanced: None,
+            },
         }
     }
 }
@@ -774,7 +807,19 @@ impl QuickJob {
 /// Lightroom-matched profile for its camera is installed, as Lightroom renders it; other
 /// profiles keep the matched one (`files::load_raw`, `docs/lr-match.md` → ProRAW).
 pub fn own_profile_source(p: &Photo) -> bool {
-    p.develop.profile.id == "lc.color" && p.format.eq_ignore_ascii_case("dng")
+    own_profile_source_as(p, &p.develop.profile.id)
+}
+
+/// [`own_profile_source`] for `p` on profile `profile`.
+pub fn own_profile_source_as(p: &Photo, profile: &str) -> bool {
+    profile == "lc.color" && p.format.eq_ignore_ascii_case("dng")
+}
+
+/// The camera profile a raw photo on profile `profile` is decoded with instead of its Adobe
+/// Standard (Bryan's fork): Camera Matching, imported and Legacy profiles (`cam:` / `legacy:`)
+/// carry their own matrices, hue/sat map, look table and tone curve (`files::load_raw`).
+pub fn base_profile_source(p: &Photo, profile: &str) -> Option<Arc<str>> {
+    (p.kind == MediaKind::Raw && lightcraft_pipeline::adobe::is_camera_profile(profile)).then(|| Arc::from(profile))
 }
 
 pub fn content_key(p: &Photo) -> String {
@@ -899,6 +944,12 @@ impl crate::Session {
     /// temporary preview while hovering a preset or profile; nothing is committed or cached).
     pub fn preview_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool, settings: &DevelopSettings) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
+        if settings.profile.id != job.settings.profile.id
+            && let Some(p) = self.catalog.photo(id).cloned()
+        {
+            // another profile may decode the raw on another camera profile
+            job.source = self.media.source_ref_as(&p, job.level, &settings.profile.id);
+        }
         job.settings = Arc::new(settings.clone());
         job.key = settings.hash64() ^ ((max_w as u64) << 40) ^ ((max_h as u64) << 20) ^ (apply_crop as u64) ^ (job.level as u64) << 60;
         Some(job)
@@ -925,7 +976,7 @@ impl crate::Session {
         let p = self.catalog.photo(id)?.clone();
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
         let level = SourceLevel::Thumb;
-        let source = self.media.source_ref(&p, level);
+        let source = self.media.source_ref_as(&p, level, &settings.profile.id);
         let ck = Self::variant_key(&p, settings, edge);
         Some(RenderJob {
             request_id: 0,
@@ -1315,6 +1366,7 @@ mod tests {
             })),
             fallback: None,
             own_profile: false,
+            base: None,
             enhanced: None,
         };
         job.info = SourceInfo::default(); // Header facts cannot override decoder facts.

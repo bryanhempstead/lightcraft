@@ -95,6 +95,9 @@ struct PresetsFile {
     /// Favourite profiles, and the recently applied ones (newest first).
     profile_favorites: Vec<String>,
     profile_recent: Vec<String>,
+    /// Profile groups hidden with Manage Profiles, and the profile browser's view.
+    profile_hidden_groups: Vec<String>,
+    profile_view: String,
 }
 
 /// `exports.json`: when each photo was last exported (L31).
@@ -198,6 +201,8 @@ fn presets_json(s: &Session) -> String {
         favorites: presets.iter().filter(|p| p.builtin && p.favorite).map(|p| p.id.clone()).collect(),
         profile_favorites: s.profile_favorites.clone(),
         profile_recent: s.profile_recent.clone(),
+        profile_hidden_groups: s.profile_hidden_groups.clone(),
+        profile_view: s.profile_view.clone(),
     };
     serde_json::to_string_pretty(&f).unwrap_or_default()
 }
@@ -363,6 +368,8 @@ impl Session {
         self.label_sets = prefs.label_sets;
         self.lut_profiles = prefs.lut_profiles;
         crate::cmd::lut_profiles::register_all(self);
+        // camera profiles imported into this library (`Profiles/*.dcp`) are listed for their cameras
+        crate::adobe::set_imported_dirs(crate::cmd::lut_profiles::profiles_dir(self).into_iter().collect());
         self.keyword_sets = prefs.keyword_sets;
         self.keyword_set = prefs.keyword_set;
         self.recent_keywords = prefs.recent_keywords;
@@ -393,9 +400,11 @@ impl Session {
                     self.presets.push(u);
                 }
             }
-            let known = |id: &String| crate::presets::profile(id).is_some() || self.lut_profiles.iter().any(|p| &p.id == id);
-            self.profile_favorites = f.profile_favorites.into_iter().filter(known).collect();
-            self.profile_recent = f.profile_recent.into_iter().filter(known).take(crate::presets::RECENT_PROFILES).collect();
+            let favorites: Vec<String> = f.profile_favorites.into_iter().filter(|id| self.is_profile(id)).collect();
+            let recent: Vec<String> = f.profile_recent.into_iter().filter(|id| self.is_profile(id)).take(crate::presets::RECENT_PROFILES).collect();
+            (self.profile_favorites, self.profile_recent) = (favorites, recent);
+            self.profile_hidden_groups = f.profile_hidden_groups;
+            self.profile_view = f.profile_view;
         }
         // view state
         if let Some(v) = settings.read::<ViewFile>(files.as_mut(), "view.json") {

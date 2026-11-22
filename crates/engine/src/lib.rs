@@ -229,6 +229,10 @@ pub struct Session {
     pub profile_favorites: Vec<String>,
     /// Recently applied profile ids, newest first (at most [`presets::RECENT_PROFILES`]).
     pub profile_recent: Vec<String>,
+    /// Profile groups hidden with Manage Profiles (by name).
+    pub profile_hidden_groups: Vec<String>,
+    /// The profile browser's view: `grid`, `large` or `list`.
+    pub profile_view: String,
     /// Executed commands (actions / debugging / replay).
     pub journal: Vec<(String, Value)>,
     /// Ops applied since the last `drain_log` (for persistence).
@@ -353,6 +357,8 @@ impl Session {
             presets: presets::builtin(),
             profile_favorites: Vec::new(),
             profile_recent: Vec::new(),
+            profile_hidden_groups: Vec::new(),
+            profile_view: String::new(),
             journal: Vec::new(),
             pending_log: Vec::new(),
             media: media::MediaCache::default(),
@@ -993,6 +999,8 @@ mod tests_organize;
 mod tests_persist;
 #[cfg(test)]
 mod tests_prefs;
+#[cfg(test)]
+mod tests_profiles;
 #[cfg(test)]
 mod tests_publish;
 #[cfg(test)]

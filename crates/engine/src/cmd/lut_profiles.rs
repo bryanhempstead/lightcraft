@@ -36,7 +36,7 @@ fn load(file: &str) -> std::result::Result<lightcraft_pipeline::lut::Lut3d, Stri
     }
 }
 
-fn profiles_dir(s: &Session) -> Option<PathBuf> {
+pub(crate) fn profiles_dir(s: &Session) -> Option<PathBuf> {
     s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Profiles"))
 }
 
@@ -99,12 +99,107 @@ fn profile_files(paths: &[String]) -> Vec<(String, String, Option<String>, bool)
                     ));
                 }
             }
-        } else if let Ok(t) = std::fs::read_to_string(path) {
+        } else if !path.extension().is_some_and(|x| x.eq_ignore_ascii_case("dcp"))
+            && let Ok(t) = std::fs::read_to_string(path)
+        {
             let xmp = path.extension().is_some_and(|x| x.eq_ignore_ascii_case("xmp"));
             out.push((path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), t, None, xmp));
         }
     }
     out
+}
+
+/// Largest camera profile (`.dcp`) imported.
+const MAX_DCP: u64 = 16 << 20;
+
+/// `.dcp` camera profiles in `paths` (folders searched, zips opened): (file name, bytes).
+fn dcp_files(paths: &[String]) -> Vec<(String, Vec<u8>)> {
+    let is_dcp = |n: &str| n.to_ascii_lowercase().ends_with(".dcp");
+    let mut out = Vec::new();
+    for p in paths {
+        let path = Path::new(p);
+        if path.is_dir() {
+            let mut stack = vec![(path.to_path_buf(), 0usize)];
+            while let Some((d, depth)) = stack.pop() {
+                let Ok(rd) = std::fs::read_dir(&d) else { continue };
+                for e in rd.flatten().take(10_000) {
+                    let ep = e.path();
+                    let name = e.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    if ep.is_dir() && depth < 8 {
+                        stack.push((ep, depth + 1));
+                    } else if is_dcp(&name)
+                        && std::fs::metadata(&ep).is_ok_and(|m| m.len() <= MAX_DCP)
+                        && let Ok(b) = std::fs::read(&ep)
+                    {
+                        out.push((name, b));
+                    }
+                }
+            }
+        } else if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("zip")) {
+            let Ok(b) = std::fs::read(path) else { continue };
+            for (inner, data) in crate::preset_import::read_zip(&b).unwrap_or_default() {
+                if is_dcp(&inner) && data.len() as u64 <= MAX_DCP {
+                    let name = Path::new(&inner).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(inner);
+                    out.push((name, data));
+                }
+            }
+        } else if path.file_name().is_some_and(|n| is_dcp(&n.to_string_lossy()))
+            && std::fs::metadata(path).is_ok_and(|m| m.len() <= MAX_DCP)
+            && let Ok(b) = std::fs::read(path)
+        {
+            out.push((path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), b));
+        }
+    }
+    out
+}
+
+/// Import the camera profiles (`.dcp`) in `paths` (Bryan's fork; U09): each is checked with the
+/// DNG SDK, copied into the library's `Profiles/` folder (or a temporary folder without a library
+/// on disk) and listed for its camera in the profile browser's Profiles group (`cam:<name>`).
+fn import_dcps(s: &mut Session, paths: &[String], dir: Option<&Path>, r: &mut ImportReport) -> Result<()> {
+    const C: &str = "profile.import";
+    let files = dcp_files(paths);
+    if files.is_empty() {
+        return Ok(());
+    }
+    let dir = match dir {
+        Some(d) => d.to_path_buf(),
+        None => std::env::temp_dir().join("lightcraft-profiles"),
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| bad(C, format!("{}: {e}", dir.display())))?;
+    let mut any = false;
+    for (name, bytes) in files {
+        match crate::adobe::dcp_facts(&bytes) {
+            Ok((camera, profile)) if !camera.trim().is_empty() => {
+                let profile = if profile.trim().is_empty() {
+                    Path::new(&name).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                } else {
+                    profile.trim().to_string()
+                };
+                let target = dir.join(format!("{}.dcp", crate::presets::slug(&format!("{camera}-{profile}"))));
+                if std::fs::read(&target).is_ok_and(|b| b == bytes) {
+                    r.known += 1;
+                    continue;
+                }
+                std::fs::write(&target, &bytes).map_err(|e| bad(C, format!("{}: {e}", target.display())))?;
+                any = true;
+                r.imported.push(json!({"id": format!("cam:{profile}"), "name": profile, "group": crate::adobe::GROUP_IMPORTED, "camera": camera}));
+            }
+            Ok(_) => r.failed.push(json!([name, "the profile names no camera"])),
+            Err(e) => r.failed.push(json!([name, e])),
+        }
+    }
+    if any {
+        let mut dirs = profiles_dir(s).into_iter().collect::<Vec<_>>();
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+        crate::adobe::set_imported_dirs(dirs);
+    }
+    Ok(())
 }
 
 /// Names of the profiles in `paths` (as [`import_paths`] would import them), without importing
@@ -144,6 +239,7 @@ pub fn import_paths(s: &mut Session, paths: &[String]) -> Result<ImportReport> {
         std::fs::create_dir_all(d).map_err(|e| bad(C, format!("{}: {e}", d.display())))?;
     }
     let mut r = ImportReport::default();
+    import_dcps(s, paths, dir.as_deref(), &mut r)?;
     for (name, text, group, xmp) in profile_files(paths) {
         let (lut, display, digest, group) = if xmp {
             match crate::crs_table::profile_from_xmp(&text) {
@@ -226,7 +322,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Profiles",
             [],
             None,
-            "{paths: [.cube / .xmp file, folder or .zip]} — 3D LUTs and camera-raw creative profiles (XMP Look profiles, or presets carrying one, whose look is an RGB colour table) become creative profiles (Amount 0–200 %; rendered on the CPU or the GPU) in the profile browser's groups (the profile's group, folder / zip name, else Imported); one already imported (same table, or same name and group) is skipped → {imported: [{id, name, group}], failed, alreadyImported, skipped}",
+            "{paths: [.cube / .xmp / .dcp file, folder or .zip]} — camera profiles (.dcp: listed for their camera in the Profiles group, `cam:<name>`), 3D LUTs and camera-raw creative profiles (XMP Look profiles, or presets carrying one, whose look is an RGB colour table) become creative profiles (Amount 0–200 %; rendered on the CPU or the GPU) in the profile browser's groups (the profile's group, folder / zip name, else Imported); one already imported (same table, or same name and group) is skipped → {imported: [{id, name, group}], failed, alreadyImported, skipped}",
             always,
             import
         ),

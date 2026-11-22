@@ -237,22 +237,37 @@ fn develop_source(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Result<Rgb
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    let own = own_profile();
+    let (own, base) = (own_profile(), base_profile());
     // (the scope may run on a pool thread: this load's in-place Enhance goes along)
     let enh = crate::enhance::current_enhanced();
-    rayon::scope(|_| crate::enhance::with_enhanced(enh, || load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, own)))
+    rayon::scope(|_| crate::enhance::with_enhanced(enh, || load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, own, base)))
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
 pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    let own = own_profile();
+    let (own, base) = (own_profile(), base_profile());
     let enh = crate::enhance::current_enhanced();
-    rayon::scope(move |_| crate::enhance::with_enhanced(enh, || load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, own)))
+    rayon::scope(move |_| crate::enhance::with_enhanced(enh, || load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, own, base)))
 }
 
 thread_local! {
     static OWN_PROFILE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static BASE_PROFILE: std::cell::RefCell<Option<std::sync::Arc<str>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` (a [`crate::media::FileLoader`] call on this thread) decoding raws on camera profile
+/// `id` (a Camera Matching / imported / Legacy profile, `lightcraft_pipeline::adobe::is_camera_profile`)
+/// instead of the camera's Adobe Standard ([`crate::media::base_profile_source`]).
+pub fn with_base_profile<R>(id: Option<std::sync::Arc<str>>, f: impl FnOnce() -> R) -> R {
+    let before = BASE_PROFILE.with(|c| c.replace(id));
+    let r = f();
+    BASE_PROFILE.with(|c| *c.borrow_mut() = before);
+    r
+}
+
+pub(crate) fn base_profile() -> Option<std::sync::Arc<str>> {
+    BASE_PROFILE.with(|c| c.borrow().clone())
 }
 
 /// Run `f` (a [`crate::media::FileLoader`] call on this thread) decoding raws that carry a
@@ -316,9 +331,14 @@ pub fn chart_source(bytes: &[u8], chart: &ChartShot) -> Result<(Rgb32f, SourceIn
     load_raw(std::borrow::Cow::Borrowed(bytes), usize::MAX, Some(chart), false)
 }
 
-fn load_bytes_now(bytes: std::borrow::Cow<'_, [u8]>, max_edge: usize, own: bool) -> Result<(Rgb32f, SourceInfo), String> {
+fn load_bytes_now(
+    bytes: std::borrow::Cow<'_, [u8]>,
+    max_edge: usize,
+    own: bool,
+    base: Option<std::sync::Arc<str>>,
+) -> Result<(Rgb32f, SourceInfo), String> {
     if lightcraft_raw::probe(&bytes).is_some() {
-        return load_raw(bytes, max_edge, None, own).map(|(img, info, _)| (img, info));
+        return crate::files::with_base_profile(base, || load_raw(bytes, max_edge, None, own)).map(|(img, info, _)| (img, info));
     }
     load_rendered(bytes, max_edge)
 }
@@ -355,13 +375,18 @@ fn load_raw(
         // ProRAW): that profile and its map, as Lightroom renders "Embedded" (measured:
         // docs/lr-match.md → Round 8); a Lightroom-matched or Adobe profile would replace both
         let own = own && chart.is_none() && raw.color.profile.gain_table_map.is_some();
-        // Bryan's fork: the camera's Adobe Standard profile, through Adobe's DNG SDK
+        // Bryan's fork: the camera's Adobe Standard profile, through Adobe's DNG SDK (or the
+        // photo's Camera Matching / imported / Legacy profile, when it is on one)
+        let base = if chart.is_none() { base_profile() } else { None };
         let adobe = raw
             .metadata
             .model
             .as_deref()
             .filter(|_| !own)
-            .and_then(|m| crate::adobe::standard_for(raw.metadata.make.as_deref(), m))
+            .and_then(|m| {
+                let make = raw.metadata.make.as_deref();
+                base.as_deref().and_then(|id| crate::adobe::profile_for(make, m, id)).or_else(|| crate::adobe::standard_for(make, m))
+            })
             .and_then(|cam| crate::adobe::decode_color(&cam, &raw).map(|c| (cam, c)));
         if let Some((cam, color)) = adobe {
             // a chart lit by another light: the camera's response under it (its colour spec for

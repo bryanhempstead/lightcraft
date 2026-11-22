@@ -178,15 +178,36 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "presets.list", "List Presets", [], None, "{}", always, |s, _| {
             Ok(Value::Array(s.presets.iter().map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": p.favorite, "builtin": p.builtin})).collect()))
         }),
-        cmd!(query "profiles.list", "List Profiles", [], None, "{} — every profile with its group and favourite flag", always, |s, _| {
-            Ok(Value::Array(
-                crate::presets::PROFILES
-                    .iter()
-                    .map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": s.profile_favorites.iter().any(|f| f == p.id)}))
-                    .collect(),
-            ))
-        }),
-        cmd!(query "profiles.menu", "Profile Menu", [], None, "{} — favourites, recent (newest first) and groups", always, |s, _| Ok(s.profile_menu())),
+        cmd!(
+            query "profiles.list",
+            "List Profiles",
+            [],
+            None,
+            "{id?: photo} — every profile with its group and favourite flag; with a photo (else the active one) its camera's Camera Matching, imported and Legacy profiles too",
+            always,
+            |s, p| {
+                let photo = p.get("id").and_then(Value::as_u64).map(PhotoId).or_else(|| s.active());
+                let fav = |id: &str| s.profile_favorites.iter().any(|f| f == id);
+                let mut out: Vec<Value> =
+                    crate::presets::PROFILES.iter().map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": fav(p.id)})).collect();
+                for c in photo.map(|id| s.camera_profiles_of(id)).unwrap_or_default() {
+                    out.push(json!({"id": c.id, "name": c.name, "group": c.group, "favorite": fav(&c.id), "camera": true}));
+                }
+                Ok(Value::Array(out))
+            }
+        ),
+        cmd!(
+            query "profiles.menu",
+            "Profile Menu",
+            [],
+            None,
+            "{id?: photo} — favourites, recent (newest first) and groups (the photo's — else the active one's — camera profiles included; `hidden` marks groups hidden with Manage Profiles)",
+            always,
+            |s, p| {
+                let photo = p.get("id").and_then(Value::as_u64).map(PhotoId).or_else(|| s.active());
+                Ok(s.profile_menu_for(photo))
+            }
+        ),
         cmd!(query "history.list", "List History", [], None, "{id?}", has_active, |s, p| {
             let id = photo_arg(s, p, "history.list")?;
             let ph = s.catalog.photo(id).ok_or_else(|| bad("history.list", "no such photo"))?;

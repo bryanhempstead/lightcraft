@@ -124,6 +124,29 @@ pub fn register_base(key: u64, base: Base) -> bool {
     true
 }
 
+/// Profile ids rendered by a camera profile of their own instead of the camera's Adobe Standard
+/// base: Camera Matching and imported camera profiles (`cam:<profile name>`, e.g. `cam:Camera
+/// Standard`) and Legacy profiles (`legacy:<name>`, e.g. `legacy:ACR 4.4`). The engine decodes
+/// the raw with that profile ([`register_base_profile`] records which base renders which id).
+pub fn is_camera_profile(id: &str) -> bool {
+    id.starts_with("cam:") || id.starts_with("legacy:")
+}
+
+fn base_profiles() -> &'static RwLock<HashMap<u64, String>> {
+    static R: OnceLock<RwLock<HashMap<u64, String>>> = OnceLock::new();
+    R.get_or_init(Default::default)
+}
+
+/// Record that base `key` is the camera profile `id` ([`is_camera_profile`]).
+pub fn register_base_profile(key: u64, id: &str) {
+    base_profiles().write().unwrap_or_else(|e| e.into_inner()).insert(key, id.to_string());
+}
+
+/// The camera-profile id base `key` renders (`None`: a camera's Adobe Standard base, or unknown).
+pub fn base_profile(key: u64) -> Option<String> {
+    base_profiles().read().unwrap_or_else(|e| e.into_inner()).get(&key).cloned()
+}
+
 pub fn base(key: u64) -> Option<Arc<Base>> {
     bases().read().unwrap_or_else(|e| e.into_inner()).get(&key).cloned()
 }

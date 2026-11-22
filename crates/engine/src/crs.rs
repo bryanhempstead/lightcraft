@@ -175,6 +175,8 @@ fn base_profile(name: &str) -> Option<&'static str> {
         "adobe portrait" => return Some("adobe:Adobe Portrait"),
         "adobe landscape" => return Some("adobe:Adobe Landscape"),
         "adobe vivid" => return Some("adobe:Adobe Vivid"),
+        "adaptive color" | "adaptive: color" => return Some("adobe:Adaptive Color"),
+        "adaptive b&w" | "adaptive: b&w" => return Some("adobe:Adaptive B&W"),
         _ => {}
     }
     let rest = lower.strip_prefix("adobe ").or_else(|| lower.strip_prefix("camera "))?;
@@ -187,6 +189,26 @@ fn base_profile(name: &str) -> Option<&'static str> {
         "monochrome" | "mono" | "monochrome v2" | "b&w" => "lc.mono",
         _ => return None,
     })
+}
+
+/// A `crs:CameraProfile` that names a camera profile of its own (Bryan's fork): Camera Matching
+/// (`Camera Standard`, `Camera PROVIA/Standard`, …) → `cam:<name>`, Legacy (`ACR 4.4`, …) →
+/// `legacy:<name>`, and profiles imported into Camera Raw or LightCraft by their name. The raw
+/// decodes with the camera's own DCP of that name (`crate::adobe::profile_for`), else renders our
+/// nearest look.
+pub fn camera_profile_id(name: &str) -> Option<String> {
+    let n = name.trim();
+    let lower = n.to_ascii_lowercase();
+    if lower.starts_with("camera ") && !lower.starts_with("camera raw ") {
+        return Some(format!("cam:{n}"));
+    }
+    if crate::adobe::is_legacy_name(n) {
+        return Some(format!("legacy:{n}"));
+    }
+    if !n.is_empty() && base_profile(n).is_none() && crate::adobe::known_profile_name(n) {
+        return Some(format!("cam:{n}"));
+    }
+    None
 }
 
 /// Map the `crs:` fields of an XMP packet to a partial develop-settings JSON object.
@@ -446,10 +468,11 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     // ---- Profile: the base profiles map to ours by name; creative looks (their own colour
     // tables) have no counterpart and stay unmapped
     let look = first(props, "crs:Look/crs:Name");
-    let look_id = look.and_then(base_profile);
+    let look_id = look.and_then(base_profile).map(str::to_string);
     // (read without marking it read: an unknown camera profile is reported)
-    let camera_id = props.get("crs:CameraProfile").and_then(|v| v.first()).and_then(|n| base_profile(n));
-    match (look_id, camera_id) {
+    let camera_id =
+        props.get("crs:CameraProfile").and_then(|v| v.first()).and_then(|n| camera_profile_id(n).or_else(|| base_profile(n).map(str::to_string)));
+    match (&look_id, &camera_id) {
         (Some(id), _) => {
             note("crs:Look");
             put(o, "profile.id", json!(id));

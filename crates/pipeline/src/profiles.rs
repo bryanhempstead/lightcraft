@@ -73,6 +73,42 @@ fn adobe_look<'a>(s: &'a DevelopSettings, look: &crate::adobe::Look, k: f64) -> 
     Cow::Owned(e)
 }
 
+/// Our own look nearest to camera profile `id` (`cam:Camera Neutral` → `lc.neutral`, …): what a
+/// Camera Matching or Legacy profile renders as when its profile isn't installed for the camera
+/// (or the file isn't a raw).
+pub fn nearest_own(id: &str) -> &'static str {
+    let name = id.split_once(':').map_or(id, |(_, n)| n).to_ascii_lowercase();
+    // whole words (Sony's two-letter Creative Look codes are words too: NT, VV, PT, BW)
+    let words: Vec<&str> = name.split(|c: char| !(c.is_alphanumeric() || c == '&')).filter(|w| !w.is_empty()).collect();
+    let has = |w: &[&str]| w.iter().any(|w| words.contains(w)) || (w.contains(&"pro neg") && name.contains("pro neg"));
+    if has(&["monochrome", "mono", "monotone", "b&w", "acros", "sepia", "bw"]) {
+        "lc.mono"
+    } else if has(&["neutral", "flat", "faithful", "eterna", "nt", "pro neg", "flexible"]) {
+        "lc.neutral"
+    } else if has(&["vivid", "velvia", "vv", "vibrant", "deep"]) {
+        "lc.vivid"
+    } else if has(&["landscape", "scenery"]) {
+        "lc.landscape"
+    } else if has(&["portrait", "astia", "natural", "pt", "soft"]) {
+        "lc.portrait"
+    } else {
+        "lc.color"
+    }
+}
+
+/// [`effective`] for a photo decoded on base `base` ([`SourceInfo::adobe`](crate::SourceInfo)):
+/// a Camera Matching / Legacy profile the decode could not use (not installed for the camera, not
+/// a raw, no DNG SDK) renders as our nearest own look instead.
+pub fn effective_for(s: &DevelopSettings, base: Option<u64>) -> Cow<'_, DevelopSettings> {
+    let id = s.profile.id.as_str();
+    if crate::adobe::is_camera_profile(id) && !base.and_then(crate::adobe::base_profile).is_some_and(|b| b == id) {
+        let mut t = s.clone();
+        t.profile.id = nearest_own(id).into();
+        return Cow::Owned(effective(&t).into_owned());
+    }
+    effective(s)
+}
+
 /// The settings the pipeline actually renders: user settings plus the profile's look.
 pub fn effective(s: &DevelopSettings) -> Cow<'_, DevelopSettings> {
     let k = (s.profile.amount / 100.0).clamp(0.0, 2.0);
@@ -91,7 +127,7 @@ pub fn effective(s: &DevelopSettings) -> Cow<'_, DevelopSettings> {
             "adobe vivid" => "lc.vivid",
             "adobe landscape" => "lc.landscape",
             "adobe portrait" => "lc.portrait",
-            "adobe monochrome" => "lc.mono",
+            "adobe monochrome" | "adaptive b&w" => "lc.mono",
             _ => return Cow::Borrowed(s),
         };
         let mut t = s.clone();
