@@ -41,16 +41,16 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
 | S. Export (EXP) | 16 | 1 | 2 | 0 | 7/7 (100%) | 8/8 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
-| U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
+| U. Map & location (MAP) | 1 | 1 | 0 | 0 | — | 0/1 (0%) |
 | V. Preferences (PREF) | 5 | 0 | 3 | 3 | 1/1 (100%) | 4/4 (100%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 17 | 4 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 65 | 18 | 38 | 9 | — | 34/35 (97%) |
-| **Total** | 430 | 46 | 85 | 36 | 191/201 (95%) | 160/169 (95%) |
+| Lightroom Classic extras | 68 | 19 | 34 | 9 | — | 34/35 (97%) |
+| **Total** | 434 | 47 | 80 | 36 | 191/201 (95%) | 160/169 (95%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.7%** of 561 in-scope rows — P0 97.5% of 201 · P1 96.4% of 169 · P2 49.2% of 190.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **81.6%** of 561 in-scope rows — P0 97.5% of 201 · P1 96.4% of 169 · P2 51.6% of 190.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -74,7 +74,7 @@ Take the first one nobody is working on.
    the app offers a consented, verified download, but **LightCraft's CDN mirrors are not configured yet** (the
    built-in list is empty, so today users need their own mirror or a manual install). Subject / Sky / People could
    use the same model with fixed prompts; denoise / super-resolution models remain a maintainer decision.
-7. **HDR** (Q. HDR, LR-EXP-HDR), **video** (R. Video), **Classic output modules** (Map view, Book, Slideshow module,
+7. **HDR** (Q. HDR, LR-EXP-HDR), **video** (R. Video), **Classic output modules** (Book, Slideshow module,
    Print, publish): large, well understood, lower priority than 1–5.
 8. **LR-VIEW-ZOOM** (P0): pinch zoom and two-finger pan now work, with stable image cursors between gesture events.
    The whole-image preview is still capped by
@@ -481,7 +481,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-MAP-INFO | Location in the info panel | P1 | 🟡 | `cmd:photo.setMeta` (`location`, `city`, `state`, `country`, `gps`), `crates/ui-egui/src/panels/right.rs` | location, city, state/province, country and GPS editable; Show on Map (OpenStreetMap in the browser); no map in the panel |
-| LR-MAP-MODULE | Map module [Classic] | P2 | ⬜ | | |
+| LR-MAP-MODULE | Map module [Classic] | P2 | ✅ | `cmd:view.map`, `cmd:map.pins`, `cmd:map.geotag`, `cmd:map.saveLocation`, `cmd:map.photosIn`, `crates/engine/src/map.rs`, `crates/ui-egui/src/panels/map.rs`, `crates/ui-egui/src/tests_map.rs` | the `map.` module (top right, ⌥⌘3, Window ▸ Map): OpenStreetMap tiles fetched at runtime (two connections, `LightCraft/<version>` user agent, cached in the library's `Map Tiles/` folder for 30 days, used offline) with the "© OpenStreetMap contributors" attribution (links to the licence); drag to pan, wheel / pinch / double-click to zoom, fit. / in. / out.; pins for the photos in view with GPS, grouped with a count when close; pins pick photos (click / ⌘-click / ⇧-click, all. / none.); photos dragged from the filmstrip or grid onto the map are geotagged there (undoable); Saved Locations on the left. Offline or refused: an empty grid with a notice, the rest keeps working. Only the standard OSM style (no satellite / terrain / hybrid), no location filter bar |
 
 ## V. Preferences (PREF)
 
@@ -735,7 +735,7 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 |---|---|---|---|---|---|
 | LRC-LIB-IMPORT | Full import dialog | P1 | ✅ | `cmd:file.addPhotos`, `cmd:import.source`, `cmd:library.import` (`mode`, `destination`, `organize`, `rename`, `metadataPreset`, `preset`, `keywords`, `album`), `crates/ui-egui/src/import_window.rs`, `crates/ui-egui/src/import.rs` | Classic's Import window (File ▸ Import Photos and Video… ⇧⌘I, Library ▸ Import…): From (source) on the left — Devices (mounted cards / cameras, chosen first when one is plugged in), Files (Pictures, Desktop, Downloads, Home, every volume, as folder trees read off the UI thread), Include Subfolders; the mode in the middle (Copy as DNG / Copy / Move / Add, with what each does); To on the right (the library's Originals or a chosen folder); a thumbnail grid with checkboxes (already-imported files dimmed and unchecked; ⇧-click ranges), All Photos / New Photos / Destination Folders, Check All / Uncheck All, sort (capture time, checked state, file name, media type), thumbnail size, "N photos / X GB"; File Handling (Build Previews Minimal / Embedded & Sidecar / Standard / 1:1, Build Smart Previews, Make a Second Copy To… into "Imported on <date>", Add to Collection), File Renaming (template with tags), Apply During Import (develop preset, metadata preset, keywords), Destination (Into Subfolder, Organize by date / into one folder, seven date formats, example path). Import closes the window; the import runs on a worker thread with its progress in the top bar, then Library shows Previous Import. The choices are remembered (`ui.json` → `importPrefs`). Import from Folder / Device and drops keep the quicker review dialog. Not: "Don't Import Suspected Duplicates" can't be turned off (duplicates are never imported twice), no Embedded & Sidecar-specific preview pass (it builds the standard thumbnails) |
 | LRC-LIB-AUTOIMPORT | Watched-folder import | P2 | ✅ | `cmd:library.autoImport` | see LR-IMP-AUTO |
-| LRC-UI-MODULES | Library and Develop modules | P1 | ✅ | `cmd:view.library`, `cmd:view.develop`, `crates/ui-egui/src/panels/topbar.rs` (`module_picker`), `crates/ui-egui/src/state.rs` (`Module`), `crates/ui-egui/src/tests_classic.rs` | the module picker top right ("Library | Develop", the active one bright); G / E (Classic keys: grid / loupe) and D (Develop), ⌥⌘1 / ⌥⌘2; each module has its own side panels and toolbar, the selection carries over, Esc in Develop goes back to the Library grid; Develop tools (R, Q, ⇧W) open Develop. Map, Book, Slideshow, Print and Web are not offered |
+| LRC-UI-MODULES | Library and Develop modules | P1 | ✅ | `cmd:view.library`, `cmd:view.develop`, `crates/ui-egui/src/panels/topbar.rs` (`module_picker`), `crates/ui-egui/src/state.rs` (`Module`), `crates/ui-egui/src/tests_classic.rs` | the module picker top right ("Library | Develop", the active one bright); G / E (Classic keys: grid / loupe) and D (Develop), ⌥⌘1 / ⌥⌘2; each module has its own side panels and toolbar, the selection carries over, Esc in Develop goes back to the Library grid; Develop tools (R, Q, ⇧W) open Develop. Map is the third link (`map.`, ⌥⌘3, see LR-MAP-MODULE); Book, Slideshow, Print and Web are not offered |
 | LRC-UI-PANELKEYS | Panel visibility keys | P1 | ✅ | `cmd:view.leftPanel`, `cmd:view.rightPanel`, `cmd:view.topPanel`, `cmd:view.sidePanels`, `cmd:view.allPanels`, `cmd:view.toolbar`, `cmd:view.lightsOut`, `cmd:view.solo` | F5 top bar, F6 filmstrip, F7 / F8 left / right panel, Tab side panels, ⇧Tab all, T toolbar, L Lights Out (Classic key profile; dim, then black, Esc or a click ends it); Solo Mode (⌥-click a panel header, or its right-click menu) |
 | LRC-DEV-PANELS | Develop right panel in Classic's order | P1 | ✅ | `crates/ui-egui/src/panels/right.rs`, `crates/ui-egui/src/panels/edit.rs` (`CLASSIC_PANELS`), `cmd:develop.sectionEnabled` | Histogram (clipping triangles, ISO / focal length / aperture / shutter, Original Photo), the tool strip (Crop & Straighten, Spot Removal, Red Eye, Masking) with the tool's options under it, then Basic (Treatment, Profile + browser, WB eyedropper / modes / Temp / Tint, Tone: Auto, Exposure … Blacks, Presence: Texture, Clarity, Dehaze, Vibrance, Saturation), Tone Curve, HSL / Color (Hue / Saturation / Luminance / All, B&W mix, targeted adjustment, Point Color), Color Grading, Detail, Lens Corrections (Profile / Manual), Transform (Upright + sliders), Effects (Post-Crop Vignetting, Grain), Calibration; Classic headers (click = open / close, ⌥-click = solo), an on/off switch on every panel but Basic (Tone Curve, HSL / Color and Color Grading switch only their own settings), one-row sliders; Previous / Reset (Sync… with several photos) at the bottom. Not: Process version, Lens Blur, profile-based Lens Corrections lookup (only DNG opcodes), Upright "Constrain to image" beyond Constrain Crop |
 | LRC-DEV-LEFTPANEL | Develop left panel | P1 | ✅ | `crates/ui-egui/src/panels/develop_left.rs`, `cmd:view.navigate` | Navigator (FIT / FILL / 1:1 / 2:1, the visible area boxed, click / drag to pan), Presets (hover = preview, click = apply), Snapshots (= versions), History (click a step = go back), Collections (the albums, click = show in Library); Copy… / Paste at the bottom |
@@ -814,10 +814,10 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 | LRC-DEV-DEFAULTS | Per-camera raw defaults | P1 | ✅ | `cmd:library.preferences` (`camera`, `import.perCamera`), `crates/ui-egui/src/panels/settings.rs` | Settings → Import: raw default and per-camera presets |
 | LRC-DEV-VIEWOPTIONS | Develop view options | P2 | ⬜ | | |
 | LRC-DEV-VIDEO | Video frame capture | P2 | ⬜ | | |
-| LRC-MAP-VIEW | Map view | P2 | ⬜ | | |
-| LRC-MAP-GEOTAG | Drag photos onto the map | P2 | ⬜ | | |
-| LRC-MAP-LOCATIONS | Saved locations | P2 | ⬜ | | |
-| LRC-MAP-TRACKLOG | GPS track logs | P2 | ✅ | `cmd:photo.autoTagTracklog`, `cmd:photo.tagFromTracklog`, `crates/meta/src/gpx.rs` | Photo ▸ Auto-Tag from Tracklog…: a GPX 1.0 / 1.1 track log sets the GPS of the selected photos by capture time — interpolated between the points of a track segment, else the nearest point within `maxGap` (10 min); never across segment breaks. The camera's time zone comes from the photo (Exif offset) or is asked for; photos that already have a location keep it unless `replace`; `dryRun` previews; one undo step. No track drawn on a map (no Map module) |
+| LRC-MAP-VIEW | Map view | P2 | ✅ | `cmd:view.map`, `cmd:map.pins`, `crates/ui-egui/src/panels/map.rs` | see LR-MAP-MODULE; one map style (OpenStreetMap standard) |
+| LRC-MAP-GEOTAG | Drag photos onto the map | P2 | ✅ | `cmd:map.geotag`, `cmd:map.clearGps`, `crates/ui-egui/src/panels/filmstrip.rs` | drop from the filmstrip or the grid sets the GPS of the dragged (selected) photos; Delete GPS Coordinates; both undoable (through `photo.setMeta`) |
+| LRC-MAP-LOCATIONS | Saved locations | P2 | ✅ | `cmd:map.locations`, `cmd:map.saveLocation`, `cmd:map.deleteLocation`, `cmd:map.photosIn`, `crates/engine/src/tests_map.rs` | name, centre, radius (m), photo count; add. saves the map's centre, click goes there, show. filters to the photos inside (clr. clears), right-click renames / deletes / makes Private — a private location's photos are exported without GPS. Kept in the catalog (`map.locations` record: undo, backups) |
+| LRC-MAP-TRACKLOG | GPS track logs | P2 | ✅ | `cmd:photo.autoTagTracklog`, `cmd:photo.tagFromTracklog`, `crates/meta/src/gpx.rs` | Photo ▸ Auto-Tag from Tracklog…: a GPX 1.0 / 1.1 track log sets the GPS of the selected photos by capture time — interpolated between the points of a track segment, else the nearest point within `maxGap` (10 min); never across segment breaks. The camera's time zone comes from the photo (Exif offset) or is asked for; photos that already have a location keep it unless `replace`; `dryRun` previews; one undo step. The Map module shows photo pins, not the track |
 | LRC-MAP-FILTER | Location filter bar | P2 | ⬜ | | |
 | LRC-MAP-REVGEO | Reverse geocoding | OOS | 🚫 | | |
 | LRC-BOOK-SETTINGS | Book settings | P2 | ⬜ | | |
@@ -864,7 +864,7 @@ From `08-lightroom-classic-extras.md` (Classic-only features) and part 2 of `06-
 | KEYC-COLLECTIONS | Classic collection keys (⌘N, B…) | P2 | 🟡 | `cmd:dialog.newAlbum` | ⌘N new album; no quick collection |
 | KEYC-METADATA | Classic keyword/metadata keys (⌘K, ⌘S, ⌘⌥⇧C/V…) | P2 | 🟡 | `cmd:photo.saveMetadataToFile` | ⌘S saves metadata; no keyword sets, metadata copy/paste |
 | KEYC-DEVELOP | Classic develop keys (V, ⌘U, ⇧⌘U, R, Q, K, M, ⇧M, ⇧W, ⇧J, ⇧Q…) | P2 | 🟡 | `cmd:develop.treatment`, `cmd:develop.reset`, `cmd:crop.reset` | V, ⇧⌘R, ⌥⌘R, W, J, Y, ⇧Y, \ match; R/K/M/⇧M differ; no Classic keymap layer |
-| KEYC-MODULE-OUTPUT | Book / slideshow / print / map / web keys | P2 | ⬜ | | modules not implemented |
+| KEYC-MODULE-OUTPUT | Book / slideshow / print / map / web keys | P2 | 🟡 | `cmd:view.map` | ⌥⌘3 opens the Map module; Book, Slideshow, Print and Web are not implemented |
 | KEYC-HELP | Classic help keys (⌘/, F1) | P2 | 🟡 | `cmd:app.shortcuts` | ⌘/ only |
 
 ### Japanese text watermarks

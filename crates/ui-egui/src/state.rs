@@ -18,6 +18,9 @@ pub enum ViewMode {
     Reference,
     /// A card per person named on faces (close-up, name, photo count).
     People,
+    /// The Map module (LR-MAP-MODULE): OpenStreetMap tiles, pins for photos with GPS, drop photos
+    /// to geotag them, saved locations.
+    Map,
 }
 
 /// Lightroom Classic's modules: Library (grid, loupe, compare, survey; organising) and Develop
@@ -35,7 +38,9 @@ impl Module {
     /// The views a module shows: Develop is the loupe (or the reference view), the rest is Library.
     pub fn of_view(view: ViewMode) -> Option<Module> {
         match view {
-            ViewMode::PhotoGrid | ViewMode::SquareGrid | ViewMode::Compare | ViewMode::Survey | ViewMode::People => Some(Module::Library),
+            ViewMode::PhotoGrid | ViewMode::SquareGrid | ViewMode::Compare | ViewMode::Survey | ViewMode::People | ViewMode::Map => {
+                Some(Module::Library)
+            }
             ViewMode::Detail | ViewMode::Reference => None,
         }
     }
@@ -440,6 +445,25 @@ pub struct SyncPrefs {
     pub match_color: bool,
 }
 
+/// Where the Map module looks (LR-MAP-MODULE).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MapUi {
+    pub lat: f64,
+    pub lon: f64,
+    /// Web Mercator zoom, 1 (the world) .. 19 (a street).
+    pub zoom: f64,
+    /// Fit the view to the pins the next time the map is drawn.
+    #[serde(skip)]
+    pub fit_pending: bool,
+}
+
+impl Default for MapUi {
+    fn default() -> Self {
+        MapUi { lat: 30.0, lon: 0.0, zoom: 2.0, fit_pending: true }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
@@ -684,6 +708,8 @@ pub struct UiState {
     /// Reference view: the reference photo.
     #[serde(skip)]
     pub reference: Option<u64>,
+    /// The Map module's view: centre and zoom (kept between sessions).
+    pub map: MapUi,
     /// Transient toast text, expiry (seconds of app time), and optional colour-label styling.
     #[serde(skip)]
     pub toast: Option<(String, f64, Option<lightcraft_catalog::ColorLabel>)>,
@@ -1057,6 +1083,7 @@ impl Default for UiState {
             local_browse_root: None,
             compare: None,
             reference: None,
+            map: MapUi::default(),
             toast: None,
             last_find_missing: None,
             rechecked_library: None,
@@ -1101,7 +1128,8 @@ impl UiState {
         if self.module == Module::Develop && !matches!(self.view, ViewMode::Detail | ViewMode::Reference) {
             self.view = ViewMode::Detail;
         }
-        if self.module == Module::Library {
+        // (the map is a module of its own: Library goes back to the grid or loupe from it)
+        if self.module == Module::Library && self.view != ViewMode::Map {
             self.library_view = self.view;
         }
     }

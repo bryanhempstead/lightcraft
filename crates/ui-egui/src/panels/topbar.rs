@@ -152,10 +152,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
     let t = Tokens::get(ui.ctx());
     let mut x = full.right() - 12.0;
-    let items =
-        [("develop", "Develop", crate::state::Module::Develop, "Develop (D)"), ("library", "Library", crate::state::Module::Library, "Library (G)")];
-    for (i, (id, label, module, tip)) in items.into_iter().enumerate() {
-        let on = app.ui.module == module;
+    let map = app.ui.view == crate::state::ViewMode::Map;
+    // right to left: map. | develop. | library.
+    let items = [
+        ("map", "Map", map, "view.map", "Map (⌘⌥3)"),
+        ("develop", "Develop", app.ui.module == crate::state::Module::Develop, "view.develop", "Develop (D)"),
+        ("library", "Library", app.ui.module == crate::state::Module::Library && !map, "view.library", "Library (G)"),
+    ];
+    let last = items.len() - 1;
+    for (i, (id, label, on, cmd, tip)) in items.into_iter().enumerate() {
         // Bryan's label style: lowercase with a period ("library.", "develop."), in every language
         let text = format!("{}.", crate::i18n::tr(label).to_lowercase());
         let font = if on { t.semibold(18.0) } else { t.font(18.0) };
@@ -173,14 +178,13 @@ pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> 
             egui::Color32::from_gray(112)
         };
         ui.painter().galley(pos2(r.left() + 4.0, r.center().y - g.size().y / 2.0), g, c);
-        if resp.clicked() {
-            let cmd = if module == crate::state::Module::Develop { "view.develop" } else { "view.library" };
-            if let Err(e) = app.run(cmd, json!({})) {
-                app.toast(ui.ctx(), e);
-            }
+        if resp.clicked()
+            && let Err(e) = app.run(cmd, json!({}))
+        {
+            app.toast(ui.ctx(), e);
         }
         x = r.left();
-        if i == 0 {
+        if i < last {
             // the divider between the links
             let d = Rect::from_center_size(pos2(x - 10.0, full.center().y), vec2(1.0, 18.0));
             ui.painter().rect_filled(d, 0.0, egui::Color32::from_gray(90));
