@@ -28,7 +28,7 @@ duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | **AI & computational** | ~15–20% | Assisted culling (focus, bursts), auto tone, HDR/panorama merge; subject/sky/background masks as classical heuristics | Real segmentation masks (subject, sky, people, objects, landscape, depth), AI denoise, super resolution, lens blur, generative remove, faces/people, natural-language search. **Blocked on a model strategy** (licensable weights or our own training; pure-Rust inference is feasible) |
 | **Workflow & library** | ~85% (single machine) | Robust catalog (journal + snapshots, background compaction, crash-tested), 85k-photo libraries stay responsive, Local browsing with automatic cleanup, XMP interop, keywords, smart albums, Move import; Settings ▸ cams. (fork) shows per camera the decoder, the profile that colours it, lens profiles and the last Lightroom ΔE, and an import recognises a camera it hasn't seen | Opening an 85k library takes 1.7–4.7 s (catalog backups, Trash deletes and Lightroom naming landed 2026-11-21); no cloud sync (out of scope), no tablet companion (#74, roadmap), shared albums, online publish services (Hard Drive / Apple Photos publishing landed 2026-11-22), tethering |
 | **Classic modules** | ~30% | Geotagging from GPX track logs, the Map module (OpenStreetMap, drag to geotag, saved locations), soft proofing (partial), slideshow (basic) | **Book, Print, Slideshow module, Web, online publish services**: ~40 tracker rows ⬜ |
-| **HDR & video** | 0% | | HDR edit/display/export; video play/trim/edit/export |
+| **HDR & video** | ~40% (video) | Video (fork, 2026-11-22): import, Loupe playback with sound, trim, poster frame, Capture Frame, Classic's video edits, trimmed and edited H.264 export (ffmpeg when installed, else macOS AVFoundation / avconvert) | HDR edit/display/export; the rest of the Edit panel on video; pure-Rust video decoding |
 | **Platform & robustness** | ~70% | macOS native; Windows/Linux builds; web via WASM; no-panic lints workspace-wide, `unsafe` confined to `crates/sysmem`; failed saves are reported; GPU errors fall back to CPU | Windows installer UI unverified on Windows (PR #79); GPU path proven only on Apple + user reports; English, Simplified/Traditional Chinese, Japanese, Brazilian Portuguese and German UI (see docs/localization.md); remaining technical errors; Traditional Chinese uses the Simplified Chinese font until craft-fonts has a TC face; accessibility partial; headless UI tests time out under machine load |
 
 ### By kind of user
@@ -62,8 +62,8 @@ Priorities, in order. Each points at tracker rows in [`docs/parity.md`](docs/par
    segmentation masks and denoise; then pure-Rust inference. Unblocks M12 and Enhance. Object / Describe masks now
    run Meta's SAM 3 in pure Rust (optional, user-consented download under the non-OSI SAM License; CDN mirrors still
    to be set up, docs/ai-masks.md); Subject / Sky / People and Enhance are still open.
-7. **Then:** HDR (Q), the Classic output modules (Print first, then Book, Slideshow; Map is in), video (R), localisation
-   and accessibility.
+7. **Then:** HDR (Q), the Classic output modules (Print first, then Book, Slideshow; Map, Hard Drive publishing and
+   video are in), localisation and accessibility.
 
 Already closed in the week of 2026-10-03: compressed NEF (#10), Move import (#29), per-library smart-preview folder,
 Local roots / cleanup, grid and catalog performance at 85k photos (#35, #37), failed-save reporting, GPU export
@@ -93,7 +93,7 @@ yet guarantee original-pixel detail; visible-region rendering remains a gap (LR-
 | M11 | RAW II | CR3, RAF (X-Trans), ORF, RW2, PEF, SRW, 3FR, IIQ + long tail; camera calibration DB; HEIC/AVIF/JXL import | 20–35 | 🚧 (CR3 lossless CRX and C-RAW, RAF uncompressed and lossless/lossy compressed, RW2 (every raw format), PEF, ORF uncompressed ✅; **camera colour calibration** 🚧 (guarded ARW, NEF, RW2 and RAF preview fitting; measured database still missing), CR3, compressed ORF ⬜) |
 | M12 | AI & smart features | subject/sky/background/people/object masks, semantic search, faces/People (permissively licensed models, pure-Rust inference) | 20–40 | ⬜ |
 | M13 | Merge | HDR merge (deghost), panorama (projections, boundary warp, fill edges), HDR panorama | 10–15 | ✅ |
-| M14 | Video | import/playback/trim via FilmCraft crates, global edits + presets on video, video export | 6–10 | ⬜ |
+| M14 | Video | import/playback/trim via FilmCraft crates, global edits + presets on video, video export | 6–10 | 🟡 (fork: ffmpeg / AVFoundation, Classic's video edits; pure-Rust decode open) |
 | M15 | Classic modules | Map, Book, Slideshow, Print, Web; smart collections, stacks, virtual copies, publish services, tethering | 25–40 | 🚧 (smart albums, stacks, virtual copies, compare/survey ✅; Map ✅; Book/Slideshow/Print/Web ⬜) |
 | M16 | 1.0 polish | preferences, shortcut editor, accessibility, localization, packaging (dmg/msi/AppImage/web), hardening | 10–20 | 🚧 (settings, keyboard shortcuts sheet, packaging basics ✅; English/Chinese (Simplified, Traditional)/Japanese/Brazilian Portuguese/German localisation 🟡; accessibility and further locales ⬜) |
 

@@ -6,6 +6,16 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (video-publish agent, 2026-11-22, branch worktree-agent-a6dca08b63db85737, not merged) **Video, publish, Photos,
+  Map, sidecar split + 2 bugs** — catalog v8 (c617f3b19: `Op::SetVideo` trim/poster, `Op::SetRecord` library records);
+  video (376135e69 engine, 58ebbe267 UI): import, Loupe bar play./pause. (Space) / scrubber / trim. / poster. / cap. /
+  snd., Classic's video edits through the pipeline, trimmed edited H.264 export (Export dialog ▸ Video), ffmpeg else
+  macOS AVFoundation helper (`video.swift`) else a notice; Map module (merged 1e7ba3b63, OSM tiles, pins, drag to
+  geotag, saved locations); Publish Services Hard Drive + Apple Photos and File ▸ Export to Photos (merged 8f71d1b6b /
+  43f30031e; needs.you #152 to try it on his real Photos library); LR-IMP-SIDECAR-SPLIT (2d4a436f7); fixes: Export
+  dialog scrolls in a short window (e82d320ab, f4e7ea2d0), tethered-capture toast (toast_soon). Left: the rest of the
+  Edit panel on video, pure-Rust video decode, online publish services, LR-PREF-PEOPLE (skipped: face recognition isn't
+  trivial on the current face code). Headless shots: scratchpad `video-publish/shots/`.
 - [ ] (detail agent, 2026-11-21 night, branch worktree-agent-af436a1c05b9b1fde, not merged) **Detail / Effects / Looks rows
   R03 R06 R07 R13 R15 R24 R25** measured with the Camera Raw oracle (`oracle/make_detail.py`, `grain_ana.py`,
   `sharp_ana.py`, `sharpfit.py`, `make_ca.py`, `make_nr_real.py`; docs/lr-match.md → Round 9): Look LUT profiles on the

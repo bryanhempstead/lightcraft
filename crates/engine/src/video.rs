@@ -958,6 +958,10 @@ fn ffmpeg_developed(
     progress: &dyn Fn(f64) -> bool,
 ) -> Result<(), String> {
     use std::io::Write;
+    // a frame buffer sized by what the file claims: capped (8K is 33 MP)
+    if u64::from(w) * u64::from(h) > 8192 * 8192 {
+        return Err(format!("{w} × {h} is larger than LightCraft exports video at"));
+    }
     let fps = if info.fps.is_finite() && info.fps > 0.5 { info.fps } else { 25.0 };
     let mut dec = Command::new(bin)
         .args(["-nostdin", "-v", "error", "-ss", &format!("{a:.3}"), "-i"])
