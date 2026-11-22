@@ -169,13 +169,14 @@ mod tests {
     #[test]
     fn draws_without_panicking_on_odd_input() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             let p = ui.painter();
             let plot = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 90.0));
             for (px, limit) in [(vec![[0.0f32; 3]], 0.0), (vec![[f32::NAN, 1e9, -3.0]], 5.0), (vec![[2.0, 0.5, 0.1]; 3], 2.3)] {
                 draw(p, plot, &hist(&px, limit), 1.2, Color32::BLACK);
             }
         });
+        out.textures_delta.clear();
         assert!((white_x(Rect::from_min_size(pos2(10.0, 0.0), vec2(100.0, 1.0))) - 50.0).abs() < 1e-4);
     }
 }
