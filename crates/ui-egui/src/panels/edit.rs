@@ -384,6 +384,13 @@ fn lens_corrections(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
         sub_title(ui, crate::i18n::tr("Distortion"));
         control(app, ui, d, "optics.distortion", true);
         sub_title(ui, crate::i18n::tr("Defringe"));
+        padded_row(ui, |ui| {
+            let active = app.ui.tool == "fringePicker";
+            if crate::widgets::icon_button(ui, "fringePicker", Icon::Picker, vec2(26.0, 24.0), active, true, "Fringe Color Selector").clicked() {
+                app.ui.tool = if active { String::new() } else { "fringePicker".into() };
+            }
+            ui.label(egui::RichText::new(crate::i18n::tr("sample fringe.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
+        });
         control(app, ui, d, "optics.defringePurple", true);
         let on = d.optics.defringe_purple_amount > 0.0;
         control(app, ui, d, "optics.defringePurpleHueLo", on);

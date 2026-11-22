@@ -412,6 +412,48 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"temp": t, "tint": tint}))
         }),
+        cmd!(
+            "develop.defringePick",
+            "Fringe Color Selector",
+            [],
+            None,
+            "{x, y} normalized image coords of a purple or green fringe: sets that Defringe hue range around the colour (and Amount 5 when it is 0) → {fringe: purple|green, amount, hueLo, hueHi}",
+            has_active,
+            |s, p| {
+                let (x, y) = (f64_req(p, "x", "develop.defringePick")?, f64_req(p, "y", "develop.defringePick")?);
+                let id = active(s, "develop.defringePick")?;
+                // fringes are a few source pixels wide: the preview level, not a thumbnail
+                let src = s.source_now(id, SourceLevel::Preview).map_err(|e| bad("develop.defringePick", e))?;
+                let d = s.develop_of(id).unwrap_or_default();
+                let o = src.oriented(d.orientation);
+                let (cx, cy) = ((x.clamp(0.0, 1.0) * o.width as f64) as isize, (y.clamp(0.0, 1.0) * o.height as f64) as isize);
+                let (kind, pos) = lightcraft_pipeline::optics::fringe_pick(&o, cx, cy)
+                    .ok_or_else(|| bad("develop.defringePick", "the sampled colour is not a purple or green fringe"))?;
+                // a 24-wide range centred on the colour (Lightroom keeps the two ends ≥ 10 apart)
+                let lo = (pos - 12.0).clamp(0.0, 76.0);
+                let hi = lo + 24.0;
+                let mut out = json!({});
+                edit(s, "develop.defringePick", "Defringe", |d| {
+                    let o = &mut d.optics;
+                    let (amount, name) = match kind {
+                        lightcraft_pipeline::optics::Fringe::Purple => {
+                            (o.defringe_purple_hue_lo, o.defringe_purple_hue_hi) = (lo, hi);
+                            (&mut o.defringe_purple_amount, "purple")
+                        }
+                        lightcraft_pipeline::optics::Fringe::Green => {
+                            (o.defringe_green_hue_lo, o.defringe_green_hue_hi) = (lo, hi);
+                            (&mut o.defringe_green_amount, "green")
+                        }
+                    };
+                    if *amount <= 0.0 {
+                        *amount = 5.0;
+                    }
+                    out = json!({"fringe": name, "amount": *amount, "hueLo": lo, "hueHi": hi});
+                    Ok(())
+                })?;
+                Ok(out)
+            }
+        ),
         cmd!("develop.treatment", "Black & White", ["Photo"], Some("V"), "{bw?: bool} (toggles when omitted)", has_active, |s, p| {
             edit(s, "develop.treatment", "Treatment", |d| {
                 let bw = p.get("bw").and_then(Value::as_bool).unwrap_or(d.treatment != Treatment::Bw);

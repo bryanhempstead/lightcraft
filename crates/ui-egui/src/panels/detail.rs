@@ -874,7 +874,7 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
         return;
     }
     let cursor = match app.ui.tool.as_str() {
-        "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
+        "wbPicker" | "fringePicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {
@@ -904,6 +904,16 @@ fn general_interaction(
         {
             let n = map.norm(q);
             let _ = app.run("develop.wbPick", json!({"x": n.x, "y": n.y}));
+            app.ui.tool.clear();
+        }
+        return;
+    }
+    if app.ui.tool == "fringePicker" {
+        if resp.clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let n = map.norm(q);
+            let _ = app.run("develop.defringePick", json!({"x": n.x, "y": n.y}));
             app.ui.tool.clear();
         }
         return;

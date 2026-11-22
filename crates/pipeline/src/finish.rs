@@ -207,17 +207,34 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
     })
 }
 
-/// Sharpening gain per unit of Amount/150 (fitted against Lightroom's renders, `docs/lr-match.md`).
+/// Local (mask) Sharpness gain per unit of its ±100 slider.
 pub const SHARPEN_GAIN: f32 = 1.0;
+/// Capture sharpening, measured with Camera Raw (R07, `docs/lr-match.md` → Round 8;
+/// `oracle/make_detail.py sharp` + `sharp_ana.py`): gain `SHARPEN_AMOUNT_GAIN · (Amount/150)^SHARPEN_AMOUNT_EXP`
+/// on log luminance at the source's full size.
+pub const SHARPEN_AMOUNT_GAIN: f32 = 8.14;
+pub const SHARPEN_AMOUNT_EXP: f32 = 0.8225;
+/// Detail: differences beyond about `T0 + T1 · Detail/100` EV are damped.
+pub const SHARPEN_DETAIL_T0: f32 = 0.006;
+pub const SHARPEN_DETAIL_T1: f32 = 0.405;
+/// Edge Masking: sharpening fades in over log-luminance gradients (EV per source px, smoothed by
+/// a Gaussian of `SHARPEN_MASK_SIGMA` source px) from `SHARPEN_MASK_LO · c` to
+/// `SHARPEN_MASK_HI · c`, `c = SHARPEN_MASK_C0 · exp(SHARPEN_MASK_K · Masking/100)`.
+pub const SHARPEN_MASK_SIGMA: f32 = 1.6;
+pub const SHARPEN_MASK_C0: f32 = 0.0075;
+pub const SHARPEN_MASK_K: f32 = 3.52;
+pub const SHARPEN_MASK_LO: f32 = -0.275;
+pub const SHARPEN_MASK_HI: f32 = 2.275;
 /// Gaussian sigma per unit of Radius, in the source's own pixels.
-pub const SHARPEN_SIGMA: f32 = 0.8;
+pub const SHARPEN_SIGMA: f32 = 0.818;
 /// Largest kernel half-width (taps each side): radii beyond ~1.6 source px are truncated there.
 pub const SHARPEN_TAPS: usize = 4;
 
 /// Lightroom-style capture sharpening: an unsharp mask of log luminance whose radius is in the
 /// source's own pixels (so a preview shows what the full-size file gets, scaled), with Detail
-/// damping large differences (halos) and Masking limiting it to edges. The kernel is read
-/// straight from the log-luminance plane (CPU and GPU alike), `r` taps each side.
+/// damping large differences (halos) and Masking limiting it to edges (by the kernel's
+/// least-squares gradient). The kernel is read straight from the log-luminance plane (CPU and
+/// GPU alike), `r` taps each side.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sharpen {
     /// Taps each side (0 = the radius is below a pixel's worth at this scale: no effect).
@@ -226,52 +243,82 @@ pub struct Sharpen {
     pub w: [f32; SHARPEN_TAPS + 1],
     /// Detail: differences larger than about `t` EV are damped (`d / (1 + |d| / t)`).
     pub t: f32,
+    /// Edge Masking's gradient: taps each side, 1-D Gaussian weights ([`SHARPEN_MASK_SIGMA`])
+    /// and the normaliser turning `Σ wg(dx) wg(dy) dx · l` into EV per source pixel.
+    pub gr: u32,
+    pub gw: [f32; SHARPEN_TAPS + 1],
+    pub gn: f32,
+}
+
+/// 1-D Gaussian weights of `sigma` (normalised to sum to 1) and their taps each side.
+fn gauss_taps(sigma: f32) -> (usize, [f32; SHARPEN_TAPS + 1]) {
+    let mut w = [0.0; SHARPEN_TAPS + 1];
+    if !(sigma.is_finite() && sigma >= 0.25) {
+        return (0, w);
+    }
+    let r = ((2.5 * sigma).ceil() as usize).clamp(1, SHARPEN_TAPS);
+    for (k, v) in w.iter_mut().enumerate().take(r + 1) {
+        *v = (-((k * k) as f32) / (2.0 * sigma * sigma)).exp();
+    }
+    let sum: f32 = w[0] + 2.0 * w[1..=r].iter().sum::<f32>();
+    for v in w.iter_mut() {
+        *v /= sum;
+    }
+    (r, w)
 }
 
 impl Sharpen {
     pub fn new(radius: f64, detail: f64, px_per_long: f64, native_long: f32) -> Sharpen {
         let native = if native_long.is_finite() && native_long > 16.0 { native_long } else { 6000.0 };
         let scale = (px_per_long as f32 / native).clamp(0.0, 4.0);
+        let scale = if scale.is_finite() { scale } else { 0.0 };
         let fin = |v: f64, d: f32| if v.is_finite() { v as f32 } else { d };
-        let sigma = SHARPEN_SIGMA * fin(radius, 1.0).clamp(0.5, 3.0) * if scale.is_finite() { scale } else { 0.0 };
-        let t = 0.04 + 0.5 * (fin(detail, 25.0) / 100.0).clamp(0.0, 1.0);
-        let mut w = [0.0; SHARPEN_TAPS + 1];
-        if !(sigma.is_finite() && sigma >= 0.25) {
-            return Sharpen { r: 0, w, t };
+        let t = SHARPEN_DETAIL_T0 + SHARPEN_DETAIL_T1 * (fin(detail, 25.0) / 100.0).clamp(0.0, 1.0);
+        let (r, w) = gauss_taps(SHARPEN_SIGMA * fin(radius, 1.0).clamp(0.5, 3.0) * scale);
+        if r == 0 {
+            return Sharpen { r: 0, w, t, gr: 0, gw: [0.0; SHARPEN_TAPS + 1], gn: 1.0 };
         }
-        let r = ((2.5 * sigma).ceil() as usize).clamp(1, SHARPEN_TAPS);
-        for (k, v) in w.iter_mut().enumerate().take(r + 1) {
-            *v = (-((k * k) as f32) / (2.0 * sigma * sigma)).exp();
-        }
-        let sum: f32 = w[0] + 2.0 * w[1..=r].iter().sum::<f32>();
-        for v in w.iter_mut() {
-            *v /= sum;
-        }
-        Sharpen { r: r as u32, w, t }
+        let (gr, gw) = gauss_taps(SHARPEN_MASK_SIGMA * scale);
+        // Σ_dy wg(dy) · Σ_dx wg(dx) dx² (the first factor is 1), per output px → per source px
+        let gn: f32 = (1..=gr).map(|k| 2.0 * gw[k] * (k * k) as f32).sum::<f32>() / scale.max(1e-6);
+        Sharpen { r: r as u32, w, t, gr: gr as u32, gw, gn: if gn > 1e-9 && gn.is_finite() { gn } else { 1.0 } }
     }
 
-    /// (blurred log luminance, 3×3 range) around `(x, y)` of the `w × h` plane `l`.
+    /// The Edge Masking weight of a pixel whose smoothed gradient is `grad` (`masking` 0..1).
     #[inline]
-    pub fn sample(&self, l: &[f32], w: usize, h: usize, x: usize, y: usize) -> (f32, f32) {
+    pub fn mask(masking: f32, grad: f32) -> f32 {
+        if masking <= 0.0 {
+            return 1.0;
+        }
+        let c = SHARPEN_MASK_C0 * (SHARPEN_MASK_K * masking.min(1.0)).exp();
+        smooth(SHARPEN_MASK_LO * c, SHARPEN_MASK_HI * c, grad)
+    }
+
+    /// (blurred log luminance, smoothed gradient magnitude in EV per source px — 0 unless
+    /// `grad`) around `(x, y)` of the `w × h` plane `l`.
+    #[inline]
+    pub fn sample(&self, l: &[f32], w: usize, h: usize, x: usize, y: usize, grad: bool) -> (f32, f32) {
         if w == 0 || h == 0 {
             return (0.0, 0.0);
         }
-        let r = self.r as i64;
-        let (mut acc, mut lo, mut hi) = (0.0f32, f32::INFINITY, f32::NEG_INFINITY);
+        let r = if grad { self.r.max(self.gr) } else { self.r } as i64;
+        let tap = |k: &[f32; SHARPEN_TAPS + 1], d: i64| k.get(d.unsigned_abs() as usize).copied().unwrap_or(0.0);
+        let (mut acc, mut gx, mut gy) = (0.0f32, 0.0f32, 0.0f32);
         for dy in -r..=r {
             let yy = (y as i64 + dy).clamp(0, h as i64 - 1) as usize;
-            let wy = self.w.get(dy.unsigned_abs() as usize).copied().unwrap_or(0.0);
+            let (wy, gwy) = (tap(&self.w, dy), tap(&self.gw, dy));
             for dx in -r..=r {
                 let xx = (x as i64 + dx).clamp(0, w as i64 - 1) as usize;
                 let v = l.get(yy * w + xx).copied().unwrap_or(0.0);
-                acc += wy * self.w.get(dx.unsigned_abs() as usize).copied().unwrap_or(0.0) * v;
-                if dx.abs() <= 1 && dy.abs() <= 1 {
-                    lo = lo.min(v);
-                    hi = hi.max(v);
+                acc += wy * tap(&self.w, dx) * v;
+                if grad {
+                    let g = gwy * tap(&self.gw, dx) * v;
+                    gx += g * dx as f32;
+                    gy += g * dy as f32;
                 }
             }
         }
-        (acc, hi - lo)
+        (acc, gx.hypot(gy) / self.gn)
     }
 }
 
@@ -287,28 +334,69 @@ pub fn halo_weight(d: f32) -> f32 {
     if q.is_finite() { (-(q * q)).exp() } else { 0.0 }
 }
 
-/// Grain amplitude per unit of Amount/100, on encoded values (fitted against Lightroom's renders).
-pub const GRAIN_GAIN: f32 = 0.36;
-/// Grain cell size in source pixels: `GRAIN_CELL0 + GRAIN_CELL_PER_SIZE · Size`.
-pub const GRAIN_CELL0: f32 = 0.5;
-pub const GRAIN_CELL_PER_SIZE: f32 = 0.03;
-/// Roughness mixes in a coarser octave (`GRAIN_COARSE`× the cell) at `GRAIN_COARSE_WEIGHT` and
-/// takes `GRAIN_FINE_DROP` of the fine one, each times the roughness.
-pub const GRAIN_COARSE: f32 = 1.6;
-pub const GRAIN_COARSE_WEIGHT: f32 = 0.35;
-pub const GRAIN_FINE_DROP: f32 = 0.25;
+/// Grain measured with Camera Raw (R06, `docs/lr-match.md` → Detail and Effects; `oracle/make_detail.py
+/// grain6000` + `grain_ana.py`): by Size (knots [`GRAIN_SIZES`]), the grain's cell in pixels of a
+/// [`GRAIN_REF_LONG`] px long edge at Roughness 50 (matched to Camera Raw's lag-1 autocorrelation)…
+pub const GRAIN_SIZES: [f32; 5] = [0.0, 11.0, 25.0, 50.0, 100.0];
+pub const GRAIN_CELL_REF: [f32; 5] = [0.45, 0.72, 1.37, 2.33, 4.05];
+/// … and its strength: L* standard deviation at mid grey for Amount 50 (finer grain is stronger).
+pub const GRAIN_SD_REF: [f32; 5] = [9.31, 6.25, 3.72, 2.77, 2.38];
+pub const GRAIN_REF_LONG: f32 = 6000.0;
+/// Camera Raw's grain follows the long edge, less than in proportion: cells × (long / 6000)^this.
+pub const GRAIN_RES_EXP: f32 = 0.7;
+/// L* per unit of encoded value at mid grey, and the standard deviation of [`grain_noise`].
+const GRAIN_L_PER_E: f32 = 100.0;
+const GRAIN_NOISE_SD: f32 = 0.386;
+/// The noise lattice is turned by atan(1/2) (cos, sin) so it never lines up with the pixels.
+pub const GRAIN_ROT: [f32; 2] = [0.894_427_2, 0.447_213_6];
+/// Grain strength by encoded luminance (Camera Raw's, measured in L* on five grey levels): full
+/// from `GRAIN_KNEE` up, `(lum / knee)^0.75` below, falling by `GRAIN_HI` per unit above `GRAIN_HI0`.
+pub const GRAIN_KNEE: f32 = 0.21;
+pub const GRAIN_HI0: f32 = 0.74;
+pub const GRAIN_HI: f32 = 0.39;
 
-/// Grain as Lightroom renders it: film grain whose cells are a size in the source's own pixels
-/// (Size 0 → 0.6 px, 100 → 4.6 px), so a smaller render averages several cells into each pixel and
-/// shows finer, weaker grain (amplitude × cell size in output pixels, below one pixel) — fine,
-/// luminance-only, on the finished image. Returns (amplitude, cells per long edge, roughness, seed).
-pub fn grain_params(amount: f64, size: f64, roughness: f64, seed: u32, px_per_long: f64, native_long: f32) -> (f32, f32, f32, u32) {
-    let native = if native_long.is_finite() && native_long > 16.0 { native_long } else { 6000.0 };
+/// Piecewise-linear `ys` at `x` over increasing `xs` (held at the ends).
+fn knots(x: f32, xs: &[f32; 5], ys: &[f32; 5]) -> f32 {
+    if !x.is_finite() || x <= xs[0] {
+        return ys[0];
+    }
+    for i in 1..5 {
+        if x <= xs[i] {
+            let t = (x - xs[i - 1]) / (xs[i] - xs[i - 1]).max(1e-6);
+            return ys[i - 1] + (ys[i] - ys[i - 1]) * t;
+        }
+    }
+    ys[4]
+}
+
+/// Grain's strength by the encoded luminance it lands on ([`GRAIN_KNEE`]).
+#[inline]
+pub fn grain_tone(lum: f32) -> f32 {
+    if !lum.is_finite() {
+        return 0.0;
+    }
+    let lo = (lum / GRAIN_KNEE).clamp(0.0, 1.0).powf(0.75);
+    lo * (1.0 - GRAIN_HI * (lum - GRAIN_HI0).clamp(0.0, 1.0))
+}
+
+/// Grain as Camera Raw renders it (measured, R06): luminance-only noise on the finished image,
+/// cells sized in the frame (by Size and Roughness, scaled with the long edge as Camera Raw does),
+/// strength by Size, Roughness (stronger at both ends) and Amount (linear) and by tone
+/// ([`grain_tone`]). A render smaller than the source averages several cells into each pixel:
+/// finer, weaker grain (amplitude × cell size in output pixels, below one pixel), as the
+/// downscaled full-size render. Returns (amplitude, cells per long edge, seed).
+pub fn grain_params(amount: f64, size: f64, roughness: f64, seed: u32, px_per_long: f64, native_long: f32) -> (f32, f32, u32) {
+    let native = if native_long.is_finite() && native_long > 16.0 { native_long } else { GRAIN_REF_LONG };
     let fin = |v: f64, d: f32| if v.is_finite() { v as f32 } else { d };
-    let cell_native = GRAIN_CELL0 + GRAIN_CELL_PER_SIZE * fin(size, 25.0).clamp(0.0, 100.0);
-    let cell_out = cell_native * (fin(px_per_long, native) / native);
-    let amp = (fin(amount, 0.0) / 100.0).clamp(0.0, 1.0) * GRAIN_GAIN * if cell_out.is_finite() { cell_out.clamp(0.05, 1.0) } else { 1.0 };
-    (amp, native / cell_native, (fin(roughness, 50.0) / 100.0).clamp(0.0, 1.0), seed)
+    let d = (fin(roughness, 50.0) / 100.0).clamp(0.0, 1.0) - 0.5;
+    let res = (native / GRAIN_REF_LONG).clamp(0.05, 8.0).powf(GRAIN_RES_EXP);
+    let c0 = knots(fin(size, 25.0).clamp(0.0, 100.0), &GRAIN_SIZES, &GRAIN_CELL_REF) * res;
+    let sd = knots(c0, &GRAIN_CELL_REF, &GRAIN_SD_REF) * (1.0 - 0.19 * d + 1.66 * d * d);
+    let cell = (c0 * (1.0 + 0.58 * d + 0.4 * d * d)).max(0.05);
+    let cell_out = cell * (fin(px_per_long, native) / native);
+    let att = if cell_out.is_finite() { cell_out.clamp(0.05, 1.0) / cell.clamp(0.05, 1.0) } else { 1.0 };
+    let amp = (fin(amount, 0.0) / 50.0).clamp(0.0, 2.0) * sd / (GRAIN_L_PER_E * GRAIN_NOISE_SD) * att;
+    (amp, native / cell, seed)
 }
 
 /// Hash constants of [`grain_noise`] (shared with the GPU kernel).
@@ -433,8 +521,8 @@ pub struct FinishParams {
     pub air_pre: f32,
     pub gain: f32,
     pub ev: f32,
-    /// Grain ([`grain_params`]): amplitude, cells per long edge, roughness, seed.
-    pub grain: Option<(f32, f32, f32, u32)>,
+    /// Grain ([`grain_params`]): amplitude, cells per long edge, seed.
+    pub grain: Option<(f32, f32, u32)>,
     /// Output px → normalized oriented coordinates.
     pub out_to_norm: lightcraft_geom::Affine,
     pub ow: f64,
@@ -522,7 +610,7 @@ impl FinishParams {
             clar,
             tex,
             dehaze,
-            sharpen: (s.detail.sharpen_amount / 150.0) as f32 * SHARPEN_GAIN,
+            sharpen: ((s.detail.sharpen_amount / 150.0).clamp(0.0, 2.0) as f32).powf(SHARPEN_AMOUNT_EXP) * SHARPEN_AMOUNT_GAIN,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
             sharp: Sharpen::new(s.detail.sharpen_radius, s.detail.sharpen_detail, px_per_long, info.native_long),
             air: air_pre * gain,
@@ -759,11 +847,10 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             }
             let sp = l_sharp * 0.6 * SHARPEN_GAIN + sharpen;
             if sp != 0.0 && fp.sharp.r > 0 {
-                let (blur, range) = fp.sharp.sample(&p.log_l.data, w, h, x, y);
+                let (blur, grad) = fp.sharp.sample(&p.log_l.data, w, h, x, y, sharpen_mask > 0.0);
                 let det = l_pre - blur;
                 let det = det / (1.0 + det.abs() / fp.sharp.t);
-                let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.12, sharpen_mask * 0.12 + 0.08, range) } else { 1.0 };
-                delta += sp * det * m;
+                delta += sp * det * Sharpen::mask(sharpen_mask, grad);
             }
             // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
             if l_noise != 0.0
@@ -858,15 +945,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     let lin = mul3(&fp.from_style, e.map(lightcraft_color::transfer::srgb_to_linear));
                     e = mul3(&fp.to_style, l.apply_linear(lin, *k, m)).map(enc_s);
                 }
-                if let Some((amt, cell, rough, seed)) = *grain {
+                if let Some((amt, cell, seed)) = *grain {
                     let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                    let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
-                    let sc = cell;
-                    let mut g = grain_noise(gx * sc, gy * sc, seed);
-                    g = g * (1.0 - rough * GRAIN_FINE_DROP)
-                        + grain_noise(gx * sc / GRAIN_COARSE, gy * sc / GRAIN_COARSE, seed ^ 0x55) * rough * GRAIN_COARSE_WEIGHT;
+                    let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32 * cell, (n.y * fp.oh) as f32 / long as f32 * cell);
+                    let [cr, sr] = GRAIN_ROT;
+                    let g = grain_noise(cr * gx - sr * gy, sr * gx + cr * gy, seed);
                     let lum = STYLE_LUMA[0] * e[0] + STYLE_LUMA[1] * e[1] + STYLE_LUMA[2] * e[2];
-                    let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
+                    let k = amt * g * grain_tone(lum);
                     e = e.map(|v| v + k);
                 }
                 d = mul3(&fp.from_style, e.map(|v| lightcraft_color::transfer::srgb_to_linear(v.clamp(0.0, 1.0))));
@@ -1085,31 +1170,51 @@ mod tests {
         assert!(Sharpen::new(1.0, 100.0, 6000.0, 6000.0).t > full.t, "Detail lets bigger differences through");
         // a flat plane has nothing to sharpen; a step reads as a step
         let flat = vec![0.5f32; 64];
-        let (b, range) = full.sample(&flat, 8, 8, 3, 3);
-        assert!((b - 0.5).abs() < 1e-6 && range == 0.0);
+        let (b, grad) = full.sample(&flat, 8, 8, 3, 3, true);
+        assert!((b - 0.5).abs() < 1e-6 && grad.abs() < 1e-6);
         let step: Vec<f32> = (0..64).map(|i| if i % 8 < 4 { 0.0 } else { 1.0 }).collect();
-        let (b, range) = full.sample(&step, 8, 8, 3, 3);
-        assert!(b > 0.0 && b < 0.5 && range == 1.0, "{b} {range}");
+        let (b, grad) = full.sample(&step, 8, 8, 3, 3, true);
+        assert!(b > 0.0 && b < 0.5 && grad > 0.2, "{b} {grad}");
+        // a ramp of 0.1 EV per px reads as 0.1 EV per px
+        let ramp: Vec<f32> = (0..256).map(|i| (i % 16) as f32 * 0.1).collect();
+        assert!((full.sample(&ramp, 16, 16, 8, 8, true).1 - 0.1).abs() < 1e-4);
+        // a half-size preview reads the same gradient per source pixel
+        let half = Sharpen::new(1.0, 25.0, 3000.0, 6000.0);
+        let ramp2: Vec<f32> = (0..256).map(|i| (i % 16) as f32 * 0.2).collect();
+        assert!((half.sample(&ramp2, 16, 16, 8, 8, true).1 - 0.1).abs() < 1e-3, "{}", half.sample(&ramp2, 16, 16, 8, 8, true).1);
+        // Edge Masking keeps edges, drops fine texture; 0 is no mask
+        assert_eq!(Sharpen::mask(0.0, 0.0), 1.0);
+        assert!(Sharpen::mask(0.94, 1.0) > 0.99 && Sharpen::mask(0.94, 0.0) < 0.05);
+        assert!(Sharpen::mask(0.3, 0.1) > 0.99 && Sharpen::mask(f32::NAN, 0.1).is_finite());
         // hostile values: no panic, nothing applied
         for (r, ppl, n) in [(f64::NAN, 6000.0, 6000.0), (1.0, f64::INFINITY, 6000.0), (1.0, 6000.0, f32::NAN), (1.0, -5.0, 0.0)] {
             let k = Sharpen::new(r, f64::NAN, ppl, n);
             assert!(k.r as usize <= SHARPEN_TAPS && k.w.iter().all(|v| v.is_finite()) && k.t.is_finite());
         }
-        assert_eq!(full.sample(&[], 0, 0, 0, 0).0, 0.0);
+        assert_eq!(full.sample(&[], 0, 0, 0, 0, true).0, 0.0);
     }
 
     #[test]
     fn grain_is_finer_and_weaker_in_smaller_renders() {
-        let (big, cells, _, _) = grain_params(31.0, 11.0, 43.0, 7, 6000.0, 6000.0);
-        let (small, cells2, _, _) = grain_params(31.0, 11.0, 43.0, 7, 1000.0, 6000.0);
+        let (big, cells, _) = grain_params(31.0, 11.0, 43.0, 7, 6000.0, 6000.0);
+        let (small, cells2, _) = grain_params(31.0, 11.0, 43.0, 7, 1000.0, 6000.0);
         assert_eq!(cells, cells2, "cells sit in the image, not on the output grid");
         assert!(small < big * 0.5 && small > 0.0, "{small} vs {big}");
-        let (coarse, coarse_cells, _, _) = grain_params(31.0, 80.0, 43.0, 7, 6000.0, 6000.0);
-        assert!(coarse_cells < cells && coarse >= big);
+        // coarser grain has fewer, weaker cells per pixel (Camera Raw's, measured)
+        let (coarse, coarse_cells, _) = grain_params(31.0, 80.0, 43.0, 7, 6000.0, 6000.0);
+        assert!(coarse_cells < cells && coarse < big);
+        // Bryan's 31 / 11 / 43 on a 6000 px file: L* sd 3.9 at mid grey (Camera Raw 3.96)
+        let sd = big * GRAIN_NOISE_SD * GRAIN_L_PER_E;
+        assert!((sd - 3.96).abs() < 0.25, "{sd}");
+        // the cells follow the frame: a 3000 px file has 1.6x fewer cells per long edge, not 2x
+        let (_, half, _) = grain_params(31.0, 11.0, 43.0, 7, 3000.0, 3000.0);
+        assert!((cells / half - 2f32.powf(1.0 - GRAIN_RES_EXP)).abs() < 0.01, "{cells} / {half}");
+        assert!(grain_tone(0.44) == 1.0 && grain_tone(0.05) < 0.5 && grain_tone(0.95) < 1.0 && grain_tone(-1.0) == 0.0);
         for v in [f64::NAN, f64::INFINITY, -1e9] {
-            let (a, c, r, _) = grain_params(v, v, v, 1, v, f32::NAN);
-            assert!(a.is_finite() && c.is_finite() && r.is_finite());
+            let (a, c, _) = grain_params(v, v, v, 1, v, f32::NAN);
+            assert!(a.is_finite() && c.is_finite());
         }
+        assert_eq!(grain_tone(f32::NAN), 0.0);
     }
 
     #[test]

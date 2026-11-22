@@ -704,3 +704,181 @@ the white balance at strength 1 for every camera: **4.01 / 10.9 / 25 → 3.81 / 
 PV6 cell (3 photos) gets 0.17 worse (tolerance 0.15), and one default R6 photo crosses the pass
 line (BHM_0433 1.993 → 2.010; default photos move by a few hundredths, most of them down, since
 the map is now read after the resize instead of per sensor pixel). Switching it on is one line.
+
+## Round 9 (2026-11-21): Looks on the GPU, Detail and Effects measured with Camera Raw
+
+### Look profiles on the GPU (R03)
+
+Creative profiles whose look is an RGB table (`lut:` profiles: Bryan's Nomad "Summer Fields" on
+6,581 photos and "Nautica" on 876, 44 % of his library) used to force the whole render onto the
+CPU. The finish kernel now has the table (`aux` at `LUT_OFF`, size³ RGB, red fastest) and does
+what `Lut3d::apply_linear` does — into the table's primaries, its encoding (linear / sRGB /
+gamma), trilinear lookup, blended by the amount, keeping the offset of colours outside the
+table's range unless the table clips — after the curves in the style block; `.cube` profiles act
+on the encoded output as on the CPU. `gpu/tests/equivalence.rs::lut_profiles_match`: three table
+spaces / encodings / clip modes, with curves and grain, and a `.cube`: mean 0.0001 LSB, max 1.
+
+Summer Fields on an M262 DNG (2.5 MP preview of the 24 MP file, Apple M3 Pro,
+`LOOK=… render_bench`, min of 7, wall-clock; before = the CPU path these photos took):
+
+| scenario | before (CPU) | after (GPU) | budget |
+|---|---|---|---|
+| loupe 1920×1280, exposure drag (warm) | 103.7 ms | 2.5 ms | 60 ms |
+| draft 1152×768, Highlights drag | 42.1 ms | 2.2 ms | 16 ms |
+| draft, Clarity drag | 37.0 ms | 2.1 ms | 16 ms |
+| draft, NR drag | 97.7 ms | 3.1 ms | 16 ms |
+| loupe 1920×1280 cold (new photo) | 435.8 ms | 28.0 ms | — |
+
+GPU vs CPU on that photo: max 1 LSB, mean 0.0002 LSB. Exports keep the CPU path (16-bit /
+float); the acceptance gate (CPU) is unchanged by construction.
+
+### The Camera Raw detail oracle (R06, R07, R24)
+
+`oracle/make_detail.py SET grain|grain6000|sharp|nr` writes synthetic LinearRaw DNGs (R6 colour):
+grey flats at five levels (1,024, 3,072 and 6,000 px wide), an edge / line / grating / texture
+chart, and noisy flats, each with one Detail or Effects setting in its XMP; `ps.sh` renders them
+with Camera Raw, `oracle_render` with LightCraft (full size), and `grain_ana.py` /
+`sharp_ana.py` / `nr_ana.py` compare grain strength / correlation, sharpening overshoot / halo
+width / gains and the noise left. (The DNG SDK must be built in: without it LightCraft's tone
+on these files differs by up to 8 L*.)
+
+### Grain (R06)
+
+Camera Raw's grain, measured (L* standard deviation of the grain field, mid grey, 6,000 px):
+its cells are sized in the frame and follow the long edge less than in proportion (×
+(long / 6000)^0.7: at Size 25 lag-1 autocorrelation −0.12 / 0.18 / 0.49 at 1,024 / 3,072 / 6,000
+px); finer grain is *stronger* per pixel (Size 0 / 11 / 25 / 50 / 100: 9.3 / 6.4 / 3.7 / 2.8 /
+2.4 at Amount 50); Roughness 0 and 100 are both stronger than 50 (×1.51 / ×1.32) and finer /
+coarser; Amount is linear; and in L* the grain stays nearly flat from L* 20 to 95, fading only in
+the deep shadows (0.42× at L* 2). The fork's value noise had the opposite size trend (too strong
+when coarse, too weak when fine), a lattice aligned with the pixels (its statistics jumped at
+whole-pixel cells) and a `lum(1 − lum)` tone weight that left highlights at 0.37×. Upstream's
+crystal grain matches Lightroom at mid grey but fades towards black and white, unlike Camera
+Raw, and needs emulsion tiles drawn per setting on a thread pool, so it was not merged.
+
+Now (`finish::grain_params`, `grain_tone`, CPU + GPU): one octave of value noise on a lattice
+turned by atan ½, cells and strength by Size from the 6,000 px measurements (`GRAIN_CELL_REF`,
+`GRAIN_SD_REF`), Roughness as a cell factor `1 + 0.58d + 0.4d²` and a strength factor
+`1 − 0.19d + 1.66d²` (d = Roughness/100 − ½), strength by the cell's size when the long edge
+differs, and Camera Raw's tone weight. LightCraft / Camera Raw grain strength (per setting and
+band; mean |log ratio|; the 1,024 / 3,072 px sizes were not used to fit):
+
+| set | before | after |
+|---|---|---|
+| 6,000 px, 10 settings × 5 bands | 0.467 (median ratio 0.94, 0.37–2.6) | **0.046** (0.94–1.05) |
+| Bryan's 31 / 11 / 43 at 6,000 px, by band | 0.97 / 0.65 / 0.83 / 0.71 / 0.48 | 0.96 / 1.01 / 1.02 / 1.03 / 1.00 |
+| 1,024 + 3,072 px (held out) | 0.502 (lag-1 autocorrelation +0.33 too high) | **0.109** (+0.08) |
+
+Previews keep the downscaled full-size grain (fewer, weaker cells per pixel), so the acceptance
+gate (Lightroom's previews, ≤ 2,560 px) is unchanged: 4.00 ΔE, 25 pass, every cell within 0.01.
+
+### Sharpening at 1:1 (R07)
+
+Measured on the edge chart (6,000 px source scale: the chart is rendered at its own size):
+Camera Raw's capture sharpening was ~10× stronger than LightCraft's at 1:1 (Amount 40 / Radius 1 /
+Detail 25: step-edge overshoot 0.38 of the step vs 0.04; Bryan's 126 / 1.0 / 25 / Masking 94:
+0.19–0.27 vs 0.05–0.12). Round 2 had tuned it on Lightroom's ≤ 2,560 px previews, where a
+full-size halo is mostly averaged away. The structure was right (an unsharp mask of log
+luminance whose large differences Detail damps: overshoot ratio across 0.6 / 2 / 6 EV edges
+1 : 0.42 : 0.08 here, 1 : 0.35 : 0.05 in Camera Raw), so it was refitted on the chart
+(`oracle/sharpfit.py`: the operator emulated on Camera Raw's own tone, 12 settings fitted, 3
+held out; `GSIG=1.6`): gain `8.14 · (Amount/150)^0.82`, sigma 0.82 × Radius source px, Detail damping
+`0.006 + 0.405 · Detail/100` EV; and Edge Masking now weighs the log-luminance gradient smoothed
+by a 1.6 px Gaussian (`c = 0.0075 · e^(3.52 · Masking/100)`, fading in from −0.275c to 2.275c),
+like Camera Raw, which already masks a 3 px grating at Masking 30 — the old 3×3 range kept it.
+CPU and GPU (`finish::Sharpen`, the kernel's gradient loop); the mask's wider window only runs
+when Masking > 0.
+
+`sharp_ana.py` (edges, lines, gratings, textures; mean |log ratio| LightCraft / Camera Raw over
+15 settings): **1.755 → 0.417**. Bryan's 126 / 1.0 / 25 / 94: 0.6 EV edge 0.19 vs 0.28 (was
+0.12), 2 EV edge 0.27 vs 0.30 (was 0.05), 6 px grating gain 1.21 vs 1.15 (was 1.12), low-contrast
+texture 1.00–1.05 vs 1.10–1.13 (was 1.17–1.31). Left: Masking 100 keeps more than Camera Raw
+(0.6 EV edge 0.22 vs 0.09), Radius 3 kernels are truncated at 4 taps, and strong unmasked amounts
+stay ~20 % under. No Alt-drag mask / detail preview yet.
+
+At preview size the two rows barely move the ratios to Lightroom's previews (`lr_compare.py
+detail`, 28 photos ≥ 1,800 px, 1 = Lightroom; before → after R06 + R07): fine texture 0.29 →
+0.36, edge sharpness 0.31 → 0.33, halos 0.66 → 0.66, chroma noise 0.54 → 0.55, mid-scale mottle
+1.21 → 1.31 (grain on the M262 files: Lightroom's previews are its 1:1 render scaled down, ours
+renders at preview size).
+
+### ProRAW: the photo's profile picks the source (round 7 follow-up)
+
+Round 7 left the choice per photo open: a source is decoded once per file, so in Bryan's library
+the Lightroom-matched `iPhone 13 Pro` camera profile (transferred from the Leica) rendered every
+ProRAW and the file's own `ProfileGainTableMap` never applied. Lightroom renders a ProRAW on
+"Embedded" / "Apple ProRAW" with the file's profile and its map, and on Adobe Standard without
+them (round 7's measurements). Now the photo's profile decides how its source is decoded: a DNG
+developed with `lc.color` (what those profiles migrate to) loads with the file's own colour model
+and map (`media::own_profile_source` → `SourceRef::File { own_profile }` → `files::load_raw`;
+only files that carry a map are affected), every other profile keeps the matched one; a cached
+source decoded the other way is not reused. On the 23 ProRAW photos with Lightroom renders,
+Bryan's setup (mean ΔE2000 / p95):
+
+| | embedded (8) | Adobe Standard (15) | all (23) |
+|---|---|---|---|
+| before (matched profile for all) | 9.87 / 17.1 | 6.43 / 17.4 | 7.63 / 17.3 |
+| **now** | **3.00 / 6.5** | 6.64 / 17.8 | **5.37 / 13.8** |
+
+(The Adobe Standard photos decode exactly as before; their +0.2, on the Summer Fields photos
+only, comes from other render changes since round 7, not isolated here.) Left: those 15 still need
+Lightroom's per-lens `Apple iPhone14,2 back camera` Adobe Standard DCP (not matched by Exif model).
+
+### Lens-profile chromatic aberration and Remove CA (R13): measured, nothing to change
+
+`oracle/make_ca.py` + `ca_ana.py`: two of Bryan's R6 photos whose Lightroom lens profile carries
+`ChromaticRedGreenModel` / `ChromaticBlueGreenModel` (Canon EF 24 mm f/1.4L II, EF 50 mm f/1.2L;
+the 5D Mark II profiles Lightroom picks for them), rendered by Camera Raw at full size with profile
+corrections off / on × Remove Chromatic Aberration off / on; red and blue registration against
+green measured per 96 px tile and fitted radially (the measurement finds a synthetic 0.05 %
+magnification, 1.48 px at r = 0.9, as 1.32 px).
+
+- Uncorrected, both photos are already registered (|shift| ≤ 0.02 px at r = 0.9), although the
+  EF 24 mm profile's model predicts +0.45 px red and +1.24 px blue there.
+- **Enable Profile Corrections leaves the colour planes alone** (identical to profile off, both
+  photos): Camera Raw does not apply the profile's chromatic model on its own.
+- Remove CA is image-based with or without the profile: it moves red by −0.10 to −0.32 px and
+  blue by ≤ 0.3 px; LightCraft's estimator (`optics::estimate_lateral_ca`) moves them by
+  ≤ 0.06 px on the same files.
+
+So applying the profile's model would have added the 1.2 px the model predicts; LightCraft keeps
+ignoring it, and "Remove CA" stays its own estimator (both within 0.3 px of Camera Raw here).
+Not settled: lenses with real lateral CA (none of Bryan's profiled lenses showed any).
+
+### Fringe Color Selector (R25)
+
+`develop.defringePick {x, y}` (the eyedropper next to Defringe in Lens Corrections ▸ Manual): the
+most saturated pixel within 3 px of the click on the preview-level source, its OkLab hue as a
+position on the Purple (240–360°) or Green (90–210°) Hue slider, and a 24-wide hue range centred
+on it; Amount becomes 5 when it was 0; a neutral or other hue is refused with a message. The
+defringe itself (`optics::defringe`, LightCraft's own edge-gated desaturation) was not measured
+against Camera Raw: Bryan uses Purple Amount on 473 photos, at one preset value.
+
+### Noise reduction at 1:1 (R24)
+
+Synthetic flats are no use here: they carry no noise profile and Camera Raw's luminance NR barely
+acts on them. `oracle/make_nr_real.py` + `nr_real_ana.py`: two of Bryan's ISO 6400 R6 raws
+(Iceland, `BHM_6642`, `BHM_9406`) at full size with no NR, Color 25 / 50 and Luminance 15 / 30 /
+60 (+ Color 25); the high-pass noise (pixel − 3×3 mean) in L* and in a*b* over the flattest
+third of 32 px tiles. With NR off LightCraft starts noisier (L* 1.59 / 2.62 vs 1.29 / 2.11;
+chroma 3× — AHD vs Adobe's demosaic). The fork's NR was weak at 1:1: Luminance blended its
+filter by √Luminance (55 % at 30) and Color mixed 75 % of the blurred chromaticity at 25. Now
+(`local::nr_params`, CPU + GPU through the same numbers): Luminance blends `min(5 × L/100, 1)`,
+radius `1 + 3.5 L/100`, edge threshold ×2.4; Color mixes `min(4 × C/100, 1) × (1 − 0.05 ×
+Detail/100)` with a `1.5 + 14 C/100` px blur. Renders below 40 % of the source keep the
+preview-fitted round-2 numbers and blend to these by full size (the first try, at every scale,
+cost the acceptance gate 2 passing photos: 4.00 → 4.02 ΔE). Noise left at 1:1, LightCraft /
+Camera Raw (L* · chroma):
+
+| | before | after |
+|---|---|---|
+| Color 25, BHM_6642 | 1.57 / 1.35 · 1.24 / 0.54 | 1.57 / 1.34 · 0.59 / 0.54 |
+| Color 25, BHM_9406 | 2.57 / 2.05 · 1.78 / 0.28 | 2.53 / 2.05 · 0.77 / 0.28 |
+| Luminance 30, BHM_6642 | 1.17 / 0.63 · 1.14 / 0.27 | 0.61 / 0.63 · 0.21 / 0.27 |
+| Luminance 30, BHM_9406 | 2.19 / 0.97 · 1.75 / 0.15 | 1.42 / 0.97 · 0.46 / 0.15 |
+| mean \|log ratio\| (10 settings × 2 photos) | 1.099 | **0.399** |
+
+Left: the darker photo keeps ~1.5× Camera Raw's luminance noise and ~3× its chroma noise (our
+demosaic starts 3× noisier in colour); Color 50 and 25 leave the same fine chroma in both
+renderers (the metric sees only the finest scale). Upstream's process V6 "joint" colour NR was
+not merged (its own process version, a larger change than these constants).

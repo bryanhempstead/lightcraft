@@ -165,21 +165,37 @@ pub struct NrColor {
 
 /// Colour noise reduction: how fast the mix towards the blurred chromaticity rises with Color.
 pub const NR_COLOR_MIX: f32 = 4.0;
+/// …and how much of the fine chromaticity Color Detail 100 keeps.
+pub const NR_COLOR_KEEP: f32 = 0.05;
+/// …and the blur's growth (px) per unit of Color/100.
+pub const NR_COLOR_SIGMA: f32 = 14.0;
+/// Luminance noise reduction: radius growth, edge threshold (EV²) and blend per unit of
+/// Luminance/100 (Camera Raw on Bryan's ISO 6400 R6 raws, `docs/lr-match.md` → Round 8).
+pub const NR_LUM_SIGMA: f32 = 3.5;
+pub const NR_LUM_EPS: f32 = 0.6;
+pub const NR_LUM_K: f32 = 5.0;
 
 /// Noise-reduction parameters at an output long edge of `out_long` px (see [`denoise`]).
 pub fn nr_params(s: &DevelopSettings, src_long: usize, out_long: usize) -> (Option<NrLum>, Option<NrColor>) {
     let lum = (s.detail.nr_luminance / 100.0) as f32;
     let col = (s.detail.nr_color / 100.0) as f32;
     let scale = (out_long as f32 / src_long.max(1) as f32).clamp(0.05, 1.0);
+    // Camera Raw's strength (measured at 1:1) towards full size; a preview, whose noise the
+    // downscale has already averaged, keeps the gentler round-2 numbers fitted on Lightroom's
+    // previews (the acceptance gate)
+    let full = ((scale - 0.4) / 0.6).clamp(0.0, 1.0);
+    let mix = |preview: f32, one: f32| preview + (one - preview) * full;
     let l = (lum > 0.0).then(|| {
         let detail = (s.detail.nr_detail / 100.0) as f32;
-        NrLum { sigma: (1.0 + 2.5 * lum) * scale.max(0.4), eps: 0.002 + lum * lum * 0.25 * (1.0 - 0.7 * detail), k: lum.sqrt() }
+        NrLum {
+            sigma: (1.0 + mix(2.5, NR_LUM_SIGMA) * lum) * scale.max(0.4),
+            eps: 0.002 + lum * lum * mix(0.25, NR_LUM_EPS) * (1.0 - 0.7 * detail),
+            k: mix(lum.sqrt(), (NR_LUM_K * lum).min(1.0)),
+        }
     });
     let c = (col > 0.0).then(|| {
-        let sigma = (1.5 + 6.0 * col) * scale.max(0.35) * (1.0 + (s.detail.nr_color_smoothness / 100.0) as f32);
-        let keep = (s.detail.nr_color_detail / 100.0) as f32 * 0.5;
-        // Lightroom's Color 25 (its raw default) leaves about as little chroma noise as a full
-        // mix here (measured against its renders, docs/lr-match.md)
+        let sigma = (1.5 + mix(6.0, NR_COLOR_SIGMA) * col) * scale.max(0.35) * (1.0 + (s.detail.nr_color_smoothness / 100.0) as f32);
+        let keep = (s.detail.nr_color_detail / 100.0) as f32 * mix(0.5, NR_COLOR_KEEP);
         NrColor { sigma, t: (NR_COLOR_MIX * col).min(1.0) * (1.0 - keep) }
     });
     (l, c)
@@ -391,6 +407,31 @@ pub fn airlight_of(mut v: Vec<f32>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R24: noise reduction as strong as Camera Raw's at 1:1 (Bryan's ISO 6400 R6 raws): Color 25
+    /// mixes in nearly all of the blurred chromaticity, Luminance 30 applies its filter in full,
+    /// a smaller render scales the radii down, and hostile settings stay finite.
+    #[test]
+    fn noise_reduction_strength_matches_camera_raw() {
+        let mut s = DevelopSettings::default();
+        s.detail.nr_luminance = 30.0;
+        s.detail.nr_color = 25.0;
+        let (l, c) = nr_params(&s, 6000, 6000);
+        let (l, c) = (l.expect("luminance NR"), c.expect("colour NR"));
+        assert_eq!(l.k, 1.0);
+        assert!(c.t > 0.95 && c.sigma > 4.0, "{c:?}");
+        let (l2, c2) = nr_params(&s, 6000, 1500);
+        assert!(l2.expect("luminance NR").sigma < l.sigma);
+        // a preview keeps the gentler preview-fitted mix
+        assert!(c2.expect("colour NR").t < c.t);
+        s.detail.nr_luminance = 15.0;
+        assert!(nr_params(&s, 6000, 6000).0.expect("luminance NR").k < 1.0);
+        s.detail.nr_luminance = f64::NAN;
+        s.detail.nr_color = 1e9;
+        let (l, c) = nr_params(&s, 0, 0);
+        assert!(l.is_none_or(|l| l.sigma.is_finite() && l.eps.is_finite() && l.k.is_finite()));
+        assert!(c.is_some_and(|c| c.sigma.is_finite() && c.t.is_finite()));
+    }
 
     /// A camera whose neutral moves bluer with temperature: ln(r/g) falls and ln(b/g) rises with
     /// mireds; tint moves green.

@@ -6,6 +6,15 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (detail agent, 2026-11-21 night, branch worktree-agent-af436a1c05b9b1fde, not merged) **Detail / Effects / Looks rows
+  R03 R06 R07 R13 R15 R24 R25** measured with the Camera Raw oracle (`oracle/make_detail.py`, `grain_ana.py`,
+  `sharp_ana.py`, `sharpfit.py`, `make_ca.py`, `make_nr_real.py`; docs/lr-match.md → Round 9): Look LUT profiles on the
+  GPU (Summer Fields drag 104 → 2.5 ms), grain = Camera Raw's (|log| 0.47 → 0.05), sharpening/masking at 1:1
+  (1.76 → 0.42), ProRAW "Embedded" on its own profile + gain map (9.87 → 3.00 ΔE), NR strength (1.10 → 0.40), fringe
+  eyedropper; R13 measured: Camera Raw doesn't apply the profile CA model — no change. Gate green after every row
+  (4.00 ΔE, 25 pass). Left: R27 AI Denoise (upstream BM3D port), R28 sky mask, Alt-drag sharpening mask preview, the
+  15 Adobe-Standard ProRAW photos need Apple's per-lens DCP. Build note: worktrees need `LIGHTCRAFT_DNG_SDK` /
+  `LIGHTCRAFT_LIBRAW` pointing at the main checkout's `vendor/` or the oracle/gate numbers are off by up to 8 L*.
 - [ ] (lrsync agent, 2026-11-21 night, branch worktree-agent-a56ca074558d7129e) **Lightroom migration rows L01 / R14 /
   U15 / R18 / R26** — c456db97f R14 (Upright: PerspectiveUpright 3 = Level / 4 = Vertical / 2 = Full, stored
   `UprightTransform_<mode>` used instead of re-detection, Constrain Crop; `repairLightroomMigration upright`),

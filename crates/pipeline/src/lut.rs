@@ -1,5 +1,5 @@
 //! 3D LUT profiles, registered here by id (`lut:…`) and found by the finishing stage; LUT
-//! profiles render on the CPU.
+//! profiles render on the CPU and the GPU (`lightcraft-gpu`'s finish kernel, same lookup).
 //!
 //! - `.cube` files (the plain-text Cube LUT format: `LUT_3D_SIZE`, optional `DOMAIN_MIN` /
 //!   `DOMAIN_MAX`, then size³ "r g b" lines with red changing fastest) apply to the
@@ -232,7 +232,7 @@ pub fn unregister(id: &str) {
     registry().write().unwrap_or_else(|e| e.into_inner()).remove(id);
 }
 
-/// Profile ids that render with a LUT (and so on the CPU).
+/// Profile ids that render with a LUT.
 pub fn is_lut_profile(id: &str) -> bool {
     id.starts_with("lut:")
 }

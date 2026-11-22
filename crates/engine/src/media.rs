@@ -119,11 +119,13 @@ pub struct DecodedSource {
     /// A smart preview's stored camera tone curve: the one decoder fact its pixels need that the
     /// catalog's header facts lack (used when `info` is `None`).
     pub camera_tone: Option<lightcraft_pipeline::tone::CameraTone>,
+    /// Decoded for a photo on the file's own profile ([`own_profile_source`]).
+    pub own_profile: bool,
 }
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None }
+        DecodedSource { image, info, camera_tone: None, own_profile: false }
     }
 
     /// What to render these pixels against: the decoder's facts, else `header` (the catalog's)
@@ -147,6 +149,8 @@ pub enum SourceRef {
         /// The photo's smart preview, used when the original can't be read (offline drive). The
         /// UI thread never checks whether the original is there; the render worker finds out.
         fallback: Option<std::path::PathBuf>,
+        /// Decode on the file's own profile ([`own_profile_source`]).
+        own_profile: bool,
     },
     /// A smart preview standing in for a missing original.
     Smart {
@@ -163,9 +167,10 @@ impl SourceRef {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
             SourceRef::Demo { scene, max_edge } => Arc::new(scene.render_fit(*max_edge)),
-            SourceRef::File { path, max_edge, loader, fallback } => {
+            SourceRef::File { path, max_edge, loader, fallback, own_profile } => {
                 let r = match loader {
-                    Some(l) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
+                    Some(l) => crate::files::with_own_profile(*own_profile, || l(path, *max_edge))
+                        .map(|(image, info)| DecodedSource { own_profile: *own_profile, ..DecodedSource::new(Arc::new(image), Some(info)) }),
                     None => Err(format!("no decoder available for {path}")),
                 };
                 // An offline original renders from its smart preview (no decoder facts: header ones).
@@ -398,9 +403,18 @@ impl MediaCache {
     }
 
     pub fn source_ref(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        if let Some(a) = self.get_source(p.id, level) {
+        let own = own_profile_source(p);
+        if let Some(a) = self.get_source(p.id, level).filter(|a| a.own_profile == own || !matches!(p.source, Source::File { .. })) {
             return SourceRef::Loaded(Box::new(a));
         }
+        let mut r = self.source_ref_uncached(p, level);
+        if let SourceRef::File { own_profile, .. } = &mut r {
+            *own_profile = own;
+        }
+        r
+    }
+
+    fn source_ref_uncached(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
         // Procedural scenes have a nominal size: "full" is that size, not unbounded.
         let max_edge = level.max_edge().min(match (&p.source, level) {
             (Source::Demo { .. }, SourceLevel::Full) => p.width.max(p.height).max(1) as usize,
@@ -436,10 +450,12 @@ impl MediaCache {
                 }
                 match self.scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => SourceRef::Demo { scene: Box::new(s.clone()), max_edge },
-                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None },
+                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, own_profile: false },
                 }
             }
-            Source::File { path } => SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None },
+            Source::File { path } => {
+                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, own_profile: false }
+            }
         }
     }
 }
@@ -630,9 +646,8 @@ impl RenderJob {
 /// the CPU, reusing `stages` either way. Both produce the same image within 1–3 LSB (see
 /// `docs/gpu-pipeline.md`); `LIGHTCRAFT_GPU=0` or [`lightcraft_gpu::set_enabled`] forces the CPU.
 pub fn develop(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>, gpu: bool) -> Rendered {
-    // LUT profiles have no GPU stage: they render on the CPU
+    // LUT profiles (creative Look tables, `.cube`) render on the GPU too (R03)
     if gpu
-        && !lightcraft_pipeline::lut::is_lut_profile(&s.profile.id)
         && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
         && req.proof.is_none()
         && let Some(r) = lightcraft_gpu::render(src, info, s, req, stages)
@@ -709,6 +724,15 @@ impl QuickJob {
 }
 
 /// What identifies a photo's pixels for caching: its content hash, else its source.
+/// Whether a photo's source is decoded on the file's own profile (Bryan's fork): a DNG developed
+/// with LightCraft's standard look (`lc.color`, what Lightroom's "Embedded" profile migrates to)
+/// renders with its own colour model and `ProfileGainTableMap` (iPhone ProRAW) even when a
+/// Lightroom-matched profile for its camera is installed, as Lightroom renders it; other
+/// profiles keep the matched one (`files::load_raw`, `docs/lr-match.md` → ProRAW).
+pub fn own_profile_source(p: &Photo) -> bool {
+    p.develop.profile.id == "lc.color" && p.format.eq_ignore_ascii_case("dng")
+}
+
 pub fn content_key(p: &Photo) -> String {
     match (&p.content_hash, &p.source) {
         (Some(h), _) => h.clone(),
@@ -1078,6 +1102,41 @@ mod thumbnail_hash_tests {
         s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
         s
     }
+    /// ProRAW (Bryan's fork): a DNG on the file's own profile (`lc.color`, Lightroom's "Embedded")
+    /// is decoded that way, and a source cached for the other kind is not reused for it.
+    #[test]
+    fn own_profile_sources_are_decoded_and_cached_apart() {
+        let mut s = crate::Session::new();
+        let p = Photo::new(PhotoId(1), Source::File { path: "IMG_0001.DNG".into() }, "IMG_0001.DNG", "DNG", 4032, 3024, "2026-01-01");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        s.media.file_loader = Some(Arc::new(move |_, _| {
+            log.lock().unwrap().push(crate::files::own_profile_for_tests());
+            Ok((Rgb32f::new(8, 8), SourceInfo { raw: true, ..Default::default() }))
+        }));
+        let set_profile = |s: &mut crate::Session, id: &str| {
+            let mut d = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+            d.profile.id = id.into();
+            s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(d), label: "Profile".into(), edited: None }).unwrap();
+        };
+        set_profile(&mut s, "lc.color");
+        assert!(own_profile_source(s.catalog.photo(PhotoId(1)).unwrap()));
+        let r = s.thumb_job(PhotoId(1), 256).unwrap().run();
+        assert!(r.loaded.as_ref().is_some_and(|l| l.own_profile));
+        s.accept(&r);
+        // the cached own-profile source serves the same photo again…
+        assert!(matches!(s.thumb_job(PhotoId(1), 256).unwrap().source, SourceRef::Loaded(_)));
+        // …but not once it is on an Adobe profile: that one decodes afresh
+        set_profile(&mut s, "adobe:Adobe Standard");
+        assert!(matches!(s.thumb_job(PhotoId(1), 256).unwrap().source, SourceRef::File { own_profile: false, .. }));
+        assert_eq!(*seen.lock().unwrap(), vec![true]);
+        assert!(!crate::files::own_profile_for_tests(), "the flag is this call's only");
+        // JPEGs and other files never take the own-profile path
+        let jpg = Photo::new(PhotoId(2), Source::File { path: "a.jpg".into() }, "a.jpg", "JPEG", 10, 10, "2026-01-01");
+        assert!(!own_profile_source(&jpg));
+    }
+
     #[test]
     fn a_tight_crop_shown_large_decodes_more_than_a_preview() {
         let mut p = Photo::new(PhotoId(1), Source::File { path: "x.dng".into() }, "x.dng", "DNG", 6000, 4000, "2026-01-01");
@@ -1202,6 +1261,7 @@ mod tests {
                 Ok((image, info))
             })),
             fallback: None,
+            own_profile: false,
         };
         job.info = SourceInfo::default(); // Header facts cannot override decoder facts.
         job.settings = Arc::new(DevelopSettings::default());

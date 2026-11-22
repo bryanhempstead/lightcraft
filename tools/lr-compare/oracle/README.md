@@ -19,7 +19,12 @@ matrix; `hslproto.py` fits the HSL / Saturation / Vibrance tables (`hslfit.py`, 
 White balance: `make_wb.py` (synthetic Temp / Tint sweep), `make_rwb.py` + `rwbcmp.py` (real raws).
 Scripts that read Bryan's renders (`make_real.py`, `make_rwb.py`) hold the scratch path in `L`.
 
-Highlights / Shadows (R02, round 7): `make_rhs.py` (Bryan's split-A raws with one-slider sidecars + one
+Highlights / Shadows (R02, round 8): `make_rhs.py` (Bryan's split-A raws with one-slider sidecars + one
 neutral ramp per camera, plus synthetic layouts), `hsfit_rhs.py` (fits `tone::lr::adobe_hs_lut`'s
 constants in scene EV), `make_full.py` (acceptance photos with their own full settings and the Summer
 Fields look), `make_hsorder.py` + `hsorder.py` (H/S come before Exposure / Contrast / Whites / Blacks).
+
+Detail and Effects (round 9): `make_detail.py SET grain|grain6000|sharp|nr` (grey flats at three
+sizes, an edge / grating / texture chart, noisy flats), then `grain_ana.py` / `sharp_ana.py` /
+`nr_ana.py SET [LCDIR]`. Lateral CA on real raws: `make_ca.py SET sample.json` (profile × Remove
+CA sidecars, full size) and `ca_ana.py SET [LCDIR]`.
