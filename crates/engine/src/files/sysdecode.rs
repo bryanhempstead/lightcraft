@@ -279,6 +279,7 @@ pub fn probe(path: &str, bytes: &[u8], why: String) -> Result<ProbeInfo, String>
         embedded_lens: None,
         xmp: if raw { lightcraft_meta::embedded(bytes).xmp } else { None },
         preview_only: Some(why),
+        duration: None,
     })
 }
 

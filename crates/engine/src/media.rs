@@ -420,6 +420,11 @@ impl MediaCache {
             (Source::Demo { .. }, SourceLevel::Full) => p.width.max(p.height).max(1) as usize,
             _ => usize::MAX,
         });
+        // a video: its poster frame (LR-VID-COVER), whose time travels with the path
+        if let (MediaKind::Video, Source::File { path }) = (p.kind, &p.source) {
+            let path = crate::video::frame_source(path, p.video.and_then(|v| v.poster));
+            return SourceRef::File { path, max_edge, loader: self.file_loader.clone(), fallback: None, own_profile: false };
+        }
         // the original is offline: its smart preview, when there is one. Only cached answers are
         // used here (no file-system call on the UI thread in the app); an original not known to
         // be offline is tried first and its smart preview is the render worker's fallback.
@@ -734,10 +739,15 @@ pub fn own_profile_source(p: &Photo) -> bool {
 }
 
 pub fn content_key(p: &Photo) -> String {
-    match (&p.content_hash, &p.source) {
+    let key = match (&p.content_hash, &p.source) {
         (Some(h), _) => h.clone(),
         (None, Source::Demo { scene }) => format!("demo:{scene}"),
         (None, Source::File { path }) => format!("file:{path}:{}", p.file_size),
+    };
+    // a video's pixels are its poster frame: another poster is other content
+    match p.video.and_then(|v| v.poster).filter(|t| p.kind == MediaKind::Video && t.is_finite() && *t > 0.0) {
+        Some(t) => format!("{key}@{t:.3}"),
+        None => key,
     }
 }
 
@@ -797,6 +807,8 @@ impl crate::Session {
     ) -> Option<RenderJob> {
         let p = self.catalog.photo(id)?.clone();
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
+        // a video's poster shows what playback and export apply (Classic's video settings)
+        let settings = if p.kind == MediaKind::Video { Arc::new(crate::video::video_settings(&settings)) } else { settings };
         let level = SourceLevel::for_size(source_edge_needed(&p, &settings, max_w.max(max_h), apply_crop));
         let source = self.media.source_ref(&p, level);
         let request = RenderRequest { apply_crop, ..RenderRequest::fit(max_w, max_h) };
@@ -1087,6 +1099,8 @@ pub struct ProbeInfo {
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
+    /// A video's length in seconds.
+    pub duration: Option<f64>,
 }
 
 pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync>;

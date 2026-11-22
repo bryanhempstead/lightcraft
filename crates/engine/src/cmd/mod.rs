@@ -37,6 +37,8 @@ mod prefs;
 mod preset_files;
 pub mod previews;
 mod publish;
+mod video;
+pub use video::{seconds as video_seconds, timecode as video_timecode};
 mod query;
 pub mod recheck;
 pub mod shoot;
@@ -169,6 +171,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(tether::specs());
         v.extend(map::specs());
         v.extend(publish::specs());
+        v.extend(video::specs());
         v
     })
 }

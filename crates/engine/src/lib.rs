@@ -55,6 +55,7 @@ pub mod segment;
 pub mod sidecar;
 pub mod smart;
 pub mod trash;
+pub mod video;
 mod view;
 
 use std::sync::Arc;
@@ -1000,5 +1001,7 @@ mod tests_spots;
 mod tests_tether;
 #[cfg(test)]
 mod tests_validate_dng;
+#[cfg(test)]
+mod tests_video;
 #[cfg(test)]
 mod tests_xmp;

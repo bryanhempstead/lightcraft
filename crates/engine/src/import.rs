@@ -342,7 +342,7 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
 pub fn is_supported(path: &Path) -> bool {
     path.extension().is_some_and(|e| {
         let e = e.to_string_lossy().to_lowercase();
-        EXTENSIONS.contains(&e.as_str()) || crate::files::sysdecode::handles_extension(&e)
+        EXTENSIONS.contains(&e.as_str()) || crate::files::sysdecode::handles_extension(&e) || crate::video::is_video_ext(&e)
     })
 }
 
@@ -354,6 +354,7 @@ pub fn extensions() -> Vec<&'static str> {
         v.extend(crate::files::sysdecode::EXTENSIONS);
         v.extend(crate::files::sysdecode::RAW_EXTENSIONS);
     }
+    v.extend(crate::video::EXTENSIONS);
     v
 }
 
@@ -987,6 +988,7 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
                 p.as_shot_wb = info.as_shot_wb;
                 p.content_hash = info.content_hash;
                 p.embedded_lens = info.embedded_lens;
+                p.duration = info.duration;
                 p.set_preview_only(info.preview_only.clone());
                 apply_import_defaults(s, &mut p);
                 if let Some(sc) = &sidecar {

@@ -616,6 +616,8 @@ pub struct ExportOptions {
     /// Bits per channel: 8, 16 (PNG, TIFF), 32 (TIFF: float, linear) or 10 (AVIF); `None` = the
     /// format's default (TIFF 16, everything else 8). See [`ExportOptions::effective_depth`].
     pub bit_depth: Option<u8>,
+    /// LR-VID-EXPORT: how a selection's videos export (Include Video Files, format, quality).
+    pub video: crate::video::VideoExport,
 }
 
 /// Where Add to Stack puts an exported photo: above or below its original.
@@ -826,6 +828,7 @@ impl Default for ExportOptions {
             color_space: OutputSpace::Srgb,
             icc_profile: None,
             bit_depth: None,
+            video: crate::video::VideoExport::default(),
         }
     }
 }
@@ -871,6 +874,7 @@ pub const OPTION_PARAMS: &[&str] = &[
     "watermark",
     "colorSpace",
     "bitDepth",
+    "video",
 ];
 
 /// The keys of a `watermark` object ([`Watermark`], camelCase).
@@ -986,6 +990,13 @@ impl ExportOptions {
                 }
                 "startNumber" => {
                     int(k, v, 0, 999_999)?;
+                }
+                "video" => {
+                    let ok = v.as_object().is_some_and(|o| o.keys().all(|x| matches!(x.as_str(), "include" | "format" | "quality")))
+                        && serde_json::from_value::<crate::video::VideoExport>(v.clone()).is_ok();
+                    if !ok {
+                        return Err(bad(format!("`{k}` must be an object {{include: bool, format: h264|original, quality: max|high|medium|low}}")));
+                    }
                 }
                 "bitDepth" => {
                     if !matches!(whole(v), Some(8 | 10 | 16 | 32)) {
@@ -1159,6 +1170,7 @@ impl ExportOptions {
                 None => d.icc_profile.clone(),
             },
             bit_depth: u("bitDepth").filter(|b| matches!(b, 8 | 10 | 16 | 32)).map(|b| b as u8),
+            video: p.get("video").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or(d.video),
         }
     }
 
@@ -1764,6 +1776,13 @@ pub struct PreparedExport {
     guard: std::sync::Arc<crate::originals::OriginalGuard>,
 }
 
+struct VideoWork {
+    path: String,
+    range: (f64, Option<f64>),
+    opts: crate::video::VideoExport,
+    develop: std::sync::Arc<lightcraft_develop::DevelopSettings>,
+}
+
 struct RenderWork {
     job: crate::media::RenderJob,
     meta: Option<Metadata>,
@@ -1772,6 +1791,8 @@ struct RenderWork {
 
 enum Work {
     Render(Box<RenderWork>),
+    /// LR-VID-EXPORT: a video, trimmed and with its edits ([`crate::video::export`]).
+    Video(Box<VideoWork>),
     /// [`ExportFormat::Original`] (the file's bytes + an XMP sidecar) or [`ExportFormat::Dng`] (the
     /// raw data re-encoded as a lossless DNG with the edits in its XMP).
     File {
@@ -1799,6 +1820,9 @@ pub fn prepare_export(
 /// [`prepare_export`] for each of `ids` in order (`{seq}` = position, from 1).
 pub fn prepare_batch(session: &mut crate::Session, ids: &[lightcraft_catalog::PhotoId], o: &ExportOptions) -> Result<Vec<PreparedExport>, String> {
     let guard = std::sync::Arc::new(session.original_guard());
+    // Include Video Files off: a selection's videos are left out (Lightroom's Video section)
+    let is_video = |id: &lightcraft_catalog::PhotoId| session.catalog.photo(*id).is_some_and(|p| p.kind == lightcraft_catalog::MediaKind::Video);
+    let ids: Vec<lightcraft_catalog::PhotoId> = ids.iter().copied().filter(|id| o.video.include || !is_video(id)).collect();
     ids.iter().enumerate().map(|(i, id)| prepare_guarded(session, *id, o, i + 1, ids.len(), guard.clone())).collect()
 }
 
@@ -1816,7 +1840,27 @@ fn prepare_guarded(
         lightcraft_catalog::Source::File { path } => std::path::Path::new(path).parent().map(|d| d.to_string_lossy().to_string()),
         lightcraft_catalog::Source::Demo { .. } => None,
     };
-    let work = if o.format.is_rendered() {
+    let work = if p.kind == lightcraft_catalog::MediaKind::Video {
+        if !o.video.include {
+            return Err(format!("{}: videos are left out (turn on Include Video Files)", p.file_name));
+        }
+        let lightcraft_catalog::Source::File { path } = &p.source else { return Err(format!("{}: no video file", p.file_name)) };
+        let range = p.video.unwrap_or_default().range(p.duration);
+        let name = crate::video::export_name(&file_name, o.video.format);
+        let file_name = match o.video.format {
+            crate::video::VideoFormat::H264 => name,
+            // Original keeps the file's own extension
+            crate::video::VideoFormat::Original => {
+                let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_else(|| "mov".into());
+                format!(
+                    "{}.{ext}",
+                    std::path::Path::new(&file_name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "video".into())
+                )
+            }
+        };
+        let work = Work::Video(Box::new(VideoWork { path: path.clone(), range, opts: o.video, develop: p.develop.clone() }));
+        return Ok(PreparedExport { photo: id, file_name, work, guard, source_dir });
+    } else if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
         let meta = export_metadata_with(Some(&session.catalog), p, o);
         let mut opts = o.clone();
@@ -1853,9 +1897,37 @@ impl PreparedExport {
         }
     }
 
+    /// A video export (encoded by ffmpeg / AVFoundation rather than rendered).
+    pub fn is_video(&self) -> bool {
+        matches!(self.work, Work::Video(_))
+    }
+
     pub fn run(self) -> Result<Exported, String> {
         let file_name = self.file_name;
         match self.work {
+            Work::Video(v) => {
+                // encoded to a temporary file, then handed to the batch's writer like any export
+                let info = crate::video::probe(&v.path)?;
+                let tmp = std::env::temp_dir().join(format!(
+                    "lc-video-export-{}-{:x}-{}",
+                    std::process::id(),
+                    lightcraft_preview::hash_bytes(format!("{}{file_name}", v.path).as_bytes()).0,
+                    file_name.replace(['/', '\\'], "_")
+                ));
+                let r = crate::video::export(&v.path, &tmp, &info, v.range, v.opts, Some(&v.develop), &|_| true);
+                let bytes = r.and_then(|notice| {
+                    if let Some(n) = notice {
+                        log::warn!("{file_name}: {n}");
+                    }
+                    std::fs::read(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))
+                });
+                let _ = std::fs::remove_file(&tmp);
+                let (w, h) = match v.opts.format {
+                    crate::video::VideoFormat::H264 => crate::video::export_size(&info, v.opts.quality),
+                    crate::video::VideoFormat::Original => (info.width, info.height),
+                };
+                Ok(Exported { file_name, bytes: bytes?, width: w as usize, height: h as usize, sidecars: Vec::new() })
+            }
             Work::Render(w) => {
                 let RenderWork { job, meta, opts } = *w;
                 let r = job.run().rendered?;
