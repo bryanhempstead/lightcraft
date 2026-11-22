@@ -124,6 +124,36 @@ fn hdr_depth_without_hdr_on_falls_back_to_the_cpu() {
     assert!(lightcraft_gpu::render(&src, &SourceInfo::default(), &DevelopSettings::default(), &req, None).is_none());
 }
 
+/// The SDR rendition's highlight saturation (`crs:SDRBlend`) renders the same on both.
+#[test]
+fn sdr_blend_matches_the_cpu() {
+    if !gpu() {
+        return;
+    }
+    let src = Arc::new(Rgb32f::from_fn(240, 30, |x, y| {
+        let v = 0.004 * 1.03f32.powi(x as i32);
+        match y / 10 {
+            0 => [v, v * 0.45, v * 0.15],
+            1 => [v * 0.3, v * 0.5, v],
+            _ => [v * 0.4, v, v * 0.5],
+        }
+    }));
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(240, 30);
+    let plain = render(&src, &raw, &hdr_on(3.0), &req).image;
+    for v in [100.0, -100.0] {
+        let mut s = hdr_on(3.0);
+        s.hdr.sdr_blend = v;
+        let cpu = render(&src, &raw, &s, &req).image;
+        let gpu = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu render").image;
+        let max = cpu.data.iter().zip(&gpu.data).flat_map(|(a, b)| (0..3).map(move |c| a[c].abs_diff(b[c]))).max().unwrap_or(0);
+        assert!(max <= 3, "SDRBlend {v}: max {max} LSB");
+        let nd = |a: &lightcraft_raster::Rgba8| a.data.iter().zip(&plain.data).filter(|(p, q)| p != q).count();
+        eprintln!("SDRBlend {v}: cpu differs from plain in {}, gpu in {}", nd(&cpu), nd(&gpu));
+        assert_ne!(gpu.data, plain.data, "SDRBlend {v} changes the SDR rendition");
+    }
+}
+
 #[test]
 fn visualize_hdr_matches_the_cpu() {
     if !gpu() {

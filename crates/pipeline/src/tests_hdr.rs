@@ -130,3 +130,48 @@ fn visualize_hdr_paints_only_what_rises_above_white() {
     let plain = render(&src, &raw(), &DevelopSettings::default(), &RenderRequest::fit(240, 240));
     assert_eq!(off.image.data, plain.image.data);
 }
+
+/// `crs:SDRBlend` (Camera Raw's highlight saturation of the SDR rendition): more colour in the
+/// brightest SDR tones at +100, less at −100, shadows and midtones untouched; nothing in the HDR
+/// render, and nothing while HDR is off (a dormant value).
+#[test]
+fn sdr_blend_saturates_the_sdr_renditions_highlights() {
+    // orange, blue and green ramps from deep shadow to past white (scene linear)
+    let src = Rgb32f::from_fn(240, 30, |x, y| {
+        let v = 0.004 * 1.03f32.powi(x as i32);
+        match y / 10 {
+            0 => [v, v * 0.45, v * 0.15],
+            1 => [v * 0.3, v * 0.5, v],
+            _ => [v * 0.4, v, v * 0.5],
+        }
+    });
+    let req = RenderRequest::fit(240, 30);
+    let base = render(&src, &raw(), &hdr_on(3.0), &req).image;
+    let blend = |v: f64| {
+        let mut s = hdr_on(3.0);
+        s.hdr.sdr_blend = v;
+        s
+    };
+    let chroma = |p: &[u8; 4]| i32::from(p[0].max(p[1]).max(p[2])) - i32::from(p[0].min(p[1]).min(p[2]));
+    let more = render(&src, &raw(), &blend(100.0), &req).image;
+    let less = render(&src, &raw(), &blend(-100.0), &req).image;
+    let (mut up, mut down, mut dark_moved) = (0, 0, 0);
+    for ((b, m), l) in base.data.iter().zip(&more.data).zip(&less.data) {
+        let lum = 0.2126 * f32::from(b[0]) + 0.7152 * f32::from(b[1]) + 0.0722 * f32::from(b[2]);
+        if lum < 150.0 {
+            dark_moved += usize::from(b != m || b != l);
+        } else if chroma(b) > 8 && chroma(b) < 200 {
+            up += usize::from(chroma(m) > chroma(b));
+            down += usize::from(chroma(l) < chroma(b));
+        }
+    }
+    assert!(up > 20 && down > 20, "highlights: {up} more saturated, {down} less");
+    assert_eq!(dark_moved, 0, "shadows and midtones stay put");
+    // the HDR render ignores it
+    let hreq = RenderRequest { depth: OutputDepth::F32Hdr, ..req };
+    assert_eq!(render(&src, &raw(), &blend(100.0), &hreq).deep, render(&src, &raw(), &hdr_on(3.0), &hreq).deep);
+    // dormant while HDR is off
+    let mut off = DevelopSettings::default();
+    off.hdr.sdr_blend = 100.0;
+    assert_eq!(render(&src, &raw(), &off, &req).image.data, render(&src, &raw(), &DevelopSettings::default(), &req).image.data);
+}

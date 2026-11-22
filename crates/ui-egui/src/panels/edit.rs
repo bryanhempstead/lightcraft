@@ -1378,7 +1378,7 @@ fn hdr_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     });
     if app.ui.hdr_sdr_preview {
         sub_title(ui, crate::i18n::tr("SDR Settings"));
-        for c in ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrClarity", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites"] {
+        for c in ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrClarity", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites", "hdr.sdrBlend"] {
             control(app, ui, d, c, true);
         }
     }

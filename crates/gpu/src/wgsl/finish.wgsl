@@ -1191,6 +1191,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- colour
     d = color_ops(d, lt[11], lt[12]);
+    let hs = pf(F_HL_SAT);
+    if (hs != 0.0) {
+        // `finish::highlight_saturation`
+        let yh = lum2020(d);
+        let f = 1.0 + HL_SAT_GAIN * hs * sstep(0.5, 1.0, yh);
+        d = max(vec3<f32>(yh) + (d - vec3<f32>(yh)) * f, vec3<f32>(0.0));
+    }
     if (tint_on) {
         let lab = oklab(d);
         d = oklab_inv(vec3<f32>(lab.x, lab.y + tint_dir.x * 0.08 * tint_amt, lab.z + tint_dir.y * 0.08 * tint_amt));

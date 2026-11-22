@@ -1120,8 +1120,13 @@ pub struct Hdr {
     pub sdr_shadows: f64,
     pub sdr_whites: f64,
     pub sdr_clarity: f64,
-    /// `crs:SDRBlend` (−100..100), kept so a Lightroom edit round-trips.
+    /// `crs:SDRBlend` (−100..100): Camera Raw's highlight saturation of the SDR rendition (more
+    /// or less colour above about half of SDR white, luminance unchanged).
     pub sdr_blend: f64,
+    /// Set only on an SDR rendition of an HDR edit ([`DevelopSettings::sdr_rendition`]): the
+    /// `sdr_blend` the renderer applies. Never saved; values set while HDR is off render nothing.
+    #[serde(skip)]
+    pub rendition_blend: f64,
 }
 
 impl Default for Hdr {
@@ -1136,6 +1141,7 @@ impl Default for Hdr {
             sdr_whites: 0.0,
             sdr_clarity: 0.0,
             sdr_blend: 0.0,
+            rendition_blend: 0.0,
         }
     }
 }
@@ -1192,6 +1198,7 @@ impl DevelopSettings {
         s.light.shadows = add(s.light.shadows, h.sdr_shadows);
         s.light.whites = add(s.light.whites, h.sdr_whites);
         s.effects.clarity = add(s.effects.clarity, h.sdr_clarity);
+        s.hdr.rendition_blend = add(0.0, h.sdr_blend);
         std::borrow::Cow::Owned(s)
     }
 }
