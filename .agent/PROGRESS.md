@@ -6,6 +6,16 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (tools agent, 2026-11-21 night, branch worktree-agent-a791cd84ab42f5251, not merged) **Develop tools rows U01–U05,
+  R17, R29, U10, U11** — U01 per-setting Copy / Sync / Paste / New Preset checklist (43 settings, 14 headings, choose
+  masks, all. / none. / def. / mod., saved subsets), U02 relative paste + Merge / Replace masks, U03 Alt-drag previews
+  (ported), U04 mask Effect presets (ported; his 6 Lightroom local presets import in place via Masking ▸ Effect ▸
+  import.), U05 crop extras (As Shot, Aspect Ratios / Center / Fifths, overlays to cycle, B&A button cycles layouts),
+  R17 content-aware Fill spots (`crates/inpaint` from upstream; `heal_patchmatch` → Fill), R29 photos converted to
+  Display P3 on a Mac (Settings ▸ Interface ▸ Photo colours; needs.you #150: Bryan compares loupe vs export on the
+  Studio Display), U10 point-curve extras, U11 ⌥-drag marquee deletes spots. Left: U14, U24, U12, U06, U09, U13, U07,
+  U08, U17, U22, U16, U18–U21, U23 and the section-3 develop behaviours. Known load flake (passes alone):
+  `ui-egui headless::tests::demo_grid_snapshot_has_ui_pixels`, `browse_a_local_folder`.
 - [ ] (lrsync agent, 2026-11-21 night, branch worktree-agent-a56ca074558d7129e) **Lightroom migration rows L01 / R14 /
   U15 / R18 / R26** — c456db97f R14 (Upright: PerspectiveUpright 3 = Level / 4 = Vertical / 2 = Full, stored
   `UprightTransform_<mode>` used instead of re-detection, Constrain Crop; `repairLightroomMigration upright`),
