@@ -671,6 +671,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     // taller than a small window: the options scroll inside, the buttons stay in view
                     let room = (screen.height() - 170.0).max(220.0);
                     egui::ScrollArea::vertical().id_salt("exportScroll").max_height(room).min_scrolled_height(room).auto_shrink([false, true]).show(ui, |ui| {
+                    // room for the scroll bar: rows never run under it
+                    egui::Frame::NONE.inner_margin(egui::Margin { right: 14, ..Default::default() }).show(ui, |ui| {
                     use lightcraft_engine::export::{Anchor as P, ExportFormat as F, MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
                     let n = app.session.selection.ids.len().max(1);
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
@@ -802,6 +804,38 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if opts.format != before {
                         // each format starts at its own default depth (TIFF 16-bit, others 8-bit)
                         opts.bit_depth = None;
+                    }
+                    // LR-VID-EXPORT: Classic's Video section, when the photos include videos
+                    let videos = app
+                        .session
+                        .targets(&json!({}))
+                        .iter()
+                        .filter(|id| app.session.catalog.photo(**id).is_some_and(|p| p.kind == lightcraft_catalog::MediaKind::Video))
+                        .count();
+                    if videos > 0 {
+                        use lightcraft_engine::video::{VideoFormat as VF, VideoQuality as VQ};
+                        ui.add_space(4.0);
+                        field(ui, "Video", |ui| {
+                            let r = ui.checkbox(&mut opts.video.include, format!("{} ({videos})", crate::i18n::tr("Include video files")));
+                            crate::widgets::register(ui.ctx(), "check:exportVideoInclude", r.rect);
+                        });
+                        if opts.video.include {
+                            choices(ui, "Video format", "exportVideoFormat", &[(VF::H264, "h264."), (VF::Original, "orig.")], &mut opts.video.format);
+                            if opts.video.format == VF::H264 {
+                                choices(
+                                    ui,
+                                    "Video quality",
+                                    "exportVideoQuality",
+                                    &[(VQ::Max, "max."), (VQ::High, "high."), (VQ::Medium, "med."), (VQ::Low, "low.")],
+                                    &mut opts.video.quality,
+                                );
+                            }
+                            let note = match opts.video.format {
+                                VF::H264 => "H.264 .mp4: trimmed, with the edits Classic applies to video (white balance, tone, curve, vibrance, saturation, B&W).",
+                                VF::Original => "The video files as they are: no trim, no edits.",
+                            };
+                            ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
+                        }
                     }
                     let rendered = opts.format.is_rendered();
                     let depths = lightcraft_engine::export::ExportOptions::bit_depths(opts.format);
@@ -1105,6 +1139,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             }
                             ui.add(egui::TextEdit::singleline(preset_name).hint_text(crate::i18n::tr("Preset name")).desired_width(ui.available_width()));
                         });
+                    });
                     });
                     });
                 }

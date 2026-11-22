@@ -154,12 +154,7 @@ fn capture_frame(s: &mut Session, p: &Value) -> Result<Value> {
     let t = p.get("time").and_then(seconds).unwrap_or(0.0).max(0.0);
     let t = photo.duration.filter(|d| *d > 0.0).map_or(t, |d| t.min(d));
     // the frame at full size, with the video's edits, as a JPEG next to the video
-    let png = crate::video::frame_png(&path, t, usize::MAX).map_err(|e| bad(C, e))?;
-    let d = lightcraft_codecs::decode(&png, lightcraft_codecs::DecodeOptions::default()).map_err(|e| bad(C, e.to_string()))?;
-    let mut img = d.to_srgb8();
-    if crate::video::has_edits(&photo.develop) {
-        img = crate::video::develop_frame(&img, &photo.develop, lightcraft_pipeline::Quality::Full);
-    }
+    let img = crate::video::frame_rgba(&path, t, usize::MAX, Some(&photo.develop), lightcraft_pipeline::Quality::Full).map_err(|e| bad(C, e))?;
     let jpeg = lightcraft_codecs::encode_jpeg(
         &lightcraft_codecs::EncodeImage::rgba8(&img),
         92,

@@ -32,6 +32,7 @@ pub mod softpaint;
 pub mod state;
 pub mod tasks;
 pub mod theme;
+pub mod video_ui;
 pub mod widgets;
 
 #[cfg(test)]
@@ -175,6 +176,8 @@ pub struct Perf {
 pub struct LightcraftApp {
     /// The Map module's tiles and textures (LR-MAP-MODULE).
     pub map: panels::map::MapRuntime,
+    /// The Loupe's video playback (LR-VID-PLAY).
+    pub video: video_ui::VideoView,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
     pub caches: Caches,
@@ -300,6 +303,7 @@ impl LightcraftApp {
             fonts_ready: false,
             last_time: 0.0,
             map: Default::default(),
+            video: Default::default(),
             canvas_rect: None,
             image_rect: None,
             grid_scroll: None,

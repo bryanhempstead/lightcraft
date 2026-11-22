@@ -470,6 +470,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if let Some(why) = photo.preview_only.as_deref().filter(|_| !fullscreen) {
         preview_only_pill(ui, canvas, why);
     }
+    // a video: the played / scrubbed frame and its control bar (LR-VID-PLAY)
+    if photo.kind == lightcraft_catalog::MediaKind::Video {
+        crate::video_ui::loupe(app, ui, canvas, img_rect, &photo);
+    }
     resp.context_menu(|ui| {
         ui.menu_button(crate::i18n::tr("Zoom"), |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {

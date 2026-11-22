@@ -245,6 +245,13 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.develop", "Develop", Some("Cmd+Alt+2"), "Window"),
     ("view.map", "Map", Some("Cmd+Alt+3"), "Window"),
     ("map.fit", "Fit Map to Photos", None, ""),
+    // LR-VID-*: the Loupe's video controls (Space plays and pauses a video: shortcuts.rs)
+    ("video.playPause", "Play / Pause Video", None, "Photo>Video"),
+    ("video.trimMode", "Trim Video", None, "Photo>Video"),
+    ("video.posterHere", "Set Poster Frame", None, "Photo>Video"),
+    ("video.captureHere", "Capture Frame", None, "Photo>Video"),
+    ("video.sound", "Video Sound On / Off", None, "Photo>Video"),
+    ("video.seek", "Go to Time in Video", None, ""),
     ("map.zoomIn", "Zoom In on Map", None, ""),
     ("map.zoomOut", "Zoom Out of Map", None, ""),
     ("dialog.mapSaveLocation", "Save Map Location…", None, ""),
@@ -656,6 +663,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 app.ui.map.fit_pending = false;
             }
             Ok(json!({"view": "map", "lat": app.ui.map.lat, "lon": app.ui.map.lon, "zoom": app.ui.map.zoom, "tiles": app.map.status()}))
+        }
+        "video.playPause" | "video.seek" | "video.trimMode" | "video.sound" | "video.posterHere" | "video.captureHere" => {
+            crate::video_ui::command(app, id, p)
         }
         "map.fit" => {
             app.ui.map.fit_pending = true;

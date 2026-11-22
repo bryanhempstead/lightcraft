@@ -425,6 +425,19 @@ pub fn frame_png_with(b: Backend, path: &str, secs: f64, max_edge: usize) -> Res
     }
 }
 
+/// The frame at `secs` as display sRGB, no larger than `max_edge`, with the clip's edits when
+/// `develop` has any ([`has_edits`]): what the Loupe shows while scrubbing, what Capture Frame
+/// writes.
+pub fn frame_rgba(path: &str, secs: f64, max_edge: usize, develop: Option<&DevelopSettings>, quality: Quality) -> Result<Rgba8, String> {
+    let png = frame_png(path, secs, max_edge)?;
+    let d = lightcraft_codecs::decode(&png, lightcraft_codecs::DecodeOptions::default()).map_err(|e| format!("{path}: {e}"))?;
+    let img = d.to_srgb8();
+    Ok(match develop.filter(|s| has_edits(s)) {
+        Some(s) => develop_frame(&img, s, quality),
+        None => img,
+    })
+}
+
 /// The file loader's view of a video ([`frame_source`]): its frame decoded like a rendered photo.
 pub fn load_frame(source: &str, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
     let (path, t) = split_source(source);
