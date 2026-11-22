@@ -178,3 +178,15 @@ fn export_next_to_the_original_and_add_it_stacked() {
     assert!(crate::export::ExportOptions::from_params(&json!({"addToStack": "sideways"})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// E10: a text watermark is a text template — its tokens are each photo's.
+#[test]
+fn watermark_text_tokens_are_per_photo() {
+    let mut s = Session::with_demo();
+    let id = s.visible_cloned()[0];
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "title": "Harbour", "creator": "Ann Lee"})).unwrap();
+    let o = crate::export::ExportOptions::from_params(&json!({"watermark": "© {creator} · {title} {seq}/{total}", "longEdge": 64})).unwrap();
+    let items = crate::export::prepare_batch(&mut s, &[id], &o).unwrap();
+    let text = items[0].watermark_text().unwrap_or_default();
+    assert_eq!(text, "© Ann Lee · Harbour 1/1");
+}

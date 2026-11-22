@@ -1647,8 +1647,15 @@ fn prepare_guarded(
     let work = if o.format.is_rendered() {
         let (w, h) = output_size(p, o);
         let meta = export_metadata(p, o);
+        let mut opts = o.clone();
+        // a text watermark is a text template (E10): its tokens are this photo's ({title},
+        // {date:%Y}, {creator}, {seq} …, the file-name tokens)
+        if let Some(wm) = opts.watermark.as_mut().filter(|w| w.text.contains('{')) {
+            let batch = crate::rename::Batch { total, text: o.custom_text.clone(), ..Default::default() };
+            wm.text = crate::rename::expand_tokens_in(&wm.text, p, seq, 1, &batch);
+        }
         let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
-        Work::Render(Box::new(RenderWork { job, meta, opts: o.clone() }))
+        Work::Render(Box::new(RenderWork { job, meta, opts }))
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
@@ -1666,6 +1673,14 @@ fn prepare_guarded(
 }
 
 impl PreparedExport {
+    /// The text watermark this photo gets, its tokens expanded (rendered exports only).
+    pub fn watermark_text(&self) -> Option<String> {
+        match &self.work {
+            Work::Render(r) => r.opts.watermark.as_ref().map(|w| w.text.clone()),
+            _ => None,
+        }
+    }
+
     pub fn run(self) -> Result<Exported, String> {
         let file_name = self.file_name;
         match self.work {
