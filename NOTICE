@@ -37,6 +37,19 @@ Distribution License 1.0 (vendor/LibRaw-0.22.3/LICENSE.LGPL, LICENSE.CDDL, COPYR
 built with it is distributed under those terms for the LibRaw part. Builds without vendor/ (and
 the web build) contain no LibRaw code.
 
+crates/denoise-core (lightcraft-denoise-core) and the network reader in crates/enhance (net.rs, onnx.rs,
+onnx_proto.rs, reference.rs, synthetic*.rs) are taken from upstream storytold/lightcraft
+(lightcraft-denoise-core / lightcraft-denoise), Copyright (c) 2026 the LightCraft contributors, MIT OR Apache-2.0.
+
+crates/enhance/src/dinov2.rs and depth_anything_v2.rs are taken from Hugging Face candle-transformers 0.9.2
+(https://github.com/huggingface/candle), licensed under the MIT License or the Apache License 2.0, at your option;
+modified by the LightCraft contributors (2026): the DINOv2 classifier head is optional.
+
+The Enhance models are not part of LightCraft and are never distributed with it. A user downloads each one only
+when they choose to, under its own licence: RawNIND UtNet2 as published by darktable-ai (GPL-3.0), Real-ESRGAN
+x2plus (BSD-3-Clause, Xintao Wang et al.), Depth Anything V2 Small (Apache-2.0, Lihe Yang et al.). See
+docs/enhance.md.
+
 The SAM 3 weights are not part of LightCraft and are never distributed with it. A user downloads
 the facebook/sam3 checkpoint only when they choose to (in the app, or by hand), under Meta's SAM
 License (https://github.com/facebookresearch/sam3/blob/main/LICENSE), a separate, non-OSI

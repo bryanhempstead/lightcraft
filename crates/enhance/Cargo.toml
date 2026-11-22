@@ -1,0 +1,32 @@
+[package]
+name = "lightcraft-enhance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft Enhance (L3): AI Denoise on the raw mosaic, Super Resolution and depth estimation with open models on candle"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightcraft-raster = { workspace = true }
+# the fork offers the RawNIND (GPL-3.0) download: Bryan's decision, 2026-11-21 (CLAUDE.md, Fork rules)
+lightcraft-denoise-core = { workspace = true, features = ["rawnind-model"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+rayon = { workspace = true }
+
+# the models run natively only (the web build has no Enhance)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+lightcraft-fetch = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { workspace = true, features = ["metal"] }
+candle-nn = { workspace = true, features = ["metal"] }
+
+[dev-dependencies]
+proptest = { workspace = true }

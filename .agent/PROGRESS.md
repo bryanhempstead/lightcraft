@@ -6,6 +6,10 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (enhance agent, 2026-11-22, branch worktree-agent-aca49497fc3d37ff4, not merged) **Enhance + depth** (F/P/K rows:
+  DENOISE, RAWDETAILS, SUPERRES, ENH-DIALOG/INPLACE, MENU-PHOTO-ENHANCE, LENSBLUR, MASK-DEPTHRANGE): new
+  `crates/enhance` (RawNIND raw denoise / Real-ESRGAN x2 / Depth Anything V2 on candle, Metal) + upstream
+  `crates/denoise-core` (built-in BM3D). Working on it.
 - [ ] (detail agent, 2026-11-21 night, branch worktree-agent-af436a1c05b9b1fde, not merged) **Detail / Effects / Looks rows
   R03 R06 R07 R13 R15 R24 R25** measured with the Camera Raw oracle (`oracle/make_detail.py`, `grain_ana.py`,
   `sharp_ana.py`, `sharpfit.py`, `make_ca.py`, `make_nr_real.py`; docs/lr-match.md → Round 9): Look LUT profiles on the
