@@ -192,6 +192,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // Metadata ▸ keyword list (L11)
     ("dialog.importKeywords", "Import Keywords…", None, "Metadata"),
     ("dialog.importCatalog", "Import from Another Library…", None, "File"),
+    // L23: Library ▸ Validate DNG Files… (the result as a toast; damaged ones selected)
+    ("dialog.validateDng", "Validate DNG Files…", None, "Library"),
     // E12: File ▸ Email Photos…
     ("file.emailPhotos", "Email Photos…", Some("Cmd+Shift+M"), "File"),
     // L26: Compare ▸ Link Focus
@@ -1357,6 +1359,27 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.quit" => {
             app.ui.quit = true;
             Ok(Value::Null)
+        }
+        "dialog.validateDng" => {
+            let r = match app.run("library.validateDng", p.clone()) {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e)),
+            };
+            let n = |k: &str| r[k].as_array().map_or(0, Vec::len);
+            let msg = format!(
+                "Checked {} DNG{}: {} valid, {} damaged, {} without a digest, {} not readable",
+                r["checked"],
+                if r["checked"] == 1 { "" } else { "s" },
+                r["valid"],
+                n("damaged"),
+                n("noDigest"),
+                n("failed")
+            );
+            if n("damaged") > 0 {
+                let _ = app.run("library.select", json!({"ids": r["damaged"]}));
+            }
+            app.ui.toast = Some((msg, app.last_time + 8.0, None));
+            Ok(r)
         }
         "file.emailPhotos" => {
             // export the selection small (JPEG, 1600 px, quality 80) into a temporary folder, then

@@ -128,6 +128,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "library.syncMetadata",
             "library.scanMetadata",
+            "dialog.validateDng",
         ],
     ),
     (

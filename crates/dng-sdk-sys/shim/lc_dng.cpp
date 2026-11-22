@@ -389,6 +389,28 @@ int lc_rgb_table_apply(const lc_rgbt *t, double amount, float *r, float *g, floa
     });
 }
 
+int lc_validate_dng(const uint8_t *dng, size_t dng_len, int *result) {
+    if (!dng || !result || dng_len < 16 || dng_len > 0x7fffffff) return LC_ERR_BAD_ARG;
+    *result = 2;
+    return guarded([&] {
+        dng_stream stream(dng, (uint32)dng_len);
+        dng_host host;
+        AutoPtr<dng_negative> negative;
+        dng_info info;
+        info.Parse(host, stream);
+        info.PostParse(host);
+        if (!info.IsValidDNG()) return LC_ERR_PARSE;
+        negative.Reset(host.Make_dng_negative());
+        negative->Parse(host, stream, info);
+        negative->PostParse(host, stream, info);
+        negative->ReadStage1Image(host, stream, info);
+        bool has = negative->RawImageDigest().IsValid() || negative->NewRawImageDigest().IsValid();
+        negative->ValidateRawImageDigest(host);
+        *result = negative->IsDamaged() ? 1 : (has ? 0 : 2);
+        return LC_OK;
+    });
+}
+
 int lc_render_dng(const uint8_t *dng, size_t dng_len, const uint8_t *dcp, size_t dcp_len, uint32_t max_size, int space,
                   uint32_t *w, uint32_t *h, float **out) {
     if (!dng || !w || !h || !out || dng_len < 16 || dng_len > 0x7fffffff) return LC_ERR_BAD_ARG;

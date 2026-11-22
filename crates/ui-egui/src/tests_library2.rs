@@ -324,3 +324,16 @@ fn email_photos_attaches_small_exports() {
     h.app.services.compose_email = None;
     assert!(h.app.run("file.emailPhotos", json!({})).is_err(), "no Mail here: an error, not a crash");
 }
+
+/// L23: Library ▸ Validate DNG Files… says what it found in a toast.
+#[test]
+fn validate_dng_menu_toast() {
+    let s = lightcraft_engine::Session::with_demo();
+    let mut h = headless(s);
+    let r = h.app.run("dialog.validateDng", json!({})).unwrap();
+    assert_eq!(r["checked"], 0, "the demo photos are JPEGs");
+    let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
+    assert!(toast.starts_with("Checked 0 DNGs"), "{toast}");
+    settle(&mut h);
+    shot(&mut h, "l23-validate-dng.png");
+}

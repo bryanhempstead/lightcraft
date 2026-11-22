@@ -106,6 +106,45 @@ fn scan(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"counts": counts, "changedOnDisk": on_disk, "conflict": conflicts, "changed": changed}))
 }
 
+/// L23: Library ▸ Validate DNG Files.
+fn validate_dngs(s: &mut Session, p: &Value) -> Result<Value> {
+    let ids = if p.get("ids").is_some() || !s.selection.ids.is_empty() { s.targets(p) } else { s.visible_cloned() };
+    let (mut checked, mut valid) = (0usize, 0usize);
+    let (mut damaged, mut none, mut failed) = (Vec::new(), Vec::new(), Vec::new());
+    for id in ids {
+        let Some(ph) = s.catalog.photo(id) else { continue };
+        let lightcraft_catalog::Source::File { path } = &ph.source else { continue };
+        if !ph.format.eq_ignore_ascii_case("dng") && !path.to_ascii_lowercase().ends_with(".dng") {
+            continue;
+        }
+        checked += 1;
+        let bytes = match std::fs::metadata(path) {
+            Ok(m) if m.len() > 2 << 30 => {
+                failed.push(json!({"id": id.0, "error": "larger than 2 GB"}));
+                continue;
+            }
+            Ok(_) => match std::fs::read(path) {
+                Ok(b) => b,
+                Err(e) => {
+                    failed.push(json!({"id": id.0, "error": e.to_string()}));
+                    continue;
+                }
+            },
+            Err(_) => {
+                failed.push(json!({"id": id.0, "error": "original offline"}));
+                continue;
+            }
+        };
+        match lightcraft_dng_sdk_sys::validate_dng(&bytes) {
+            Ok(lightcraft_dng_sdk_sys::DngValidity::Valid) => valid += 1,
+            Ok(lightcraft_dng_sdk_sys::DngValidity::Damaged) => damaged.push(id.0),
+            Ok(lightcraft_dng_sdk_sys::DngValidity::NoDigest) => none.push(id.0),
+            Err(e) => failed.push(json!({"id": id.0, "error": format!("{e:?}")})),
+        }
+    }
+    Ok(json!({"checked": checked, "valid": valid, "damaged": damaged, "noDigest": none, "failed": failed}))
+}
+
 fn resolve(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.resolveMetadata";
     let ids: Vec<u64> = s.targets(p).iter().map(|i| i.0).collect();
@@ -129,6 +168,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 let v: Vec<Value> = s.targets(p).iter().map(|id| json!({"id": id.0, "status": s.metadata_status(*id).id()})).collect();
                 Ok(json!(v))
             }
+        ),
+        cmd!(
+            "library.validateDng",
+            "Validate DNG Files",
+            ["Library"],
+            None,
+            "{ids?} — checks each DNG's raw data against the digest in the file (Adobe's DNG SDK); the selected photos, else every DNG in view → {checked, valid, damaged: [id], noDigest: [id], failed: [{id, error}]}",
+            always,
+            validate_dngs
         ),
         cmd!(
             "library.scanMetadata",

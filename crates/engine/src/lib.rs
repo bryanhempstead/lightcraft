@@ -971,4 +971,6 @@ mod tests_settings_files;
 #[cfg(test)]
 mod tests_spots;
 #[cfg(test)]
+mod tests_validate_dng;
+#[cfg(test)]
 mod tests_xmp;

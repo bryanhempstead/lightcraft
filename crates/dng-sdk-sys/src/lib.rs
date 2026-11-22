@@ -207,6 +207,7 @@ mod ffi {
             out: *mut *mut f32,
         ) -> i32;
         pub fn lc_free(ptr: *mut std::ffi::c_void);
+        pub fn lc_validate_dng(dng: *const u8, dng_len: usize, result: *mut i32) -> i32;
     }
 }
 
@@ -645,6 +646,38 @@ impl RgbTable {
     }
 }
 
+/// What [`validate_dng`] found (L23, Library ▸ Validate DNG Files).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DngValidity {
+    /// The raw data matches the file's digest.
+    Valid,
+    /// A digest doesn't match: the raw data changed since the file was written.
+    Damaged,
+    /// The file carries no digest to check against.
+    NoDigest,
+}
+
+/// Check a DNG's raw data against its RawImageDigest / NewRawImageDigest with the SDK.
+#[allow(unsafe_code)]
+pub fn validate_dng(dng: &[u8]) -> Result<DngValidity> {
+    #[cfg(lc_dng_sdk)]
+    {
+        let mut r = 0i32;
+        // SAFETY: `dng` is a live slice of `dng.len()` bytes; `r` is a valid out pointer.
+        status(unsafe { ffi::lc_validate_dng(dng.as_ptr(), dng.len(), &mut r) })?;
+        Ok(match r {
+            0 => DngValidity::Valid,
+            1 => DngValidity::Damaged,
+            _ => DngValidity::NoDigest,
+        })
+    }
+    #[cfg(not(lc_dng_sdk))]
+    {
+        let _ = dng;
+        Err(Error::Unavailable)
+    }
+}
+
 /// A reference render (`dng_render`) of a DNG file, optionally with an external profile used
 /// instead of the file's own: `(width, height, interleaved RGB 0..1)` in sRGB (`prophoto` false)
 /// or ProPhoto (gamma 1.8) — what the SDK's defaults make of the file.
@@ -689,6 +722,8 @@ mod tests {
         assert!(Profile::parse(&[0xffu8; 4096]).is_err());
         assert!(decode_look_table("not a table").is_err());
         assert!(render_dng(b"II*\0 not a dng at all", None, 256, false).is_err());
+        assert!(validate_dng(b"II*\0 not a dng at all").is_err());
+        assert!(validate_dng(&[]).is_err());
         assert!(temp_tint_to_xy(f64::NAN, 0.0).is_err());
         let bad = HueSatMap { dims: [2, 2, 1], deltas: vec![[0.0, 1.0, 1.0]; 3], encoding: 0 };
         assert!(HsmApplier::new(&bad).is_err());
