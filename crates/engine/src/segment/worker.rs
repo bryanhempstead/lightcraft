@@ -238,6 +238,10 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration) {
             let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), auto: None, superseded: true });
             continue;
         }
+        // one model on the GPU at a time: candle's Metal device gives wrong results when Enhance and the masks
+        // queue work on it from two threads at once (measured in crates/enhance)
+        #[cfg(feature = "enhance")]
+        let gpu = lightcraft_enhance::gpu_lock(&lightcraft_enhance::best_device());
         let result = match std::panic::catch_unwind(AssertUnwindSafe(|| run_job(&mut state, shared, &mut job))) {
             Ok(r) => r,
             Err(p) => {
@@ -248,6 +252,8 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration) {
                 Err("the AI model failed unexpectedly (it will be reloaded on the next try)".to_string())
             }
         };
+        #[cfg(feature = "enhance")]
+        drop(gpu);
         if result.is_err() && !is_detail {
             state.cache = None;
             state.input = None;

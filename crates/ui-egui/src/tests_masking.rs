@@ -319,6 +319,9 @@ fn g_toggles_grids_and_shift_g_starts_guided_upright() {
 #[test]
 fn luminance_range_controls_and_map() {
     let mut h = detail("panel.masking");
+    // tall enough for the whole panel (the tile grid has four rows since the Depth tile)
+    let r = h.request("ui.resize", json!({"width": 1400.0, "height": 1700.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
     exec(&mut h, "mask.add", json!({"kind": "luminanceRange", "lo": 0.6, "hi": 1.0}));
     h.settle(SETTLE);
     let lum = |h: &Headless| match &develop(h).masks[0].components[0].shape {
