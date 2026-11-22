@@ -66,7 +66,8 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     for (i, (id, _, sharp, clip, _)) in rows.iter().enumerate() {
         let g = group_of[i];
         let is_best = g.is_some_and(|g| best.get(&g).is_some_and(|b| b.0 == i));
-        ops.push(Op::SetAnalysis { id: *id, analysis: Some(Analysis { sharpness: *sharp, clipped: *clip, group: g, best: is_best }) });
+        let prev = s.catalog.photo(*id).and_then(|p| p.analysis).unwrap_or_default();
+        ops.push(Op::SetAnalysis { id: *id, analysis: Some(Analysis { sharpness: *sharp, clipped: *clip, group: g, best: is_best, ..prev }) });
         let flag = s.catalog.photo(*id).map(|p| p.flag).unwrap_or_default();
         if reject_below.is_some_and(|t| *sharp < t) && flag != Flag::Reject {
             ops.push(Op::SetFlag { id: *id, flag: Flag::Reject });

@@ -134,6 +134,7 @@ fn best_take_finds_tagged_people_and_swaps_a_face() {
             kind: lightcraft_meta::RegionKind::Face,
             name: Some("Kate".into()),
             description: None,
+            rejected: Vec::new(),
         }];
         s.commit("t", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(m) }).unwrap();
     }

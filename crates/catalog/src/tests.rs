@@ -331,6 +331,7 @@ fn people_from_named_face_regions() {
         kind,
         name: name.map(str::to_string),
         description: None,
+        rejected: Vec::new(),
     };
     let mut c = Catalog::new();
     let mut add = |name: &str, regions: Vec<Region>| {
@@ -399,6 +400,7 @@ fn empty_regions_are_not_serialized_and_default_when_missing() {
         kind: lightcraft_meta::RegionKind::Face,
         name: Some("A".into()),
         description: None,
+        rejected: Vec::new(),
     });
     let back: Meta = serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
     assert_eq!(back, with);

@@ -51,6 +51,7 @@
 //! | 6 | metadata status (fork) | `Op::SetXmpSync`, `Photo.xmp_sync` |
 //! | 7 | the name a photo was imported with (fork) | `Photo.original_name` |
 //! | 8 | video trim / poster frame, library records (fork: publish services, map locations) | `Op::SetVideo`, `Photo.video`, `Op::SetRecord`, `Catalog.records` |
+//! | 9 | faces: found faces, rejected suggestions, AI culling (fork) | `Op::SetRegions`, `Region.rejected`, `Analysis.faces` / `eyes_closed` / `face_focus` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -60,6 +61,8 @@
 //! - **Opening an older format upgrades it**: right after loading, [`Journal::open`] writes a
 //!   snapshot in this build's format (also for a new library), before anything is appended — so a
 //!   library is never a mix, and older builds refuse it from then on instead of reading part of it.
+//!   The older format's snapshot and log are kept first, once, as `catalog.snap.v<N>.bak` and
+//!   `catalog.log.v<N>.bak` (from v9 on).
 //!   [`LoadReport::upgraded_from`] says when that happened.
 //! - **A newer format is refused, untouched**: a snapshot whose `version` is above [`VERSION`],
 //!   or a log record whose CRC matches (so it is exactly what was written) but whose op doesn't
@@ -75,7 +78,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -325,6 +328,8 @@ impl Journal {
         let snap = store.read(SNAPSHOT).map_err(io)?;
         let log = store.read(LOG).map_err(io)?;
         report.created = snap.is_none() && log.is_none();
+        // an older format's files, kept beside the upgraded library (see below)
+        let mut old_files: Option<(u32, Vec<u8>, Option<Vec<u8>>)> = None;
         let (mut catalog, snapshot_seq, snapshot_version) = match snap {
             Some(bytes) => {
                 // the header first: a newer snapshot may not parse as this version's catalog
@@ -336,6 +341,9 @@ impl Journal {
                     return Err(newer(format!("{SNAPSHOT} is catalog format v{}", h.version)));
                 }
                 let s: SnapFile = serde_json::from_slice(&bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
+                if h.version < VERSION {
+                    old_files = Some((h.version, bytes.clone(), log.clone()));
+                }
                 (s.catalog, s.seq, Some(h.version))
             }
             None => (Catalog::new(), 0, None),
@@ -453,6 +461,21 @@ impl Journal {
             }
         } else if report.damaged.is_none() && snapshot_version != Some(VERSION) {
             report.upgraded_from = Some(snapshot_version.unwrap_or(0));
+            // the older format's files stay beside the library (`catalog.snap.v8.bak`, …), once: a way
+            // back to an older LightCraft if the upgrade ever needs undoing
+            if let Some((v, snap, log)) = old_files.take() {
+                let name = format!("{SNAPSHOT}.v{v}.bak");
+                if matches!(j.store.read(&name), Ok(None)) {
+                    if let Err(e) = j.store.write_atomic(&name, &snap) {
+                        log::warn!("catalog: can't keep the format v{v} snapshot: {e}");
+                    }
+                    if let Some(l) = log
+                        && let Err(e) = j.store.write_atomic(&format!("{LOG}.v{v}.bak"), &l)
+                    {
+                        log::warn!("catalog: can't keep the format v{v} log: {e}");
+                    }
+                }
+            }
             match j.snapshot(&catalog) {
                 Ok(()) => {
                     if let Some(v) = report.upgraded_from {

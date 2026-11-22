@@ -172,6 +172,12 @@ pub enum Op {
         id: PhotoId,
         captured: Option<String>,
     },
+    /// A photo's face / pet regions (the face finder's results, naming, confirming, rejecting):
+    /// smaller than a whole [`Op::SetMeta`] (catalog format v9).
+    SetRegions {
+        id: PhotoId,
+        regions: Vec<lightcraft_meta::Region>,
+    },
     /// Assisted culling scores.
     SetAnalysis {
         id: PhotoId,
@@ -599,6 +605,10 @@ impl Catalog {
                 let old = Op::SetStack { id, photos: std::mem::replace(&mut s.photos, photos), collapsed: s.collapsed };
                 s.collapsed = collapsed;
                 old
+            }
+            Op::SetRegions { id, regions } => {
+                let p = self.photo_mut(id)?;
+                Op::SetRegions { id, regions: std::mem::replace(&mut p.meta.regions, regions) }
             }
             Op::SetAnalysis { id, analysis } => {
                 let p = self.photo_mut(id)?;

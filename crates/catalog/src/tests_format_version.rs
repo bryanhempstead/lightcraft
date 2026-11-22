@@ -183,9 +183,10 @@ fn op_variants_are_versioned() {
             Op::SetFolderRecord { .. } | Op::SetAlbumMarks { .. } => 4,
             Op::SetXmpSync { .. } => 6,
             Op::SetVideo { .. } | Op::SetRecord { .. } => 8,
+            Op::SetRegions { .. } => 9,
         }
     }
-    let newest = since(&Op::SetVideo { id: PhotoId(1), video: None });
+    let newest = since(&Op::SetRegions { id: PhotoId(1), regions: Vec::new() });
     // a format can also add a field (v5: `Meta.iptc_ext`), so the newest op may be older
     assert!(newest <= VERSION, "an op newer than the current format version");
 }
@@ -215,4 +216,43 @@ fn v8_video_edit_and_records_round_trip() {
     assert_eq!(VideoEdit { trim_in: 5.0, trim_out: Some(2.0), poster: None }.range(Some(10.0)), (0.0, Some(10.0)));
     assert_eq!(VideoEdit { trim_in: 2.0, trim_out: None, poster: None }.range(Some(10.0)), (2.0, Some(10.0)));
     assert_eq!(VideoEdit { trim_in: f64::NAN, trim_out: Some(f64::INFINITY), poster: None }.range(Some(3.0)), (0.0, Some(3.0)));
+}
+
+/// v9: found faces, rejected suggestions and face culling scores survive a snapshot round trip and
+/// undo; a v8 photo (no such fields) reads with none.
+#[test]
+fn v9_regions_and_face_analysis_round_trip() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: "/p/a.jpg".into() }, "a.jpg", "JPEG", 400, 300, "2026-11-22");
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let mut face = lightcraft_meta::Region::face(lightcraft_meta::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 });
+    face.rejected.push("Ann".into());
+    let undo = c.apply(Op::SetRegions { id, regions: vec![face.clone()] }).unwrap();
+    let a = Analysis { sharpness: 50.0, faces: 2, eyes_closed: 1, face_focus: Some(33.0), ..Default::default() };
+    c.apply(Op::SetAnalysis { id, analysis: Some(a) }).unwrap();
+    let back: Catalog = serde_json::from_str(&c.to_snapshot()).unwrap();
+    assert_eq!(back.photo(id).unwrap().meta.regions, vec![face]);
+    assert_eq!(back.photo(id).unwrap().analysis, Some(a));
+    c.apply(undo).unwrap();
+    assert!(c.photo(id).unwrap().meta.regions.is_empty());
+    // v8 data: no `rejected`, no face fields
+    let r: lightcraft_meta::Region =
+        serde_json::from_str(r#"{"rect":{"x0":0.1,"y0":0.1,"x1":0.2,"y1":0.2},"kind":"Face","name":"Bo","description":null}"#).unwrap();
+    assert!(r.rejected.is_empty());
+    let a: Analysis = serde_json::from_str(r#"{"sharpness":1.0,"clipped":0.0,"group":null,"best":false}"#).unwrap();
+    assert_eq!((a.faces, a.eyes_closed, a.face_focus), (0, 0, None));
+}
+
+/// Upgrading keeps the older format's files beside the library, once.
+#[test]
+fn an_upgrade_keeps_the_older_files() {
+    let m = MemStore::new();
+    let old = format!("{{\"format\":\"lightcraft-catalog\",\"version\":8,\"seq\":0,\"catalog\":{}}}\n", Catalog::new().to_snapshot());
+    m.set(SNAPSHOT, old.clone().into_bytes());
+    m.set(LOG, b"".to_vec());
+    let (_, _, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, Some(8));
+    assert_eq!(m.get("catalog.snap.v8.bak"), Some(old.into_bytes()));
+    assert_eq!(snapshot_version(&m), VERSION as u64);
 }

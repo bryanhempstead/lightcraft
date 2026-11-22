@@ -342,6 +342,7 @@ fn best_take_dialog_lists_people_and_builds_swaps() {
             kind: lightcraft_meta::RegionKind::Face,
             name: Some("Kate".into()),
             description: None,
+            rejected: Vec::new(),
         }];
         h.app.session.commit("t", lightcraft_catalog::Op::SetMeta { id: ids[k], meta: Box::new(m) }).unwrap();
     }

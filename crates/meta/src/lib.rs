@@ -52,8 +52,9 @@ pub struct Flash {
 }
 
 /// A named region of interest on a photo (MWG Region Guidelines, `mwg-rs:Regions`): most often a face,
-/// drawn by Lightroom, digiKam, Picasa or similar tools. Read-only for now — LightCraft does not write
-/// regions yet (see `docs/xmp-interop.md`).
+/// drawn by Lightroom, digiKam, Picasa or similar tools, or found by LightCraft's face finder (then
+/// unnamed until the user names or confirms it). Named regions are written back to XMP (see
+/// `docs/xmp-interop.md`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Region {
     /// Normalized to the image's full, oriented frame (`Metadata::width`/`height`), y-down, 0..1 on
@@ -63,6 +64,17 @@ pub struct Region {
     /// `mwg-rs:Name` (e.g. the person's name).
     pub name: Option<String>,
     pub description: Option<String>,
+    /// People the user said this face is not (a rejected suggestion): never suggested for it again.
+    /// LightCraft's own (catalog format v9); not written to XMP.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected: Vec<String>,
+}
+
+impl Region {
+    /// A face box with no name.
+    pub fn face(rect: Rect) -> Region {
+        Region { rect, kind: RegionKind::Face, name: None, description: None, rejected: Vec::new() }
+    }
 }
 
 /// `mwg-rs:Type`. Unrecognised values are kept verbatim rather than dropped.
