@@ -725,7 +725,7 @@ mod tests {
                 app.run("dialog.export", serde_json::json!({})).unwrap();
             }
             for frame in 0..4 {
-                let input = crate::headless::HeadlessView::raw_input(egui::vec2(1600.0, 1000.0), 1.0, frame as f64 / 60.0, vec![]);
+                let input = crate::headless::HeadlessView::raw_input(egui::vec2(1600.0, 1800.0), 1.0, frame as f64 / 60.0, vec![]);
                 let mut out = ctx.run_ui(input, |ui| {
                     app.logic(ui.ctx());
                     app.ui(ui);

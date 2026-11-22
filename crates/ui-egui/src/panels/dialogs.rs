@@ -670,7 +670,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } => {
                     // taller than a small window: the options scroll inside, the buttons stay in view
                     let room = (screen.height() - 170.0).max(220.0);
-                    egui::ScrollArea::vertical().id_salt("exportScroll").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("exportScroll").max_height(room).min_scrolled_height(room).auto_shrink([false, true]).show(ui, |ui| {
                     use lightcraft_engine::export::{Anchor as P, ExportFormat as F, MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
                     let n = app.session.selection.ids.len().max(1);
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
