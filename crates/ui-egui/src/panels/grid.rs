@@ -208,7 +208,11 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let runs_key = (generation, group_key, by);
     let stats = &mut app.caches.grid_stats;
-    let runs = app.caches.grid.runs(stats, &app.session.catalog, &ids, runs_key);
+    let runs = match app.session.source {
+        // a published collection: New / Modified / Published / Deleted, not dates
+        lightcraft_engine::LibrarySource::Published(c) => publish_runs(ui, &app.session.catalog, c, &ids, generation),
+        _ => app.caches.grid.runs(stats, &app.session.catalog, &ids, runs_key),
+    };
     // the layout only changes with the photos (and their shapes), the grouping, the width and
     // the thumbnail size
     let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square);
@@ -411,6 +415,23 @@ pub fn layout(aspects: &[f32], groups: &[(usize, usize)], avail_w: f32, target: 
 
 /// A date header: "Wednesday, 30 September 2026 · 12 photos". Clicking it selects the group
 /// (Cmd/Shift: adds to the selection).
+/// The state groups of a published collection's view (LRC-LIB-PUBLISH), once per view generation.
+fn publish_runs(ui: &egui::Ui, cat: &Catalog, c: u64, ids: &[PhotoId], generation: u64) -> Arc<Vec<DateRun>> {
+    let key = egui::Id::new(("publish-runs", c));
+    if let Some((g, r)) = ui.data(|d| d.get_temp::<(u64, Arc<Vec<DateRun>>)>(key))
+        && g == generation
+    {
+        return r;
+    }
+    let runs: Vec<DateRun> = lightcraft_engine::publish::view_runs(cat, c, ids)
+        .into_iter()
+        .map(|(s, start, count)| DateRun { key: format!("publish:{}", s.key()), label: s.heading().to_string(), start, count })
+        .collect();
+    let runs = Arc::new(runs);
+    ui.data_mut(|d| d.insert_temp(key, (generation, runs.clone())));
+    runs
+}
+
 fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: &[PhotoId], r: Rect, pinned: bool) {
     let t = Tokens::get(ui.ctx());
     let resp = ui.interact(r, egui::Id::new(("group-header", run.start, pinned)), Sense::click());
@@ -422,7 +443,9 @@ fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: 
         p.rect_filled(r, 0.0, t.canvas);
         p.hline(r.x_range(), r.bottom(), Stroke::new(1.0, t.divider));
     }
-    let g = p.layout_no_wrap(crate::i18n::date_group_label(&run.key, false), t.semibold(15.0), if resp.hovered() { t.text } else { t.text_label });
+    let title =
+        if run.key.starts_with("publish:") { crate::i18n::tr(&run.label).to_string() } else { crate::i18n::date_group_label(&run.key, false) };
+    let g = p.layout_no_wrap(title, t.semibold(15.0), if resp.hovered() { t.text } else { t.text_label });
     let x = r.left() + 8.0;
     let gw = g.size().x;
     p.galley(pos2(x, r.center().y - g.size().y / 2.0), g, t.text);
