@@ -1,5 +1,17 @@
 # What's new in LightCraft
 
+## November 2026
+
+### Identity plate, and a clean launch
+- Your own logo or name in the window, like Lightroom Classic's identity plate but anywhere: Settings ▸ identity.
+  (Edit ▸ Identity Plate Setup…). Pick a transparent PNG, SVG, WebP or JPEG (it's copied into LightCraft's
+  `identity` folder, so the original can move) or type a text plate; put it in the top bar, any window corner or a
+  corner of the photo area; set its size, opacity and margin, the modules it shows in (lib. dev. map.) and a color
+  from the color wheel (a white logo takes the color exactly; none. keeps its own colors). It's decoration only:
+  clicks go through it, it moves off buttons and fades while the pointer is over it. Agents set it with
+  `app.identityPlate`.
+- LightCraft no longer opens on a blank grey window: the first frame already shows the app.
+
 ## October 2026
 
 ### Library keyboard culling

@@ -19,6 +19,8 @@ lightcraft-catalog = { workspace = true }
 web-time = { workspace = true }
 lightcraft-engine = { workspace = true }
 lightcraft-preview = { workspace = true }
+lightcraft-codecs = { workspace = true }
+resvg = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -26,7 +28,7 @@ log = { workspace = true }
 
 [dev-dependencies]
 lightcraft-vision = { workspace = true }
-lightcraft-codecs = { workspace = true }
+png = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

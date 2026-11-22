@@ -88,7 +88,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 sw = sw.min(2.0 * (full.center().x - menus_right)).max(200.0);
             }
             let search_left = full.center().x - sw / 2.0;
-            ui.horizontal_centered(|ui| {
+            let left_items = ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if icon_button(ui, "sidebar", Icon::Sidebar, vec2(30.0, 30.0), app.ui.left_panel, true, "Show/hide My Photos panel").clicked() {
                     let _ = app.run("view.leftPanel", json!({}));
@@ -114,6 +114,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     crate::menubar::show_in_window(app, ui, room);
                 }
             });
+            // the free space between the left buttons and the search field: the identity plate's
+            // spot (Lightroom Classic shows its plate at the top left)
+            let slot =
+                Rect::from_min_max(pos2(left_items.response.rect.right() + 16.0, full.top() + 5.0), pos2(search_left - 16.0, full.bottom() - 5.0));
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(crate::identity::BAR_SLOT), slot));
             // search field (centred on the window)
             let sr = Rect::from_center_size(pos2(full.center().x, full.center().y), vec2(sw, 28.0));
             let id = egui::Id::new("search-field");

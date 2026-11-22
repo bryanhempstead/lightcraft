@@ -16,6 +16,7 @@ pub mod hdr_view;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
+pub mod identity;
 pub mod import;
 pub mod import_window;
 pub mod keymap;
@@ -59,6 +60,8 @@ mod tests_grid;
 mod tests_grid_cells;
 #[cfg(test)]
 mod tests_hdr;
+#[cfg(test)]
+mod tests_identity;
 #[cfg(test)]
 mod tests_keys;
 #[cfg(test)]
@@ -146,6 +149,8 @@ pub struct Services {
     pub save_curve_preset_file: Option<SaveFile>,
     /// Open dialog for a text file (Metadata ▸ Import Keywords…: a keyword list `.txt`).
     pub pick_text_file: Option<PickFiles>,
+    /// Open dialog for an identity-plate image (PNG / SVG / WebP / JPEG).
+    pub pick_image: Option<PickFiles>,
     /// Save dialog for a text file (Metadata ▸ Export Keywords…), the suggested name given.
     pub save_text_file: Option<SaveFile>,
     /// E12 Email Photos: open a new mail message with these files attached (desktop: Mail).
@@ -209,6 +214,11 @@ pub struct LightcraftApp {
     pub headless_host: bool,
     /// Warnings to show one at a time (damaged settings files…, issue #103).
     pub notices: Vec<String>,
+    /// The identity plate's decoded image ([`identity`]).
+    pub identity: identity::Cache,
+    /// Where picked identity-plate images are copied (`<config>/identity`; `None`: used where
+    /// they are — `--memory`, tests).
+    pub identity_dir: Option<std::path::PathBuf>,
     /// Quitting was stopped because changes couldn't be saved: the prompt's text.
     pub quit_prompt: Option<String>,
     /// Quit Anyway was chosen: the window may close with unsaved changes.
@@ -311,6 +321,8 @@ impl LightcraftApp {
             native_shortcuts: Default::default(),
             headless_host: false,
             notices: vec![],
+            identity: Default::default(),
+            identity_dir: None,
             quit_prompt: None,
             quit_confirmed: false,
             backup_prompt: false,
@@ -723,6 +735,9 @@ impl LightcraftApp {
         view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.ui(ui));
         let img = capture.then(|| {
             let mut tex = self.renderer.cpu_textures();
+            if let (Some(t), Some(px)) = (&self.identity.texture, &self.identity.pixels) {
+                tex.insert(t.id(), crate::softpaint::CpuTexture::linear(px.clone()));
+            }
             if let (Some((t, ..)), Some(px)) = (&self.merge.preview, &self.merge.preview_pixels) {
                 tex.insert(t.id(), crate::softpaint::CpuTexture::linear(px.clone()));
             }
@@ -757,6 +772,30 @@ impl LightcraftApp {
         }
     }
 
+    /// Fonts, theme and background watchers, once. The host calls this before the first frame
+    /// ([`Self::prepare`]) so that frame already draws the UI (no blank window at launch).
+    fn style(&mut self, ctx: &egui::Context) {
+        theme::install_fonts(ctx);
+        theme::apply(ctx);
+        // File → Add from Device lists cards scanned in the background: show hot-plugs
+        let repaint = ctx.clone();
+        lightcraft_engine::devices::on_change(move || repaint.request_repaint());
+        // "is the original there?" (grid, Info panel, Missing Photos) answers from a cache a
+        // worker fills: a sleeping NAS or a dropped share never stalls a frame
+        let repaint = ctx.clone();
+        self.session.media.availability.run_in_background(std::sync::Arc::new(move || repaint.request_repaint()));
+        self.styled = true;
+        self.font_language = self.ui.language;
+    }
+
+    /// Get ready to draw: install the fonts and theme now, so the very first frame shows the
+    /// app's UI instead of an empty window (the window stays hidden until that frame).
+    pub fn prepare(&mut self, ctx: &egui::Context) {
+        if !self.styled {
+            self.style(ctx);
+        }
+    }
+
     /// Per-frame logic before layout (control channel, renders, shortcuts, drops).
     pub fn logic(&mut self, ctx: &egui::Context) {
         i18n::set_language(self.ui.language);
@@ -768,17 +807,7 @@ impl LightcraftApp {
 
     fn logic_inner(&mut self, ctx: &egui::Context) {
         if !self.styled {
-            theme::install_fonts(ctx);
-            theme::apply(ctx);
-            // File → Add from Device lists cards scanned in the background: show hot-plugs
-            let repaint = ctx.clone();
-            lightcraft_engine::devices::on_change(move || repaint.request_repaint());
-            // "is the original there?" (grid, Info panel, Missing Photos) answers from a cache a
-            // worker fills: a sleeping NAS or a dropped share never stalls a frame
-            let repaint = ctx.clone();
-            self.session.media.availability.run_in_background(std::sync::Arc::new(move || repaint.request_repaint()));
-            self.styled = true;
-            self.font_language = self.ui.language;
+            self.style(ctx);
         } else if self.font_language != self.ui.language {
             // Shared Han characters take the active language's forms (Japanese faces for 日本語,
             // the Simplified Chinese face for 简体中文): rebuild the fallback order.
@@ -979,6 +1008,8 @@ impl LightcraftApp {
         i18n::set_language(self.ui.language);
         let ctx = ui.ctx().clone();
         if !self.fonts_ready {
+            // never a blank (grey) first frame: the app's own dark chrome until the UI draws
+            ui.painter().rect_filled(ctx.content_rect(), 0.0, theme::Tokens::get(&ctx).chrome);
             ctx.request_repaint();
             return;
         }
@@ -1040,7 +1071,7 @@ impl LightcraftApp {
         } else {
             t.grid_bg
         };
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(bg)).show(ui, |ui| match self.ui.view {
+        let canvas = egui::CentralPanel::default().frame(egui::Frame::NONE.fill(bg)).show(ui, |ui| match self.ui.view {
             state::ViewMode::PhotoGrid | state::ViewMode::SquareGrid => panels::grid::show(self, ui),
             state::ViewMode::Detail => panels::detail::show(self, ui),
             state::ViewMode::Compare => panels::compare::show_compare(self, ui),
@@ -1049,6 +1080,8 @@ impl LightcraftApp {
             state::ViewMode::People => panels::people::show(self, ui),
             state::ViewMode::Map => panels::map::show(self, ui),
         });
+        // the identity plate: over the panels and the photo area, under dialogs and menus
+        identity::paint(self, ui, canvas.response.rect);
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);

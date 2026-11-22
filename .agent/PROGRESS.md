@@ -6,6 +6,14 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (plate agent, 2026-11-22, branch worktree-agent-aa8ef530a41bd0901, not merged) **LRC-UI-IDENTITYPLATE + clean
+  launch** — `crates/ui-egui/src/identity.rs` (new: settings, decode with caps, SVG via resvg, tint, copy into
+  `<config>/identity/`, layout that slides off controls, paint, preview), Settings ▸ identity. (`identity_tab`,
+  `tint_picker`; `panels::edit::paint_hue_wheel` shared with Color Grading), `cmd:app.identityPlate` /
+  `cmd:app.identityPlateSetup`, top bar publishes its free space (`identity::BAR_SLOT`), `AppSettings.identity_plate`,
+  `Services.pick_image`, `LightcraftApp::prepare` (fonts before frame 1), main.rs opaque `clear_color` + transparent
+  window until the first frame (the grey box at launch). needs.you #195. Left: plates in exported slideshows/prints
+  (no such modules), multi-font text.
 - [ ] (export agent, 2026-11-22, branch worktree-agent-a3771648dd17295ab, not merged; main merged in twice, DNG
   preview / lossy options kept) **LR-EXP-DIALOG: Export dialog laid out like Lightroom Classic's** —
   `crates/ui-egui/src/export_dialog.rs` (new), `export_task.rs` (queue, pause), `crates/engine/src/export.rs`

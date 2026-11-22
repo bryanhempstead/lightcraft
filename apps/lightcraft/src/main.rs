@@ -66,6 +66,11 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.0.ui(ui);
     }
+    /// Opaque, in the app's own dark chrome: eframe's default is a translucent dark grey, which a
+    /// macOS window showed as a grey box before LightCraft's first frame.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        lightcraft_ui_egui::theme::Tokens::default().chrome.to_normalized_gamma_f32()
+    }
     fn on_exit(&mut self) {
         if let Err(e) = self.1.save(&self.0) {
             log::error!("{e}");
@@ -376,6 +381,14 @@ fn services() -> Services {
                 .map_err(|e| e.to_string())
                 .and_then(|s| if s.success() { Ok(()) } else { Err(format!("Mail didn't open ({s})")) })
         })),
+        pick_image: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .set_title(lightcraft_ui_egui::i18n::tr("Identity Plate Image"))
+                .add_filter(lightcraft_ui_egui::i18n::tr("Images"), &["png", "svg", "webp", "jpg", "jpeg"])
+                .pick_file()
+                .map(|p| vec![p.to_string_lossy().to_string()])
+                .unwrap_or_default()
+        })),
         pick_text_file: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter(lightcraft_ui_egui::i18n::tr("Text"), &["txt"])
@@ -583,6 +596,10 @@ fn main() -> eframe::Result {
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false)
+            // Launch: the window opens transparent, so until the GPU has shown LightCraft's first
+            // frame (it can take a second or two on a busy Mac) there is nothing to see instead of
+            // macOS's empty grey window. Every frame is opaque (`clear_color`), so it looks the same.
+            .with_transparent(true)
             .with_icon(app_icon())
             // Wayland matches the window to packaging/linux/ai.storyteller.lightcraft.desktop by this id
             .with_app_id(APP_ID),
@@ -620,6 +637,12 @@ fn main() -> eframe::Result {
                 app.ui = ui;
             }
             lightcraft_ui_egui::i18n::set_language(app.ui.language);
+            // identity-plate images are copied here (not with --memory / LIGHTCRAFT_NO_PREFS: nothing is written)
+            app.identity_dir =
+                (!in_memory && std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none()).then(lightcraft_ui_egui::identity::default_dir).flatten();
+            // fonts and theme before the first frame, so the window opens on the UI (it stays
+            // hidden until that frame), never on a blank grey box
+            app.prepare(&cc.egui_ctx);
             app.integrated_titlebar = cfg!(target_os = "macos");
             app.notices.extend(prefs_warning);
             // what's on disk now: only changes are written

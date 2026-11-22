@@ -1445,12 +1445,18 @@ fn grading(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
 }
 
 fn paint_wheel(p: &egui::Painter, c: Pos2, rad: f32) {
+    paint_hue_wheel(p, c, rad, Color32::from_gray(128), 0.75, 0.8);
+}
+
+/// A hue wheel: `center` in the middle, the hues at saturation `sat` and value `val` round the
+/// rim (Color Grading's wheels; the identity plate's tint picker).
+pub(crate) fn paint_hue_wheel(p: &egui::Painter, c: Pos2, rad: f32, center: Color32, sat: f32, val: f32) {
     let mut mesh = Mesh::default();
     let n = 48;
-    mesh.vertices.push(Vertex { pos: c, uv: Pos2::ZERO, color: Color32::from_gray(128) });
+    mesh.vertices.push(Vertex { pos: c, uv: Pos2::ZERO, color: center });
     for i in 0..=n {
         let a = i as f32 / n as f32 * std::f32::consts::TAU;
-        let rgb = lightcraft_color::perceptual::hsv_to_rgb(a.to_degrees(), 0.75, 0.8);
+        let rgb = lightcraft_color::perceptual::hsv_to_rgb(a.to_degrees(), sat, val);
         let col = Color32::from_rgb((rgb[0] * 255.0) as u8, (rgb[1] * 255.0) as u8, (rgb[2] * 255.0) as u8);
         mesh.vertices.push(Vertex { pos: c + vec2(a.cos(), -a.sin()) * rad, uv: Pos2::ZERO, color: col });
         if i > 0 {
