@@ -961,6 +961,108 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"id": id.0}))
         }),
         cmd!(
+            "album.duplicate",
+            "Duplicate Album",
+            [],
+            None,
+            "{id, name?} — a copy of the album (or smart album, with its rules) next to it, named \"<name> copy\" → {id}",
+            always,
+            |s, p| {
+                const C: &str = "album.duplicate";
+                let src = s.catalog.album(album_param(p, "id", C)?).cloned().ok_or_else(|| bad(C, "no such album"))?;
+                if src.folder || src.quick {
+                    return Err(bad(C, "only albums and smart albums can be duplicated"));
+                }
+                let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| format!("{} copy", src.name), str::to_string);
+                let id = s.catalog.alloc_album_id();
+                s.commit("Duplicate Album", Op::AddAlbum { album: Album { id, name, ..src } })?;
+                Ok(json!({"id": id.0}))
+            }
+        ),
+        cmd!(
+            "album.fromFolder",
+            "Create Album from Folder",
+            [],
+            None,
+            "{path, name?, subfolders?: bool (default true)} — a new album holding the library photos of that folder (Lightroom's Create Collection from folder) → {id, photos}",
+            always,
+            |s, p| {
+                const C: &str = "album.fromFolder";
+                let path = str_param(p, "path").map(str::trim).filter(|d| !d.is_empty()).ok_or_else(|| bad(C, "missing `path`"))?.to_string();
+                let f = Filter { library_folder: Some(path.clone()), library_folder_only: !bool_or(p, "subfolders", true), ..Default::default() };
+                let photos = s.catalog.query(&f, &Sort::default());
+                if photos.is_empty() {
+                    return Err(bad(C, format!("{path}: no photo in the library was imported from it")));
+                }
+                let default_name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.clone());
+                let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).map_or(default_name, str::to_string);
+                let id = s.catalog.alloc_album_id();
+                let n = photos.len();
+                let cover = photos.first().copied();
+                s.commit(
+                    "New Album from Folder",
+                    Op::AddAlbum { album: Album { id, name, parent: None, folder: false, photos, cover, smart: None, quick: false } },
+                )?;
+                Ok(json!({"id": id.0, "photos": n}))
+            }
+        ),
+        cmd!(
+            "album.saveQuick",
+            "Save Quick Collection",
+            ["Library"],
+            Some("Cmd+Alt+B"),
+            "{name?, clear?: bool (default true)} — the Quick Collection's photos as a new album; then the Quick Collection is emptied (one undo step) → {id, photos}",
+            always,
+            |s, p| {
+                const C: &str = "album.saveQuick";
+                let q = s
+                    .catalog
+                    .quick_collection()
+                    .and_then(|id| s.catalog.album(id).cloned())
+                    .filter(|a| !a.photos.is_empty())
+                    .ok_or_else(|| bad(C, "the Quick Collection is empty"))?;
+                let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Quick Collection (saved)").to_string();
+                let id = s.catalog.alloc_album_id();
+                let n = q.photos.len();
+                let mut ops = vec![Op::AddAlbum {
+                    album: Album {
+                        id,
+                        name,
+                        parent: None,
+                        folder: false,
+                        photos: q.photos.clone(),
+                        cover: q.photos.first().copied(),
+                        smart: None,
+                        quick: false,
+                    },
+                }];
+                if bool_or(p, "clear", true) {
+                    ops.push(Op::SetAlbumPhotos { id: q.id, photos: vec![] });
+                    ops.push(Op::SetAlbumCover { id: q.id, cover: None });
+                }
+                s.commit("Save Quick Collection", Op::Batch { ops })?;
+                Ok(json!({"id": id.0, "photos": n}))
+            }
+        ),
+        cmd!(
+            query "photo.albums",
+            "Albums of a Photo",
+            [],
+            None,
+            "{id?} — the regular albums the photo is in (Lightroom's Go to Collection) → [{id, name}]",
+            always,
+            |s, p| {
+                let Some(id) = s.targets(p).first().copied() else { return Ok(json!([])) };
+                let Some(ph) = s.catalog.photo(id).cloned() else { return Ok(json!([])) };
+                Ok(json!(s
+                    .catalog
+                    .albums()
+                    .filter(|a| !a.folder && !a.is_smart() && !a.quick && s.catalog.album_contains(a.id, &ph))
+                    .map(|a| json!({"id": a.id.0, "name": a.name}))
+                    .collect::<Vec<_>>()))
+            }
+        ),
+        cmd!(
             "album.createSmart",
             "New Smart Album…",
             [],

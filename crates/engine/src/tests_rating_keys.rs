@@ -307,3 +307,27 @@ fn capture_time_from_the_file() {
     assert!(t.as_str() > "2020", "{t}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// L25: duplicate an album, an album from a folder, Save Quick Collection, the albums of a photo.
+#[test]
+fn collection_extras() {
+    let mut s = Session::with_demo();
+    let v = s.visible_cloned();
+    s.selection = crate::Selection { ids: v[..3].to_vec(), active: Some(v[0]) };
+    let a = s.execute("album.create", &json!({"name": "Keepers", "addSelected": true})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("album.duplicate", &json!({"id": a})).unwrap()["id"].as_u64().unwrap();
+    let dup = s.catalog.album(lightcraft_catalog::AlbumId(b)).unwrap();
+    assert_eq!((dup.name.as_str(), dup.photos.len()), ("Keepers copy", 3));
+    let albums = s.execute("photo.albums", &json!({"id": v[0].0})).unwrap();
+    let names: Vec<&str> = albums.as_array().unwrap().iter().filter_map(|a| a["name"].as_str()).collect();
+    assert!(names.contains(&"Keepers") && names.contains(&"Keepers copy"), "{albums}");
+    // Quick Collection → a saved album, then emptied
+    s.selection = crate::Selection::single(v[4]);
+    s.execute("album.toggleTarget", &json!({})).unwrap();
+    let r = s.execute("album.saveQuick", &json!({"name": "Picks for Ann"})).unwrap();
+    assert_eq!(r["photos"], 1);
+    let q = s.catalog.quick_collection().unwrap();
+    assert!(s.catalog.album(q).unwrap().photos.is_empty());
+    assert!(s.execute("album.saveQuick", &json!({})).is_err(), "empty now");
+    assert!(s.execute("album.fromFolder", &json!({"path": "/nowhere"})).is_err());
+}
