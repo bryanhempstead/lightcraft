@@ -26,31 +26,31 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | C. Views & navigation (VIEW) | 15 | 3 | 0 | 0 | 8/10 (80%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 43 | 7 | 0 | 1 | 24/28 (86%) | 13/15 (87%) |
-| G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
+| F. Edit panel — global adjustments (EDIT) | 44 | 6 | 0 | 1 | 24/28 (86%) | 13/15 (87%) |
+| G. Profiles (PROF) | 9 | 2 | 0 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 9 | 1 | 1 | 2 | 4/4 (100%) | 3/3 (100%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
-| K. Masking (MASK) | 21 | 2 | 1 | 0 | 8/8 (100%) | 6/6 (100%) |
-| L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
+| K. Masking (MASK) | 22 | 2 | 0 | 0 | 8/8 (100%) | 6/6 (100%) |
+| L. Presets (PRE) | 7 | 0 | 0 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 8 | 0 | 0 | 0 | 3/3 (100%) | 4/4 (100%) |
 | O. Merge (MERGE) | 4 | 0 | 0 | 0 | — | — |
 | P. Enhance (ENH) | 2 | 0 | 0 | 0 | — | — |
 | Q. HDR (HDR) | 3 | 2 | 0 | 0 | — | — |
-| R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
-| S. Export (EXP) | 17 | 1 | 1 | 0 | 7/7 (100%) | 8/8 (100%) |
+| R. Video (VID) | 4 | 1 | 0 | 1 | — | 2/2 (100%) |
+| S. Export (EXP) | 17 | 2 | 0 | 0 | 7/7 (100%) | 8/8 (100%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 1 | 1 | 0 | 0 | — | 0/1 (0%) |
 | V. Preferences (PREF) | 5 | 0 | 3 | 3 | 1/1 (100%) | 4/4 (100%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 2 | 0 | 0 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 17 | 4 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 83 | 1 | 1 | 8 | 47/47 (100%) | 23/23 (100%) |
-| Z. Keyboard shortcuts (desktop) | 76 | 3 | 2 | 1 | 49/52 (94%) | 23/24 (96%) |
-| Lightroom Classic extras | 65 | 18 | 38 | 9 | — | 34/35 (97%) |
-| **Total** | 448 | 52 | 61 | 36 | 189/201 (94%) | 160/169 (95%) |
+| Z. Keyboard shortcuts (desktop) | 77 | 3 | 1 | 1 | 49/52 (94%) | 24/24 (100%) |
+| Lightroom Classic extras | 68 | 20 | 33 | 9 | — | 34/35 (97%) |
+| **Total** | 463 | 56 | 42 | 36 | 189/201 (94%) | 163/169 (96%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **84.5%** of 561 in-scope rows — P0 97.0% of 201 · P1 96.4% of 169 · P2 60.8% of 190.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **87.5%** of 561 in-scope rows — P0 97.0% of 201 · P1 98.2% of 169 · P2 68.2% of 190.
 <!-- /parity:summary -->
 
 ## Top gaps

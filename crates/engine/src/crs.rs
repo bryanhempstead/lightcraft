@@ -403,6 +403,44 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     n(o, "GrainSize", "grain.size");
     n(o, "GrainFrequency", "grain.roughness");
 
+    // ---- Lens Blur (`crs:LensBlur`, e.g. Lightroom's Adaptive: Blur Background presets). The
+    // focal range "near-start near-full far-full far-end" (0..100); the whole range (0 0 100 100)
+    // means "focus on the subject", which applying it works out (`lensBlur.apply`).
+    if let Some(b) = boolean(props, "crs:LensBlur/crs:Active") {
+        note("crs:LensBlur");
+        put(o, "lens_blur.enabled", json!(b));
+    }
+    if let Some(v) = num(props, "crs:LensBlur/crs:BlurAmount") {
+        put(o, "lens_blur.amount", json!(v.clamp(0.0, 100.0)));
+    }
+    if let Some(v) = num(props, "crs:LensBlur/crs:HighlightsBoost") {
+        put(o, "lens_blur.boost", json!(v.clamp(0.0, 100.0)));
+    }
+    if let Some(shape) = num(props, "crs:LensBlur/crs:BokehShape") {
+        let detail = num(props, "crs:LensBlur/crs:BokehShapeDetail").unwrap_or(0.0);
+        let bubble = num(props, "crs:LensBlur/crs:SphericalAberration").unwrap_or(0.0) > 40.0;
+        let bokeh = if shape >= 1.0 {
+            "ring"
+        } else if detail >= 1.0 {
+            "fiveBlade"
+        } else if bubble {
+            "bubble"
+        } else {
+            "circle"
+        };
+        put(o, "lens_blur.bokeh", json!(bokeh));
+    }
+    if let Some(r) = first(props, "crs:LensBlur/crs:FocalRange") {
+        let q: Vec<f64> = r.split_whitespace().filter_map(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite()).collect();
+        if let [a, b, c, d] = q[..] {
+            let whole = a <= 0.0 && b <= 0.0 && c >= 100.0 && d >= 100.0;
+            let (lo, hi) = (b.min(c).clamp(0.0, 100.0), b.max(c).clamp(0.0, 100.0));
+            let (distance, range) = if whole { (0.0, 0.0) } else { ((lo + hi) / 2.0, (hi - lo).max(1.0)) };
+            put(o, "lens_blur.focal_distance", json!(distance));
+            put(o, "lens_blur.focal_range", json!(range));
+        }
+    }
+
     // ---- Optics: the switch, and the lens profile Lightroom chose (by name, file and digest;
     // Bryan's fork renders it from the installed `.lcp`). A profile embedded in the file
     // (`LensProfileIsEmbedded`) is the file's own: nothing to name.

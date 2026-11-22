@@ -1172,6 +1172,36 @@ pub fn specs() -> Vec<CommandSpec> {
             // heuristic selections, and the reason is returned
             let (mut queued, mut errors) = (0usize, Vec::<String>::new());
             for (id, mask) in ai {
+                // People parts need the photo's people first (the active photo's: in the app the
+                // masks are computed once they are found)
+                let person = s.develop_of(id).and_then(|d| {
+                    d.masks.iter().find(|m| m.id == mask).and_then(|m| {
+                        m.components.iter().find_map(|c| match &c.shape {
+                            lightcraft_develop::MaskShape::People { person, rect: None, .. } => Some(*person as usize),
+                            _ => None,
+                        })
+                    })
+                });
+                if let Some(k) = person
+                    && s.person_rect(id, k).is_none()
+                {
+                    let then = (s.active() == Some(id)).then(|| json!({"command": "mask.updateAI", "params": {"id": mask}}));
+                    match s.detect_people(id, then) {
+                        Ok(Some(v)) if v.is_empty() => {
+                            errors.push("No people were found in this photo.".into());
+                            continue;
+                        }
+                        Ok(Some(_)) => {}
+                        Ok(None) => {
+                            queued += 1;
+                            continue;
+                        }
+                        Err(e) => {
+                            errors.push(e);
+                            continue;
+                        }
+                    }
+                }
                 match s.update_ai(id, Some(mask)) {
                     Ok((n, e)) => {
                         queued += n;
@@ -1179,6 +1209,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     Err(e) => errors.push(e),
                 }
+            }
+            // a preset that switches Lens Blur on with its focus left to the photo (Adaptive: Blur
+            // Background): the active photo gets its depth map and Lightroom's starting focus
+            if let Some(id) = s.active().filter(|a| ids.contains(a))
+                && s.develop_of(id).is_some_and(|d| d.lens_blur.enabled && d.lens_blur.focal_distance == 0.0 && d.lens_blur.focal_range == 0.0)
+                && let Err(e) = s.execute("lensBlur.apply", &json!({"on": true}))
+            {
+                errors.push(e.to_string());
             }
             errors.sort();
             errors.dedup();

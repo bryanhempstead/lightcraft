@@ -172,6 +172,17 @@ pub fn adobe_presets() -> Vec<Preset> {
                 if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX) > MAX_ADOBE_PRESET {
                     continue;
                 }
+                // the preset type sits in the packet's first attributes: skip the (large) look
+                // profiles without reading them whole
+                let head = {
+                    use std::io::Read;
+                    let mut b = Vec::new();
+                    let _ = std::fs::File::open(&path).map(|f| f.take(16 << 10).read_to_end(&mut b));
+                    b
+                };
+                if !String::from_utf8_lossy(&head).contains("crs:PresetType=\"Normal\"") {
+                    continue;
+                }
                 let Ok(bytes) = std::fs::read(&path) else { continue };
                 let text = String::from_utf8_lossy(&bytes);
                 if !text.contains("crs:PresetType=\"Normal\"") || text.contains("crs:ShowInPresets=\"False\"") {

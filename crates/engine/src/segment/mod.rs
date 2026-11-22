@@ -1289,7 +1289,12 @@ impl Session {
                         polled.messages.push("No people were found in this photo.".into());
                     } else if let Some(p) = then
                         && self.active() == Some(photo)
-                        && let Err(e) = self.execute("mask.add", &p)
+                        // `{command, params}` runs that command (an adaptive preset's masks:
+                        // `mask.updateAI`); anything else is a `mask.add`
+                        && let Err(e) = match p.get("command").and_then(serde_json::Value::as_str) {
+                            Some(c) => self.execute(c, &p.get("params").cloned().unwrap_or_else(|| serde_json::json!({}))),
+                            None => self.execute("mask.add", &p),
+                        }
                     {
                         polled.messages.push(e.to_string());
                     }

@@ -1058,3 +1058,32 @@ photos' own tone and colour settings (no look) LightCraft is 0.3–0.8 EV too da
 tone (R02: their Highlights −74…−90 / Shadows +43…+79), and it dominates what the acceptance set
 sees. Lowering `MEASURED_EXPOSURE` by ~0.16 EV would fix the defaults but move the edited
 photos the wrong way until R02 is refitted, so it is left.
+
+## Camera Matching, Legacy and Adaptive profiles (2026-11-22)
+
+A photo on a Camera Matching or imported camera profile (`cam:<name>`, Camera Raw's
+`CameraProfiles/Camera/<camera>/` and `CameraProfiles/Imported`) or a Legacy one (`legacy:ACR 4.4`)
+decodes on that DCP instead of the camera's Adobe Standard (`files::with_base_profile`,
+`adobe::profile_for`): its matrices / forward matrices and hue/sat map in the raw decode, its look
+table and tone curve in the per-pixel stage, as Adobe Standard always did. Legacy = Adobe Standard's
+matrices only, ACR3 default curve. Without the DCP the photo renders our nearest own look
+(`profiles::effective_for`).
+
+Check against Adobe's reference renderer (`dng-sdk-sys` example `sdk_render`, `dng_render` with the
+same DCP) on a Ricoh GR III DNG at 1200 px, mean ΔE76 after a 480 px box resize:
+
+| Profile | LightCraft vs SDK |
+|---|---|
+| Adobe Standard | 2.78 |
+| Camera Standard | 1.69 |
+| Camera Vivid | 1.82 |
+| Camera Positive Film | 1.45 |
+| Camera Negative Film | 1.58 |
+| Camera Monotone / Soft / Hard Monotone | 1.04 / 1.15 / 1.14 |
+
+(The SDK's reference tone isn't Lightroom's PV2012 base, so this checks the profile path, not
+Lightroom's tone; scripts `verify.sh` / `sdkcmp.py` were kept in the session scratchpad.) Bryan's
+catalog uses no Camera Matching profile: 14,674 Adobe Standard, 2,051 Embedded, 98 Apple Embedded
+(all 16,823 photos resolve, `tests_profiles::every_profile_in_the_lightroom_catalog_resolves` with
+`LIGHTCRAFT_LRCAT`). Adobe Adaptive: Color / B&W render their look table; their per-photo gain table
+map and RGB tables come from Camera Raw's `ModelZoo/ai_look`, an encrypted Core ML bundle.

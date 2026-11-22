@@ -310,6 +310,7 @@ fn adaptive_presets_compute_their_masks_with_the_installed_models() {
     let out = std::env::var_os("LIGHTCRAFT_AI_OUT").map(PathBuf::from);
     let wanted = std::env::var("LIGHTCRAFT_AI_PRESETS")
         .unwrap_or_else(|_| "Adaptive: Sky/Blue Drama,Adaptive: Portrait/Whiten Teeth,Adaptive: Landscape/Autumn".into());
+    let mut total = 0;
     for pair in wanted.split(',') {
         let Some((group, name)) = pair.split_once('/') else { continue };
         let Some(p) = s.presets.iter().find(|p| p.group == group && p.name.contains(name)).cloned() else {
@@ -334,9 +335,12 @@ fn adaptive_presets_compute_their_masks_with_the_installed_models() {
             .unwrap();
             std::fs::write(path, png).unwrap();
         }
-        assert!(r["aiErrors"].as_array().is_some_and(Vec::is_empty), "{r}");
-        assert!(computed > 0, "{group} ▸ {}: nothing computed", p.name);
+        // a photo without that subject (no sky, no people) says so; anything else is a failure
+        let none_found = r["aiErrors"].as_array().is_some_and(|a| a.iter().all(|e| e.as_str().is_some_and(|e| e.starts_with("No "))));
+        assert!(computed > 0 || (none_found && !r["aiErrors"].as_array().is_some_and(Vec::is_empty)), "{group} ▸ {}: {r}", p.name);
+        total += computed;
     }
+    assert!(total > 0, "nothing computed on this photo");
 }
 
 /// Every profile Bryan's Lightroom catalog uses resolves (skipped unless `LIGHTCRAFT_LRCAT` names
@@ -380,4 +384,29 @@ fn every_profile_in_the_lightroom_catalog_resolves() {
     }
     eprintln!("{total} photos, {unresolved} unresolved");
     assert_eq!(unresolved, 0);
+}
+
+#[test]
+fn blur_background_presets_switch_lens_blur_on() {
+    let x = |shape: &str, detail: &str, sa: &str, range: &str| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:PresetType="Normal"><crs:LensBlur crs:Version="1" crs:Active="true" crs:FocalRange="{range}" crs:BlurAmount="70" crs:BokehShape="{shape}" crs:BokehShapeDetail="{detail}" crs:HighlightsBoost="50" crs:SphericalAberration="{sa}"/></rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    let lb = |xmp: &str| {
+        let d = lightcraft_meta::parse_xmp(xmp).unwrap();
+        let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), None, 1.5);
+        assert!(!unmapped.iter().any(|u| u.contains("LensBlur")), "{unmapped:?}");
+        lightcraft_develop::apply_partial(&lightcraft_develop::DevelopSettings::default(), &partial, 1.0).lens_blur
+    };
+    let b = lb(&x("0", "0", "80", "0 0 100 100"));
+    assert!(b.enabled && b.amount == 70.0 && b.boost == 50.0);
+    assert_eq!(b.bokeh, lightcraft_develop::Bokeh::Bubble);
+    assert_eq!((b.focal_distance, b.focal_range), (0.0, 0.0), "the whole range: focus on the subject when applied");
+    assert_eq!(lb(&x("0", "1", "0", "0 0 100 100")).bokeh, lightcraft_develop::Bokeh::FiveBlade);
+    assert_eq!(lb(&x("1", "3", "0", "0 0 100 100")).bokeh, lightcraft_develop::Bokeh::Ring);
+    let r = lb(&x("0", "0", "0", "0 20 40 60"));
+    assert_eq!(r.bokeh, lightcraft_develop::Bokeh::Circle);
+    assert_eq!((r.focal_distance, r.focal_range), (30.0, 20.0));
+    assert!(!lb(&x("0", "0", "0", "garbage")).focal_range.is_nan());
 }
