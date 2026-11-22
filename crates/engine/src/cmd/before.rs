@@ -45,7 +45,13 @@ fn set_before(s: &mut Session, p: &Value) -> Result<Value> {
             let name = p.get("name").and_then(Value::as_str).ok_or_else(|| bad(C, "version needs `name`"))?;
             Some(photo.versions.iter().find(|v| v.name == name).ok_or_else(|| bad(C, format!("no version `{name}`")))?.settings.clone())
         }
-        other => return Err(bad(C, format!("unknown source `{other}` (import, current, history, version)"))),
+        // a step of the photo's Lightroom history (migrated with it)
+        "lightroom" => {
+            let i = p.get("index").and_then(Value::as_u64).ok_or_else(|| bad(C, "lightroom needs `index`"))? as usize;
+            let h = crate::lr_history::history_of(s, id).ok_or_else(|| bad(C, "no Lightroom history"))?;
+            Some(Arc::new(h.settings(i).ok_or_else(|| bad(C, format!("no Lightroom step {i}")))?))
+        }
+        other => return Err(bad(C, format!("unknown source `{other}` (import, current, history, version, lightroom)"))),
     };
     match settings {
         Some(b) => s.before.insert(id, b),
@@ -76,7 +82,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Before",
             [],
             None,
-            "{source: import|current|history|version, index? (history step), name? (version)} — what the before side shows (this session)",
+            "{source: import|current|history|version|lightroom, index? (history or Lightroom history step), name? (version)} — what the before side shows (this session)",
             has_active,
             set_before
         ),

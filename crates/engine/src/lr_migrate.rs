@@ -151,7 +151,7 @@ pub struct MigrateOptions {
 
 /// The profile one of our profiles a creative look `name` matches: `look_map`'s choice, else an
 /// imported profile of that name (case-insensitive).
-fn matching_profile(s: &Session, look_map: &HashMap<String, String>, name: &str) -> Option<String> {
+pub(crate) fn matching_profile(s: &Session, look_map: &HashMap<String, String>, name: &str) -> Option<String> {
     look_map.get(name).cloned().or_else(|| s.lut_profiles.iter().find(|l| l.name.eq_ignore_ascii_case(name.trim())).map(|l| l.id.clone()))
 }
 
@@ -1159,7 +1159,7 @@ impl DevelopStats {
 
 /// The colour label Lightroom's text names (its own colour names or a label set's), ignoring
 /// plug-in bookkeeping labels.
-fn label_of(s: &Session, text: &str) -> Option<ColorLabel> {
+pub(crate) fn label_of(s: &Session, text: &str) -> Option<ColorLabel> {
     let t = text.trim();
     if t.is_empty() || t.starts_with("TK#") {
         return None;
@@ -1784,7 +1784,7 @@ pub fn flatten_wrapper(s: &mut Session, any: bool) -> crate::Result<Value> {
 }
 
 /// An album (or folder) named `name` under `parent`, made if there is none.
-fn find_or_make_album(s: &mut Session, name: &str, parent: Option<AlbumId>, folder: bool) -> crate::Result<AlbumId> {
+pub(crate) fn find_or_make_album(s: &mut Session, name: &str, parent: Option<AlbumId>, folder: bool) -> crate::Result<AlbumId> {
     if let Some(a) = s.catalog.albums().find(|a| a.parent == parent && a.name == name && a.folder == folder && !a.is_smart() && !a.quick) {
         return Ok(a.id);
     }
