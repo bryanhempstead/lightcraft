@@ -544,6 +544,10 @@ pub struct RenderJob {
     /// What a lens profile named in `settings` needs to know of the photo (Lightroom's choice,
     /// [`DevelopSettings::optics`]`.lens_profile_ref`): `None` = the file's own lens data only.
     pub lens_facts: Option<LensFacts>,
+    /// A region render ([`RenderRequest::region`], [`crate::Session::detail_job`]): the source
+    /// and request of the whole-photo pass its globals come from (a preview-size render;
+    /// [`lightcraft_pipeline::region`]).
+    pub context: Option<(SourceRef, RenderRequest, u64)>,
 }
 
 /// The photo facts a lens profile's corrections depend on: its size (oriented, default crop),
@@ -697,7 +701,7 @@ impl RenderJob {
                 photo: self.photo,
                 level: self.level,
                 key: self.key,
-                rendered: Ok(Rendered { image, histogram, deep: None }),
+                rendered: Ok(Rendered { image, histogram, deep: None, region: None }),
                 loaded: None,
                 quick: None,
             };
@@ -713,7 +717,33 @@ impl RenderJob {
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
-                let rendered = develop(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                let rendered = match (self.request.region, &self.context) {
+                    (Some(_), Some((ctx, creq, gkey))) => match region_globals(
+                        src,
+                        &info,
+                        &self.request,
+                        (ctx, creq, *gkey),
+                        self.info,
+                        &self.settings,
+                        self.lens_facts,
+                        self.stages.as_deref(),
+                    ) {
+                        Ok(g) => develop_region(src, &info, &self.settings, &self.request, &g, self.stages.as_deref(), gpu),
+                        Err(e) => {
+                            return RenderResult {
+                                request_id: self.request_id,
+                                source_key: self.source_key,
+                                photo: self.photo,
+                                level: self.level,
+                                key: self.key,
+                                rendered: Err(e),
+                                loaded: (!was_loaded).then_some(source),
+                                quick: None,
+                            };
+                        }
+                    },
+                    _ => develop(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu),
+                };
                 if let Some((cache, key)) = &self.cache {
                     cache.put_at(self.cache_generation, *key, Arc::new(rendered.image.clone()));
                 }
@@ -765,6 +795,57 @@ pub fn develop(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &
     }
 }
 
+/// The whole-photo values a region render of `s` from `full` for `req` takes
+/// ([`lightcraft_pipeline::region`]): kept in the view's `stages` under `key`
+/// ([`lightcraft_pipeline::region::globals_key`]), else computed — tone statistics and the like
+/// from a whole render of `ctx` for `creq` (the preview-size source; decoded here if it isn't
+/// yet), Camera Raw's scene map from `full` at `req`'s size.
+#[allow(clippy::too_many_arguments)]
+pub fn region_globals(
+    full: &Rgb32f,
+    full_info: &SourceInfo,
+    req: &RenderRequest,
+    (ctx, creq, key): (&SourceRef, &RenderRequest, u64),
+    header: SourceInfo,
+    s: &DevelopSettings,
+    lens_facts: Option<LensFacts>,
+    stages: Option<&StageCache>,
+) -> Result<Arc<lightcraft_pipeline::Globals>, String> {
+    if let Some(g) = stages.and_then(|c| c.globals(key)) {
+        return Ok(g);
+    }
+    let source = ctx.load_source()?;
+    let mut info = source.info_or(header);
+    if let Some(lens) = lens_facts.and_then(|f| f.chosen(s)) {
+        info.lens = Some(lens);
+    }
+    let g = Arc::new(lightcraft_pipeline::region::globals_for(full, full_info, &source.image, &info, s, req, creq));
+    if let Some(c) = stages {
+        c.set_globals(key, g.clone());
+    }
+    Ok(g)
+}
+
+/// [`develop`] for a region render ([`RenderRequest::region`]) with its whole-photo values.
+pub fn develop_region(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    globals: &lightcraft_pipeline::Globals,
+    stages: Option<&StageCache>,
+    gpu: bool,
+) -> Rendered {
+    if gpu
+        && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
+        && req.proof.is_none()
+        && let Some(r) = lightcraft_gpu::render_region(src, info, s, req, globals, stages)
+    {
+        return r;
+    }
+    lightcraft_pipeline::render_region(src, info, s, req, globals, stages)
+}
+
 /// Where a [`QuickJob`]'s stand-in image came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -808,7 +889,7 @@ impl QuickJob {
         };
         let rendered = |image: Rgba8| {
             let histogram = Histogram::of_srgb8(&image);
-            Ok(Rendered { image, histogram, deep: None })
+            Ok(Rendered { image, histogram, deep: None, region: None })
         };
         for (cache, k) in &self.cached {
             if let Some(img) = cache.get(*k) {
@@ -967,7 +1048,49 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             lens_facts: LensFacts::of(&p),
+            context: None,
         })
+    }
+
+    /// The size of `id`'s whole render at `scale` of its native resolution (1 = the original's
+    /// pixels: what a full-size export has), cropped unless `apply_crop` is off.
+    pub fn detail_size(&self, id: PhotoId, scale: f64, apply_crop: bool) -> Option<(usize, usize)> {
+        let p = self.catalog.photo(id)?;
+        let mut s = (*p.develop).clone();
+        if !apply_crop {
+            s.crop = Default::default();
+        }
+        let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &s);
+        let scale = if scale.is_finite() { scale.clamp(1.0 / 64.0, 1.0) } else { 1.0 };
+        let px = |v: f64| if v.is_finite() { ((v * scale).round() as usize).clamp(1, 1 << 16) } else { 1 };
+        Some((px(w), px(h)))
+    }
+
+    /// A region of `id`'s render at `scale` of its native resolution ([`Self::detail_size`]), at
+    /// that resolution — the loupe's tiles at 1:1 and beyond the preview size — through the same
+    /// pipeline as the whole render (GPU or CPU) and equal to the same pixels of it
+    /// ([`lightcraft_pipeline::region`]). What depends on the whole photo comes from a
+    /// preview-size pass over the preview source ([`RenderJob::context`], kept in the view's
+    /// stage cache while the scene-linear settings stay). `before`: the "before" settings.
+    /// The result's [`Rendered::region`] says where its pixels go.
+    pub fn detail_job(&mut self, id: PhotoId, scale: f64, region: lightcraft_pipeline::Region, apply_crop: bool, before: bool) -> Option<RenderJob> {
+        let (w, h) = self.detail_size(id, scale, apply_crop)?;
+        let mut job = self.build_job(id, w, h, before, apply_crop, None)?;
+        let p = self.catalog.photo(id)?.clone();
+        let content = Hasher128::new().str(&content_key(&p)).finish().0 as u64;
+        let creq = RenderRequest { apply_crop, ..RenderRequest::fit(SourceLevel::Preview.max_edge(), SourceLevel::Preview.max_edge()) };
+        let gkey = lightcraft_pipeline::region::globals_key(&job.settings)
+            ^ content.rotate_left(29)
+            ^ (apply_crop as u64).rotate_left(3)
+            ^ id.0.rotate_left(41);
+        let level = SourceLevel::for_size(source_edge_needed(&p, &job.settings, creq.max_w, apply_crop));
+        let ctx = if level == job.level { job.source.clone() } else { self.media.source_ref(&p, level) };
+        job.request.region = Some(region);
+        job.key ^= region.key().rotate_left(7) ^ 0x7469_6c65; // "tile"
+        job.context = Some((ctx, creq, gkey));
+        job.view_cache = None;
+        job.cache = None;
+        Some(job)
     }
 
     /// A render of `id` with `settings` in place of its own, fitting `max_w × max_h` (the loupe's
@@ -1037,6 +1160,7 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             lens_facts: LensFacts::of(&p),
+            context: None,
         })
     }
 
@@ -1083,6 +1207,7 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             lens_facts: LensFacts::of(&p),
+            context: None,
         })
     }
 

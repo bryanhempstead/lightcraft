@@ -159,6 +159,12 @@ const FIELDS: &[(&str, usize)] = &[
     ("SCENE_TOP", 1),
     // the SDR rendition's highlight saturation (`crs:SDRBlend`, `finish::highlight_saturation`)
     ("HL_SAT", 1),
+    // a region render (`lightcraft_pipeline::region`): where the buffer sits in the whole render
+    // (x, y, width, height), for what is placed over the whole frame (vignette, scene tone map)
+    ("WIN_X", 1),
+    ("WIN_Y", 1),
+    ("WIN_FW", 1),
+    ("WIN_FH", 1),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -328,6 +334,10 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let mut p = Block::new();
     p.u("W", fp.w as u32);
     p.u("H", fp.h as u32);
+    p.u("WIN_X", fp.win.0 as u32);
+    p.u("WIN_Y", fp.win.1 as u32);
+    p.u("WIN_FW", fp.win.2 as u32);
+    p.u("WIN_FH", fp.win.3 as u32);
     p.u("NMASK", masks.len() as u32);
     p.u("MASK_OFF", mask_off as u32);
     p.u("SRGB_OFF", srgb_off as u32);

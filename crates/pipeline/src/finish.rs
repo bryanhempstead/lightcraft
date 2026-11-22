@@ -532,6 +532,10 @@ pub struct FinishParams {
     pub oh: f64,
     pub w: usize,
     pub h: usize,
+    /// Where the `w × h` buffer sits in the whole render: x, y and the whole render's width and
+    /// height (0, 0, w, h unless this is a region render, [`crate::region`]). Positions over the
+    /// whole frame (vignette, the scene tone map) are taken there.
+    pub win: (usize, usize, usize, usize),
     pub px_per_long: f64,
     /// Peak linear output relative to SDR white: 1 for SDR renders; `2^max_ev` for an HDR render
     /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them.
@@ -660,6 +664,10 @@ impl FinishParams {
             oh: frame.oh,
             w,
             h,
+            win: {
+                let ((x, y), (fw, fh)) = (frame.offset(), frame.full_size(w, h));
+                (x, y, fw, fh)
+            },
             px_per_long,
             scene: None,
             tex_space: crate::texture_cr::space(info),
@@ -692,7 +700,7 @@ impl FinishParams {
             },
             (None, None) => return self,
         };
-        let mut t = sc::SceneTone::new(base, self.w, self.h, self.ev);
+        let mut t = sc::SceneTone::new(base, self.win.2, self.win.3, self.ev);
         t.clarity = clarity && map.is_some();
         if t.clarity {
             // made here, outside the per-pixel stage's parallel rows: a lazily made detail inside
@@ -809,7 +817,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
-    let aspect = w as f32 / h as f32;
+    // a region render's pixels sit at (ox, oy) of a fw × fh render
+    let (ox, oy, fw, fh) = fp.win;
+    let aspect = fw.max(1) as f32 / fh.max(1) as f32;
 
     let srgb = srgb_lut();
     let peak = fp.peak;
@@ -870,7 +880,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // Camera Raw's scene tone map (`scene_cr`): the pixel's neighbours on the map, and its
             // level after Exposure, before Dehaze and a mask's Exposure
             let sc = fp.scene.as_deref();
-            let smp = sc.map(|t| t.sample(x, y));
+            let smp = sc.map(|t| t.sample(x + ox, y + oy));
             let l_scene = crate::scene_cr::level(luminance_2020(c));
             // --- dehaze (scene linear): positive with Camera Raw's haze model after local tone
             let dz = dehaze + l_dehaze;
@@ -1064,8 +1074,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 
             // --- vignette (display linear, post-crop)
             if let Some(v) = vig {
-                let u = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
-                let vv = (y as f32 + 0.5) / h as f32 * 2.0 - 1.0;
+                let u = ((x + ox) as f32 + 0.5) / fw.max(1) as f32 * 2.0 - 1.0;
+                let vv = ((y + oy) as f32 + 0.5) / fh.max(1) as f32 * 2.0 - 1.0;
                 let sx = 1.0 + (aspect - 1.0) * v.aspect_mix;
                 let sy = 1.0 + (1.0 / aspect - 1.0) * v.aspect_mix;
                 let (ax, ay) = ((u * sx.max(1.0) / sx.max(sy)).abs(), (vv * sy.max(1.0) / sx.max(sy)).abs());
