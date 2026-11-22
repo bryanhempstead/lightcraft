@@ -778,6 +778,10 @@ fn options_column(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, d: &mut I
                 if !smart_ok && d.prefs.smart_previews {
                     ui.label(egui::RichText::new(crate::i18n::tr("This library keeps no smart previews.")).small().color(t.caution));
                 }
+                if crate::import::volume_of(&d.prefs.source).is_some() {
+                    let r = ui.checkbox(&mut d.prefs.eject, crate::i18n::tr("Eject after import"));
+                    register(ui.ctx(), "check:importEject", r.rect);
+                }
                 ui.label(
                     egui::RichText::new(crate::i18n::tr("Suspected duplicates are never imported twice: they show dimmed and unchecked."))
                         .small()
@@ -1113,5 +1117,15 @@ mod tests {
         assert!(w.copy && w.move_files);
         d.prefs.mode = "add".into();
         assert!(!crate::import::from_prefs(&d).copy);
+    }
+
+    /// I02: Eject after import names the card's volume.
+    #[test]
+    fn eject_volume_of_a_source() {
+        assert_eq!(crate::import::volume_of("/Volumes/EOS_DIGITAL/DCIM/100CANON").as_deref(), Some("/Volumes/EOS_DIGITAL"));
+        assert_eq!(crate::import::volume_of("/Volumes/CARD").as_deref(), Some("/Volumes/CARD"));
+        assert_eq!(crate::import::volume_of("/Users/me/Pictures"), None);
+        assert_eq!(crate::import::volume_of("/Volumes/"), None);
+        assert!(!ImportPrefs::default().eject, "off unless asked");
     }
 }

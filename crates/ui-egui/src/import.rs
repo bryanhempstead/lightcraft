@@ -133,6 +133,8 @@ pub struct ImportPrefs {
     pub preset: String,
     pub metadata_preset: String,
     pub keywords: String,
+    /// Eject the card (or disk) imported from once the import is done (I02).
+    pub eject: bool,
 }
 
 impl Default for ImportPrefs {
@@ -153,6 +155,7 @@ impl Default for ImportPrefs {
             preset: String::new(),
             metadata_preset: String::new(),
             keywords: String::new(),
+            eject: false,
         }
     }
 }
@@ -951,7 +954,25 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
 }
 
 /// The import is done (or cancelled): one undo step, select the first photo, say what happened.
+/// The removable volume a source lies on (`/Volumes/CARD/DCIM/100` → `/Volumes/CARD`), if any.
+pub fn volume_of(source: &str) -> Option<String> {
+    let rest = source.strip_prefix("/Volumes/")?;
+    let name = rest.split('/').next().filter(|n| !n.is_empty())?;
+    Some(format!("/Volumes/{name}"))
+}
+
 fn finish(app: &mut LightcraftApp, ctx: &egui::Context, mut task: ImportTask) {
+    // Eject after import (I02): the card goes once its photos are in
+    #[cfg(target_os = "macos")]
+    if let Some(vol) = task.window.as_ref().filter(|w| w.eject).and_then(|w| volume_of(&w.source)) {
+        match std::process::Command::new("/usr/sbin/diskutil").args(["eject", &vol]).spawn() {
+            Ok(mut child) => {
+                let _ = std::thread::Builder::new().name("eject".into()).spawn(move || child.wait());
+                app.toast(ctx, format!("Ejecting {vol}"));
+            }
+            Err(e) => app.toast_error(ctx, format!("Couldn't eject {vol}: {e}")),
+        }
+    }
     let steps = app.session.undo.len().saturating_sub(task.undo0);
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     let label = if task.imported == 0 && task.restored > 0 {
