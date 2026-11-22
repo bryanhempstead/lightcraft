@@ -33,6 +33,22 @@ pub struct Frame {
     pub warp: Option<Warp>,
     /// The photo's depth map, decoded (Lens Blur, Depth Range masks).
     pub depth: Option<std::sync::Arc<lightcraft_develop::DepthGrid>>,
+    /// A region render ([`crate::Region`]): the output buffer is this window of a `full_w ×
+    /// full_h` render. Every mapping between output pixels and the image (sampling, masks,
+    /// spots, vignette, grain) then places the buffer's pixels where they sit in the whole
+    /// render, so a region equals the same pixels of the whole render.
+    pub window: Option<Window>,
+}
+
+/// Where a region render's buffer sits in the whole render (see [`Frame::window`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Window {
+    /// The buffer's top-left pixel in the whole render.
+    pub x: usize,
+    pub y: usize,
+    /// The whole render's size.
+    pub full_w: usize,
+    pub full_h: usize,
 }
 
 impl Frame {
@@ -65,6 +81,7 @@ impl Frame {
             flip_v: apply_crop && s.crop.flip_v,
             warp: (!warp.is_identity()).then_some(warp),
             depth: s.depth.as_ref().and_then(|d| d.grid()).map(std::sync::Arc::new),
+            window: None,
         };
         if apply_crop && s.geometry.constrain_crop {
             f.constrain_to_image();
@@ -151,15 +168,34 @@ impl Frame {
         ((w.round() as usize).max(1), (h.round() as usize).max(1))
     }
 
-    /// Output pixels per unit of the oriented image's long edge.
+    /// Output pixels per unit of the oriented image's long edge (a region render: the whole
+    /// render's, whatever `out_w`).
     pub fn px_per_long(&self, out_w: usize) -> f64 {
         let r = self.crop.rect_px(self.ow, self.oh);
+        let out_w = self.window.map_or(out_w, |win| win.full_w);
         out_w as f64 / r.width() * self.ow.max(self.oh)
+    }
+
+    /// The size of the whole render an `out_w × out_h` buffer belongs to (itself, unless this is
+    /// a region render).
+    pub fn full_size(&self, out_w: usize, out_h: usize) -> (usize, usize) {
+        self.window.map_or((out_w, out_h), |win| (win.full_w, win.full_h))
+    }
+
+    /// The buffer's top-left pixel in the whole render (0, 0 unless this is a region render).
+    pub fn offset(&self) -> (usize, usize) {
+        self.window.map_or((0, 0), |win| (win.x, win.y))
+    }
+
+    /// The same frame for a whole render (no [`Frame::window`]).
+    pub fn whole(&self) -> Frame {
+        Frame { window: None, ..self.clone() }
     }
 
     /// Affine from output pixel coordinates to oriented-image pixel coordinates.
     pub fn out_to_oriented(&self, out_w: usize, out_h: usize) -> Affine {
-        let (w, h) = (out_w as f64, out_h as f64);
+        let (fw, fh) = self.full_size(out_w, out_h);
+        let (w, h) = (fw as f64, fh as f64);
         let mut flip = Affine::IDENTITY;
         if self.flip_h {
             flip = Affine([-1.0, 0.0, 0.0, 1.0, w, 0.0]) * flip;
@@ -167,7 +203,9 @@ impl Frame {
         if self.flip_v {
             flip = Affine([1.0, 0.0, 0.0, -1.0, 0.0, h]) * flip;
         }
-        self.crop.output_to_source(self.ow, self.oh, w, h) * flip
+        let (ox, oy) = self.offset();
+        let shift = Affine([1.0, 0.0, 0.0, 1.0, ox as f64, oy as f64]);
+        self.crop.output_to_source(self.ow, self.oh, w, h) * flip * shift
     }
 
     /// Map an output pixel to normalized oriented-image coordinates (0..1).
@@ -190,13 +228,13 @@ impl Frame {
     pub fn sample_plan(&self, src_w: usize, src_h: usize, w: usize, h: usize) -> SamplePlan {
         let (ow, oh) = if self.orient.swaps_axes() { (src_h, src_w) } else { (src_w, src_h) };
         let crop_px = self.crop.rect_px(self.ow, self.oh);
-        let k = crop_px.width() / w as f64;
+        let k = crop_px.width() / self.full_size(w, h).0 as f64;
         let prefilter = (k > 1.25).then(|| (((ow as f64 / k).round() as usize).max(1), ((oh as f64 / k).round() as usize).max(1)));
         let (bw, bh) = prefilter.unwrap_or((ow, oh));
         let (sx, sy) = (bw as f64 / ow as f64, bh as f64 / oh as f64);
         let mode = if self.warp.is_some() {
             SampleMode::Warp(self.out_to_oriented(w, h))
-        } else if self.crop.is_identity() && !self.flip_h && !self.flip_v && bw == w && bh == h {
+        } else if self.crop.is_identity() && !self.flip_h && !self.flip_v && bw == w && bh == h && self.window.is_none() {
             SampleMode::Copy
         } else {
             SampleMode::Affine(Affine::scale(sx, sy) * self.out_to_oriented(w, h))
@@ -208,8 +246,14 @@ impl Frame {
     /// bilinear resample from a pre-filtered (area-downscaled) copy, so minification never aliases.
     pub fn sample(&self, src: &Rgb32f, w: usize, h: usize) -> Rgb32f {
         let oriented = if self.orient == Orientation::Normal { None } else { Some(src.oriented(self.orient)) };
-        let o = oriented.as_ref().unwrap_or(src);
-        let plan = self.sample_plan(src.width, src.height, w, h);
+        self.sample_oriented(oriented.as_ref().unwrap_or(src), w, h)
+    }
+
+    /// [`Frame::sample`] from the source already turned by [`Frame::orient`] (so a caller
+    /// sampling many windows of one frame orients it once).
+    pub fn sample_oriented(&self, o: &Rgb32f, w: usize, h: usize) -> Rgb32f {
+        let (src_w, src_h) = if self.orient.swaps_axes() { (o.height, o.width) } else { (o.width, o.height) };
+        let plan = self.sample_plan(src_w, src_h, w, h);
         let base = match plan.prefilter {
             Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, Filter::Mitchell)),
             None => std::borrow::Cow::Borrowed(o),

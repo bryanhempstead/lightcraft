@@ -48,6 +48,7 @@ pub mod point_color_cr;
 pub mod profiles;
 pub mod redeye;
 pub mod reflection;
+pub mod region;
 pub mod scene_cr;
 pub mod spots;
 pub mod texture_cr;
@@ -58,6 +59,7 @@ pub mod upright;
 pub mod visualize;
 
 pub use output::{DeepImage, DeepSamples, OutputDepth, OutputSpace, OutputTrc, Proof};
+pub use region::{Globals, Region, RegionPx};
 pub use visualize::{MaskView, Overlay};
 
 use lightcraft_develop::{DevelopSettings, Treatment};
@@ -225,6 +227,8 @@ pub struct RenderRequest {
     pub depth: OutputDepth,
     /// Soft proofing (CPU only; see [`Proof`]).
     pub proof: Option<Proof>,
+    /// Render only this rectangle of the whole `max_w × max_h` fit, at its scale ([`region`]).
+    pub region: Option<Region>,
 }
 
 impl RenderRequest {
@@ -238,6 +242,7 @@ impl RenderRequest {
             space: OutputSpace::Srgb,
             depth: OutputDepth::U8,
             proof: None,
+            region: None,
         }
     }
 }
@@ -248,6 +253,8 @@ pub struct Rendered {
     pub histogram: Histogram,
     /// The high-bit-depth result when [`RenderRequest::depth`] asks for one.
     pub deep: Option<DeepImage>,
+    /// A region render ([`RenderRequest::region`]): where `image` sits in the whole render.
+    pub region: Option<RegionPx>,
 }
 
 /// Everything the per-pixel stage needs, precomputed at output resolution.
@@ -318,11 +325,13 @@ pub struct StageCache {
     capacity: usize,
     /// Another renderer's per-view state (the GPU renderer keeps its device-resident stages here).
     ext: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
+    /// A region view's whole-photo values ([`region::Globals`]) and their key.
+    globals: Mutex<Option<(u64, Arc<Globals>)>>,
 }
 
 impl Default for StageCache {
     fn default() -> Self {
-        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None) }
+        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None), globals: Mutex::new(None) }
     }
 }
 
@@ -331,6 +340,17 @@ impl StageCache {
     pub fn clear(&self) {
         self.lock().clear();
         *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.globals.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// The whole-photo values kept for `key` ([`Self::set_globals`]), if any.
+    pub fn globals(&self, key: u64) -> Option<Arc<Globals>> {
+        self.globals.lock().unwrap_or_else(|e| e.into_inner()).as_ref().filter(|(k, _)| *k == key).map(|(_, g)| g.clone())
+    }
+
+    /// Keep a region view's whole-photo values (one set: the latest).
+    pub fn set_globals(&self, key: u64, g: Arc<Globals>) {
+        *self.globals.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, g));
     }
 
     /// Per-view state of type `T` kept alongside this cache (created on first use). Lets another
@@ -439,6 +459,9 @@ pub struct Plan<'a> {
     pub lin_key: u64,
     /// Red eye / pet eye corrections with their detected pupils, in output pixels.
     pub eyes: Vec<redeye::EyeK>,
+    /// A region render: the requested pixels of the whole render (the `w × h` buffer is the
+    /// frame's [`geometry::Frame::window`] around them, or the whole render).
+    pub region: Option<RegionPx>,
 }
 
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
@@ -449,10 +472,14 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     };
     visualize::adjust_settings(req.overlay, &mut settings);
     let s = &*settings;
-    let frame = frame_for(src, info, s, req.apply_crop);
+    let mut frame = frame_for(src, info, s, req.apply_crop);
     let (w, h) = frame.fit(req.max_w, req.max_h);
     let px_per_long = frame.px_per_long(w);
     let src_long = src.width.max(src.height);
+    let (region, w, h) = match req.region.and_then(|r| region::place(r, &mut frame, s, w, h, px_per_long, req.quality, src_long)) {
+        Some((px, ww, wh)) => (Some(px), ww, wh),
+        None => (None, w, h),
+    };
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
@@ -470,7 +497,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         spots::gen_state(&s.spots),
         reflection::key(s),
     ));
-    Plan { settings, frame, w, h, px_per_long, src_long, geo, lin_key, eyes }
+    Plan { settings, frame, w, h, px_per_long, src_long, geo, lin_key, eyes, region }
 }
 
 /// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal).
@@ -514,13 +541,44 @@ pub fn settings_for<'a>(s: &'a DevelopSettings, req: &RenderRequest) -> std::bor
 
 /// Render `src` with settings `s`.
 pub fn render(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Rendered {
-    render_impl(Src::Borrowed(src), info, s, req, None)
+    render_impl(Src::Borrowed(src), info, s, req, None, None)
 }
 
 /// [`render`], reusing (and refreshing) the intermediate results in `cache`. The output is
 /// identical to [`render`]'s.
 pub fn render_cached(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: &StageCache) -> Rendered {
-    render_impl(Src::Shared(src), info, s, req, Some(cache))
+    render_impl(Src::Shared(src), info, s, req, Some(cache), None)
+}
+
+/// A region render ([`RenderRequest::region`]) taking what depends on the whole photo from
+/// `globals` (see [`region`]); `cache` as in [`render_cached`].
+pub fn render_region(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    globals: &Globals,
+    cache: Option<&StageCache>,
+) -> Rendered {
+    render_impl(Src::Shared(src), info, s, req, cache, Some(globals))
+}
+
+/// What a whole render of `req` (its region ignored) learns from the whole photo, for
+/// [`render_region`]: usually a preview-size render's.
+pub fn globals(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Globals {
+    let effective = s.effective();
+    let req = RenderRequest { region: None, ..*req };
+    let rendition = settings_for(&effective, &req);
+    let plan = plan(src, info, &rendition, &req);
+    let s = &*plan.settings;
+    let mut img = plan.frame.sample(src, plan.w, plan.h);
+    lin_cpu(&mut img, info, &plan);
+    local::denoise(&mut img, s, plan.src_long, plan.w.max(plan.h));
+    let mut planes = local::Planes { key: plan.lin_key, ..Default::default() };
+    let tex_space = texture_cr::space(info);
+    let prep =
+        local::prepare(Arc::new(img), s, &plan.frame, plan.px_per_long, info.native_long, req.quality, &mut planes, tex_space.as_ref().map(|m| &m.0));
+    Globals { tone_stats: prep.tone_stats, p99: prep.p99, air: prep.dark.is_some().then_some(prep.air), scene_map: prep.scene_map, haze: prep.haze }
 }
 
 enum Src<'a> {
@@ -528,7 +586,14 @@ enum Src<'a> {
     Shared(&'a Arc<Rgb32f>),
 }
 
-fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Rendered {
+fn render_impl(
+    src: Src<'_>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    cache: Option<&StageCache>,
+    globals: Option<&Globals>,
+) -> Rendered {
     // sections switched off with their eye render as if at their defaults (issue #316)
     let effective = s.effective();
     let edit: &DevelopSettings = &effective;
@@ -567,7 +632,8 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             // Without a cache the resampled buffer is ours: work on it in place.
             let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
             lin_cpu(&mut img, info, &plan);
-            local::denoise(&mut img, s, src_long, w.max(h));
+            let (fw, fh) = frame.full_size(w, h);
+            local::denoise(&mut img, s, src_long, fw.max(fh));
             Arc::new(img)
         }
     };
@@ -576,8 +642,14 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if p.key == lin_key => p,
         _ => local::Planes { key: lin_key, ..Default::default() },
     };
+    if let Some(g) = globals {
+        seed_planes(&mut planes, g);
+    }
     let tex_space = texture_cr::space(info);
-    let prep = local::prepare(lin.clone(), s, frame, px_per_long, info.native_long, req.quality, &mut planes, tex_space.as_ref().map(|m| &m.0));
+    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, info.native_long, req.quality, &mut planes, tex_space.as_ref().map(|m| &m.0));
+    if let Some(a) = globals.and_then(|g| g.air).filter(|_| prep.dark.is_some()) {
+        prep.air = a;
+    }
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });
@@ -587,7 +659,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         let image = deep.to_rgba8();
         let histogram = Histogram::of_srgb8(&image);
         lap("finish (deep)", &mut t);
-        return Rendered { image, histogram, deep: Some(deep) };
+        return cut_region(Rendered { image, histogram, deep: Some(deep), region: None }, &plan);
     }
     let image = finish::finish(&prep, s, frame, info, req.space, req.proof);
     lap("finish", &mut t);
@@ -596,17 +668,52 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let mut image = image;
     let mask = overlay_alpha(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref());
+    let mut out = cut_region(Rendered { image, histogram, deep: None, region: None }, &plan);
     if let Overlay::HdrRange(display) = req.overlay
         && edit.hdr.enabled
     {
         // the HDR rendition of the same request says how far above SDR white each pixel goes
+        // (a region's: the same region)
         let hreq = RenderRequest { depth: OutputDepth::F32Hdr, overlay: Overlay::None, proof: None, ..*req };
-        if let Some(hdr) = render(src_img, info, edit, &hreq).deep {
-            visualize::hdr_range(&mut image, &hdr, display);
+        if let Some(hdr) = render_impl(Src::Borrowed(src_img), info, edit, &hreq, None, globals).deep {
+            visualize::hdr_range(&mut out.image, &hdr, display);
         }
         lap("visualize hdr", &mut t);
     }
-    Rendered { image, histogram, deep: None }
+    out
+}
+
+/// A region render's globals in its planes (replacing what the window alone would give).
+fn seed_planes(planes: &mut local::Planes, g: &Globals) {
+    if g.tone_stats.is_some() {
+        planes.tone_stats = g.tone_stats;
+    }
+    if g.p99.is_some() {
+        planes.p99 = g.p99;
+    }
+    if let Some(m) = &g.scene_map {
+        planes.scene_map = Some(Some(m.clone()));
+    }
+    if let Some(h) = &g.haze {
+        planes.haze = Some(Some(h.clone()));
+    }
+}
+
+/// The requested pixels of a region render (the buffer is the padded window around them) with
+/// their histogram; any other render unchanged.
+pub fn cut_region(r: Rendered, plan: &Plan<'_>) -> Rendered {
+    let Some(px) = plan.region else { return r };
+    let (ox, oy) = plan.frame.offset();
+    let rect = (px.x.saturating_sub(ox), px.y.saturating_sub(oy), px.w, px.h);
+    let (bw, bh) = (r.image.width, r.image.height);
+    if rect.0 == 0 && rect.1 == 0 && px.w == bw && px.h == bh {
+        return Rendered { region: Some(px), ..r };
+    }
+    let data = region::crop_samples(&r.image.data, bw, 1, rect);
+    let image = Rgba8 { width: px.w, height: px.h, data };
+    let histogram = Histogram::of_srgb8(&image);
+    let deep = r.deep.map(|d| d.crop(bw, rect));
+    Rendered { image, histogram, deep, region: Some(px) }
 }
 
 /// The colour a colour-range mask would sample at normalized image point `p` (OkLab of the
@@ -695,3 +802,5 @@ mod tests_geometry;
 mod tests_hdr;
 #[cfg(test)]
 mod tests_local;
+#[cfg(test)]
+mod tests_region;

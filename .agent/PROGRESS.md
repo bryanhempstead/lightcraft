@@ -32,6 +32,16 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   another agent has replaced it since, so nothing to restore. needs.you #183 (rebuild Previews.lrdata), #184 (where the
   //lot48/…/MY MEDIA originals are). Left: Lightroom ΔE for Q2 / 5D III / iPhone 17 / Sony / Nikon (no previews),
   specular vs normal white for Canon, DNG SDK built without JXL.
+- [ ] (zoom agent, 2026-11-22, branch worktree-agent-a0b644f80b07fbd8d, not merged) **LR-VIEW-ZOOM ✅ + LR-VIEW-COLORMANAGED ✅**
+  — region renders (`crates/pipeline/src/region.rs`: `RenderRequest::region`, `Frame::window`, `Globals`,
+  `render_region`, `lightcraft_gpu::render_region`, `Session::detail_job`); the loupe / its before view / Compare
+  draw native-resolution 512 px pieces over the capped preview at 1:1 and closer (`crates/ui-egui/src/tiles.rs`,
+  `Slot::Detail(view)`, `ui.inspect` → `perf.detail`). Region = same pixels as the full-size render (CPU max 2 LSB,
+  GPU max 1). Colour: the 8-bit window surface is tagged Display P3 on a Mac (`patches/egui-wgpu`
+  `request_sdr_color_space`; `display_p3::WindowSpace`, `app.viewSpace` → `colorManaged`), video / previews / map
+  tiles converted like photos. Merge note: `Rendered` gained `region`, `RenderRequest` gained `region`,
+  `RenderJob` gained `context`; the finish kernel has 4 new params at the end (`WIN_*`). Left: Before half of
+  Before/After and HDR renditions at 1:1 stay at preview size.
 - [ ] (hdr2 agent, 2026-11-22, branch worktree-agent-ac64e49f32754ea1f, not merged) **HDR leftovers + LR-VID-EDIT** —
   e0f0ea988 HDR loupe on the GPU (finish kernel's float HDR output, `PEAK`/`SCENE_TOP` params appended; CPU/GPU
   equivalence crates/gpu/tests/hdr.rs; 1936x1290 draft drag 12–14 ms GPU vs 340–620 ms CPU under load ~100; UI

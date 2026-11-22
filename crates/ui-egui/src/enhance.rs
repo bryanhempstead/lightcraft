@@ -221,6 +221,7 @@ fn remake_in_place(app: &mut LightcraftApp) {
 
 /// Per frame: keep the preview in sync with the dialog's options, collect finished jobs.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let p3 = app.renderer.display_p3;
     lightcraft_engine::enhance::warm_up_in_background(&app.session.enhancer.models_root);
     let dialog_opts = match &app.ui.dialog {
         Some(crate::state::Dialog::Enhance { opts }) => Some(opts.clone()),
@@ -269,7 +270,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let tex = |name: &str, img: &lightcraft_raster::Rgba8| {
                         ctx.load_texture(
                             name,
-                            egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.as_bytes()),
+                            crate::display_p3::screen_image(p3, [img.width, img.height], &img.as_bytes()),
                             egui::TextureOptions::NEAREST,
                         )
                     };

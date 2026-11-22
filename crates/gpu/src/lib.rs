@@ -292,6 +292,30 @@ pub fn stage_bytes(stages: &StageCache) -> usize {
 /// Render `src` with `s` on the GPU, reusing the device-resident stages kept with `stages` (the
 /// view's CPU stage cache). `None`: render on the CPU instead.
 pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Rendered> {
+    render_with(src, info, s, req, stages, None)
+}
+
+/// A region render ([`RenderRequest::region`]) on the GPU, taking what depends on the whole photo
+/// from `globals` (as [`lightcraft_pipeline::render_region`]). `None`: render on the CPU instead.
+pub fn render_region(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    globals: &lightcraft_pipeline::Globals,
+    stages: Option<&StageCache>,
+) -> Option<Rendered> {
+    render_with(src, info, s, req, stages, Some(globals))
+}
+
+fn render_with(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    globals: Option<&lightcraft_pipeline::Globals>,
+) -> Option<Rendered> {
     use lightcraft_pipeline::{OutputDepth, Overlay};
     // Visualize HDR: the SDR render with the HDR rendition of the same request painted over it
     // (as `lightcraft_pipeline::render` does it)
@@ -300,18 +324,25 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
     {
         let plain = RenderRequest { overlay: Overlay::None, ..*req };
         if !s.effective().hdr.enabled {
-            return render_one(src, info, s, &plain, stages);
+            return render_one(src, info, s, &plain, stages, globals);
         }
-        let mut sdr = render_one(src, info, s, &plain, stages)?;
+        let mut sdr = render_one(src, info, s, &plain, stages, globals)?;
         let hreq = RenderRequest { depth: OutputDepth::F32Hdr, proof: None, ..plain };
-        let hdr = render_one(src, info, s, &hreq, stages)?.deep?;
+        let hdr = render_one(src, info, s, &hreq, stages, globals)?.deep?;
         lightcraft_pipeline::visualize::hdr_range(&mut sdr.image, &hdr, display);
         return Some(sdr);
     }
-    render_one(src, info, s, req, stages)
+    render_one(src, info, s, req, stages, globals)
 }
 
-fn render_one(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Rendered> {
+fn render_one(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    globals: Option<&lightcraft_pipeline::Globals>,
+) -> Option<Rendered> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         // sections switched off with their eye render as if at their defaults (issue #316)
@@ -341,7 +372,7 @@ fn render_one(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
         let (r, scoped) = {
             let _scope = ctx::RenderScope::new(gpu);
             let errors = ctx::ErrorScopes::push(gpu);
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault, globals)));
             (r, errors.pop())
         };
         // An error the device raised explains the readback failures that follow it; a buffer
@@ -394,7 +425,7 @@ fn render_one(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (src, info, s, req, stages);
+        let _ = (src, info, s, req, stages, globals);
         None
     }
 }

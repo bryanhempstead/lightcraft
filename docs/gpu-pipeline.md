@@ -212,6 +212,32 @@ compilation: ~0.4 s once per process — the desktop app starts it on a backgrou
 (`lightcraft_gpu::warm_up`), so the first loupe render doesn't wait for it; other processes create
 the device on their first GPU render. `lightcraft_gpu::ready()` asks without blocking.
 
+## Region renders: 1:1 detail (LR-VIEW-ZOOM)
+The loupe's whole-image preview is capped by Settings ▸ Performance ▸ Preview size; at 1:1 (and 200–800 %) of a
+larger photo `crates/ui-egui/src/tiles.rs` renders the visible part again at the photo's own resolution and draws it
+over the preview in 512 px pieces. A region render (`RenderRequest::region`, `lightcraft_pipeline::region`,
+`lightcraft_gpu::render_region`, `Session::detail_job`) is one rectangle of the whole render through the same pipeline:
+
+- **Window.** The buffer is a padded window of the whole render (`Frame::window`): every mapping between output pixels
+  and the photo — sampling, lens corrections, perspective, crop / straighten / flips, masks, spots, red eye, vignette,
+  grain, the scene tone map — places its pixels where they sit in the whole render (`px_per_long`, noise reduction and
+  mask refine use the whole render's size). It is padded by the spatial filters' reach (`region::reach`: guided bases,
+  clarity, dehaze, colour / luminance NR, the 6-level texture pyramid, sharpening), aligned to 64 px (the coarsest
+  pyramid / subsampling grid), and grown to every spot box the region depends on, including the spots those read.
+  Lens Blur, auto-sourced spots and windows over 60 % of the frame render the whole frame and cut the region from it.
+- **Whole-photo values** (`Globals`): tone statistics, negative Dehaze's percentile and the airlight from a
+  preview-size pass over the preview source; Camera Raw's scene map and haze (block means, so resolution-dependent)
+  from block means of the native render made in 512-row bands (`region::scene_means`, never a full-size buffer). Kept
+  in the view's stage cache under `region::globals_key`, which ignores the per-pixel sliders: an Exposure, tone or
+  colour drag at 1:1 re-runs only the per-pixel stage of the same window.
+- **Levels.** Native resolution at 1:1 and closer (region renders); between the preview size and 1:1 the half / quarter
+  resolution render whole (`tiles::level`).
+- **Accuracy** (`crates/pipeline/src/tests_region.rs`, `crates/gpu/tests/region.rs`, `crates/ui-egui/src/tests_zoom.rs`):
+  CPU region vs the same pixels of the whole render max 2 / mean < 0.05 LSB with typical edits, masks, crop + straighten
+  + flip + Rotate, distortion, vignette, grain and spots whose source lies far outside the region (≤ 3 / < 0.1 with the
+  preview-size globals the loupe uses); GPU region vs GPU whole max 1 / mean 0.0011; the loupe's 1:1 piece vs the
+  6000×4000 full-size render within the CPU ↔ GPU bounds.
+
 ## Opening a photo (M5.4)
 - The loupe shows a stand-in at once (`media::QuickJob`): the photo's cached view render for its
   current settings, else (raws with their import look) the embedded camera JPEG, else a

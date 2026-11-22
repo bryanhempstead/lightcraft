@@ -974,8 +974,9 @@ fn sc_level(y: f32) -> f32 {
 fn sc_sample(x: u32, y: u32) -> ScS {
     let mw = pu(F_SC_MW);
     let mh = pu(F_SC_MH);
-    let fx = clamp((f32(x) + 0.5) * pf(F_SC_SX) - 0.5, 0.0, f32(mw - 1u));
-    let fy = clamp((f32(y) + 0.5) * pf(F_SC_SY) - 0.5, 0.0, f32(mh - 1u));
+    // (a region render's pixels sit at WIN_X, WIN_Y of the whole render)
+    let fx = clamp((f32(x + pu(F_WIN_X)) + 0.5) * pf(F_SC_SX) - 0.5, 0.0, f32(mw - 1u));
+    let fy = clamp((f32(y + pu(F_WIN_Y)) + 0.5) * pf(F_SC_SY) - 0.5, 0.0, f32(mh - 1u));
     let ix = u32(fx);
     let iy = u32(fy);
     let jx = min(ix + 1u, mw - 1u);
@@ -1420,14 +1421,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // --- vignette (display linear, post-crop)
     if (pu(F_VIG) != 0u) {
-        let fw = f32(w);
-        let fh = f32(h);
+        // over the whole render (a region render's pixels sit at WIN_X, WIN_Y of it)
+        let fw = f32(max(pu(F_WIN_FW), 1u));
+        let fh = f32(max(pu(F_WIN_FH), 1u));
         let aspect = fw / fh;
         let amount = pf(F_VIG_AMOUNT);
         let mixa = pf(F_VIG_ASPECT_MIX);
         let power = pf(F_VIG_POWER);
-        let u = (f32(x) + 0.5) / fw * 2.0 - 1.0;
-        let vv = (f32(y) + 0.5) / fh * 2.0 - 1.0;
+        let u = (f32(x + pu(F_WIN_X)) + 0.5) / fw * 2.0 - 1.0;
+        let vv = (f32(y + pu(F_WIN_Y)) + 0.5) / fh * 2.0 - 1.0;
         let sx = 1.0 + (aspect - 1.0) * mixa;
         let sy = 1.0 + (1.0 / aspect - 1.0) * mixa;
         let ax = abs(u * max(sx, 1.0) / max(sx, sy));

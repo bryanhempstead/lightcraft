@@ -214,6 +214,16 @@ pub struct DeepImage {
 }
 
 impl DeepImage {
+    /// The `w × h` pixels at (`x`, `y`) of this `src_w`-wide image (a region render's requested
+    /// pixels, [`crate::region`]).
+    pub fn crop(self, src_w: usize, rect: (usize, usize, usize, usize)) -> DeepImage {
+        let samples = match &self.samples {
+            DeepSamples::U16(v) => DeepSamples::U16(crate::region::crop_samples(v, src_w, 3, rect)),
+            DeepSamples::F32(v) => DeepSamples::F32(crate::region::crop_samples(v, src_w, 3, rect)),
+        };
+        DeepImage { width: rect.2, height: rect.3, space: self.space, samples }
+    }
+
     /// The same image reduced to 8 bits, display-encoded with the space's curve.
     pub fn to_rgba8(&self) -> lightcraft_raster::Rgba8 {
         let mut out = lightcraft_raster::Rgba8::new(self.width, self.height);

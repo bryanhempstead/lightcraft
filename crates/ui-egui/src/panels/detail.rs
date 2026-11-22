@@ -424,6 +424,49 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     app.hdr_view = hdr_shown.into_inner();
     app.loupe_shown = Some((id, shown));
+    // native-resolution detail over the preview at 1:1 and beyond the preview size (`tiles`):
+    // the after view (or the before view while it is shown alone); not over an HDR rendition
+    let hdr_view = d.hdr.enabled && hdr_headroom(app).is_some();
+    if !hdr_view && hover_key.is_none() && matches!(shown, "render" | "preview" | "thumb") {
+        let (view, before) = if show_before && !split { (3u8, true) } else { (0u8, false) };
+        let want = crate::tiles::Want {
+            view,
+            photo: id,
+            img: target_rect,
+            area: main_area.intersect(canvas),
+            ppp,
+            apply_crop: !crop_tool,
+            before,
+            preview_long: (target_rect.width().max(target_rect.height()) * ppp).min(max_edge) as usize,
+            interacting,
+            overlay: if before { lightcraft_pipeline::Overlay::None } else { view_overlay(app, &d) },
+            proof: app.ui.soft_proof.then_some(app.ui.proof),
+            now: ui.input(|i| i.time),
+        };
+        if crate::tiles::update(app, &want).is_some()
+            && let Some(t) = app.renderer.tiles.get_mut(&view)
+        {
+            t.draw(
+                &p.with_clip_rect(main_area.intersect(canvas)),
+                img_rect,
+                main_area,
+                interacting && want.overlay == lightcraft_pipeline::Overlay::None,
+            );
+        }
+        for other in [0u8, 3] {
+            if other != view
+                && let Some(t) = app.renderer.tiles.get_mut(&other)
+            {
+                t.look = None;
+            }
+        }
+    } else {
+        for v in [0u8, 3] {
+            if let Some(t) = app.renderer.tiles.get_mut(&v) {
+                t.look = None;
+            }
+        }
+    }
     if app.ui.before_after == BeforeAfter::Split {
         let mid = img_rect.center().x;
         if let Some(tex) = app.renderer.textures.get(&Slot::Before).filter(|t| t.photo == id) {

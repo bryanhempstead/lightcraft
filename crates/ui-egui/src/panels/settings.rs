@@ -697,10 +697,16 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     ui.label(
         egui::RichText::new(crate::i18n::tr(
-            "Display P3 for Apple displays (Studio Display, MacBook, iMac) so photos look as they export; sRGB for an sRGB monitor. Auto: Display P3 on a Mac.",
+            "Auto: color-managed on a Mac (the window is tagged, and macOS shows photos through the display's own profile, as Preview and Lightroom do). Display P3 / sRGB: the values go to the display as they are, for a display of that space.",
         ))
         .color(t.text_dim),
     );
+    let state = match app.window_space.as_ref().and_then(|w| w.tagged()) {
+        Some("extendedSrgb") => "Window: color-managed (HDR, extended sRGB)",
+        Some(_) => "Window: color-managed (Display P3)",
+        None => "Window: not color-managed (values shown as they are)",
+    };
+    ui.label(egui::RichText::new(crate::i18n::tr(state)).color(t.text_dim));
     // L19: Loupe Info 1 / 2 lines (Library View Options ▸ Loupe View)
     loupe_info_rows(ui, t, &mut app.ui.settings.loupe_info, "", "settingsLoupeDefaults");
     check(ui, "settings.loadingMessage", &mut app.ui.settings.loading_message, "Show message when loading or rendering photos");
