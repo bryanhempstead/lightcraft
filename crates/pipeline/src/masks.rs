@@ -138,8 +138,20 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
                 *v = 1.0 - smooth(tol * 0.5, tol, d);
             }
         }
-        MaskShape::Sky => {
-            // Classical sky heuristic until the segmenter lands (M12): bright, smooth, blue-ish or
+        // a model's segmentation, when computed (sky / landscape: the scene parser; subject: SAM 3
+        // or the scene parser; people: their outline, and their parts at a higher resolution)
+        MaskShape::Sky { seg: Some(seg) } | MaskShape::Subject { seg: Some(seg) } | MaskShape::Landscape { seg: Some(seg), .. } => {
+            sample_seg(Some(seg), &[], 1.0, frame, w, h, &mut out);
+        }
+        MaskShape::People { seg, detail, .. } if seg.is_some() || !detail.is_empty() => {
+            sample_seg(seg.as_ref(), detail, 1.0, frame, w, h, &mut out);
+        }
+        MaskShape::Background { seg: Some(seg) } => {
+            sample_seg(Some(seg), &[], 1.0, frame, w, h, &mut out);
+            out.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+        }
+        MaskShape::Sky { seg: None } => {
+            // Classical sky heuristic without the scene model: bright, smooth, blue-ish or
             // unsaturated, and connected to the top of the frame.
             let m = frame.out_to_norm(w, h);
             for (i, v) in out.data.iter_mut().enumerate() {
@@ -152,6 +164,9 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
                 *v = top * smooth(-3.5, -1.0, l) * (0.4 + 0.6 * smooth(0.0, 0.3, blue).max(smooth(0.0, 1.5, l)));
             }
             smooth_plane(&mut out, 0.01 * frame_px(frame, w));
+        }
+        MaskShape::Landscape { class, seg: None } if class == "sky" => {
+            out = shape_alpha(&MaskShape::Sky { seg: None }, frame, w, h, img, log_l, ev);
         }
         MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } if seg.is_some() || !detail.is_empty() => {
             // Edge: below 0 a steeper transition (up to 8× the logits), above 0 feathered (up to
@@ -166,7 +181,7 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
         // not computed yet (no clicks, or a build without the model): nothing selected
         MaskShape::Object { hint, .. } if hint.is_empty() => {}
         MaskShape::Prompt { .. } => {}
-        MaskShape::Subject | MaskShape::Object { .. } | MaskShape::People { .. } => {
+        MaskShape::Subject { .. } | MaskShape::Object { .. } | MaskShape::People { .. } => {
             // Saliency heuristic: centre-weighted local contrast (replaced by the segmenter in M12).
             let m = frame.out_to_norm(w, h);
             let blur = lightcraft_raster::blur::gaussian(log_l, 0.03 * frame_px(frame, w));
@@ -179,8 +194,8 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             }
             smooth_plane(&mut out, 0.015 * frame_px(frame, w));
         }
-        MaskShape::Background => {
-            let mut s = shape_alpha(&MaskShape::Subject, frame, w, h, img, log_l, ev);
+        MaskShape::Background { .. } => {
+            let mut s = shape_alpha(&MaskShape::Subject { seg: None }, frame, w, h, img, log_l, ev);
             s.data.iter_mut().for_each(|v| *v = 1.0 - *v);
             out = s;
         }
@@ -520,7 +535,12 @@ mod tests {
         for shape in [
             MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
             MaskShape::Prompt { text: "sky".into(), seg: None, detail: vec![], edge: 0.0 },
-            MaskShape::Prompt { text: "sky".into(), seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None }), detail: vec![], edge: 0.0 },
+            MaskShape::Prompt {
+                text: "sky".into(),
+                seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None, basis: None }),
+                detail: vec![],
+                edge: 0.0,
+            },
         ] {
             assert!(shape_alpha(&shape, &f, 30, 30, &img, &l, 0.0).data.iter().all(|v| *v == 0.0));
         }

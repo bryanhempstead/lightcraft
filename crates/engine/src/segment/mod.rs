@@ -16,9 +16,30 @@
 //! MCP, tests) they wait for the worker.
 
 #[cfg(feature = "sam")]
+mod auto;
+#[cfg(feature = "sam")]
 mod download;
 #[cfg(feature = "sam")]
 mod worker;
+
+/// How errors about missing automatic-mask models start (the UI offers the download on it).
+pub const NO_AUTO_MODEL: &str = "The AI mask models are not installed";
+
+/// A person found in the photo (People masks): their box (normalized) and how sure the model is.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct PersonFound {
+    pub rect: [f64; 4],
+    pub score: f32,
+    #[serde(skip)]
+    pub seg: SegMask,
+}
+
+/// What the models found in a photo, for the Masking panel's People and Landscape lists.
+#[derive(Clone, Debug, Default)]
+pub struct Found {
+    pub people: Option<(PhotoId, String, Vec<PersonFound>)>,
+    pub coverage: Option<(PhotoId, String, Vec<(String, f32)>)>,
+}
 
 use std::path::PathBuf;
 
@@ -64,6 +85,18 @@ pub(crate) enum Tag {
     NewPrompt { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, text: String },
     /// A zoomed-in pass for a component, computed from `shape` (without its detail).
     Detail { photo: PhotoId, mask: u32, comp: usize, shape: MaskShape },
+    /// An automatic mask (subject, sky, landscape, people): a new mask (`mask: None`) or a
+    /// component combined by `op`, `shape` filled in with what the model found.
+    Auto { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, shape: MaskShape },
+    /// Update AI Settings: component `comp` of mask `mask` recomputed; `shape` is what it was
+    /// (applied only if it is still that).
+    Update { photo: PhotoId, mask: u32, comp: usize, shape: MaskShape },
+    /// The photo's people (then `then`: the `mask.add` that waited for them).
+    People { photo: PhotoId, basis: String, then: Option<serde_json::Value> },
+    /// How much of the photo each Landscape class covers.
+    Coverage { photo: PhotoId, basis: String },
+    /// Objects detected for Remove (people, wires): they become content-aware Remove spots.
+    Remove { photo: PhotoId },
 }
 
 /// The model input: 8-bit RGB.
@@ -120,15 +153,27 @@ pub struct Segmenter {
     pub dir: Option<PathBuf>,
     /// The user's list of download mirrors (one base URL per line), if any.
     pub mirrors_file: Option<PathBuf>,
+    /// Whether the built-in download locations are used after the user's (tests turn them off:
+    /// no test touches the internet).
+    pub default_mirrors: bool,
     /// Run requests in the background and apply them in [`Session::segment_poll`] (the
     /// desktop app); otherwise commands wait for their result (CLI, MCP, tests).
     pub background: bool,
+    /// The models folder the parsers (scene, body, face) live in, as `<models>/<parser id>/`
+    /// (set by the app; `None`: no Sky / Landscape / People models).
+    pub models: Option<PathBuf>,
+    /// What the models found in the active photo (People and Landscape lists).
+    pub found: Found,
+    /// Automatic masks queued and not applied yet (background mode).
+    auto_pending: usize,
     pending: Option<PendingClicks>,
     messages: Vec<String>,
     #[cfg(feature = "sam")]
     worker: worker::Worker,
     #[cfg(feature = "sam")]
     download: download::Downloader,
+    #[cfg(feature = "sam")]
+    parsers_download: download::Downloader,
     #[cfg(feature = "sam")]
     results: (std::sync::mpsc::Sender<worker::Outcome>, std::sync::mpsc::Receiver<worker::Outcome>),
 }
@@ -140,13 +185,19 @@ impl Default for Segmenter {
         Segmenter {
             dir: None,
             mirrors_file: None,
+            default_mirrors: true,
             background: false,
+            models: None,
+            found: Found::default(),
+            auto_pending: 0,
             pending: None,
             messages: Vec::new(),
             #[cfg(feature = "sam")]
             worker: worker::Worker::default(),
             #[cfg(feature = "sam")]
             download: download::Downloader::default(),
+            #[cfg(feature = "sam")]
+            parsers_download: download::Downloader::default(),
             #[cfg(feature = "sam")]
             results: std::sync::mpsc::channel(),
         }
@@ -219,7 +270,8 @@ impl Segmenter {
         #[cfg(feature = "sam")]
         {
             let env = std::env::var(lightcraft_segment::fetch::MIRRORS_ENV).ok();
-            lightcraft_segment::fetch::mirrors(env.as_deref(), self.mirrors_file.as_deref())
+            let defaults: &[&str] = if self.default_mirrors { lightcraft_segment::fetch::DEFAULT_MIRRORS } else { &[] };
+            lightcraft_segment::fetch::mirrors_with(env.as_deref(), self.mirrors_file.as_deref(), defaults)
         }
         #[cfg(not(feature = "sam"))]
         Vec::new()
@@ -274,10 +326,98 @@ impl Segmenter {
     /// Stop a running download (its partial files stay, to resume). False when none runs.
     pub fn cancel_download(&self) -> bool {
         #[cfg(feature = "sam")]
-        return self.download.cancel();
+        return self.download.cancel() | self.parsers_download.cancel();
         #[cfg(not(feature = "sam"))]
         false
     }
+
+    /// The parsers (Sky / Landscape / People models): `(id, name, purpose, licence, licence URL,
+    /// bytes, installed)`.
+    pub fn parsers(&self) -> Vec<ParserInfo> {
+        #[cfg(feature = "sam")]
+        {
+            lightcraft_segment::parsers::ALL
+                .iter()
+                .map(|p| ParserInfo {
+                    id: p.id,
+                    name: p.name,
+                    purpose: p.purpose,
+                    license: p.license,
+                    license_url: p.license_url,
+                    bytes: p.bytes(),
+                    installed: self.models.as_ref().is_some_and(|m| lightcraft_segment::parsers::is_parser_dir(&m.join(p.id))),
+                })
+                .collect()
+        }
+        #[cfg(not(feature = "sam"))]
+        Vec::new()
+    }
+
+    /// Whether any model for automatic masks (SAM 3 or a parser) is installed.
+    pub fn any_auto_model(&self) -> bool {
+        self.installed() || self.parsers().iter().any(|p| p.installed)
+    }
+
+    /// Whether every parser is installed.
+    pub fn parsers_installed(&self) -> bool {
+        let p = self.parsers();
+        !p.is_empty() && p.iter().all(|p| p.installed)
+    }
+
+    /// The parsers' download.
+    pub fn parsers_download_status(&self) -> DownloadStatus {
+        #[cfg(feature = "sam")]
+        {
+            let s = self.parsers_download.status();
+            DownloadStatus { running: s.running, done: s.done, total: s.total, file: s.file, error: s.error, finished: s.finished }
+        }
+        #[cfg(not(feature = "sam"))]
+        DownloadStatus::default()
+    }
+
+    /// Download the parsers that aren't installed (in the background; see
+    /// `segment.parsers.download`). `Ok(false)` when all are, or a download is running.
+    pub fn start_parsers_download(&self) -> Result<bool, String> {
+        if !Self::AVAILABLE {
+            return Err("AI masks are not available in this build".into());
+        }
+        let root = self.models.clone().ok_or("no folder is set for the AI mask models")?;
+        #[cfg(feature = "sam")]
+        {
+            let jobs: Vec<_> = lightcraft_segment::parsers::ALL
+                .iter()
+                .filter(|p| !lightcraft_segment::parsers::is_parser_dir(&root.join(p.id)))
+                .map(|p| (p.files, p.mirrors.iter().map(|m| m.to_string()).collect(), root.join(p.id)))
+                .collect();
+            if jobs.is_empty() {
+                return Ok(false);
+            }
+            self.parsers_download.start_many(jobs, lightcraft_segment::fetch::Options::default())
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = root;
+            Ok(false)
+        }
+    }
+
+    /// Automatic masks queued and not applied yet.
+    pub fn auto_busy(&self) -> bool {
+        self.auto_pending > 0
+    }
+}
+
+/// One parser model (`segment.parsers.status`).
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParserInfo {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub purpose: &'static str,
+    pub license: &'static str,
+    pub license_url: &'static str,
+    pub bytes: u64,
+    pub installed: bool,
 }
 
 /// Mix `v` into a 64-bit hash.
@@ -327,6 +467,116 @@ pub fn detail_region(seg: &SegMask, aspect: f64) -> Option<[f64; 4]> {
     let out = [x / a, y, (x + w) / a, y + h];
     // a region nearly the whole photo isn't worth a second pass
     ((out[2] - out[0]) * (out[3] - out[1]) < 0.8).then_some(out)
+}
+
+/// Most spots one detected object becomes.
+const MAX_OBJECT_SPOTS: usize = 120;
+
+/// Content-aware Remove spots covering the selection of `seg` (a detected person, wires): brushed
+/// strokes along its rows, each as wide as the selection allows, with a margin of one cell so
+/// the fill reaches past its edge. `aspect` = width / height of the photo.
+pub fn spots_covering(seg: &SegMask, aspect: f64) -> Vec<lightcraft_develop::Spot> {
+    let (Some(l), Some(r)) = (seg.logits(), seg.bounds()) else { return Vec::new() };
+    let side = seg.side as usize;
+    let a = if aspect.is_finite() { aspect.clamp(0.1, 10.0) } else { 1.0 };
+    // selected cells, grown by one
+    let on = |x: usize, y: usize| l.get(y * side + x).is_some_and(|v| *v > 0.0);
+    let grown: Vec<bool> = (0..side * side)
+        .map(|i| {
+            let (x, y) = (i % side, i / side);
+            (y.saturating_sub(1)..(y + 2).min(side)).any(|yy| (x.saturating_sub(1)..(x + 2).min(side)).any(|xx| on(xx, yy)))
+        })
+        .collect();
+    let cells: Vec<usize> = (0..grown.len()).filter(|i| grown[*i]).collect();
+    let Some(b) = cell_box(&cells, side) else { return Vec::new() };
+    let (rw, rh) = (r[2] - r[0], r[3] - r[1]);
+    let nx = |c: f64| r[0] + c / side as f64 * rw;
+    let ny = |c: f64| r[1] + c / side as f64 * rh;
+    // sizes in long-edge units (spots measure their radius on the long edge)
+    let (wl, hl) = if a >= 1.0 { (1.0, 1.0 / a) } else { (a, 1.0) };
+    let bw = (nx(b[2] as f64) - nx(b[0] as f64)) * wl;
+    let bh = (ny(b[3] as f64) - ny(b[1] as f64)) * hl;
+    let radius = (0.25 * bw.min(bh)).clamp(0.004, 0.03);
+    // rows every 1.4 radii, in cells
+    let step = ((1.4 * radius / hl) / rh * side as f64).max(1.0);
+    let mut spots = Vec::new();
+    let mut y = b[1] as f64 + step / 2.0;
+    while y < b[3] as f64 && spots.len() < MAX_OBJECT_SPOTS {
+        let row = (y as usize).min(side - 1);
+        let mut x = b[0];
+        while x < b[2] {
+            if !grown[row * side + x] {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            while x < b[2] && grown[row * side + x] {
+                x += 1;
+            }
+            let (x0, x1, yy) = (nx(start as f64 + 0.5), nx(x as f64 - 0.5), ny(row as f64 + 0.5));
+            let n = (((x1 - x0) * wl / radius).ceil() as usize).clamp(1, 64);
+            let points = (0..=n).map(|k| Point::new(x0 + (x1 - x0) * k as f64 / n as f64, yy)).collect();
+            spots.push(lightcraft_develop::Spot {
+                mode: lightcraft_develop::SpotMode::Fill,
+                points,
+                size: radius,
+                feather: 30.0,
+                opacity: 100.0,
+                source_offset: None,
+            });
+        }
+        y += step;
+    }
+    spots.truncate(MAX_OBJECT_SPOTS);
+    spots
+}
+
+/// The bounding box (cells, exclusive end) of `cells` on a `w`-wide grid.
+fn cell_box(cells: &[usize], w: usize) -> Option<[usize; 4]> {
+    let mut b = [usize::MAX, usize::MAX, 0, 0];
+    for &i in cells {
+        let (x, y) = (i % w.max(1), i / w.max(1));
+        b = [b[0].min(x), b[1].min(y), b[2].max(x + 1), b[3].max(y + 1)];
+    }
+    (b[0] != usize::MAX).then_some(b)
+}
+
+/// `shape` with what an automatic mask job found, every segmentation stamped with `basis`.
+#[cfg(feature = "sam")]
+fn fill(shape: &mut MaskShape, out: auto::AutoOut, basis: &str) -> Result<(), String> {
+    let stamp = |mut s: SegMask| {
+        s.basis = Some(basis.to_string());
+        s
+    };
+    match (shape, out) {
+        (
+            MaskShape::Sky { seg } | MaskShape::Subject { seg } | MaskShape::Background { seg } | MaskShape::Landscape { seg, .. },
+            auto::AutoOut::Seg(s),
+        ) => *seg = Some(stamp(s)),
+        (MaskShape::People { seg, detail, .. }, auto::AutoOut::Parts { seg: s, detail: d }) => {
+            *seg = s.map(stamp);
+            *detail = d.into_iter().map(stamp).collect();
+        }
+        _ => return Err("the AI model returned something else".into()),
+    }
+    Ok(())
+}
+
+/// `shape` without its segmentations (what an automatic mask is computed from).
+pub(crate) fn strip_seg(mut shape: MaskShape) -> MaskShape {
+    match &mut shape {
+        MaskShape::Sky { seg } | MaskShape::Subject { seg } | MaskShape::Background { seg } | MaskShape::Landscape { seg, .. } => *seg = None,
+        MaskShape::People { seg, detail, .. } => {
+            *seg = None;
+            detail.clear();
+        }
+        MaskShape::Object { seg, detail, .. } | MaskShape::Prompt { seg, detail, .. } => {
+            *seg = None;
+            detail.clear();
+        }
+        _ => {}
+    }
+    shape
 }
 
 /// `shape` without its detail patches (what a detail pass was computed from)
@@ -400,7 +650,211 @@ impl Session {
                 job
             }
         };
-        Ok(worker::Job { dir, key: if region.is_some() { 0 } else { key }, render: Some(render), missing, kind, tag, reply })
+        Ok(worker::Job {
+            dir,
+            key: if region.is_some() { 0 } else { key },
+            render: Some(render),
+            missing,
+            kind,
+            sam3: true,
+            models: self.segmenter.models.clone(),
+            crop: None,
+            tag,
+            reply,
+        })
+    }
+
+    /// The render of `region` (normalized) of photo `id` at `edge` px, from a source sharp enough.
+    #[cfg(feature = "sam")]
+    fn region_job(&mut self, id: PhotoId, region: [f64; 4], edge: usize) -> Option<crate::media::RenderJob> {
+        let (_, mut d) = self.segment_key(id)?;
+        let p = self.catalog.photo(id)?.clone();
+        d.crop.geometry = lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(region[0], region[1], region[2], region[3]), angle: 0.0 };
+        d.crop.flip_h = false;
+        d.crop.flip_v = false;
+        d.geometry.constrain_crop = false;
+        let mut job = self.preview_job(id, edge, edge, true, &d)?;
+        let frac = (region[2] - region[0]).max(region[3] - region[1]).max(0.01);
+        job.level = crate::media::SourceLevel::for_size((edge as f64 / frac) as usize);
+        job.source = self.media.source_ref(&p, job.level);
+        Some(job)
+    }
+
+    /// A worker request for an automatic mask on photo `id`: whichever models are installed
+    /// (SAM 3 is optional for these).
+    #[cfg(feature = "sam")]
+    fn auto_job(&mut self, id: PhotoId, a: auto::Auto, tag: Tag, reply: std::sync::mpsc::Sender<worker::Outcome>) -> Result<worker::Job, String> {
+        if !Segmenter::AVAILABLE {
+            return Err("AI masks are not available in this build".into());
+        }
+        if !self.segmenter.any_auto_model() {
+            return Err(format!(
+                "{NO_AUTO_MODEL}. Download them when LightCraft offers it, or with `segment.parsers.download {{\"acknowledged\": true}}` (SAM 3: `segment.model.download`)."
+            ));
+        }
+        let (key, d) = self.segment_key(id).ok_or("no such photo")?;
+        let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
+        let missing = match &p.source {
+            lightcraft_catalog::Source::File { path } if !std::path::Path::new(path).exists() => Some(path.clone()),
+            _ => None,
+        };
+        let render = self.preview_job(id, INPUT_EDGE, INPUT_EDGE, false, &d).ok_or("no such photo")?;
+        let crop = match &a {
+            auto::Auto::Parts { region, .. } => Some(self.region_job(id, *region, 2 * INPUT_EDGE).ok_or("no such photo")?),
+            _ => None,
+        };
+        Ok(worker::Job {
+            dir: self.segmenter.dir.clone().unwrap_or_default(),
+            key,
+            render: Some(render),
+            missing,
+            kind: worker::Kind::Auto(a),
+            sam3: self.segmenter.installed(),
+            models: self.segmenter.models.clone(),
+            crop,
+            tag,
+            reply,
+        })
+    }
+
+    /// Run an automatic mask job: in background mode queue it (its result is applied by
+    /// [`Session::segment_poll`], `Ok(None)`), else wait for it.
+    #[cfg(feature = "sam")]
+    fn auto_run(&mut self, id: PhotoId, a: auto::Auto, tag: Tag) -> Result<Option<auto::AutoOut>, String> {
+        if self.segmenter.background {
+            let reply = self.segmenter.results.0.clone();
+            let job = self.auto_job(id, a, tag, reply)?;
+            self.segmenter.worker.submit(job)?;
+            self.segmenter.auto_pending += 1;
+            return Ok(None);
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let job = self.auto_job(id, a, Tag::Wait, tx)?;
+        self.segmenter.worker.submit(job)?;
+        match rx.recv_timeout(WAIT) {
+            Ok(o) => {
+                o.result?;
+                o.auto.map(Some).ok_or_else(|| "the AI model returned nothing".to_string())
+            }
+            Err(_) => Err("the AI model took too long; try again".into()),
+        }
+    }
+
+    /// The automatic-mask request that computes `shape` (sky, subject, background, landscape,
+    /// people); `None` for other shapes.
+    #[cfg(feature = "sam")]
+    fn auto_for(&self, id: PhotoId, shape: &MaskShape) -> Result<Option<auto::Auto>, String> {
+        Ok(Some(match shape {
+            MaskShape::Sky { .. } => auto::Auto::Sky,
+            MaskShape::Subject { .. } | MaskShape::Background { .. } => auto::Auto::Subject,
+            MaskShape::Landscape { class, .. } if class == "sky" => auto::Auto::Sky,
+            MaskShape::Landscape { class, .. } => auto::Auto::Landscape(class.clone()),
+            MaskShape::People { rect: Some(rect), parts, .. } => {
+                auto::Auto::Parts { rect: *rect, region: auto::person_region(*rect), parts: parts.clone() }
+            }
+            MaskShape::People { person, parts, .. } => {
+                let rect = self.person_rect(id, *person as usize).ok_or("detect the people in this photo first (segment.detectPeople)")?;
+                auto::Auto::Parts { rect, region: auto::person_region(rect), parts: parts.clone() }
+            }
+            _ => return Ok(None),
+        }))
+    }
+
+    /// The box of person `k` of photo `id`, if its people were detected (for the photo as it is).
+    pub fn person_rect(&self, id: PhotoId, k: usize) -> Option<[f64; 4]> {
+        let d = self.develop_of(id)?;
+        let basis = lightcraft_develop::ai::basis(&d);
+        self.segmenter.found.people.as_ref().filter(|(p, b, _)| *p == id && *b == basis).and_then(|(_, _, v)| v.get(k)).map(|p| p.rect)
+    }
+
+    /// The people detected in photo `id` (as it is), if detected.
+    pub fn people_found(&self, id: PhotoId) -> Option<&[PersonFound]> {
+        let d = self.develop_of(id)?;
+        let basis = lightcraft_develop::ai::basis(&d);
+        self.segmenter.found.people.as_ref().filter(|(p, b, _)| *p == id && *b == basis).map(|(_, _, v)| v.as_slice())
+    }
+
+    /// How much of photo `id` each Landscape class covers, if analyzed.
+    pub fn coverage_found(&self, id: PhotoId) -> Option<&[(String, f32)]> {
+        let d = self.develop_of(id)?;
+        let basis = lightcraft_develop::ai::basis(&d);
+        self.segmenter.found.coverage.as_ref().filter(|(p, b, _)| *p == id && *b == basis).map(|(_, _, v)| v.as_slice())
+    }
+
+    /// Find the people in photo `id` (People masks list them). In background mode it returns at
+    /// once (`Ok(None)`) and the list arrives with [`Session::segment_poll`]; `then` is a
+    /// `mask.add` to run once they are found.
+    pub fn detect_people(&mut self, id: PhotoId, then: Option<serde_json::Value>) -> Result<Option<Vec<PersonFound>>, String> {
+        #[cfg(feature = "sam")]
+        {
+            let d = self.develop_of(id).ok_or("no such photo")?;
+            let basis = lightcraft_develop::ai::basis(&d);
+            match self.auto_run(id, auto::Auto::People, Tag::People { photo: id, basis: basis.clone(), then })? {
+                Some(auto::AutoOut::People(v)) => {
+                    let v: Vec<PersonFound> = v.into_iter().map(|p| PersonFound { rect: p.rect, score: p.score, seg: p.seg }).collect();
+                    self.segmenter.found.people = Some((id, basis, v.clone()));
+                    Ok(Some(v))
+                }
+                Some(_) => Err("the AI model returned something else".into()),
+                None => Ok(None),
+            }
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = (id, then);
+            Err("AI masks are not available in this build".into())
+        }
+    }
+
+    /// How much of photo `id` each Landscape class covers (background mode: `Ok(None)`, the list
+    /// arrives with [`Session::segment_poll`]).
+    pub fn detect_landscape(&mut self, id: PhotoId) -> Result<Option<Vec<(String, f32)>>, String> {
+        #[cfg(feature = "sam")]
+        {
+            let d = self.develop_of(id).ok_or("no such photo")?;
+            let basis = lightcraft_develop::ai::basis(&d);
+            match self.auto_run(id, auto::Auto::Coverage, Tag::Coverage { photo: id, basis: basis.clone() })? {
+                Some(auto::AutoOut::Coverage(v)) => {
+                    self.segmenter.found.coverage = Some((id, basis, v.clone()));
+                    Ok(Some(v))
+                }
+                Some(_) => Err("the AI model returned something else".into()),
+                None => Ok(None),
+            }
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = id;
+            Err("AI masks are not available in this build".into())
+        }
+    }
+
+    /// Compute the automatic mask `shape` on photo `id` (filling in its segmentation). In
+    /// background mode the job is queued with `tag` and `Ok(false)` returned; `Ok(true)` when
+    /// `shape` was filled in now. A shape that isn't an automatic mask is left alone (`Ok(true)`).
+    pub(crate) fn compute_auto(&mut self, id: PhotoId, shape: &mut MaskShape, tag: impl FnOnce(&MaskShape) -> Tag) -> Result<bool, String> {
+        #[cfg(feature = "sam")]
+        {
+            let Some(a) = self.auto_for(id, shape)? else { return Ok(true) };
+            // a person picked by number is kept by their box (the numbering can change)
+            if let (MaskShape::People { rect, .. }, auto::Auto::Parts { rect: r, .. }) = (&mut *shape, &a) {
+                *rect = Some(*r);
+            }
+            let tag = tag(shape);
+            match self.auto_run(id, a, tag)? {
+                None => Ok(false),
+                Some(out) => {
+                    let d = self.develop_of(id).ok_or("no such photo")?;
+                    fill(shape, out, &lightcraft_develop::ai::basis(&d))?;
+                    Ok(true)
+                }
+            }
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = (id, shape, tag);
+            Err("AI masks are not available in this build".into())
+        }
     }
 
     /// Send a request and wait for its result (CLI, MCP, tests; or when not in background mode).
@@ -549,7 +1003,7 @@ impl Session {
                 self.segment_queue(id, kind, tag, Some(region))?;
             } else {
                 let patch = self.segment_wait(id, kind, Some(region))?;
-                let outcome = worker::Outcome { tag, result: Ok(patch), superseded: false };
+                let outcome = worker::Outcome { tag, result: Ok(patch), auto: None, superseded: false };
                 let mut polled = Polled::default();
                 self.apply_outcome(outcome, &mut polled);
             }
@@ -559,6 +1013,163 @@ impl Session {
         {
             let _ = (prompt, region, mask);
             Ok(false)
+        }
+    }
+
+    /// Add content-aware Remove spots over each selection in `segs` (one undo step); how many
+    /// objects got spots.
+    #[cfg_attr(not(feature = "sam"), allow(dead_code))]
+    pub(crate) fn add_remove_spots(&mut self, id: PhotoId, segs: &[SegMask]) -> Result<usize, String> {
+        let p = self.catalog.photo(id).ok_or("no such photo")?;
+        let d = self.develop_of(id).ok_or("no such photo")?;
+        let (pw, ph) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
+        let aspect = if d.orientation.swaps_axes() { ph / pw } else { pw / ph };
+        let mut d = (*d).clone();
+        let mut n = 0;
+        for s in segs {
+            let spots = spots_covering(s, aspect);
+            if !spots.is_empty() {
+                n += 1;
+                d.spots.extend(spots);
+            }
+        }
+        if n > 0 {
+            self.set_develop(id, d, "Detect Objects").map_err(|e| e.to_string())?;
+        }
+        Ok(n)
+    }
+
+    /// Lightroom's Remove ▸ Detect (⌥⇧O): find `people` and / or `wires` (wires and cables:
+    /// SAM 3) in photo `id` and cover each with content-aware Remove spots. In background mode
+    /// the searches are queued (`Ok(None)`) and the spots added as each finishes; otherwise
+    /// `Ok(Some(objects))`.
+    pub fn detect_remove(&mut self, id: PhotoId, people: bool, wires: bool) -> Result<Option<usize>, String> {
+        #[cfg(feature = "sam")]
+        {
+            let mut segs: Vec<SegMask> = Vec::new();
+            let mut queued = false;
+            if people {
+                match self.auto_run(id, auto::Auto::People, Tag::Remove { photo: id })? {
+                    Some(auto::AutoOut::People(v)) => segs.extend(v.into_iter().map(|p| p.seg)),
+                    Some(_) => {}
+                    None => queued = true,
+                }
+            }
+            if wires {
+                if !self.segmenter.installed() {
+                    return Err(format!("{NOT_INSTALLED}: finding wires and cables needs it."));
+                }
+                let kind = worker::Kind::Text("power lines, cables, wires".into());
+                if self.segmenter.background {
+                    self.segment_queue(id, kind, Tag::Remove { photo: id }, None)?;
+                    self.segmenter.auto_pending += 1;
+                    queued = true;
+                } else if let Some(s) = self.segment_wait(id, kind, None)? {
+                    segs.push(s);
+                }
+            }
+            if queued {
+                return Ok(None);
+            }
+            self.add_remove_spots(id, &segs).map(Some)
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = (id, people, wires);
+            Err("AI masks are not available in this build".into())
+        }
+    }
+
+    /// Update AI Settings (Lightroom's Photo ▸ Update AI Settings, the mask's update warning):
+    /// recompute every AI mask component of photo `id` (only mask `only`'s, when given) from what
+    /// defines it — the class, the person, the clicks, the description — on the photo as it is
+    /// now. In background mode the components are queued and replaced as each is computed
+    /// (`(queued, errors)`); otherwise they are replaced now, in one undo step.
+    pub fn update_ai(&mut self, id: PhotoId, only: Option<u32>) -> Result<(usize, Vec<String>), String> {
+        let d = self.develop_of(id).ok_or("no such photo")?;
+        let jobs: Vec<(u32, usize, MaskShape)> = d
+            .masks
+            .iter()
+            .filter(|m| only.is_none_or(|o| o == m.id))
+            .flat_map(|m| m.components.iter().enumerate().filter(|(_, c)| c.shape.is_ai()).map(move |(k, c)| (m.id, k, c.shape.clone())))
+            .collect();
+        let mut errors = Vec::new();
+        let mut done: Vec<(u32, usize, MaskShape)> = Vec::new();
+        let mut queued = 0;
+        for (mask, comp, shape) in jobs {
+            let original = shape.clone();
+            let mut fresh = strip_seg(shape);
+            let r: Result<bool, String> = match &fresh {
+                MaskShape::Object { hint, exclude, .. } if !hint.is_empty() && hint.len() + exclude.len() <= MAX_CLICKS => {
+                    let clicks = clicks_of(hint, exclude);
+                    self.recompute_sam(id, &mut fresh, Prompt::Clicks(clicks), Tag::Update { photo: id, mask, comp, shape: original.clone() })
+                }
+                MaskShape::Prompt { text, .. } if !text.trim().is_empty() => {
+                    let text = text.clone();
+                    self.recompute_sam(id, &mut fresh, Prompt::Text(text), Tag::Update { photo: id, mask, comp, shape: original.clone() })
+                }
+                MaskShape::Object { .. } | MaskShape::Prompt { .. } => continue,
+                _ => self.compute_auto(id, &mut fresh, |_| Tag::Update { photo: id, mask, comp, shape: original.clone() }),
+            };
+            match r {
+                Ok(true) => done.push((mask, comp, fresh)),
+                Ok(false) => queued += 1,
+                Err(e) => errors.push(e),
+            }
+        }
+        if !done.is_empty() {
+            let mut d = (*self.develop_of(id).ok_or("no such photo")?).clone();
+            let n = done.len();
+            for (mask, comp, mut fresh) in done {
+                if let Some(c) = d.masks.iter_mut().find(|m| m.id == mask).and_then(|m| m.components.get_mut(comp)) {
+                    if let (
+                        MaskShape::Object { edge: e0, .. } | MaskShape::Prompt { edge: e0, .. },
+                        MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. },
+                    ) = (&c.shape, &mut fresh)
+                    {
+                        *edge = *e0;
+                    }
+                    c.shape = fresh;
+                }
+            }
+            self.set_develop(id, d, "Update AI Settings").map_err(|e| e.to_string())?;
+            queued += n;
+        }
+        Ok((queued, errors))
+    }
+
+    /// Recompute an Object / Describe selection (Update AI Settings): queued with `tag` in
+    /// background mode (`Ok(false)`), else filled in now (`Ok(true)`).
+    fn recompute_sam(&mut self, id: PhotoId, shape: &mut MaskShape, prompt: Prompt, tag: Tag) -> Result<bool, String> {
+        self.segmenter.model_dir()?;
+        #[cfg(feature = "sam")]
+        {
+            let kind = match prompt {
+                Prompt::Clicks(c) => worker::Kind::Clicks(Self::model_clicks(&c)),
+                Prompt::Text(t) => worker::Kind::Text(t),
+            };
+            if self.segmenter.background {
+                self.segment_queue(id, kind, tag, None)?;
+                self.segmenter.auto_pending += 1;
+                return Ok(false);
+            }
+            let found = self.segment_wait(id, kind, None)?;
+            let basis = self.develop_of(id).map(|d| lightcraft_develop::ai::basis(&d));
+            match shape {
+                MaskShape::Object { seg, .. } | MaskShape::Prompt { seg, .. } => {
+                    *seg = found.map(|mut s| {
+                        s.basis = basis;
+                        s
+                    })
+                }
+                _ => {}
+            }
+            Ok(true)
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = (id, shape, prompt, tag);
+            Err("AI masks are not available in this build".into())
         }
     }
 
@@ -578,18 +1189,134 @@ impl Session {
             // clicks whose request was lost (the worker restarted) aren't pending forever
             if idle {
                 self.segmenter.pending = None;
+                self.segmenter.auto_pending = 0;
             }
         }
         polled
     }
 
     #[cfg(feature = "sam")]
-    fn apply_outcome(&mut self, o: worker::Outcome, polled: &mut Polled) {
+    fn apply_outcome(&mut self, mut o: worker::Outcome, polled: &mut Polled) {
+        if matches!(o.tag, Tag::Auto { .. } | Tag::Update { .. } | Tag::People { .. } | Tag::Coverage { .. } | Tag::Remove { .. }) {
+            self.segmenter.auto_pending = self.segmenter.auto_pending.saturating_sub(1);
+        }
         if o.superseded {
             return;
         }
+        // what the photo looks like now (stamped on new segmentations: the update indicator)
+        let basis_of = |s: &Session, photo: PhotoId| s.develop_of(photo).map(|d| lightcraft_develop::ai::basis(&d)).unwrap_or_default();
+        if let (Ok(Some(seg)), Tag::Clicks { photo, .. } | Tag::NewPrompt { photo, .. } | Tag::Update { photo, .. }) = (&mut o.result, &o.tag) {
+            seg.basis = Some(basis_of(self, *photo));
+        }
         match o.tag {
             Tag::Wait => {}
+            Tag::Auto { photo, mask, op, name, mut shape } => {
+                let out = match (o.result, o.auto) {
+                    (Err(e), _) => return polled.messages.push(e),
+                    (Ok(_), Some(a)) => a,
+                    (Ok(_), None) => return,
+                };
+                if let Err(e) = fill(&mut shape, out, &basis_of(self, photo)) {
+                    return polled.messages.push(e);
+                }
+                if self.active() != Some(photo) {
+                    return polled.messages.push("The photo changed before the AI mask was computed; try again.".into());
+                }
+                let Ok(shape) = serde_json::to_value(&shape) else { return };
+                let mut p = serde_json::json!({"shape": shape});
+                if let Some(n) = name {
+                    p["name"] = serde_json::json!(n);
+                }
+                let r = match mask {
+                    None => self.execute("mask.add", &p),
+                    Some(m) => {
+                        if !self.develop_of(photo).is_some_and(|d| d.masks.iter().any(|x| x.id == m)) {
+                            return polled.messages.push("The mask was removed before the AI mask was computed.".into());
+                        }
+                        self.active_mask = Some(m);
+                        p["op"] = serde_json::json!(op);
+                        self.execute("mask.addComponent", &p)
+                    }
+                };
+                match r {
+                    Ok(_) => polled.changed = true,
+                    Err(e) => polled.messages.push(e.to_string()),
+                }
+            }
+            Tag::Update { photo, mask, comp, shape } => {
+                let mut fresh = shape.clone();
+                match (o.result, o.auto) {
+                    (Err(e), _) => return polled.messages.push(e),
+                    (Ok(_), Some(a)) => {
+                        if let Err(e) = fill(&mut fresh, a, &basis_of(self, photo)) {
+                            return polled.messages.push(e);
+                        }
+                    }
+                    (Ok(Some(seg)), None) => match &mut fresh {
+                        MaskShape::Object { seg: s, .. } | MaskShape::Prompt { seg: s, .. } => *s = Some(seg),
+                        _ => return,
+                    },
+                    (Ok(None), None) => return,
+                }
+                let Some(d) = self.develop_of(photo) else { return };
+                let mut d = (*d).clone();
+                let Some(c) = d.masks.iter_mut().find(|m| m.id == mask).and_then(|m| m.components.get_mut(comp)) else { return };
+                if strip_seg(c.shape.clone()) != strip_seg(shape) {
+                    return; // edited meanwhile
+                }
+                // keep the selection's own settings (Edge)
+                if let (
+                    MaskShape::Object { edge: e0, .. } | MaskShape::Prompt { edge: e0, .. },
+                    MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. },
+                ) = (&c.shape, &mut fresh)
+                {
+                    *edge = *e0;
+                }
+                c.shape = fresh;
+                match self.set_develop(photo, d, "Update AI Settings") {
+                    Ok(()) => polled.changed = true,
+                    Err(e) => polled.messages.push(e.to_string()),
+                }
+            }
+            Tag::People { photo, basis, then } => match (o.result, o.auto) {
+                (Err(e), _) => polled.messages.push(e),
+                (Ok(_), Some(auto::AutoOut::People(v))) => {
+                    let found = v.len();
+                    let v: Vec<PersonFound> = v.into_iter().map(|p| PersonFound { rect: p.rect, score: p.score, seg: p.seg }).collect();
+                    self.segmenter.found.people = Some((photo, basis, v));
+                    polled.changed = true;
+                    if found == 0 {
+                        polled.messages.push("No people were found in this photo.".into());
+                    } else if let Some(p) = then
+                        && self.active() == Some(photo)
+                        && let Err(e) = self.execute("mask.add", &p)
+                    {
+                        polled.messages.push(e.to_string());
+                    }
+                }
+                _ => {}
+            },
+            Tag::Coverage { photo, basis } => match (o.result, o.auto) {
+                (Err(e), _) => polled.messages.push(e),
+                (Ok(_), Some(auto::AutoOut::Coverage(v))) => {
+                    self.segmenter.found.coverage = Some((photo, basis, v));
+                    polled.changed = true;
+                }
+                _ => {}
+            },
+            Tag::Remove { photo } => {
+                let segs: Vec<SegMask> = match (o.result, o.auto) {
+                    (Err(e), _) => return polled.messages.push(e),
+                    (Ok(_), Some(auto::AutoOut::People(v))) => v.into_iter().map(|p| p.seg).collect(),
+                    (Ok(Some(seg)), None) => vec![seg],
+                    _ => vec![],
+                };
+                match self.add_remove_spots(photo, &segs) {
+                    Ok(0) => polled.messages.push("Nothing to remove was found.".into()),
+                    Ok(_) => polled.changed = true,
+                    Err(e) => polled.messages.push(e),
+                }
+            }
             Tag::Prepare => {
                 if let Err(e) = o.result {
                     polled.messages.push(e);
@@ -709,7 +1436,7 @@ mod tests {
     fn no_region_for_nothing_or_most_of_the_photo() {
         assert!(detail_region(&seg_box(50, 0, 0, 0, 0), 1.0).is_none());
         assert!(detail_region(&seg_box(50, 2, 2, 48, 48), 1.0).is_none());
-        let damaged = SegMask { side: 50, data: "?".into(), rect: None };
+        let damaged = SegMask { side: 50, data: "?".into(), rect: None, basis: None };
         assert!(detail_region(&damaged, 1.0).is_none());
     }
 }

@@ -17,8 +17,11 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
 use lightcraft_develop::SegMask;
+use lightcraft_segment::parsers::{self, ParserSpec};
+use lightcraft_segment::segformer::{Parsed, SegFormer};
 use lightcraft_segment::{Encoded, Sam3};
 
+use super::auto::{self, Auto, AutoOut};
 use super::{Input, Prompt, Tag};
 use crate::media::RenderJob;
 
@@ -36,6 +39,9 @@ pub enum Kind {
         prompt: Prompt,
         region: [f64; 4],
     },
+    /// Lightroom's automatic masks (subject, sky, landscape, people), from whichever models are
+    /// installed.
+    Auto(Auto),
     /// Panics (tests of the worker's recovery).
     #[cfg(test)]
     Panic,
@@ -43,7 +49,7 @@ pub enum Kind {
 
 /// One request.
 pub struct Job {
-    /// The model folder.
+    /// The SAM 3 model folder (see `sam3`).
     pub dir: PathBuf,
     /// Which photo and look the request is about (the encode cache's key).
     pub key: u64,
@@ -52,6 +58,12 @@ pub struct Job {
     /// The photo's file, when it is missing on disk (for a clearer error if rendering fails).
     pub missing: Option<String>,
     pub kind: Kind,
+    /// Whether SAM 3 is installed in `dir` (automatic masks also run without it).
+    pub sam3: bool,
+    /// The folder the parsers are installed in (`<models>/<parser id>/`), if any.
+    pub models: Option<PathBuf>,
+    /// A second render: the part of the photo a People parts job zooms into.
+    pub crop: Option<RenderJob>,
     pub tag: Tag,
     pub reply: mpsc::Sender<Outcome>,
 }
@@ -60,6 +72,8 @@ pub struct Job {
 pub struct Outcome {
     pub tag: Tag,
     pub result: Result<Option<SegMask>, String>,
+    /// What an automatic mask job found (with `result` `Ok(None)`).
+    pub auto: Option<AutoOut>,
     /// A newer request for the same selection came in; this one was skipped.
     pub superseded: bool,
 }
@@ -175,6 +189,12 @@ impl Worker {
 struct State {
     model: Option<(PathBuf, Sam3)>,
     cache: Option<(u64, Encoded)>,
+    /// The last photo rendered for the models.
+    input: Option<(u64, Input)>,
+    /// Parsers loaded so far (by id).
+    parsers: Vec<(&'static str, SegFormer)>,
+    /// The scene parse of photo `input` holds.
+    scene: Option<(u64, Parsed)>,
 }
 
 /// Whether `later` makes `job` pointless (it asks for the same selection again).
@@ -195,7 +215,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration) {
             match rx.recv_timeout(idle) {
                 Ok(j) => queue.push_back(j),
                 Err(RecvTimeoutError::Timeout) => {
-                    if state.model.is_some() {
+                    if state.model.is_some() || !state.parsers.is_empty() {
                         state = State::default();
                         shared.loaded.store(false, Ordering::SeqCst);
                         log::info!("SAM 3 unloaded after {} minutes without use", idle.as_secs() / 60);
@@ -215,7 +235,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration) {
         let done = Done(if is_detail { &shared.detail } else { &shared.pending });
         if queue.iter().any(|later| supersedes(later, &job)) {
             drop(done);
-            let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), superseded: true });
+            let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), auto: None, superseded: true });
             continue;
         }
         let result = match std::panic::catch_unwind(AssertUnwindSafe(|| run_job(&mut state, shared, &mut job))) {
@@ -230,10 +250,17 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration) {
         };
         if result.is_err() && !is_detail {
             state.cache = None;
+            state.input = None;
+            state.scene = None;
         }
-        shared.loaded.store(state.model.is_some(), Ordering::SeqCst);
+        shared.loaded.store(state.model.is_some() || !state.parsers.is_empty(), Ordering::SeqCst);
         drop(done);
-        let _ = job.reply.send(Outcome { tag: job.tag, result, superseded: false });
+        let (result, auto) = match result {
+            Ok(Out::Seg(s)) => (Ok(s), None),
+            Ok(Out::Auto(a)) => (Ok(None), Some(a)),
+            Err(e) => (Err(e), None),
+        };
+        let _ = job.reply.send(Outcome { tag: job.tag, result, auto, superseded: false });
     }
 }
 
@@ -270,25 +297,205 @@ fn render(job: &mut Job) -> Result<Input, String> {
     Ok(Input { rgb, w: img.width, h: img.height })
 }
 
+/// The rendered photo `job.key` (rendering it when the cache holds another).
+fn input<'a>(state: &'a mut State, job: &mut Job) -> Result<&'a Input, String> {
+    if state.input.as_ref().is_none_or(|(k, _)| *k != job.key) {
+        state.input = None;
+        let i = render(job)?;
+        state.input = Some((job.key, i));
+    }
+    state.input.as_ref().map(|(_, i)| i).ok_or_else(|| "the photo is not available".to_string())
+}
+
 /// The model and the encoded photo `job.key` (rendering and encoding it when needed).
 fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job) -> Result<(&'a mut Sam3, &'a mut Encoded), String> {
     model(state, shared, &job.dir)?;
     if state.cache.as_ref().is_none_or(|(k, _)| *k != job.key) {
         state.cache = None;
-        let input = render(job)?;
+        input(state, job)?;
         let _busy = Flag::raise(&shared.encoding);
-        let m = state.model.as_mut().map(|(_, m)| m).ok_or("the model did not load")?;
+        let (Some((_, m)), Some((_, input))) = (state.model.as_mut(), state.input.as_ref()) else {
+            return Err("the model did not load".into());
+        };
         let t = web_time::Instant::now();
         let mut enc = m.encode(&input.rgb, input.w, input.h).map_err(|e| e.to_string())?;
         m.prepare_clicks(&mut enc).map_err(|e| e.to_string())?;
         log::info!("SAM 3 encoded {}×{} in {:?}", input.w, input.h, t.elapsed());
         state.cache = Some((job.key, enc));
     }
-    let State { model, cache } = state;
-    match (model.as_mut(), cache.as_mut()) {
+    match (state.model.as_mut(), state.cache.as_mut()) {
         (Some((_, m)), Some((_, e))) => Ok((m, e)),
         _ => Err("the model is not ready".into()),
     }
+}
+
+/// Parser `spec` from `models`, loading it when needed; `None` when it isn't installed.
+fn parser<'a>(state: &'a mut State, shared: &Shared, models: Option<&std::path::Path>, spec: &ParserSpec) -> Result<Option<&'a SegFormer>, String> {
+    let Some(dir) = models.map(|m| m.join(spec.id)).filter(|d| lightcraft_segment::parsers::is_parser_dir(d)) else { return Ok(None) };
+    if !state.parsers.iter().any(|(id, _)| *id == spec.id) {
+        let _busy = Flag::raise(&shared.encoding);
+        let t = web_time::Instant::now();
+        let m = SegFormer::load(&dir, lightcraft_segment::best_device()).map_err(|e| format!("{}: {e}", spec.name))?;
+        log::info!("{} loaded in {:?}", spec.name, t.elapsed());
+        state.parsers.push((spec.id, m));
+        shared.loaded.store(true, Ordering::SeqCst);
+    }
+    Ok(state.parsers.iter().find(|(id, _)| *id == spec.id).map(|(_, m)| m))
+}
+
+/// The scene parse of photo `job.key` (computing it when needed); `None` without the scene model.
+fn scene(state: &mut State, shared: &Shared, job: &mut Job) -> Result<bool, String> {
+    if state.scene.as_ref().is_some_and(|(k, _)| *k == job.key) {
+        return Ok(true);
+    }
+    let models = job.models.clone();
+    if parser(state, shared, models.as_deref(), &parsers::SCENE)?.is_none() {
+        return Ok(false);
+    }
+    input(state, job)?;
+    let _busy = Flag::raise(&shared.encoding);
+    let (Some((_, i)), Some((_, m))) = (state.input.as_ref(), state.parsers.iter().find(|(id, _)| *id == parsers::SCENE.id)) else {
+        return Ok(false);
+    };
+    let t = web_time::Instant::now();
+    let p = m.parse(&i.rgb, i.w, i.h, parsers::SCENE.input).map_err(|e| e.to_string())?;
+    log::info!("scene parsed {}×{} in {:?}", i.w, i.h, t.elapsed());
+    state.scene = Some((job.key, p));
+    Ok(true)
+}
+
+/// The error when no model for `auto` is installed (starts with [`super::NO_AUTO_MODEL`]: the UI
+/// offers the download on it).
+fn no_model(auto: &Auto) -> String {
+    let what = match auto {
+        Auto::Sky | Auto::Landscape(_) | Auto::Coverage => "the Scene model",
+        Auto::Subject | Auto::People => "SAM 3 or the Scene model",
+        Auto::Parts { .. } => "the People and Faces models",
+    };
+    format!(
+        "{} ({what}). Download them when LightCraft offers it, or with `segment.parsers.download {{\"acknowledged\": true}}`.",
+        super::NO_AUTO_MODEL
+    )
+}
+
+fn run_auto(state: &mut State, shared: &Shared, job: &mut Job, auto: Auto) -> Result<AutoOut, String> {
+    // the scene parse, only where it is used (SAM 3 answers Subject and People without it)
+    let needs_scene = match auto {
+        Auto::Parts { .. } => false,
+        Auto::Subject | Auto::People => !job.sam3,
+        _ => true,
+    };
+    let have_scene = needs_scene && scene(state, shared, job)?;
+    let scene_labels: Option<Vec<String>> = state.parsers.iter().find(|(id, _)| *id == parsers::SCENE.id).map(|(_, m)| m.labels().to_vec());
+    match auto {
+        Auto::Sky | Auto::Landscape(_) | Auto::Coverage => {
+            let class = match &auto {
+                Auto::Landscape(c) => c.clone(),
+                _ => "sky".to_string(),
+            };
+            if let (true, Some((_, p)), Some(labels)) = (have_scene, state.scene.as_ref(), scene_labels.as_deref()) {
+                if matches!(auto, Auto::Coverage) {
+                    return Ok(AutoOut::Coverage(auto::coverage(p, labels)));
+                }
+                return auto::landscape(p, labels, &class)?.map(AutoOut::Seg).ok_or_else(|| nothing(&class));
+            }
+            // without the scene model, SAM 3 describes it
+            if job.sam3 && !matches!(auto, Auto::Coverage) {
+                let prompt: Vec<&str> = class
+                    .split(',')
+                    .map(|c| match c.trim() {
+                        "naturalGround" => "ground, sand, rocks",
+                        "artificialGround" => "road, pavement, floor",
+                        "vegetation" => "trees, grass, plants",
+                        "architecture" => "buildings",
+                        "mountains" => "mountains",
+                        c => c,
+                    })
+                    .collect();
+                let (m, enc) = encoded(state, shared, job)?;
+                return text_logits(m, enc, &prompt.join(", "))?
+                    .map(|l| AutoOut::Seg(SegMask::from_logits(lightcraft_segment::MASK_SIDE, &l)))
+                    .ok_or_else(|| nothing(&class));
+            }
+            Err(no_model(&auto))
+        }
+        Auto::Subject => {
+            if job.sam3 {
+                let (m, enc) = encoded(state, shared, job)?;
+                let mut models = auto::Models { sam: Some((m, enc)), scene: None };
+                if let Some(s) = auto::subject(&mut models)? {
+                    return Ok(AutoOut::Seg(s));
+                }
+            }
+            if let (true, Some((_, p)), Some(labels)) = (have_scene, state.scene.as_ref(), scene_labels.as_deref()) {
+                return auto::scene_subject(p, labels).map(AutoOut::Seg).ok_or_else(|| "No subject was found in this photo.".to_string());
+            }
+            if job.sam3 { Err("No subject was found in this photo.".into()) } else { Err(no_model(&auto)) }
+        }
+        Auto::People => {
+            if job.sam3 {
+                let (m, enc) = encoded(state, shared, job)?;
+                return Ok(AutoOut::People(auto::people(&mut auto::Models { sam: Some((m, enc)), scene: None }, None, &[])?));
+            }
+            if !have_scene {
+                return Err(no_model(&auto));
+            }
+            // the faces (body parser) split people standing together
+            let models = job.models.clone();
+            let mut faces: Vec<(f64, f64)> = Vec::new();
+            if parser(state, shared, models.as_deref(), &parsers::BODY)?.is_some()
+                && let (Some((_, i)), Some((_, body))) = (state.input.as_ref(), state.parsers.iter().find(|(id, _)| *id == parsers::BODY.id))
+            {
+                let _busy = Flag::raise(&shared.encoding);
+                let pb = body.parse(&i.rgb, i.w, i.h, parsers::BODY.input).map_err(|e| e.to_string())?;
+                let fp = pb.prob(&parsers::indices(body.labels(), &["Face"]));
+                for c in parsers::components(&fp, pb.vw, pb.vh, 0.5) {
+                    if c.len() >= 4
+                        && let Some(b) = parsers::bbox(&c, pb.vw)
+                    {
+                        faces.push(((b[0] + b[2]) as f64 / 2.0 / pb.vw as f64, (b[1] + b[3]) as f64 / 2.0 / pb.vh as f64));
+                    }
+                }
+            }
+            match state.scene.as_ref() {
+                Some((_, p)) => Ok(AutoOut::People(auto::people(&mut auto::Models { sam: None, scene: Some(p) }, scene_labels.as_deref(), &faces)?)),
+                None => Err(no_model(&auto)),
+            }
+        }
+        Auto::Parts { rect, region, parts } => {
+            // the person: found again on the whole photo, the one that overlaps `rect` most
+            let found = run_auto(state, shared, job, Auto::People)?;
+            let AutoOut::People(people) = found else { return Err("no people".into()) };
+            let person = people
+                .into_iter()
+                .map(|p| (auto::iou(p.rect, rect), p))
+                .filter(|(o, _)| *o > 0.3)
+                .max_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, p)| p)
+                .ok_or("That person is no longer found in this photo.")?;
+            let models = job.models.clone();
+            if parser(state, shared, models.as_deref(), &parsers::BODY)?.is_none() {
+                return Err(no_model(&Auto::Parts { rect, region, parts }));
+            }
+            parser(state, shared, models.as_deref(), &parsers::FACE)?;
+            let crop_job = job.crop.take().ok_or("the photo is not available")?;
+            let r = crop_job.run();
+            let img = r.rendered.map_err(|e| format!("couldn't render the photo for AI masks: {e}"))?.image;
+            let crop = Input { rgb: img.data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect(), w: img.width, h: img.height };
+            let body = state.parsers.iter().find(|(id, _)| *id == parsers::BODY.id).map(|(_, m)| m).ok_or("the People model did not load")?;
+            let face = state.parsers.iter().find(|(id, _)| *id == parsers::FACE.id).map(|(_, m)| m);
+            let _busy = Flag::raise(&shared.encoding);
+            let t = web_time::Instant::now();
+            let (seg, detail) = auto::parts(body, face, &crop, region, &person.seg, &parts)?;
+            log::info!("people parts ({}×{}) in {:?}", crop.w, crop.h, t.elapsed());
+            Ok(AutoOut::Parts { seg, detail })
+        }
+    }
+}
+
+fn nothing(class: &str) -> String {
+    let labels: Vec<String> = class.split(',').map(|c| lightcraft_develop::ai::landscape_label(c.trim()).unwrap_or(c).to_lowercase()).collect();
+    format!("No {} was found in this photo.", labels.join(" or "))
 }
 
 /// Every phrase of `text` ("car, road"), merged (the per-pixel maximum); `None` when nothing
@@ -306,13 +513,27 @@ fn text_logits(model: &mut Sam3, enc: &mut Encoded, text: &str) -> Result<Option
     Ok(merged)
 }
 
-fn run_job(state: &mut State, shared: &Shared, job: &mut Job) -> Result<Option<SegMask>, String> {
+/// What a job produced.
+enum Out {
+    Seg(Option<SegMask>),
+    Auto(AutoOut),
+}
+
+fn run_job(state: &mut State, shared: &Shared, job: &mut Job) -> Result<Out, String> {
+    if let Kind::Auto(a) = std::mem::replace(&mut job.kind, Kind::Prepare) {
+        return run_auto(state, shared, job, a).map(Out::Auto);
+    }
+    run_sam(state, shared, job).map(Out::Seg)
+}
+
+fn run_sam(state: &mut State, shared: &Shared, job: &mut Job) -> Result<Option<SegMask>, String> {
     let side = lightcraft_segment::MASK_SIDE;
     match std::mem::replace(&mut job.kind, Kind::Prepare) {
         Kind::Prepare => {
             encoded(state, shared, job)?;
             Ok(None)
         }
+        Kind::Auto(_) => Ok(None),
         Kind::Clicks(clicks) => {
             let (m, enc) = encoded(state, shared, job)?;
             let p = m.segment_clicks(enc, &clicks).map_err(|e| e.to_string())?;
@@ -362,7 +583,7 @@ mod tests {
     fn job(tag: Tag, reply: &mpsc::Sender<Outcome>) -> Job {
         // an empty folder: loading fails with an error (no model files)
         let dir = std::env::temp_dir().join(format!("lc-sam3-worker-none-{}", std::process::id()));
-        Job { dir, key: 1, render: None, missing: None, kind: Kind::Prepare, tag, reply: reply.clone() }
+        Job { dir, key: 1, render: None, missing: None, kind: Kind::Prepare, sam3: true, models: None, crop: None, tag, reply: reply.clone() }
     }
 
     #[test]

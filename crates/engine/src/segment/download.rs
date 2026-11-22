@@ -95,6 +95,12 @@ impl Downloader {
     /// Start downloading `files` from `mirrors` into `dir` on a background thread. False when
     /// one is already running.
     pub fn start(&self, files: &'static [fetch::FileSpec], mirrors: Vec<String>, dir: PathBuf, opts: Options) -> Result<bool, String> {
+        self.start_many(vec![(files, mirrors, dir)], opts)
+    }
+
+    /// Download several models, one after the other (each `(files, mirrors, folder)`), on one
+    /// background thread; progress counts all of them. False when a download is running already.
+    pub fn start_many(&self, jobs: Vec<(&'static [fetch::FileSpec], Vec<String>, PathBuf)>, opts: Options) -> Result<bool, String> {
         let s = self.shared.clone();
         if s.running.swap(true, Ordering::SeqCst) {
             return Ok(false);
@@ -102,35 +108,45 @@ impl Downloader {
         s.cancel.store(false, Ordering::SeqCst);
         s.finished.store(false, Ordering::SeqCst);
         s.done.store(0, Ordering::SeqCst);
-        s.total.store(files.iter().filter_map(|f| f.size).sum(), Ordering::SeqCst);
+        let grand: u64 = jobs.iter().flat_map(|j| j.0.iter()).filter_map(|f| f.size).sum();
+        s.total.store(grand, Ordering::SeqCst);
         // nothing else runs while `running` was false
         *lock(&s.text) = Text::default();
         *lock(&self.last) = Text::default();
         let guard = Running(s.clone());
-        let spawned = std::thread::Builder::new().name("sam3-download".into()).spawn(move || {
+        let spawned = std::thread::Builder::new().name("model-download".into()).spawn(move || {
             let s = guard.0.clone();
             let mut last_file = String::new();
-            let mut on_progress = |p: &Progress| {
-                s.done.store(p.done, Ordering::SeqCst);
-                s.total.store(p.total, Ordering::SeqCst);
-                if p.file != last_file {
-                    last_file.clone_from(&p.file);
-                    lock(&s.text).file.clone_from(&p.file);
+            // bytes of the models finished before the one downloading
+            let mut before = 0u64;
+            let mut error = None;
+            for (files, mirrors, dir) in &jobs {
+                let mut on_progress = |p: &Progress| {
+                    s.done.store(before.saturating_add(p.done), Ordering::SeqCst);
+                    s.total.store(grand.max(before.saturating_add(p.total)), Ordering::SeqCst);
+                    if p.file != last_file {
+                        last_file.clone_from(&p.file);
+                        lock(&s.text).file.clone_from(&p.file);
+                    }
+                };
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    fetch::download(files, mirrors, dir, &opts, &s.cancel, &mut on_progress)
+                }));
+                match r {
+                    Ok(Ok(())) => log::info!("model downloaded to {}", dir.display()),
+                    Ok(Err(e)) => error = Some(e.to_string()),
+                    Err(_) => error = Some("the download failed unexpectedly".to_string()),
                 }
-            };
-            let r =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fetch::download(files, &mirrors, &dir, &opts, &s.cancel, &mut on_progress)));
-            let error = match r {
-                Ok(Ok(())) => {
-                    s.finished.store(true, Ordering::SeqCst);
-                    log::info!("SAM 3 model downloaded to {}", dir.display());
-                    None
+                if error.is_some() {
+                    break;
                 }
-                Ok(Err(e)) => Some(e.to_string()),
-                Err(_) => Some("the download failed unexpectedly".to_string()),
-            };
+                before = before.saturating_add(files.iter().filter_map(|f| f.size).sum());
+            }
+            if error.is_none() {
+                s.finished.store(true, Ordering::SeqCst);
+            }
             if let Some(e) = &error {
-                log::warn!("SAM 3 download: {e}");
+                log::warn!("model download: {e}");
             }
             lock(&s.text).error = error;
             drop(guard);

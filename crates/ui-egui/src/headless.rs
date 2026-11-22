@@ -181,6 +181,9 @@ impl Headless {
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()
             || !self.events.is_empty()
+            // AI masks being computed (a script waits for them like for a render)
+            || self.app.session.segmenter.busy()
+            || self.app.session.segmenter.auto_busy()
     }
 
     /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in

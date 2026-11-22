@@ -583,6 +583,9 @@ pub struct UiState {
     /// (`new` mask, or `add`/`subtract`/`intersect` on the selected one) and the text typed.
     #[serde(skip)]
     pub describe: Option<(String, String)>,
+    /// The People / Landscape picker under the mask tiles while open.
+    #[serde(skip)]
+    pub ai_pick: Option<AiPick>,
     /// A SAM 3 download was started from the app (to report its end once).
     #[serde(skip)]
     pub sam_downloading: bool,
@@ -725,6 +728,22 @@ impl Dialog {
     pub fn create_preset() -> Dialog {
         Dialog::CreatePreset { name: String::new(), group: "User Presets".into(), groups: default_preset_groups(), masks: None }
     }
+}
+
+/// The People / Landscape picker of the Masking panel (Lightroom's People and Landscape panes):
+/// which people, parts or classes are picked (indices; click = just this one, ⌘-click adds or
+/// removes one, ⇧-click the run from the last click) and whether each becomes its own mask.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AiPick {
+    /// `people` or `landscape`.
+    pub kind: String,
+    pub people: Vec<usize>,
+    pub parts: Vec<usize>,
+    pub classes: Vec<usize>,
+    /// The last click in each list (`people`, `parts`, `classes`), for ⇧-click.
+    pub anchors: [Option<usize>; 3],
+    /// Create separate masks (one per part / class).
+    pub separate: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1013,6 +1032,7 @@ impl Default for UiState {
             focus_search: false,
             renaming_mask: None,
             describe: None,
+            ai_pick: None,
             detail_due: None,
             sam_downloading: false,
             renaming_component: None,

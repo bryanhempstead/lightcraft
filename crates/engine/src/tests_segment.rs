@@ -66,6 +66,7 @@ fn status_and_model_commands_without_the_model() {
     let dir = tmp("nomirrors");
     s.segmenter.dir = Some(dir.clone());
     s.segmenter.mirrors_file = Some(dir.join("none.txt"));
+    s.segmenter.default_mirrors = false;
     if s.segmenter.mirrors().is_empty() {
         let e = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap_err().to_string();
         assert!(e.contains("LIGHTCRAFT_SAM3_MIRRORS"), "{e}");
@@ -96,6 +97,7 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
     let mut s = Session::with_demo();
     s.segmenter.dir = Some(dir.clone());
     s.segmenter.mirrors_file = Some(mirrors.clone());
+    s.segmenter.default_mirrors = false;
     let t = Instant::now();
     let r = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap();
     assert_eq!(r["started"], true);

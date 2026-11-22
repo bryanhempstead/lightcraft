@@ -29,3 +29,6 @@ dhat = { workspace = true, optional = true }
 # every allocation (live/peak bytes in `library.memory` / `ui.inspect`) and writes dhat-heap.json
 # (open it in DHAT's viewer: allocation sites by bytes at the peak). Slows allocation-heavy work.
 dhat-heap = ["dep:dhat"]
+# AI masks in snapshots and commands (SAM 3 / the SegFormer parsers, when installed: LIGHTCRAFT_SAM3_DIR,
+# LIGHTCRAFT_MODELS_DIR): `cargo run -p lightcraft-cli --features sam -- snapshot …`
+sam = ["lightcraft-engine/sam"]

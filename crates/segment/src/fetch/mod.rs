@@ -63,6 +63,11 @@ pub fn mirrors(env: Option<&str>, file: Option<&Path>) -> Vec<String> {
     lightcraft_fetch::mirrors(env, file, DEFAULT_MIRRORS)
 }
 
+/// [`mirrors`] with other defaults (none: only the user's).
+pub fn mirrors_with(env: Option<&str>, file: Option<&Path>, defaults: &[&str]) -> Vec<String> {
+    lightcraft_fetch::mirrors(env, file, defaults)
+}
+
 /// Download settings for SAM 3: the defaults, plus [`TOKEN_ENV`] for a gated mirror.
 pub fn options() -> Options {
     Options { token_env: Some(TOKEN_ENV), ..Options::default() }

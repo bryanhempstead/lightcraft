@@ -22,9 +22,41 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
             feather: f64_or(p, "feather", 50.0),
             invert: bool_or(p, "invert", false),
         },
-        "sky" => MaskShape::Sky,
-        "subject" => MaskShape::Subject,
-        "background" => MaskShape::Background,
+        "sky" => MaskShape::Sky { seg: seg_param(p) },
+        "subject" => MaskShape::Subject { seg: seg_param(p) },
+        "background" => MaskShape::Background { seg: seg_param(p) },
+        "landscape" => {
+            // one class (`class`) or several (`classes`: their union in one selection)
+            let classes: Vec<String> = match p.get("classes").and_then(Value::as_array) {
+                Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+                None => str_param(p, "class").unwrap_or("sky").split(',').map(|s| s.trim().to_string()).collect(),
+            };
+            if classes.is_empty() || classes.iter().any(|c| lightcraft_develop::ai::landscape_label(c).is_none()) {
+                return Err(bad(c, "Landscape classes are sky, water, vegetation, mountains, architecture, naturalGround, artificialGround"));
+            }
+            MaskShape::Landscape { class: classes.join(","), seg: seg_param(p) }
+        }
+        "people" => {
+            let parts: Vec<String> = p
+                .get("parts")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_else(|| vec!["person".to_string()]);
+            if parts.is_empty() || parts.iter().any(|x| lightcraft_develop::ai::part_label(x).is_none()) {
+                return Err(bad(c, "People parts are person, faceSkin, bodySkin, eyebrows, eyeSclera, iris, lips, teeth, hair, clothes"));
+            }
+            let rect = p.get("rect").and_then(Value::as_array).and_then(|a| {
+                let v: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
+                (v.len() == 4 && v.iter().all(|x| x.is_finite()) && v[2] > v[0] && v[3] > v[1]).then(|| [v[0], v[1], v[2], v[3]])
+            });
+            MaskShape::People {
+                person: p.get("person").and_then(Value::as_u64).unwrap_or(0).min(999) as u32,
+                parts,
+                rect,
+                seg: seg_param(p),
+                detail: vec![],
+            }
+        }
         "luminanceRange" => MaskShape::LuminanceRange {
             lo: f64_or(p, "lo", 0.6),
             hi: f64_or(p, "hi", 1.0),
@@ -46,10 +78,21 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
         other => {
             return Err(bad(
                 c,
-                format!("unknown mask kind `{other}` (brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt)"),
+                format!(
+                    "unknown mask kind `{other}` (brush|linear|radial|sky|subject|background|landscape|people|luminanceRange|colorRange|object|prompt)"
+                ),
             ));
         }
     })
+}
+
+/// The shape of a `mask.add` / `mask.addComponent`: `shape` (a whole MaskShape, as stored) or
+/// `kind` and its parameters.
+fn shape_of(p: &Value, default_kind: &str, c: &str) -> Result<MaskShape> {
+    if let Some(s) = p.get("shape") {
+        return serde_json::from_value(s.clone()).map_err(|e| bad(c, format!("shape: {e}")));
+    }
+    shape_from(str_param(p, "kind").unwrap_or(default_kind), p, c)
 }
 
 /// `[[x, y], …]` normalized points under `key`.
@@ -72,16 +115,68 @@ enum Later {
     Clicks(Vec<Point>, Vec<Point>),
     /// Background mode: the Describe selection is computed first; the mask is added when found.
     Text(String),
+    /// Background mode: an automatic mask (or the people it needs) is being computed; the mask is
+    /// added when it is.
+    Queued,
+}
+
+/// Where a new AI shape goes: a new mask (`mask: None`, named `name`) or a component of `mask`
+/// combined by `op`.
+struct Target {
+    mask: Option<u32>,
+    op: String,
+    name: Option<String>,
+}
+
+/// Compute an automatic mask (sky, subject, background, landscape, people) unless it came with
+/// its segmentation. Without any model, sky / subject / background (and the landscape sky) keep
+/// the classical heuristics; other kinds need a model.
+fn resolve_auto(s: &mut Session, shape: &mut MaskShape, p: &Value, to: &Target, c: &str) -> Result<Later> {
+    if shape.seg().is_some() {
+        return Ok(Later::Nothing);
+    }
+    let heuristic = match shape {
+        MaskShape::Sky { .. } | MaskShape::Subject { .. } | MaskShape::Background { .. } => true,
+        MaskShape::Landscape { class, .. } => class == "sky",
+        _ => false,
+    };
+    if !s.segmenter.any_auto_model() {
+        if heuristic {
+            return Ok(Later::Nothing);
+        }
+        return Err(ai_err(format!(
+            "{}. Download them when LightCraft offers it, or with `segment.parsers.download {{\"acknowledged\": true}}`.",
+            crate::segment::NO_AUTO_MODEL
+        )));
+    }
+    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+    // a person picked by number needs the photo's people first
+    if let MaskShape::People { person, rect: None, .. } = shape
+        && s.person_rect(id, *person as usize).is_none()
+    {
+        match s.detect_people(id, Some(p.clone())).map_err(ai_err)? {
+            None => return Ok(Later::Queued), // background: mask.add runs again once they are found
+            Some(v) if v.is_empty() => return Err(ai_err("No people were found in this photo.")),
+            Some(v) if *person as usize >= v.len() => return Err(ai_err(format!("This photo has {} people (person 0–{}).", v.len(), v.len() - 1))),
+            Some(_) => {}
+        }
+    }
+    let (mask, op, name) = (to.mask, to.op.clone(), to.name.clone());
+    let done = s.compute_auto(id, shape, |sh| crate::segment::Tag::Auto { photo: id, mask, op, name, shape: sh.clone() }).map_err(ai_err)?;
+    Ok(if done { Later::Nothing } else { Later::Queued })
 }
 
 /// Compute the segmentation of a new AI shape (Object with clicks, Prompt) — or, in background
 /// mode, say what to queue. An Object without clicks stays empty until the photo is clicked
 /// (the photo is analyzed meanwhile); a Prompt that matches nothing is an error. Shapes given
 /// with their `seg` need no model.
-fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> {
+fn resolve_ai(s: &mut Session, shape: &mut MaskShape, p: &Value, to: &Target, c: &str) -> Result<Later> {
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let background = s.segmenter.background;
     match shape {
+        MaskShape::Sky { .. } | MaskShape::Subject { .. } | MaskShape::Background { .. } | MaskShape::Landscape { .. } | MaskShape::People { .. } => {
+            return resolve_auto(s, shape, p, to, c);
+        }
         MaskShape::Object { seg: Some(_), .. } | MaskShape::Prompt { seg: Some(_), .. } => {}
         MaskShape::Object { hint, exclude, .. } if !hint.is_empty() && background => {
             s.segmenter.model_dir().map_err(ai_err)?;
@@ -124,6 +219,14 @@ fn queue_later(s: &mut Session, later: Later, mask: u32, comp: usize, mut out: V
     Ok(out)
 }
 
+fn people_json(v: &[crate::segment::PersonFound]) -> Vec<Value> {
+    v.iter().enumerate().map(|(i, p)| json!({"index": i, "rect": p.rect, "score": p.score})).collect()
+}
+
+fn coverage_json(v: &[(String, f32)]) -> Vec<Value> {
+    v.iter().map(|(id, c)| json!({"id": id, "label": lightcraft_develop::ai::landscape_label(id).unwrap_or(id), "coverage": c})).collect()
+}
+
 /// AI mask failures are shown as they are (not as "invalid parameters").
 fn ai_err(msg: impl Into<String>) -> crate::EngineError {
     crate::EngineError::Other(msg.into())
@@ -161,10 +264,32 @@ pub fn specs() -> Vec<CommandSpec> {
             "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; object/prompt: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt returns {pending} and the mask appears when found",
             has_active,
             |s, p| {
-                let kind = str_param(p, "kind").unwrap_or("radial").to_string();
-                let mut shape = shape_from(&kind, p, "mask.add")?;
-                let later = resolve_ai(s, &mut shape, "mask.add")?;
+                // several Landscape classes or People parts as separate masks: one mask.add each
+                if p.get("separate").and_then(Value::as_bool) == Some(true) {
+                    let (key, items): (&str, Vec<Value>) = match str_param(p, "kind") {
+                        Some("landscape") => ("classes", p.get("classes").and_then(Value::as_array).cloned().unwrap_or_default()),
+                        Some("people") => ("parts", p.get("parts").and_then(Value::as_array).cloned().unwrap_or_default()),
+                        _ => ("", vec![]),
+                    };
+                    if items.len() > 1 {
+                        let mut outs = Vec::new();
+                        for it in items {
+                            let mut one = p.clone();
+                            one["separate"] = json!(false);
+                            one[key] = json!([it]);
+                            outs.push(s.execute("mask.add", &one)?);
+                        }
+                        let pending = outs.iter().any(|o| o.get("pending").and_then(Value::as_bool) == Some(true));
+                        return Ok(json!({"masks": outs, "pending": pending, "activeMask": s.active_mask}));
+                    }
+                }
+                let mut shape = shape_of(p, "radial", "mask.add")?;
                 let name = str_param(p, "name").map(str::to_string);
+                let to = Target { mask: None, op: "add".into(), name: name.clone() };
+                let later = resolve_ai(s, &mut shape, p, &to, "mask.add")?;
+                if let Later::Queued = later {
+                    return Ok(json!({"pending": true}));
+                }
                 if let Later::Text(text) = &later {
                     let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
                     s.segment_text_later(id, None, "add", name, text).map_err(ai_err)?;
@@ -197,7 +322,6 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id?: maskId, op: add|subtract|intersect, kind, ...shape params}",
             has_active,
             |s, p| {
-                let kind = str_param(p, "kind").unwrap_or("brush").to_string();
                 let op: MaskOp =
                     serde_json::from_value(p.get("op").cloned().unwrap_or(json!("add"))).map_err(|e| bad("mask.addComponent", e.to_string()))?;
                 let active = s.active_mask;
@@ -206,8 +330,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 if !s.develop_of(id).is_some_and(|d| d.masks.iter().any(|m| m.id == mid)) {
                     return Err(bad("mask.addComponent", format!("no mask {mid}")));
                 }
-                let mut shape = shape_from(&kind, p, "mask.addComponent")?;
-                let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
+                let mut shape = shape_of(p, "brush", "mask.addComponent")?;
+                let to = Target { mask: Some(mid), op: p.get("op").and_then(Value::as_str).unwrap_or("add").to_string(), name: None };
+                let later = resolve_ai(s, &mut shape, p, &to, "mask.addComponent")?;
+                if let Later::Queued = later {
+                    return Ok(json!({"pending": true}));
+                }
                 if let Later::Text(text) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
                     s.segment_text_later(id, Some(mid), op, None, text).map_err(ai_err)?;
@@ -480,6 +608,153 @@ pub fn specs() -> Vec<CommandSpec> {
             "{} — stop the SAM 3 download (what has arrived is kept, and a new download resumes from it) → {cancelled}",
             super::always,
             |s, _| Ok(json!({"cancelled": s.segmenter.cancel_download()}))
+        ),
+        cmd!(
+            query "segment.parsers.status",
+            "AI Mask Models Status",
+            [],
+            None,
+            "{} — the Sky / Landscape / People models (SegFormer parsers: scene, body, face): each one's name, purpose, licence, size and whether it is installed, and their download → {models: [{id, name, purpose, license, licenseUrl, bytes, installed}], installed, dir, download}",
+            super::always,
+            |s, _| {
+                let g = &s.segmenter;
+                Ok(json!({
+                    "models": g.parsers(),
+                    "installed": g.parsers_installed(),
+                    "dir": g.models.as_ref().map(|d| d.display().to_string()),
+                    "download": g.parsers_download_status(),
+                }))
+            }
+        ),
+        cmd!(
+            query "segment.parsers.download",
+            "Download AI Mask Models",
+            [],
+            None,
+            "{acknowledged: true} — download the Sky / Landscape / People models that aren't installed (about 870 MB: NVIDIA's SegFormer licence and the CelebAMask-HQ terms, non-commercial; MIT), in the background; only after the user agreed. segment.model.cancel stops it → {started}",
+            super::always,
+            |s, p| {
+                let c = "segment.parsers.download";
+                if p.get("acknowledged").and_then(Value::as_bool) != Some(true) {
+                    let bytes: u64 = s.segmenter.parsers().iter().map(|m| m.bytes).sum();
+                    return Err(bad(
+                        c,
+                        format!(
+                            "the AI mask models are a {:.0} MB download under their own licences (see segment.parsers.status): pass `acknowledged: true` once the user has agreed",
+                            bytes as f64 / 1e6
+                        ),
+                    ));
+                }
+                let started = s.segmenter.start_parsers_download().map_err(ai_err)?;
+                Ok(json!({"started": started, "installed": s.segmenter.parsers_installed()}))
+            }
+        ),
+        cmd!(
+            "remove.detect",
+            "Detect Objects to Remove",
+            [],
+            Some("Alt+Shift+O"),
+            "{people?: bool (true), wires?: bool (true when SAM 3 is installed), dust?: bool (true)} — Lightroom's Remove ▸ Detect: finds people (SAM 3 or the Scene model), wires and cables (SAM 3) and sensor dust, and covers each with content-aware Remove spots (one undo step per kind) → {objects, dust} (in the app people and wires come in the background: {pending})",
+            has_active,
+            |s, p| {
+                let c = "remove.detect";
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let people = bool_or(p, "people", true);
+                let wires = p.get("wires").and_then(Value::as_bool).unwrap_or(s.segmenter.installed());
+                let dust = bool_or(p, "dust", true);
+                let mut out = json!({"objects": 0, "dust": 0});
+                let mut errors = Vec::new();
+                if dust {
+                    match s.execute("spot.findDust", &json!({})) {
+                        Ok(r) => out["dust"] = r["added"].clone(),
+                        Err(e) => errors.push(e.to_string()),
+                    }
+                }
+                if (people || wires) && s.segmenter.any_auto_model() {
+                    match s.detect_remove(id, people, wires) {
+                        Ok(Some(n)) => out["objects"] = json!(n),
+                        Ok(None) => out["pending"] = json!(true),
+                        Err(e) => errors.push(e),
+                    }
+                } else if people || wires {
+                    errors.push(format!("{}: people and wires need them.", crate::segment::NO_AUTO_MODEL));
+                }
+                if !errors.is_empty() {
+                    out["errors"] = json!(errors);
+                }
+                Ok(out)
+            }
+        ),
+        cmd!(
+            "segment.detectPeople",
+            "Detect People",
+            [],
+            None,
+            "{} — find the people in the active photo (People masks pick one by its index) → {people: [{index, rect: [x0,y0,x1,y1] normalized, score}]} (in the app {pending: true}; the list then shows in the Masking panel)",
+            has_active,
+            |s, _| {
+                let id = s.active().ok_or_else(|| bad("segment.detectPeople", "no active photo"))?;
+                match s.detect_people(id, None).map_err(ai_err)? {
+                    None => Ok(json!({"pending": true})),
+                    Some(v) => Ok(json!({"people": people_json(&v)})),
+                }
+            }
+        ),
+        cmd!(
+            "segment.detectLandscape",
+            "Detect Landscape",
+            [],
+            None,
+            "{} — how much of the active photo each Landscape class covers (needs the Scene model) → {classes: [{id, label, coverage 0..1}]} (in the app {pending: true})",
+            has_active,
+            |s, _| {
+                let id = s.active().ok_or_else(|| bad("segment.detectLandscape", "no active photo"))?;
+                match s.detect_landscape(id).map_err(ai_err)? {
+                    None => Ok(json!({"pending": true})),
+                    Some(v) => Ok(json!({"classes": coverage_json(&v)})),
+                }
+            }
+        ),
+        cmd!(
+            query "segment.found",
+            "AI Mask Detections",
+            [],
+            None,
+            "{} — what was detected in the active photo so far (null: not analyzed, or the photo changed since) → {people, classes, stale: [{mask, component}]}",
+            has_active,
+            |s, _| {
+                let id = s.active().ok_or_else(|| bad("segment.found", "no active photo"))?;
+                let stale: Vec<Value> = s
+                    .develop_of(id)
+                    .map(|d| lightcraft_develop::ai::stale_components(&d))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(m, c)| json!({"mask": m, "component": c}))
+                    .collect();
+                Ok(json!({
+                    "people": s.people_found(id).map(people_json),
+                    "classes": s.coverage_found(id).map(coverage_json),
+                    "stale": stale,
+                }))
+            }
+        ),
+        cmd!(
+            "mask.updateAI",
+            "Update AI Settings",
+            ["Photo"],
+            None,
+            "{id?: mask (default: every mask)} — recompute the active photo's AI masks (Subject, Sky, Background, Landscape, People, Object, Describe) on the photo as it is now: after lens or geometry corrections, spots or Enhance change it, or a new model → {updated, errors} (in the app they are queued: {pending})",
+            has_active,
+            |s, p| {
+                let id = s.active().ok_or_else(|| bad("mask.updateAI", "no active photo"))?;
+                let only = p.get("id").and_then(Value::as_u64).map(|v| v as u32);
+                let (n, errors) = s.update_ai(id, only).map_err(ai_err)?;
+                if n == 0 && !errors.is_empty() {
+                    return Err(ai_err(errors.join(" ")));
+                }
+                let background = s.segmenter.background;
+                Ok(json!({"updated": n, "pending": background && n > 0, "errors": errors}))
+            }
         ),
         cmd!(
             "mask.refine",

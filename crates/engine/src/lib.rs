@@ -935,6 +935,8 @@ pub fn json_delta(old: &Value, new: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_ai_masks;
+#[cfg(test)]
 mod tests_backup;
 #[cfg(test)]
 mod tests_cameras;
