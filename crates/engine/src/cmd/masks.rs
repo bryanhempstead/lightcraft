@@ -822,6 +822,34 @@ pub fn specs() -> Vec<CommandSpec> {
             };
             ok()
         }),
+        cmd!(
+            "spot.deleteInRect",
+            "Delete Spots in Rectangle",
+            [],
+            None,
+            "{rect: [x0, y0, x1, y1] normalized (any corner order)} — deletes every spot whose target lies inside (Lightroom's ⌥-drag marquee in the Remove tool); one undo step → {deleted}",
+            has_active,
+            |s, p| {
+                let c = "spot.deleteInRect";
+                let r: Vec<f64> = p.get("rect").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+                let &[ax, ay, bx, by] = r.as_slice() else { return Err(bad(c, "`rect` is [x0, y0, x1, y1]")) };
+                if !r.iter().all(|v| v.is_finite()) {
+                    return Err(bad(c, "`rect` must be finite numbers"));
+                }
+                let (x0, x1, y0, y1) = (ax.min(bx), ax.max(bx), ay.min(by), ay.max(by));
+                let inside = |sp: &Spot| sp.points.first().is_some_and(|q| (x0..=x1).contains(&q.x) && (y0..=y1).contains(&q.y));
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let n = s.develop_of(id).map_or(0, |d| d.spots.iter().filter(|sp| inside(sp)).count());
+                if n > 0 {
+                    spots_edit(s, c, "Delete Spots", |spots| {
+                        spots.retain(|sp| !inside(sp));
+                        Ok(())
+                    })?;
+                    s.active_spot = None;
+                }
+                Ok(json!({"deleted": n}))
+            }
+        ),
         // ---- Red eye / pet eye
         cmd!(
             "redeye.add",

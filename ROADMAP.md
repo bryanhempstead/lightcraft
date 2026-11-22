@@ -242,6 +242,7 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
 - 2026-11-21 (fork): photos on a P3 display (Studio Display) are shown in Display P3 values, so the loupe matches the
   export instead of looking more saturated (Settings ▸ Interface ▸ Photo colours).
 - 2026-11-21 (fork): point curve Snap to Grid, copy / paste a channel, Show All Curves.
+- 2026-11-21 (fork): Remove tool ⌥-drag marquee deletes the spots inside it.
 
 ## Chinese and Japanese interfaces, and text watermarks
 

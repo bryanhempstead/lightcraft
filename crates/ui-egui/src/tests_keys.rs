@@ -628,3 +628,40 @@ fn point_curve_snap_copy_paste_and_show_all() {
     let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&h.app.ui).unwrap()).unwrap();
     assert!(back.curve_show_all && back.curve_snap);
 }
+
+/// U11: ⌥-drag a marquee in the Remove tool deletes the spots inside it (one undo step); a Fill
+/// brush adds a content-aware Fill spot (R17).
+#[test]
+fn remove_tool_marquee_deletes_spots_and_fill_mode_adds_fill_spots() {
+    let mut h = demo();
+    let first = h.app.session.catalog.photos().next().unwrap().id.0;
+    exec(&mut h, "library.select", json!({"ids": [first]}));
+    let r = h.request("ui.set", json!({"view": "detail", "right": "remove"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for (x, y) in [(0.2, 0.2), (0.3, 0.25), (0.8, 0.8)] {
+        exec(&mut h, "spot.add", json!({"mode": "heal", "points": [[x, y]], "size": 0.02}));
+    }
+    let id = h.app.session.active().unwrap();
+    // engine: rejects junk, deletes what's inside (corners in any order)
+    let r = h.request("engine.execute", json!({"command": "spot.deleteInRect", "params": {"rect": [0, 0, 1]}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    let undo = h.app.session.undo.len();
+    let r = exec(&mut h, "spot.deleteInRect", json!({"rect": [0.35, 0.3, 0.1, 0.1]}));
+    assert_eq!(r["deleted"], 2);
+    assert_eq!(h.app.session.develop_of(id).unwrap().spots.len(), 1);
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    // ⌥-drag on the photo across the last spot
+    h.settle(Duration::from_secs(60));
+    let r = h.request("ui.pointer", json!({"alt": true, "events": [{"kind": "down", "x": 0.7, "y": 0.7}, {"x": 0.75, "y": 0.75}, {"x": 0.9, "y": 0.9}, {"kind": "up", "x": 0.9, "y": 0.9}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(Duration::from_secs(60));
+    assert!(h.app.session.develop_of(id).unwrap().spots.is_empty(), "the marquee deleted it");
+    // Fill: a click with the Fill tool adds a Fill spot
+    h.app.ui.tool = "fill".into();
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.5, "y": 0.5}, {"kind": "up", "x": 0.5, "y": 0.5}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(Duration::from_secs(60));
+    let spots = h.app.session.develop_of(id).unwrap().spots.clone();
+    assert_eq!(spots.len(), 1, "{spots:?}");
+    assert_eq!(spots[0].mode, lightcraft_develop::SpotMode::Fill);
+}
