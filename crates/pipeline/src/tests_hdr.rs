@@ -112,3 +112,21 @@ fn camera_tone_raws_open_their_highlights_into_the_headroom() {
     let close = hdr.iter().zip(&sdr).filter(|(a, b)| **b < 0.15 && (**a - **b).abs() < 3e-3).count();
     assert!(dark > 100 && close == dark, "{close} of {dark} dark samples unchanged");
 }
+
+#[test]
+fn visualize_hdr_paints_only_what_rises_above_white() {
+    use crate::Overlay;
+    use crate::visualize::HDR_BANDS;
+    let src = sunset();
+    let req = RenderRequest { overlay: Overlay::HdrRange, ..RenderRequest::fit(240, 240) };
+    let banded = |p: &[u8; 4]| HDR_BANDS.iter().any(|b| (0..3).all(|k| (p[k] as i32 - b[k] as i32).abs() < 70) && p[0] > p[2] + 40);
+    let on = render(&src, &raw(), &hdr_on(3.0), &req);
+    let n = on.image.data.iter().filter(|p| banded(p)).count();
+    assert!(n > 0 && n < on.image.data.len() / 3, "{n} banded pixels");
+    // the rest is grey
+    assert!(on.image.data.iter().filter(|p| !banded(p)).all(|p| p[0] == p[1] && p[1] == p[2]));
+    // HDR off: the overlay draws nothing
+    let off = render(&src, &raw(), &DevelopSettings::default(), &req);
+    let plain = render(&src, &raw(), &DevelopSettings::default(), &RenderRequest::fit(240, 240));
+    assert_eq!(off.image.data, plain.image.data);
+}

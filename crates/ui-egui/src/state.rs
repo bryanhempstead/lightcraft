@@ -623,6 +623,11 @@ pub struct UiState {
     pub point_color: usize,
     /// Point Color "Visualize range": the selected sample's range in colour, the rest grey.
     pub point_color_visualize: bool,
+    /// Light panel "Visualize HDR": grey below SDR white, colour bands above (HDR edits).
+    pub hdr_visualize: bool,
+    /// Basic panel "Preview for SDR Display" (HDR edits): the loupe shows the SDR rendition and
+    /// the SDR settings, even on an HDR (EDR) display.
+    pub hdr_sdr_preview: bool,
     /// Red Eye panel: selected correction, and whether new ones are pet eyes.
     pub eye: usize,
     pub eye_pet: bool,
@@ -1033,6 +1038,8 @@ impl Default for UiState {
             remove_opacity: 100.0,
             point_color: 0,
             point_color_visualize: false,
+            hdr_visualize: false,
+            hdr_sdr_preview: false,
             eye: 0,
             eye_pet: false,
             visualize_spots: false,
