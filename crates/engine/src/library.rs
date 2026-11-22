@@ -116,6 +116,8 @@ struct ViewFile {
     library_folder: Option<String>,
     /// Its subfolders shown or not, whatever Show Photos in Subfolders says (a shoot's choice).
     library_folder_subfolders: Option<bool>,
+    /// The folders or cameras a collection source is narrowed to.
+    album_part: Option<crate::album_parts::AlbumPart>,
     // No filter: a library opens unfiltered. A date, keyword or person left over from the last session
     // would silently hide photos, with only a small badge to say so.
     sort: lightcraft_catalog::Sort,
@@ -353,6 +355,7 @@ impl Session {
         self.source = LibrarySource::All;
         self.library_folder = None;
         self.library_folder_subfolders = None;
+        self.album_part = None;
         if report.created && seed_demo {
             crate::demo::load(self);
             journal.snapshot(&self.catalog)?;
@@ -418,6 +421,7 @@ impl Session {
             self.browse = v.browse;
             self.library_folder = v.library_folder.filter(|f| !f.trim().is_empty());
             self.library_folder_subfolders = v.library_folder_subfolders;
+            self.album_part = v.album_part;
             if self.source == LibrarySource::LibraryFolder {
                 // a folder that is gone (or none): everything, not an empty grid
                 let f = lightcraft_catalog::Filter { library_folder: self.library_folder.clone(), ..Default::default() };
@@ -581,6 +585,7 @@ impl Session {
             // only while it is shown: a leftover would be a stale choice nobody made
             library_folder: self.library_folder.clone().filter(|_| self.source == LibrarySource::LibraryFolder),
             library_folder_subfolders: self.library_folder_subfolders.filter(|_| self.source == LibrarySource::LibraryFolder),
+            album_part: self.active_album_part().cloned(),
             sort: self.sort,
             selection: self.selection.clone(),
         };

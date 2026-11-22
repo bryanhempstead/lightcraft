@@ -6,6 +6,14 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (subfolders agent, 2026-11-22, branch worktree-agent-a0f3c68e00ff61adc, not merged) **LRC-LIB-COLL-PARTS:
+  a collection's folders / cameras under its row** — every Collections row (smart, in sets, and in the Map module's
+  left panel, which now lists Collections under Saved Locations) has a disclosure triangle listing the folders its
+  photos come from (`raw/M262 · LEICA M (Typ 262)`, `raw/R6`, `jpg`; `fldr.` / `cam.` in the header for cameras);
+  click / ⌘ / ⇧ / all. / none. narrow the collection (`library.source {kind: album, folders | cameras}`,
+  `album.parts`; `Session::album_part`, kept in view.json); drop onto a row adds to the collection; ← / → over a
+  collection close / open it. Camera folders beside them on disk with photos not in the library (`GR3 · not in library 401 add.`; photos counted, pairs once, sidecars never) import in place into the collection (`import::start_paths_into`). `crates/engine/src/album_parts.rs`, `left.rs` (`album_part_rows`), headless tests
+  `tests_collection_parts.rs`. Left: cameras by model only (no serial), Develop's Collections panel has no triangles.
 - [ ] (export agent, 2026-11-22, branch worktree-agent-a3771648dd17295ab, not merged; main merged in twice, DNG
   preview / lossy options kept) **LR-EXP-DIALOG: Export dialog laid out like Lightroom Classic's** —
   `crates/ui-egui/src/export_dialog.rs` (new), `export_task.rs` (queue, pause), `crates/engine/src/export.rs`

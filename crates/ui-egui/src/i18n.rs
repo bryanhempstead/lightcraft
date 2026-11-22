@@ -229,6 +229,11 @@ pub fn source_label(source: lightcraft_engine::LibrarySource, catalog: &lightcra
 pub fn source_title(session: &lightcraft_engine::Session) -> String {
     match (session.source, session.library_folder.as_deref()) {
         (lightcraft_engine::LibrarySource::LibraryFolder, Some(path)) => lightcraft_catalog::folders::folder_label(path),
+        // a collection narrowed to some of its folders or cameras says which (`Erika › raw/M262`)
+        (source @ lightcraft_engine::LibrarySource::Album(_), _) => match session.active_album_part().filter(|p| !p.title.is_empty()) {
+            Some(p) => format!("{} › {}", source_label(source, &session.catalog), p.title),
+            None => source_label(source, &session.catalog),
+        },
         (source, _) => source_label(source, &session.catalog),
     }
 }

@@ -48,6 +48,8 @@ mod tests_cameras;
 #[cfg(test)]
 mod tests_classic;
 #[cfg(test)]
+mod tests_collection_parts;
+#[cfg(test)]
 mod tests_curve;
 #[cfg(test)]
 mod tests_export_dialog;
