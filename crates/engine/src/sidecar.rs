@@ -285,7 +285,8 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
     if !p.meta.location.trim().is_empty() {
         lc.push(("location", p.meta.location.as_str()));
     }
-    lightcraft_meta::write_xmp_lc(&meta, &lc)
+    // the HDR edit, also as Camera Raw's fields: Lightroom reads it back (`crs::hdr_props`)
+    lightcraft_meta::write_xmp_lc_crs(&meta, &lc, &crate::crs::hdr_props(&p.develop.hdr))
 }
 
 /// The properties LightCraft writes and owns in a sidecar: replaced on every save (removed when
@@ -328,7 +329,23 @@ pub const OWNED: &[&str] = &[
 /// Properties replaced only when LightCraft has a value (capture time; GPS, which LightCraft
 /// doesn't read from sidecars): otherwise the sidecar's own value stays. Anything else LightCraft
 /// writes (`xmp:CreatorTool`) goes only into new sidecars.
-pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude"];
+/// The HDR edit's `crs:` fields ([`crate::crs::hdr_props`]) are written only for an HDR edit, and
+/// then replace another application's.
+pub const OWNED_IF_STATED: &[&str] = &[
+    "exif:DateTimeOriginal",
+    "photoshop:DateCreated",
+    "exif:GPSLatitude",
+    "exif:GPSLongitude",
+    "crs:HDREditMode",
+    "crs:HDRMaxValue",
+    "crs:SDRBrightness",
+    "crs:SDRContrast",
+    "crs:SDRClarity",
+    "crs:SDRHighlights",
+    "crs:SDRShadows",
+    "crs:SDRWhites",
+    "crs:SDRBlend",
+];
 
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
@@ -677,6 +694,31 @@ mod tests {
         assert_eq!(p.develop.color.vibrance, 12.0);
         assert_eq!(p.develop.effects.clarity, before.effects.clarity, "crs partial keeps unrelated settings");
         assert_eq!(p.meta.title, "Dune & sky", "fields the sidecar doesn't state are kept");
+    }
+
+    #[test]
+    fn hdr_edits_replace_lightrooms_hdr_fields_and_keep_its_others() {
+        let lr = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="-0.40" crs:HDREditMode="0" crs:HDRMaxValue="4"/></rdf:RDF></x:xmpmeta>"#;
+        let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
+        // no HDR edit in LightCraft: Lightroom's HDR fields stay as they were
+        let p = photo();
+        let merged = lightcraft_meta::merge_xmp(lr, &sidecar_packet(&p, &lightcraft_catalog::Catalog::new()), rules).unwrap();
+        let props = lightcraft_meta::parse_xmp(&merged).unwrap().properties;
+        assert_eq!(props["crs:HDREditMode"], vec!["0".to_string()]);
+        // an HDR edit replaces them; Lightroom's other settings are kept
+        let mut p = photo();
+        let mut d = (*p.develop).clone();
+        d.hdr.enabled = true;
+        d.hdr.max_ev = 3.0;
+        p.develop = Arc::new(d);
+        let merged = lightcraft_meta::merge_xmp(lr, &sidecar_packet(&p, &lightcraft_catalog::Catalog::new()), rules).unwrap();
+        let props = lightcraft_meta::parse_xmp(&merged).unwrap().properties;
+        assert_eq!(props["crs:HDREditMode"], vec!["1".to_string()]);
+        assert_eq!(props["crs:HDRMaxValue"], vec!["3".to_string()]);
+        assert_eq!(props["crs:Exposure2012"], vec!["-0.40".to_string()]);
+        assert!(!merged.contains("crs:HDREditMode=\"0\"") && !merged.contains("crs:HDRMaxValue=\"4\""), "{merged}");
     }
 
     #[test]

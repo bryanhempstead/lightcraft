@@ -46,6 +46,39 @@ const NON_ADJUSTMENT: &[&str] = &[
     "crs:HasCrop",
 ];
 
+/// Camera Raw's HDR fields besides `HDREditMode` (the switch) and the develop settings they map
+/// to: the headroom limit in stops above SDR white, and the SDR rendition's offsets (−100..100).
+pub const HDR_CRS: &[(&str, &str)] = &[
+    ("crs:HDRMaxValue", "hdr.max_ev"),
+    ("crs:SDRBrightness", "hdr.sdr_brightness"),
+    ("crs:SDRContrast", "hdr.sdr_contrast"),
+    ("crs:SDRClarity", "hdr.sdr_clarity"),
+    ("crs:SDRHighlights", "hdr.sdr_highlights"),
+    ("crs:SDRShadows", "hdr.sdr_shadows"),
+    ("crs:SDRWhites", "hdr.sdr_whites"),
+    ("crs:SDRBlend", "hdr.sdr_blend"),
+];
+
+/// The `crs:` HDR fields of `h` (`crs:HDREditMode` and [`HDR_CRS`]) as Camera Raw writes them,
+/// for a sidecar, so Lightroom reads LightCraft's HDR edit back. Empty for the default (HDR off,
+/// nothing changed): then another application's HDR fields stay as it left them.
+pub fn hdr_props(h: &lightcraft_develop::Hdr) -> Vec<(&'static str, String)> {
+    if h.is_default() {
+        return Vec::new();
+    }
+    let fmt = |v: f64| {
+        let v = if v.is_finite() { v } else { 0.0 };
+        let r = (v * 100.0).round() / 100.0;
+        if r.fract() == 0.0 { format!("{r:+.0}") } else { format!("{r:+}") }
+    };
+    let values = [h.headroom_ev(), h.sdr_brightness, h.sdr_contrast, h.sdr_clarity, h.sdr_highlights, h.sdr_shadows, h.sdr_whites, h.sdr_blend];
+    let mut v = vec![("crs:HDREditMode", if h.enabled { "1" } else { "0" }.to_string())];
+    for ((name, _), x) in HDR_CRS.iter().zip(values) {
+        v.push((*name, if *name == "crs:HDRMaxValue" { fmt(x).trim_start_matches('+').to_string() } else { fmt(x) }));
+    }
+    v
+}
+
 /// True if the packet carries any `crs:` adjustment (not just bookkeeping fields).
 pub fn has_adjustments(props: &Props) -> bool {
     if props.get("crs:AlreadyApplied").and_then(|v| v.first()).is_some_and(|s| s.eq_ignore_ascii_case("true")) {
@@ -196,6 +229,25 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     old(o, "FillLight", "light.shadows", &|v| v);
     old(o, "Shadows", "light.blacks", &|v| -(v - 5.0) * 4.0);
     old(o, "Brightness", "light.whites", &|v| (v - 50.0) * 0.6);
+    // ---- HDR editing (Lightroom 13+ / Camera Raw 15+): the HDR switch, its headroom limit
+    // (stops) and the SDR rendition. Read only for an HDR edit (or a packet that moves the SDR
+    // rendition): Lightroom writes `HDRMaxValue` on every photo, and HDR-off photos keep their
+    // settings (and cached previews) unchanged
+    let hdr_on = boolean(props, "crs:HDREditMode");
+    let sdr_moved = HDR_CRS.iter().filter(|(k, _)| k.starts_with("crs:SDR")).any(|(k, _)| num(props, k).is_some_and(|v| v != 0.0));
+    if hdr_on == Some(true) || sdr_moved {
+        if let Some(on) = hdr_on {
+            put(o, "hdr.enabled", json!(on));
+        }
+        for (crs, path) in HDR_CRS {
+            if let Some(v) = num(props, crs) {
+                let v = if *crs == "crs:HDRMaxValue" { v.clamp(0.0, lightcraft_develop::Hdr::MAX_EV_LIMIT) } else { v.clamp(-100.0, 100.0) };
+                put(o, path, json!(v));
+            }
+        }
+    } else if hdr_on == Some(false) {
+        put(o, "hdr.enabled", json!(false));
+    }
     // ---- Presence
     n(o, "Texture", "effects.texture");
     n(o, "Clarity2012", "effects.clarity");
@@ -625,6 +677,33 @@ mod tests {
 
     fn props(x: &str) -> Props {
         lightcraft_meta::parse_xmp(x).unwrap().properties
+    }
+
+    #[test]
+    fn hdr_edits_round_trip_through_camera_raw_fields() {
+        // a Lightroom HDR edit
+        let lr = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:ProcessVersion="15.4"
+            crs:HDREditMode="1" crs:HDRMaxValue="2.3" crs:SDRBrightness="+12" crs:SDRContrast="-5" crs:SDRClarity="0"
+            crs:SDRHighlights="-30" crs:SDRShadows="+8" crs:SDRWhites="-4" crs:SDRBlend="+10" crs:Exposure2012="+0.40"/></rdf:RDF></x:xmpmeta>"#;
+        let s = apply_partial(&DevelopSettings::default(), &to_partial(&props(lr), Some(true)), 1.0);
+        assert!(s.hdr.enabled);
+        assert_eq!((s.hdr.max_ev, s.hdr.sdr_brightness, s.hdr.sdr_contrast, s.hdr.sdr_highlights), (2.3, 12.0, -5.0, -30.0));
+        assert_eq!((s.hdr.sdr_shadows, s.hdr.sdr_whites, s.hdr.sdr_blend), (8.0, -4.0, 10.0));
+        // written back as Camera Raw writes them, and read again to the same edit
+        let w = hdr_props(&s.hdr);
+        assert_eq!(w.first(), Some(&("crs:HDREditMode", "1".to_string())));
+        assert!(w.contains(&("crs:HDRMaxValue", "2.3".to_string())) && w.contains(&("crs:SDRHighlights", "-30".to_string())));
+        let x = lightcraft_meta::write_xmp_lc_crs(&lightcraft_meta::Metadata::default(), &[], &w);
+        let back = apply_partial(&DevelopSettings::default(), &to_partial(&props(&x), Some(true)), 1.0);
+        assert_eq!(back.hdr, s.hdr);
+        // HDR off (Lightroom writes HDRMaxValue on every photo): nothing but the switch is read,
+        // so the settings stay default and nothing is written back
+        let off = lr.replace("crs:HDREditMode=\"1\"", "crs:HDREditMode=\"0\"").replace("+12", "0").replace("-5", "0").replace("-30", "0");
+        let off = off.replace("+8", "0").replace("-4", "0").replace("+10", "0");
+        let s = apply_partial(&DevelopSettings::default(), &to_partial(&props(&off), Some(true)), 1.0);
+        assert!(s.hdr.is_default(), "{:?}", s.hdr);
+        assert!(hdr_props(&s.hdr).is_empty());
     }
 
     #[test]

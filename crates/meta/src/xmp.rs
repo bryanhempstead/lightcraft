@@ -585,6 +585,17 @@ pub fn write_xmp(meta: &Metadata, lc_settings: Option<&str>) -> String {
 
 /// Like [`write_xmp`], with any number of simple `lc:<name>` properties (e.g. `settings`, `flag`).
 pub fn write_xmp_lc(meta: &Metadata, lc: &[(&str, &str)]) -> String {
+    write_xmp_lc_crs(meta, lc, &[])
+}
+
+/// [`write_xmp_lc`] plus the camera-raw-settings properties `crs` (`("crs:Name", value)`; other
+/// names are skipped), for the few `crs:` fields LightCraft hands back to Camera Raw / Lightroom
+/// (the HDR edit). With `crs` empty the packet is [`write_xmp_lc`]'s, which never declares `crs:`.
+pub fn write_xmp_lc_crs(meta: &Metadata, lc: &[(&str, &str)], crs: &[(&str, String)]) -> String {
+    let crs: Vec<(&str, &String)> = crs
+        .iter()
+        .filter_map(|(k, v)| k.strip_prefix("crs:").filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric())).map(|_| (*k, v)))
+        .collect();
     let mut simple: Vec<(&str, String)> = Vec::new();
     let mut push = |k: &'static str, v: Option<String>| {
         if let Some(v) = v {
@@ -636,10 +647,13 @@ pub fn write_xmp_lc(meta: &Metadata, lc: &[(&str, &str)]) -> String {
     x.push_str("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"LightCraft\">\n");
     x.push_str(" <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n");
     x.push_str("  <rdf:Description rdf:about=\"\"");
-    for (p, u) in NAMESPACES.iter().skip(2).filter(|(p, _)| *p != "crs") {
+    for (p, u) in NAMESPACES.iter().skip(2).filter(|(p, _)| *p != "crs" || !crs.is_empty()) {
         x.push_str(&format!("\n    xmlns:{p}=\"{u}\""));
     }
     x.push_str(">\n");
+    for (k, v) in &crs {
+        x.push_str(&format!("   <{k}>{}</{k}>\n", escape(v.as_str())));
+    }
     for (k, v) in &simple {
         x.push_str(&format!("   <{k}>{}</{k}>\n", escape(v.as_str())));
     }
