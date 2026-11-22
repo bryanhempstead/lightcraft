@@ -315,7 +315,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-REM-CONTENTAWARE | Content-aware remove | P1 | 🟡 | `cmd:spot.add` (`mode: remove`), `crates/pipeline/src/spots.rs` | heal with automatic source; no patch synthesis (M8.4) |
+| LR-REM-CONTENTAWARE | Content-aware remove | P1 | ✅ | `cmd:spot.add` (`mode: fill`), `crates/pipeline/src/spots.rs` (`fill_box`), `crates/inpaint/src/lib.rs`, `crates/engine/src/crs_spots.rs` | Remove panel ▸ Fill: the spot is rebuilt from patches of its surroundings (PatchMatch completion, `crates/inpaint` ported from upstream / PhotoCraft; membrane fill when no whole patch fits); Lightroom's content-aware `heal_patchmatch` spots import as Fill; Remove stays heal with an automatic source |
 | LR-REM-HEAL | Heal | P0 | ✅ | `cmd:spot.add` (`mode: heal`) | |
 | LR-REM-CLONE | Clone | P0 | ✅ | `cmd:spot.add` (`mode: clone`) | |
 | LR-REM-GEN | Generative remove | OOS | 🚫 | | |

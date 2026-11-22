@@ -237,6 +237,8 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   place (Masking ▸ Effect ▸ import.).
 - 2026-11-21 (fork): crop extras: As Shot aspect, Aspect Ratios / Center / Fifths overlays, Choose Overlays to Cycle;
   the Before & After button cycles the layouts.
+- 2026-11-21 (fork): content-aware Fill spots (PatchMatch, `crates/inpaint` from upstream); Lightroom's content-aware
+  remove spots map to it.
 
 ## Chinese and Japanese interfaces, and text watermarks
 

@@ -47,7 +47,9 @@ fn mode(kind: &str) -> &'static str {
     match kind.to_ascii_lowercase().as_str() {
         "clone" => "clone",
         "heal" => "heal",
-        // content-aware remove (and anything newer)
+        // content-aware remove: rebuilt from patches of the surroundings
+        "heal_patchmatch" => "fill",
+        // anything newer
         _ => "remove",
     }
 }
@@ -195,4 +197,18 @@ pub fn point_colors(values: &Values) -> Vec<Value> {
         }));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R17: Lightroom's content-aware remove (`heal_patchmatch`) becomes a content-aware Fill spot.
+    #[test]
+    fn content_aware_remove_maps_to_fill() {
+        assert_eq!(mode("heal_patchmatch"), "fill");
+        assert_eq!((mode("Heal"), mode("clone"), mode("someday")), ("heal", "clone", "remove"));
+        let spot: lightcraft_develop::Spot = serde_json::from_value(serde_json::json!({"mode": mode("heal_patchmatch")})).unwrap();
+        assert_eq!(spot.mode, lightcraft_develop::SpotMode::Fill);
+    }
 }
