@@ -144,6 +144,8 @@ pub struct ColorOps {
     /// Point Color samples that change something (applied after the mixer).
     pub points: Vec<PointK>,
     pub bw: Option<[f32; 8]>,
+    /// Camera Raw's measured B&W mix ([`crate::bw_cr`]), used in place of `bw`'s band mix.
+    pub bw_cr: Option<std::sync::Arc<crate::bw_cr::Mix>>,
     /// Wheels (shadows, midtones, highlights, global), blending, balance.
     pub grading: Option<([WheelK; 4], f32, f32)>,
     /// Camera Raw's measured Color Grading ([`crate::grading_cr`]) in place of `grading`:
@@ -179,7 +181,8 @@ impl ColorOps {
                 s.point_colors.iter().take(lightcraft_develop::MAX_POINT_COLORS).filter(|p| !p.is_neutral()).map(PointK::new).collect()
             },
             bw: crate::is_bw(s).then(|| s.bw_mix.bands().map(|v| (v / 100.0) as f32)),
-
+            bw_cr: (crate::bw_cr::MEASURED && crate::is_bw(s))
+                .then(|| std::sync::Arc::new(crate::bw_cr::Mix::new(s.bw_mix.bands().map(|v| (v / 100.0) as f32)))),
             grading_cr: crate::grading_cr::Curves::for_settings(s).map(std::sync::Arc::new),
             grading: (!g.is_neutral() && !crate::grading_cr::MEASURED).then(|| {
                 (
@@ -245,6 +248,10 @@ impl ColorOps {
                 lab[2] *= k;
             }
             return self.grade(lab);
+        }
+        if let Some(m) = &self.bw_cr {
+            let y = m.gray(mul3(&pp_matrices().0, rgb), lightcraft_color::luminance_2020(rgb)).min(1.0);
+            return self.grade(oklab_from_2020([y; 3]));
         }
         let [mut l, mut c, mut h] = lab_to_lch(lab);
         if let Some(bw) = &self.bw {

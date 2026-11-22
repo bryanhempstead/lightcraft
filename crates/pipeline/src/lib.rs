@@ -25,6 +25,7 @@
 
 pub mod adobe;
 pub mod auto;
+pub mod bw_cr;
 pub mod colorops;
 pub mod colortab;
 pub mod cull;
@@ -606,7 +607,7 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
 /// Settings the GPU kernel doesn't render yet (Bryan's fork, round 10: Camera Raw's measured
 /// Texture): such renders take the CPU pipeline.
 pub fn cpu_only(s: &DevelopSettings) -> bool {
-    local::texture_level(s, 1.0, 1.0).is_some() || grading_cr::Curves::for_settings(s).is_some()
+    local::texture_level(s, 1.0, 1.0).is_some() || grading_cr::Curves::for_settings(s).is_some() || (bw_cr::MEASURED && is_bw(s))
 }
 
 pub(crate) fn is_bw(s: &DevelopSettings) -> bool {
