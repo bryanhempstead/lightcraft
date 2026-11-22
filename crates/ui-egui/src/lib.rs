@@ -35,6 +35,8 @@ pub mod widgets;
 #[cfg(test)]
 mod tests_backup_delete;
 #[cfg(test)]
+mod tests_cameras;
+#[cfg(test)]
 mod tests_classic;
 #[cfg(test)]
 mod tests_curve;

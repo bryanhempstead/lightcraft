@@ -530,23 +530,9 @@ fn info_overlay(app: &LightcraftApp, p: &egui::Painter, canvas: Rect, photo: &li
     register(p.ctx(), "canvas:infoOverlay", Rect::from_min_max(canvas.min, pos2(canvas.left() + 320.0, y)));
 }
 
-/// The camera as Lightroom shows it (the Exif model): the stored "make model" loses the make when
-/// the model repeats it — "Canon Canon EOS R6" → "Canon EOS R6", "Leica Camera AG LEICA M (Typ 262)"
-/// → "LEICA M (Typ 262)"; "Canon EOS R6" or "SONY ILCE-7M3" stay as they are.
+/// The camera as Lightroom shows it (the Exif model): see [`lightcraft_engine::cameras::display_name`].
 pub(crate) fn camera_model(camera: &str) -> &str {
-    let words: Vec<&str> = camera.split_whitespace().collect();
-    let Some(first) = words.first() else { return camera.trim() };
-    for k in 1..words.len() {
-        if words[k].eq_ignore_ascii_case(first) {
-            // the model starts at the k-th word: return the rest of the original text
-            let mut rest = camera.trim_start();
-            for w in &words[..k] {
-                rest = rest.trim_start().strip_prefix(w).unwrap_or(rest);
-            }
-            return rest.trim();
-        }
-    }
-    camera.trim()
+    lightcraft_engine::cameras::display_name(camera)
 }
 
 #[cfg(test)]

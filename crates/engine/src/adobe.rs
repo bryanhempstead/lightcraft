@@ -113,6 +113,62 @@ fn candidates(make: Option<&str>, model: &str) -> Vec<String> {
     v
 }
 
+/// Cameras Camera Raw has an `Adobe Standard` profile for, as Camera Raw names them (sorted).
+pub fn standard_cameras() -> Vec<String> {
+    static N: OnceLock<Vec<String>> = OnceLock::new();
+    N.get_or_init(|| {
+        let mut v: Vec<String> = Vec::new();
+        for d in camera_raw_dirs() {
+            let Ok(rd) = std::fs::read_dir(d.join("CameraProfiles/Adobe Standard")) else { continue };
+            for e in rd.flatten().take(20_000) {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if let Some(cam) = name.strip_suffix(" Adobe Standard.dcp") {
+                    v.push(cam.to_string());
+                }
+            }
+        }
+        v.sort_by_key(|a| a.to_lowercase());
+        v.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        v
+    })
+    .clone()
+}
+
+/// The `Adobe Standard` DCP for a camera (its path), without loading it.
+pub fn standard_path(make: Option<&str>, model: &str) -> Option<PathBuf> {
+    if model.trim().is_empty() {
+        return None;
+    }
+    candidates(make, model).iter().find_map(|c| standard_index().get(c).cloned())
+}
+
+/// Camera Raw's Camera Matching profiles for a camera (`Camera Standard`, `Camera Portrait`, …):
+/// the DCPs in `CameraProfiles/Camera/<camera>/`, by profile name.
+pub fn camera_matching(make: Option<&str>, model: &str) -> Vec<String> {
+    let want = candidates(make, model);
+    let mut out = Vec::new();
+    for d in camera_raw_dirs() {
+        let Ok(rd) = std::fs::read_dir(d.join("CameraProfiles/Camera")) else { continue };
+        for e in rd.flatten().take(20_000) {
+            let cam = e.file_name().to_string_lossy().into_owned();
+            if !want.contains(&lower(&cam)) {
+                continue;
+            }
+            let Ok(files) = std::fs::read_dir(e.path()) else { continue };
+            for f in files.flatten().take(200) {
+                let n = f.file_name().to_string_lossy().into_owned();
+                let Some(stem) = n.strip_suffix(".dcp") else { continue };
+                let name = stem.strip_prefix(cam.as_str()).map(str::trim).filter(|s| !s.is_empty()).unwrap_or(stem);
+                if !out.iter().any(|x: &String| x.eq_ignore_ascii_case(name)) {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// The camera's Adobe Standard profile (`None`: no SDK, no installed profile, or unreadable).
 /// Parsed once per camera per process.
 pub fn standard_for(make: Option<&str>, model: &str) -> Option<Arc<Camera>> {

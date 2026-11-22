@@ -7,6 +7,7 @@
 mod backup;
 mod before;
 pub(crate) mod browse;
+pub(crate) mod cameras;
 mod color;
 pub(crate) mod convert;
 mod cull;
@@ -156,6 +157,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(backup::specs());
         v.extend(delete::specs());
         v.extend(naming::specs());
+        v.extend(cameras::specs());
         v
     })
 }

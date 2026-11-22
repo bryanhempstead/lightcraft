@@ -206,6 +206,32 @@ fn parsed(path: &Path) -> Option<Arc<Vec<Entry>>> {
     v
 }
 
+/// How many installed lens profiles are filed under a camera make (Camera Raw keeps one folder per
+/// maker: `LensProfiles/1.0/Canon/…`), and the folder's name.
+pub fn count_for_make(make: &str) -> usize {
+    let first = norm(make.split(|c: char| c.is_whitespace() || c == ',').next().unwrap_or(make));
+    if first.len() < 2 {
+        return 0;
+    }
+    index()
+        .iter()
+        .filter(|(_, p)| {
+            let folder = p.parent().and_then(Path::file_name).map(|n| norm(&n.to_string_lossy())).unwrap_or_default();
+            let file = p.file_name().map(|n| norm(&n.to_string_lossy())).unwrap_or_default();
+            (!folder.is_empty() && (folder.starts_with(&first) || first.starts_with(&folder))) || file.starts_with(&first)
+        })
+        .count()
+}
+
+/// A lens's installed profile as the Optics panel names it ("Adobe (Canon RF 24-105mm …)"),
+/// and its file, for a camera.
+pub fn profile_name(make: Option<&str>, model: Option<&str>, lens: &str) -> Option<(String, PathBuf)> {
+    let (path, entries) = find(make, model, lens)?;
+    let name = entries.iter().map(|e| e.profile_name.trim()).find(|n| !n.is_empty()).map(str::to_string);
+    let name = name.unwrap_or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+    Some((name, path))
+}
+
 /// The installed profile for a lens (the file's Exif `LensModel`) on a camera: entries for that
 /// lens name, preferring the same camera, then the same make, raw profiles over JPEG ones.
 pub fn find(make: Option<&str>, model: Option<&str>, lens: &str) -> Option<(PathBuf, Arc<Vec<Entry>>)> {

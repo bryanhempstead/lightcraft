@@ -376,6 +376,8 @@ pub struct ImportTask {
     pub duplicates: usize,
     /// The library photos the skipped duplicates match (shown when nothing new was added).
     existing: Vec<u64>,
+    /// Cameras the library hadn't seen, recognised after their batch went in (their notices).
+    pub new_cameras: Vec<String>,
     pub failed: usize,
     /// Move: originals moved, and sources left in place (reported by the engine with a reason).
     pub moved: usize,
@@ -937,6 +939,7 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
             task.duplicates += len("duplicates");
             task.existing.extend(v["duplicates"].as_array().into_iter().flatten().filter_map(|d| d["existing"].as_u64()));
             task.failed += len("failed");
+            task.new_cameras.extend(v["newCameras"].as_array().into_iter().flatten().filter_map(|c| c["notice"].as_str()).map(str::to_string));
             task.moved += len("moved");
             task.kept += len("kept");
             for k in v["kept"].as_array().into_iter().flatten() {
@@ -995,7 +998,12 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, mut task: ImportTask) {
     }
     if task.auto {
         if task.imported > 0 {
-            app.toast(ctx, crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, if task.imported == 1 { "" } else { "s" }));
+            let mut msg = crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, if task.imported == 1 { "" } else { "s" });
+            for c in &task.new_cameras {
+                msg.push_str(" · ");
+                msg.push_str(c);
+            }
+            app.toast(ctx, msg);
         }
         return;
     }
@@ -1041,6 +1049,16 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, mut task: ImportTask) {
     }
     if task.failed > 0 {
         msg.push_str(&crate::i18n::tr_format!(" · {} not readable", task.failed));
+    }
+    // a camera not seen before: what LightCraft found for it (cams. in Settings lists it)
+    if let Some(first) = task.new_cameras.first() {
+        msg.push_str(" · ");
+        msg.push_str(first);
+        if task.new_cameras.len() > 1 {
+            msg.push_str(&format!(" (+{} more new cameras: Settings ▸ cams.)", task.new_cameras.len() - 1));
+        }
+        app.toast_for(ctx, msg, 8.0);
+        return;
     }
     app.toast(ctx, msg);
 }

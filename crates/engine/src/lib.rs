@@ -12,10 +12,11 @@
 
 pub mod adobe;
 pub mod availability;
-pub mod camera_match;
 pub mod backup;
+pub mod camera_match;
 mod camera_preview;
 pub mod camera_profiles;
+pub mod cameras;
 pub mod cmd;
 pub mod crs;
 pub mod crs_masks;
@@ -275,6 +276,10 @@ pub struct Session {
     /// Untouched Local records of folders not browsed for this many days are forgotten when the
     /// library opens (0 = never; persisted in prefs.json). See `cmd/browse.rs`.
     pub forget_local_days: u32,
+    /// `cameras.json` here instead of the config folder (tests, scripts); see [`cameras`].
+    pub cameras_file: Option<std::path::PathBuf>,
+    /// The camera records of a session with nowhere to keep them (in memory, no library).
+    pub cameras_mem: Vec<cameras::Record>,
 }
 
 impl Default for Session {
@@ -351,6 +356,8 @@ impl Session {
             cache_mb: 0,
             smart_previews_dir: None,
             forget_local_days: lightcraft_catalog::DEFAULT_FORGET_DAYS,
+            cameras_file: None,
+            cameras_mem: Vec::new(),
         }
     }
 
@@ -869,6 +876,8 @@ mod tests;
 #[cfg(test)]
 mod tests_backup;
 #[cfg(test)]
+mod tests_cameras;
+#[cfg(test)]
 mod tests_color;
 #[cfg(test)]
 mod tests_delete;
@@ -897,8 +906,9 @@ mod tests_persist;
 #[cfg(test)]
 mod tests_prefs;
 #[cfg(test)]
-mod tests_recheck;
 mod tests_rating_keys;
+#[cfg(test)]
+mod tests_recheck;
 #[cfg(test)]
 mod tests_segment;
 #[cfg(test)]

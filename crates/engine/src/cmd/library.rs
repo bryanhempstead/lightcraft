@@ -114,6 +114,12 @@ pub fn import_batch_done(s: &mut Session, report: crate::import::ImportReport, m
         s.execute("album.addPhotos", &json!({"id": a, "ids": imported}))?;
         report["album"] = json!(a);
     }
+    // a camera not seen before: recognised, its profiles / lens data resolved and kept (after
+    // the photos are in, so it never holds the import up)
+    let new_cameras = crate::cameras::recognise_new(s, &imported);
+    if !new_cameras.is_empty() {
+        report["newCameras"] = json!(new_cameras);
+    }
     Ok(report)
 }
 
