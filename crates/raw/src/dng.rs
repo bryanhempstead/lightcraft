@@ -67,6 +67,7 @@ pub(crate) fn profile_look(ifd0: &Ifd, raw: &Ifd) -> ProfileLook {
         ],
         look_table: table(t::PROFILE_LOOK_TABLE_DIMS, t::PROFILE_LOOK_TABLE_DATA, t::PROFILE_LOOK_TABLE_ENCODING),
         tone_curve: pick(t::PROFILE_TONE_CURVE).f64s(t::PROFILE_TONE_CURVE).and_then(|v| ToneCurve::from_tag(&v)),
+        gain_table_map: None,
     }
 }
 
@@ -175,7 +176,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area,
         crop,
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: color_data(ifd0, raw),
+        color: {
+            let mut c = color_data(ifd0, raw);
+            c.profile.gain_table_map = crate::gainmap::GainTableMap::from_ifds(ifd0, raw, tiff.order).map(std::sync::Arc::new);
+            c
+        },
         wb_multipliers: None,
         linearized,
         opcodes,

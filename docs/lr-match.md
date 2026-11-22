@@ -78,7 +78,7 @@ Before → after (mean CIEDE2000 per photo at 512 px; `dE128` in brackets):
   data for (Canon R6 corners −6 L*), masks are approximated, local tone differs.
 - **Per camera**: edited GR III photos come out ~0.35 EV brighter and X-T2 ~0.2 EV darker than
   Lightroom (the slider fit is shared by all cameras).
-- **Not handled**: iPhone ProRAW (`ProfileGainTableMap` not applied; renders far too dark),
+- **Not handled**: iPhone ProRAW's `ProfileGainTableMap` applies only with the file's own rendering, not per photo's profile (round 7),
   iPhone HDR JPEGs with presets (Lightroom's incremental white balance and tone on these differ),
   Adobe Monochrome photos, X100F (no default-setting photos to calibrate on), looks whose table is
   a hue/saturation `LookTable` (Glacial, North Star, Salt Flats also carry one).
@@ -271,7 +271,7 @@ operator on heavily edited photos.
 - iPhone ProRAW (no Adobe Standard DCP matched: `Apple Embedded Color Profile`) and JPEGs keep
   the round-2 path.
 - The SDK's opcode lists (`WarpRectilinear`, `GainMap`) are not used for pixels yet: LightCraft's
-  own opcode code applies DNG lens corrections; ProRAW `ProfileGainTableMap` is still missing.
+  own opcode code applies DNG lens corrections; ProRAW `ProfileGainTableMap`: round 7.
 
 Next: a controlled oracle for Lightroom's sliders (Camera Raw in Photoshop rendering synthetic
 DNGs with known settings, if Bryan agrees to it being scripted) would replace the regression on
@@ -585,3 +585,37 @@ these stay measured only:
 Bryan runs: reopening the catalog in Lightroom Classic rebuilds `Previews.lrdata`; then
 `lr_compare.py prepare --spec tools/lr-compare/acceptance.json --seed 1122` gives the full recipe
 set (Nautica × iPhone, PV5 R6, Monochrome, X-T2) for the next round.
+
+## Round 7 (2026-11-21): ProRAW gain table map
+
+iPhone ProRAW DNGs carry a DNG 1.6 **`ProfileGainTableMap`** (tag 52525, raw IFD, file byte
+order; iPhone 13 Pro: 48 × 62 grid × 257-entry tables, ~3 MB): Apple's local tone mapping, gains
+~×2 in the shadows down to ~×0.1 far above white. `crates/raw/src/gainmap.rs` reads it (and DNG
+1.7's `ProfileGainTableMap2`, tag 52544: u8 / u16 / f16 / f32 data, Gamma) with checked, capped
+reads (≤ 16 M gains; NaN / inf / out-of-range values reject the map, the photo then renders
+without it) and applies it as Adobe's reference renderer does (`RefBaselineProfileGainTableMap`):
+on linear ProPhoto after the hue/sat map and baseline exposure, before the look table; weight =
+clamp(w · [R, G, B, min, max], 0, 1)^Gamma, scaled by N (not N − 1); trilinear over (row, column,
+table); position = pixel centre relative to the active area, clamped to the grid. Our DNG writer
+keeps it.
+
+The map belongs to the file's own profile ("Apple Embedded Color Profile"). Set: 23 iPhone 13 Pro
+ProRAW photos with real Lightroom renders (`prepare --ids`, 8 on the embedded profile, 15 on
+Adobe Standard with Summer Fields / Adobe Color; mean ΔE2000 / p95 / ΔL*):
+
+| render | embedded (8) | Adobe Standard (15) | all (23) |
+|---|---|---|---|
+| file's own profile, no map | 10.57 / 20.5 / −7.96 | 21.04 / 44.4 / −23.5 | 17.40 / 36.1 |
+| **file's own profile + map** | **3.01 / 6.5 / −0.01** | 21.08 / 45.8 / −22.8 | 14.79 / 32.1 |
+| Leica-transferred `iPhone 13 Pro` profile, no map (Bryan's setup, unchanged) | 9.87 / 17.1 / +9.35 | 6.43 / 17.4 / −2.26 | 7.63 / 17.3 |
+| transferred profile + map (rejected) | 16.52 / 26.7 / +19.7 | 11.88 / 25.8 / +4.28 | 13.49 / 26.1 |
+
+So the map applies only with the file's own rendering: a Lightroom-matched camera profile (which
+stands for Lightroom's Adobe profiles) and the Adobe DCP path render without it. Not done: the
+choice per photo. A source is decoded once per file, not per profile, so a library with an
+`iPhone 13 Pro` Lightroom-matched profile (Bryan's, transferred from the Leica, `files: 0`)
+renders every ProRAW with it, also the 98 of the 150 ProRAW images in his catalog that Lightroom
+shows on the embedded profile; without that profile, Adobe Standard photos stay ~2 EV too dark (Lightroom's
+Adobe Standard for iPhones is the per-lens `Apple iPhone14,2 back camera` DCP, which
+`adobe::standard_for` doesn't match by Exif model). Next: a profile-keyed source (`lc.color` /
+embedded → own profile + map; `adobe:*` → the DCP matched by `UniqueCameraModel`).

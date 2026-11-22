@@ -1147,10 +1147,15 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "dialog.syncSettings" => {
             let groups = crate::state::default_preset_groups();
-            // what was checked last time (Match exposure / Auto align start off)
+            // what was checked last time (Match exposure / Auto align / Match camera & lens color start off)
             let prefs = app.ui.sync_prefs.clone();
             let groups = prefs.groups.unwrap_or(groups);
-            app.ui.dialog = Some(Dialog::SyncSettings { groups, match_exposure: prefs.match_exposure, auto_align: prefs.auto_align });
+            app.ui.dialog = Some(Dialog::SyncSettings {
+                groups,
+                match_exposure: prefs.match_exposure,
+                auto_align: prefs.auto_align,
+                match_color: prefs.match_color,
+            });
             Ok(Value::Null)
         }
         "dialog.copySettings" => {

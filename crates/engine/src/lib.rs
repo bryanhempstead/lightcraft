@@ -12,6 +12,7 @@
 
 pub mod adobe;
 pub mod availability;
+pub mod camera_match;
 mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -30,6 +31,7 @@ pub mod guard;
 pub mod import;
 mod import_move;
 pub mod lcp;
+pub mod lens_casts;
 pub mod library;
 pub mod logging;
 pub mod lr_migrate;

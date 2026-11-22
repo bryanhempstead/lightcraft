@@ -250,7 +250,7 @@ pub const RIGHT_WIDTH: PanelWidth = PanelWidth { min: 250.0, default: 270.0, max
 /// The photo area the side panels always leave free (as far as their minimum widths allow).
 pub const MIN_PHOTO_WIDTH: f32 = 360.0;
 
-/// The Sync Settings dialog's checkboxes as last left. Match exposure and auto align start off.
+/// The Sync Settings dialog's checkboxes as last left. Match exposure, auto align and match camera & lens color start off.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SyncPrefs {
@@ -258,6 +258,8 @@ pub struct SyncPrefs {
     pub groups: Option<Vec<String>>,
     pub match_exposure: bool,
     pub auto_align: bool,
+    /// Match camera & lens color (off by default).
+    pub match_color: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -603,6 +605,8 @@ pub enum Dialog {
         match_exposure: bool,
         /// Then level each photo's horizon.
         auto_align: bool,
+        /// First match each photo's colour to the active one across cameras, lenses and phones.
+        match_color: bool,
     },
     /// Paste Selected Settings: which of the copied groups to paste.
     PasteSettings {
