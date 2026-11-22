@@ -298,7 +298,8 @@ pub fn globals_key(s: &DevelopSettings) -> u64 {
         sig.base.is_some(),
         sig.dark.is_some(),
         local::dehaze_key_needed(&e),
-        crate::scene_cr::needs(&e),
+        // per photo the Adobe base is fixed; `true` keys every operator it could need
+        crate::scene_cr::needs(&e, true),
         crate::settings_for(&e, &crate::RenderRequest::fit(1, 1)).hdr.enabled,
     );
     let mut k = e.into_owned();

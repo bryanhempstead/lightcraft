@@ -577,8 +577,17 @@ pub fn globals(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     local::denoise(&mut img, s, plan.src_long, plan.w.max(plan.h));
     let mut planes = local::Planes { key: plan.lin_key, ..Default::default() };
     let tex_space = texture_cr::space(info);
-    let prep =
-        local::prepare(Arc::new(img), s, &plan.frame, plan.px_per_long, info.native_long, req.quality, &mut planes, tex_space.as_ref().map(|m| &m.0));
+    let prep = local::prepare(
+        Arc::new(img),
+        s,
+        &plan.frame,
+        plan.px_per_long,
+        info.native_long,
+        req.quality,
+        &mut planes,
+        tex_space.as_ref().map(|m| &m.0),
+        info.adobe.is_some(),
+    );
     Globals { tone_stats: prep.tone_stats, p99: prep.p99, air: prep.dark.is_some().then_some(prep.air), scene_map: prep.scene_map, haze: prep.haze }
 }
 
