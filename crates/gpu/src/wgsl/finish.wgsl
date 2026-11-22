@@ -263,8 +263,13 @@ fn adobe_tone(c: vec3<f32>) -> vec3<f32> {
         p = vec3<f32>(ad_ramp(p.x, black), ad_ramp(p.y, black), ad_ramp(p.z, black));
     }
     let nt = pu(F_AD_NT);
+    let hk = pf(F_AD_HSM_K);
     for (var t = 0u; t < nt; t += 1u) {
-        p = ad_table(t, p);
+        if (t == 0u && hk != 1.0) {
+            p = ad_table(t, p * hk) / hk;
+        } else {
+            p = ad_table(t, p);
+        }
     }
     return mul3(ad_mat(F_AD_FROM_PP), ad_rgb_tone(p));
 }

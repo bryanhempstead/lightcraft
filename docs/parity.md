@@ -26,7 +26,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | C. Views & navigation (VIEW) | 15 | 1 | 1 | 0 | 8/9 (89%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 42 | 1 | 5 | 1 | 28/28 (100%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 39 | 4 | 5 | 1 | 26/28 (93%) | 12/14 (86%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 7 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -48,9 +48,9 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | Y. Menus | 81 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 75 | 3 | 3 | 1 | 49/52 (94%) | 23/24 (96%) |
 | Lightroom Classic extras | 60 | 11 | 39 | 9 | — | 33/34 (97%) |
-| **Total** | 420 | 36 | 86 | 36 | 193/200 (97%) | 154/163 (94%) |
+| **Total** | 417 | 39 | 86 | 36 | 191/200 (96%) | 153/163 (94%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.8%** of 542 in-scope rows — P0 98.2% of 200 · P1 96.3% of 163 · P2 47.2% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **80.5%** of 542 in-scope rows — P0 97.8% of 200 · P1 96.0% of 163 · P2 47.2% of 178.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -234,11 +234,11 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-EDIT-HDR-MODE | HDR editing | P2 | ⬜ | | |
 | LR-EDIT-LIGHT-EXPOSURE | Exposure | P0 | ✅ | `ctl:light.exposure` | |
 | LR-EDIT-LIGHT-CONTRAST | Contrast | P0 | ✅ | `ctl:light.contrast` | |
-| LR-EDIT-LIGHT-HIGHLIGHTS | Highlights | P0 | ✅ | `ctl:light.highlights` | |
-| LR-EDIT-LIGHT-SHADOWS | Shadows | P0 | ✅ | `ctl:light.shadows` | |
+| LR-EDIT-LIGHT-HIGHLIGHTS | Highlights | P0 | 🟡 | `ctl:light.highlights` | works, but not as Lightroom renders it: the tables are fitted on Lightroom previews and are 3–5× too weak at −100 against Camera Raw; Camera Raw's photo-dependent model is measured and in the code (`tone::lr::adobe_hs_lut`, `docs/lr-match.md` → Round 7) but off until the rest is refitted |
+| LR-EDIT-LIGHT-SHADOWS | Shadows | P0 | 🟡 | `ctl:light.shadows` | works, but 2–3× too strong against Camera Raw on flat regions and moves uniform images; the measured model (`tone::lr::adobe_hs_lut`) is off until the rest is refitted (`docs/lr-match.md` → Round 7) |
 | LR-EDIT-LIGHT-WHITES | Whites | P0 | ✅ | `ctl:light.whites` | |
 | LR-EDIT-LIGHT-BLACKS | Blacks | P0 | ✅ | `ctl:light.blacks` | |
-| LR-EDIT-LIGHT-CURVE-PARAM | Parametric curve | P0 | ✅ | `ctl:curve.highlights`, `ctl:curve.lights`, `ctl:curve.darks`, `ctl:curve.shadows`, `ctl:curve.split*` | |
+| LR-EDIT-LIGHT-CURVE-PARAM | Parametric curve | P0 | ✅ | `ctl:curve.highlights`, `ctl:curve.lights`, `ctl:curve.darks`, `ctl:curve.shadows`, `ctl:curve.split*` | preview-fitted (~10 levels off Camera Raw over the sweep); Camera Raw's measured table is in the code (`finish::parametric_adobe_lut`) but off until Basic tone is refitted on top of it (`docs/lr-match.md` → R08) |
 | LR-EDIT-LIGHT-CURVE-POINT | Point curve | P0 | ✅ | `cmd:develop.curve`, `cmd:curve.reset`, `cmd:curve.presets`, `cmd:curve.applyPreset`, `cmd:curve.savePreset`, `cmd:curve.deletePreset`, `cmd:curve.importPresets`, `cmd:curve.exportPresets`, `cmd:file.importCurvePresets`, `cmd:file.exportCurvePresets`, `crates/engine/src/cmd/curves.rs`, `crates/ui-egui/src/panels/edit.rs` | click to add a point; drag a point in both axes (between its neighbours, input / output readout, one undo step per drag); drag empty space to add and drag; double-click removes; reset: double-click a channel selector (that channel), the Reset button under the graph (every curve incl. parametric) or right-click the graph (channel / all); Point Curve preset dropdown: own Linear / Medium Contrast / Strong Contrast, user presets (save the current point curves, delete by right-click; saved with the library), import / export as `.lccurve` JSON. Rendered as Lightroom does (Camera Raw oracle): natural cubic spline clamped to 0..1, master curve hue-preserving on ProPhoto/sRGB-curve values, R/G/B per channel (`finish::Curves`, `spline::NaturalCurve`) |
 | LR-EDIT-LIGHT-CURVE-RGB | Per-channel curves | P0 | ✅ | `cmd:develop.curve` (`channel`) | |
 | LR-EDIT-LIGHT-CURVE-REFINESAT | Curve saturation compensation | P1 | ✅ | `ctl:curve.refineSaturation` | |
@@ -274,7 +274,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-EDIT-GEOM-CONSTRAIN | Constrain crop | P1 | ✅ | `crates/ui-egui/src/panels/right.rs` (checkbox → `cmd:develop.merge`) | |
 | LR-EDIT-GEOM-GRID | Grid while transforming | P2 | ✅ | `crates/ui-egui/src/panels/detail.rs` | a fine grid over the photo while a geometry slider is dragged |
 | LR-EDIT-LENSBLUR | Lens blur | P2 | ⬜ | | settings field reserved, not rendered |
-| LR-EDIT-CALIB | Calibration [Classic] | P1 | ✅ | `ctl:calibration.*` | shadows tint, red/green/blue primary hue and saturation; read/written in XMP |
+| LR-EDIT-CALIB | Calibration [Classic] | P1 | 🟡 | `ctl:calibration.*` | shadows tint, red/green/blue primary hue and saturation; read/written in XMP. Applied after the camera profile's hue/sat map, where Camera Raw applies it before: Summer Fields' calibration on the oracle chart 4.22 ΔE; the Camera Raw order is in the code (`engine::adobe::HUE_SAT_IN_FINISH`, 2.20 ΔE) but off until it passes the acceptance gate (`docs/lr-match.md` → Round 7) |
 | LR-EDIT-SECTION-TOGGLE | Section on/off | P1 | ✅ | `cmd:develop.sectionEnabled`, `crates/develop/src/lib.rs` (`effective`) | the eye on a section header hides its adjustments: Light (with the curve), Color (white balance, presence, mixers, grading, point colour), Effects, Detail, Optics, Geometry, Calibration; masks stay on (issue #316 fixed Light, Color and Detail, which had no effect) |
 | LR-EDIT-RESET | Reset all / section / slider | P0 | ✅ | `cmd:develop.reset`, `cmd:develop.resetSection`, `cmd:develop.resetControl`, `crates/ui-egui/src/widgets.rs` (double-click) | no "reset to open" |
 | LR-EDIT-SHOWORIG | Show original | P0 | ✅ | `cmd:view.showOriginal` | |

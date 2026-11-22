@@ -90,7 +90,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("AD_FROM_PP", 9),
     ("AD_BLACK", 1),
     ("AD_NT", 1),
-    ("AD_T", 12),
+    ("AD_T", 18),
+    ("AD_HSM_K", 1),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
 ];
@@ -182,9 +183,9 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         aux.extend_from_slice(t);
     }
     // Adobe look tables (value-major, hue, saturation-minor; three floats per entry)
-    let mut ad_t = [0u32; 12];
+    let mut ad_t = [0u32; 18];
     if let Some(a) = &fp.adobe {
-        for (k, t) in a.tables.iter().take(2).enumerate() {
+        for (k, t) in a.tables.iter().take(3).enumerate() {
             ad_t[k * 6] = aux.len() as u32;
             ad_t[k * 6 + 1] = t.hue_divisions as u32;
             ad_t[k * 6 + 2] = t.sat_divisions as u32;
@@ -284,7 +285,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.fs("AD_TO_PP", a.to_pp.as_flattened());
         p.fs("AD_FROM_PP", a.from_pp.as_flattened());
         p.f("AD_BLACK", a.base.black);
-        p.u("AD_NT", a.tables.len().min(2) as u32);
+        p.f("AD_HSM_K", a.hsm_k);
+        p.u("AD_NT", a.tables.len().min(3) as u32);
         p.us("AD_T", &ad_t);
     }
     p.fs("OUT_M", fp.to_out.as_flattened());

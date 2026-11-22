@@ -619,3 +619,88 @@ shows on the embedded profile; without that profile, Adobe Standard photos stay 
 Adobe Standard for iPhones is the per-lens `Apple iPhone14,2 back camera` DCP, which
 `adobe::standard_for` doesn't match by Exif model). Next: a profile-keyed source (`lc.color` /
 embedded → own profile + map; `adobe:*` → the DCP matched by `UniqueCameraModel`).
+
+## Round 8 (2026-11-21): Highlights / Shadows on Bryan's raws, calibration before the hue/sat map
+
+### Highlights / Shadows (R02): what Camera Raw does on real photos
+
+New oracle sets (`oracle/make_rhs.py`: 26 of Bryan's split-A raws — M262, R6, GR III — with
+single-slider and combined sidecars, one neutral ramp per camera to read every render back as
+scene EV, plus synthetic gradients / three-level fields / a small bright square / a blob):
+
+- **Linear in the slider, and the sliders add**: S+50 is half of S+100, H+50 ≈ −½·H−100, and
+  H+30 S+69 is the sum of the two (to the fit noise).
+- **Before Exposure, Contrast, Whites and Blacks**: with his tone sliders (E −1.1 … −1.75,
+  C −65 / −72, W, B) Camera Raw's render is the H/S render at default tone passed through the
+  sliders' own global curve (`oracle/make_hsorder.py` + `hsorder.py`, error 0.02–0.5 L* against a map noise of
+  0.03–0.15) — so H/S see the photo before Exposure and are exposure-invariant.
+- **Region-flat, edge-sharp, photo-dependent**: the Shadows map is a crisp, smooth "mask" of the
+  dark regions (texture rides on it), not a per-level curve and not a local Laplacian halo (a
+  full-depth fast local Laplacian, tried in numpy with level-dependent remaps, decays away from
+  edges; Camera Raw's two-level fields move as flat regions). How far a region moves depends on the whole photo:
+  around a pivot near log2 of the photo's mean *linear* luminance (−0.5 EV), Shadows lifts what
+  lies below it by ~0.7 EV per EV of depth, saturating at the darkest ~13 % (S+100: +0.6 … +2.4
+  EV on real photos, +0.45 on a flat two-level field); Highlights − pulls what lies above it
+  (~0.5 EV per EV), up to the brightest ~5 %. Synthetic flat fields move less than textured photos
+  of the same histogram, so a curve alone can't be exact.
+
+LightCraft now has that model (`tone::lr::adobe_hs_lut`, `ToneStats` from every 7th log-luminance
+value on CPU and from the same read-back on the GPU; the table runs through the existing
+base / halo path, so CPU and GPU stay equivalent and the cost is one O(n) selection per photo:
+prepare 7–9 ms at 2.5 MP either way). Fitted with `oracle/hsfit_rhs.py` (mean |ΔEV| of the move
+0.385 → 0.104 on the 26 photos). Against Camera Raw on the oracle photos (ΔE2000, LightCraft's old
+tables → the model): S+100 5.24 → 2.16–2.98, H−100 2.95 → 2.21–2.38, H+30 S+69 4.06 → 1.99–2.54,
+his whole tone recipe 3.88 → 2.67 (tone without H/S 1.48 either way).
+
+**But it is not switched on** (`finish::ADOBE_HS_MEASURED`): on the acceptance set (Lightroom's
+previews) every variant is worse — 4.01 / 10.9 / 25 (b0) → 4.33 / 10.9 / 25 with the measured
+parametric curve, 4.39 / 10.9 / 27 without it; Summer Fields M262 4.45 → 5.04–5.27, R6 5.88 →
+6.56–6.78 — and stronger slopes are worse still (5.04). Why the oracle and the previews disagree:
+
+- The previews include Bryan's **masks** (R16: radial / linear components with local Exposure /
+  Shadows on 376 photos), the oracle renders (`oracle/make_full.py`: his full settings and the
+  Summer Fields look, no geometry/detail) do not: on 8 Summer Fields photos Camera Raw without
+  masks is 10–15 L* brighter in the shadows than the preview, LightCraft (with its mask model)
+  is within ~3. Comparing only the H/S *effect* (full − full without H/S), the model is closer
+  to Camera Raw on 6 of 8 photos (mean error 4.42 → 3.62 L*), worst on BHM_8476 (H −100, S +65:
+  +12 L* vs +3).
+- With his negative Exposure the highlights move into the mid-tones, where the model's weak
+  spot shows: above the 95th percentile it stops, Camera Raw keeps pulling (L1009426 at 0 EV:
+  −0.4 vs −1.0 EV), and S lifts mid-darks ~25 % short.
+- The mask model, the look, `WB_STRENGTH` and the old preview-fitted H/S tables were tuned
+  together on the previews; replacing one piece moves the balance.
+
+Next: a richer H/S model (the top end; texture-dependent lift), then R16 masks against the oracle
+(local Exposure / Shadows sidecars), then switch R02 + R08 on together and refit on split A.
+
+### Parametric curve (R08)
+
+The measured table is now in the code (`parametric_adobe.rs`, `finish::parametric_adobe_lut`) but
+off (`finish::PARAMETRIC_MEASURED`): alone it made the acceptance set worse last round (3.85 →
+4.04); on top of the measured H/S model it helps (4.39 → 4.33, ΔL* −0.42 → +0.74), so the two go
+on together once H/S passes.
+
+### Calibration before the profile's hue/sat map (R10), and custom white balance (R05)
+
+LightCraft applied the camera profile's hue/sat map in the raw decode, before white balance and
+Calibration; Camera Raw edits the profile, i.e. Calibration (and the white balance) come first.
+The map can now run in the per-pixel stage as the first of the Adobe tables (`adobe::Base::hue_sat`,
+one registered base per distinct map with the white on a 0.002 grid; read at its own level,
+`2^-(baseline gain + Exposure)`; CPU and GPU, three tables now, a GPU equivalence case with
+Calibration). On the oracle chart (R6 colour, `chartcmp.py`) Bryan's Summer Fields calibration
+goes **4.22 → 2.20 ΔE** (teals 5.46 → 1.55, blues 210–270° 11.3 / 14.7 → 3.6 / 4.3), every single
+Calibration stop is better (e.g. Blue Saturation +100 2.72 → 1.22, Red Saturation −100 3.62 →
+1.28 per pixel), and the base is unchanged (1.39).
+
+With the map after white balance, the white balance is used at the DNG colour spec's strength (1)
+for those cameras; the factor 2 found in round 4 (`WB_STRENGTH`, R05) looks like compensation for
+the old order (an oracle check of custom white balance in the new order is still to do).
+
+On the acceptance set (old H/S tables and parametric curve), with the map after Calibration and
+the white balance at strength 1 for every camera: **4.01 / 10.9 / 25 → 3.81 / 10.6 / 24**, edited
+4.59 → 4.32, Summer Fields R6 5.88 → 4.51, X100F PV5 5.00 → 4.62, X-T2 5.66 → 5.51, M262 4.45 →
+4.41, GR III 4.02 → 3.97, Adobe Color R6 2.96 → 2.90 (the R6 alone: 3.83). It stays **off**
+(`engine::adobe::HUE_SAT_IN_FINISH` empty) only because the gate fails on two edges: the X100F
+PV6 cell (3 photos) gets 0.17 worse (tolerance 0.15), and one default R6 photo crosses the pass
+line (BHM_0433 1.993 → 2.010; default photos move by a few hundredths, most of them down, since
+the map is now read after the resize instead of per sensor pixel). Switching it on is one line.

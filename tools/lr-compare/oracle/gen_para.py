@@ -27,7 +27,7 @@ def arr(a):
 
 body = ",\n".join("    [\n" + ",\n".join(f"        {arr(s)}" for s in reg) + ",\n    ]" for reg in t)
 open(OUT, "w").write(f'''//! Lightroom's parametric tone curve, measured with the Camera Raw oracle (`tools/lr-compare/oracle`
-//! `make_curve.py` → `gen_para.py`; Bryan's fork, `docs/lr-match.md` → Round 7). Generated: don't edit.
+//! `make_curve.py` → `gen_para.py`; Bryan's fork, `docs/lr-match.md` → *Parametric curve (R08)*). Generated: don't edit.
 //!
 //! Per region (Shadows, Darks, Lights, Highlights) and slider stop (−100, −50, +50, +100): Camera
 //! Raw's change of the encoded value (`y − x`, ProPhoto primaries with the sRGB curve) at {N} evenly
