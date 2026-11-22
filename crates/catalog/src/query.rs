@@ -20,6 +20,16 @@ pub struct Filter {
     /// Free-text search: every token must match filename, title, caption, keywords, camera, lens,
     /// location or format. Tokens like `rating:3`, `flag:pick`, `iso:>800`, `camera:x2` are fielded.
     pub text: String,
+    /// Lightroom's Text filter target: `any` (default: every searchable field), `fileName`,
+    /// `copyName`, `title`, `caption`, `keywords`, `metadata` (IPTC text), `exif` (camera, lens,
+    /// format).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_target: Option<String>,
+    /// Its rule: `containsAll` (default: every word appears), `contains` (any word), `words`
+    /// (whole words), `notContains`, `startsWith`, `endsWith`. A word starting with `!` must not
+    /// appear (any rule).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_rule: Option<String>,
     pub rating: u8,
     pub rating_op: RatingOp,
     pub flag: Option<Flag>,
@@ -180,6 +190,52 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
     }
     let hay = [&p.file_name, &p.meta.title, &p.meta.caption, &p.meta.camera, &p.meta.lens, &p.meta.location, &p.format];
     hay.iter().any(|h| h.to_lowercase().contains(&t)) || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(&t))
+}
+
+/// The text a Text filter target searches, lower-cased.
+fn target_text(p: &Photo, target: &str) -> Vec<String> {
+    let m = &p.meta;
+    let v: Vec<&str> = match target {
+        "fileName" => vec![&p.file_name],
+        "copyName" => vec![p.copy_name.as_deref().unwrap_or("")],
+        "title" => vec![&m.title],
+        "caption" => vec![&m.caption],
+        "keywords" => m.keywords.iter().map(String::as_str).collect(),
+        "metadata" => {
+            vec![&m.title, &m.caption, &m.creator, &m.copyright, &m.location, &m.city, &m.state, &m.country, &m.alt_text, &m.extended_description]
+        }
+        "exif" => vec![&m.camera, &m.lens, &p.format, &m.shutter],
+        _ => {
+            let mut v: Vec<&str> =
+                vec![&p.file_name, &m.title, &m.caption, &m.camera, &m.lens, &m.location, &m.city, &m.state, &m.country, &m.creator, &p.format];
+            v.extend(m.keywords.iter().map(String::as_str));
+            v.extend(p.copy_name.as_deref());
+            v
+        }
+    };
+    v.into_iter().map(str::to_lowercase).collect()
+}
+
+/// Lightroom's Text filter with a target and a rule (L29). Words starting with `!` exclude.
+fn text_rule_matches(p: &Photo, text: &str, target: &str, rule: &str) -> bool {
+    let hay = target_text(p, target);
+    let (not, want): (Vec<String>, Vec<String>) = text.split_whitespace().map(str::to_lowercase).partition(|w| w.starts_with('!') && w.len() > 1);
+    let not: Vec<String> = not.into_iter().map(|w| w[1..].to_string()).collect();
+    if not.iter().any(|w| hay.iter().any(|h| h.contains(w.as_str()))) {
+        return false;
+    }
+    if want.is_empty() {
+        return true;
+    }
+    let is_word = |h: &str, w: &str| h.split(|c: char| !c.is_alphanumeric()).any(|x| x == w);
+    match rule {
+        "contains" => want.iter().any(|w| hay.iter().any(|h| h.contains(w.as_str()))),
+        "words" => want.iter().all(|w| hay.iter().any(|h| is_word(h, w))),
+        "notContains" => !want.iter().any(|w| hay.iter().any(|h| h.contains(w.as_str()))),
+        "startsWith" => want.iter().all(|w| hay.iter().any(|h| h.split(|c: char| !c.is_alphanumeric()).any(|x| x.starts_with(w.as_str())))),
+        "endsWith" => want.iter().all(|w| hay.iter().any(|h| h.split(|c: char| !c.is_alphanumeric()).any(|x| x.ends_with(w.as_str())))),
+        _ => want.iter().all(|w| hay.iter().any(|h| h.contains(w.as_str()))),
+    }
 }
 
 /// Whether `p` has a named face region called `name` (case-insensitive).
@@ -394,7 +450,10 @@ impl Filter {
         {
             return false;
         }
-        self.text.split_whitespace().all(|tok| token_matches(p, tok))
+        if self.text_target.is_none() && self.text_rule.is_none() {
+            return self.text.split_whitespace().all(|tok| token_matches(p, tok));
+        }
+        text_rule_matches(p, &self.text, self.text_target.as_deref().unwrap_or("any"), self.text_rule.as_deref().unwrap_or("containsAll"))
     }
 }
 

@@ -352,3 +352,20 @@ fn more_sort_orders() {
     assert!(px.windows(2).all(|w| w[0] <= w[1]));
     assert!(s.execute("library.sort", &json!({"key": "colour"})).is_err());
 }
+
+/// L29: the Text filter's target and rule, and `!` exclusion.
+#[test]
+fn text_filter_targets_and_rules() {
+    let mut s = Session::with_demo();
+    let v = s.visible_cloned();
+    s.execute("photo.setMeta", &json!({"ids": [v[0].0], "title": "Harbour at dawn"})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [v[1].0], "title": "Harbourside market", "caption": "dawn"})).unwrap();
+    let count = |s: &mut Session, f: serde_json::Value| s.execute("library.filter", &f).unwrap()["count"].as_u64().unwrap();
+    assert_eq!(count(&mut s, json!({"text": "harbour dawn", "textTarget": "title", "textRule": "containsAll"})), 1);
+    assert_eq!(count(&mut s, json!({"text": "harbour dawn", "textTarget": "any", "textRule": "containsAll"})), 2);
+    assert_eq!(count(&mut s, json!({"text": "harbour", "textTarget": "title", "textRule": "words"})), 1, "whole words");
+    assert_eq!(count(&mut s, json!({"text": "harbour !market", "textTarget": "title", "textRule": "contains"})), 1, "! excludes");
+    assert_eq!(count(&mut s, json!({"text": "harb", "textTarget": "title", "textRule": "startsWith"})), 2);
+    let n = count(&mut s, json!({"text": "harbour", "textTarget": "title", "textRule": "notContains"}));
+    assert_eq!(n as usize, v.len() - 2);
+}

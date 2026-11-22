@@ -316,6 +316,48 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 
     let ui: &mut egui::Ui = if two_rows { &mut row3 } else { &mut row1 };
+    // the Text filter's target and rule (the search field above the grid types the words)
+    let targets = [
+        ("any", "Any field"),
+        ("fileName", "Filename"),
+        ("copyName", "Copy name"),
+        ("title", "Title"),
+        ("caption", "Caption"),
+        ("keywords", "Keywords"),
+        ("metadata", "Metadata"),
+        ("exif", "EXIF"),
+    ];
+    let cur_t = f.text_target.clone().unwrap_or_else(|| "any".into());
+    let shown_t = targets.iter().find(|(k, _)| *k == cur_t).map_or("Any field", |x| x.1);
+    picker(
+        app,
+        ui,
+        "textTarget",
+        shown_t,
+        f.text_target.is_some(),
+        targets.iter().map(|(k, l)| (l.to_string(), json!({"textTarget": if *k == "any" { Value::Null } else { json!(k) }}), cur_t == *k)).collect(),
+    );
+    let rules = [
+        ("containsAll", "Contains all"),
+        ("contains", "Contains"),
+        ("words", "Contains words"),
+        ("notContains", "Doesn't contain"),
+        ("startsWith", "Starts with"),
+        ("endsWith", "Ends with"),
+    ];
+    let cur_r = f.text_rule.clone().unwrap_or_else(|| "containsAll".into());
+    let shown_r = rules.iter().find(|(k, _)| *k == cur_r).map_or("Contains all", |x| x.1);
+    picker(
+        app,
+        ui,
+        "textRule",
+        shown_r,
+        f.text_rule.is_some(),
+        rules
+            .iter()
+            .map(|(k, l)| (l.to_string(), json!({"textRule": if *k == "containsAll" { Value::Null } else { json!(k) }}), cur_r == *k))
+            .collect(),
+    );
     // the metadata column browser under the bar
     let r = crate::widgets::text_button(ui, "filterColumns", "columns.", app.ui.column_browser);
     if r.clicked() {
