@@ -27,11 +27,39 @@ impl log::Log for StderrLog {
         m.level() <= self.level && (m.level() <= Level::Warn || m.target().starts_with("lightcraft"))
     }
     fn log(&self, r: &Record) {
+        if r.level() <= Level::Warn {
+            remember(&format!("{} {}: {}", r.level(), r.target(), r.args()));
+        }
         if self.enabled(r.metadata()) {
             eprintln!("{}: {} {}: {}", self.prefix, r.level(), r.target(), r.args());
         }
     }
     fn flush(&self) {}
+}
+
+/// How many recent warnings and errors [`recent`] keeps.
+const RECENT: usize = 40;
+
+type Recent = std::collections::VecDeque<(i64, String)>;
+static RECENT_LOG: std::sync::Mutex<Recent> = std::sync::Mutex::new(std::collections::VecDeque::new());
+
+/// Keep `line` among the recent warnings and errors (the installed logger does this for every
+/// warning and error, whatever level it shows; the fix notes record the last few).
+pub fn remember(line: &str) {
+    let at = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    // (capped: one runaway message can't hold megabytes)
+    let line: String = line.chars().take(600).collect();
+    let mut q = RECENT_LOG.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    q.push_back((at, line));
+    while q.len() > RECENT {
+        q.pop_front();
+    }
+}
+
+/// The last `n` warnings and errors logged, oldest first: (Unix seconds, `LEVEL target: message`).
+pub fn recent(n: usize) -> Vec<(i64, String)> {
+    let q = RECENT_LOG.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    q.iter().skip(q.len().saturating_sub(n)).cloned().collect()
 }
 
 fn parse_level(s: &str) -> Option<LevelFilter> {
@@ -102,6 +130,16 @@ mod tests {
         assert_eq!(level_from(None, Some("error,lightcraft_gpu=info")), LevelFilter::Info);
         assert_eq!(level_from(None, Some("lightcraft_gpu=info,lightcraft_engine=trace")), LevelFilter::Trace);
         assert_eq!(level_from(None, Some("info,naga=off")), LevelFilter::Info);
+    }
+
+    #[test]
+    fn warnings_are_remembered_even_when_not_shown() {
+        let quiet = StderrLog::new("test", LevelFilter::Off);
+        quiet.log(&Record::builder().level(Level::Warn).target("lightcraft_test").args(format_args!("remember me {}", 7)).build());
+        quiet.log(&Record::builder().level(Level::Info).target("lightcraft_test").args(format_args!("not me")).build());
+        let r = recent(RECENT);
+        assert!(r.iter().any(|(_, l)| l == "WARN lightcraft_test: remember me 7"), "{r:?}");
+        assert!(!r.iter().any(|(_, l)| l.contains("not me")));
     }
 
     #[test]

@@ -559,11 +559,15 @@ fn main() -> eframe::Result {
     }
     // The log file: opened after the arguments, so `--version`, `--help` and a usage error leave
     // no file behind. Records logged until now are written to it first.
+    let mut log_file = None;
     if let Some(logger) = logger {
         // a --memory session writes nothing (issue #164), a log file included
         match log_dir().filter(|_| !in_memory) {
             Some(dir) => match logger.attach_dir(&dir) {
-                Ok(path) => log::info!("LightCraft {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
+                Ok(path) => {
+                    log::info!("LightCraft {}, log file {}", env!("CARGO_PKG_VERSION"), path.display());
+                    log_file = Some(path);
+                }
                 // The file sink has given up by now, so this goes to standard error only.
                 Err(e) => log::warn!("no log file: {e}"),
             },
@@ -640,6 +644,13 @@ fn main() -> eframe::Result {
             // identity-plate images are copied here (not with --memory / LIGHTCRAFT_NO_PREFS: nothing is written)
             app.identity_dir =
                 (!in_memory && std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none()).then(lightcraft_ui_egui::identity::default_dir).flatten();
+            // the notes. panel's notes (<config>/fix-notes.json) and fix inbox (LIGHTCRAFT_FIX_INBOX overrides it);
+            // in memory with --memory / LIGHTCRAFT_NO_PREFS
+            let (notes, notes_notice) =
+                lightcraft_ui_egui::fixnotes::FixNotes::for_app(in_memory || std::env::var_os("LIGHTCRAFT_NO_PREFS").is_some());
+            app.fix_notes = notes;
+            app.fix_notes.log_file = log_file.clone();
+            app.notices.extend(notes_notice);
             // fonts and theme before the first frame, so the window opens on the UI (it stays
             // hidden until that frame), never on a blank grey box
             app.prepare(&cc.egui_ctx);

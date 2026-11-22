@@ -51,6 +51,7 @@ mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 | `keys.import` | `{source: lrkeys\|superkeys\|monogram, path?, profile?, write?}` | Read LrKeys `bindings.json`, LrSuperKeys `Shortcuts.xml`+`SpeedKeys.xml`, or a Monogram `state.json` profile (read-only) into the keymap → `{mapped, skipped, …}`; `write` saves the generated Monogram profile |
 | `keys.midi` / `keys.learn` | `{midi: cc\|note, number, value?, channel?}` or `{bytes}` / `{on}` | A MIDI message as if from the MIDI input → what it did / MIDI learn |
 | super keys | `keys.nudge {control, dir, size: small\|large}` · `keys.macro {steps: [{command, params}]}` · `keys.send {keys}` · `preset.applyByName {name}` · `crop.nudge {x?, y?, scale?}` · `view.develop` · `view.colorMixer {mode}` · `view.resumeLastLeftOff` | Commands for keys, MIDI and the control channel (see `crates/ui-egui/src/keymap.rs`, `leftoff.rs`) |
+| fix notes | `notes.list {status?}` · `notes.add {text, shot?}` · `notes.send {ids?}` · `notes.markFixed {ids, note?}` · `notes.reopen` · `notes.edit` · `notes.remove` · `notes.select` · `notes.toggle {open?}` (all via `engine.execute`) | The notes. panel's notes about what isn't working and the fix requests it writes for the Claude session: `docs/fix-notes.md` |
 
 Image navigation is also available directly as the UI command `view.navigate`, with
 `{zoom?: "fit" | "fill" | {"percent": number}, pan?: [x, y]}`. Percentage zoom accepts fractional

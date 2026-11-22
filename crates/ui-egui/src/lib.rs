@@ -13,6 +13,7 @@ pub mod display_p3;
 pub mod enhance;
 pub mod export_dialog;
 pub mod export_task;
+pub mod fixnotes;
 pub mod hdr_view;
 pub mod headless;
 pub mod i18n;
@@ -57,6 +58,8 @@ mod tests_curve;
 mod tests_export_dialog;
 #[cfg(test)]
 mod tests_filmstrip;
+#[cfg(test)]
+mod tests_fixnotes;
 #[cfg(test)]
 mod tests_grid;
 #[cfg(test)]
@@ -302,6 +305,8 @@ pub struct LightcraftApp {
     pub midi_status: String,
     /// "Where I left off" tracking for this session ([`leftoff`]).
     pub left_off: leftoff::Tracker,
+    /// The notes. panel: notes about what isn't working, sent to Claude with fix. ([`fixnotes`]).
+    pub fix_notes: fixnotes::FixNotes,
 }
 
 impl LightcraftApp {
@@ -369,6 +374,7 @@ impl LightcraftApp {
             midi_rx: None,
             midi_status: String::new(),
             left_off: leftoff::Tracker::default(),
+            fix_notes: fixnotes::FixNotes::default(),
         }
     }
 
@@ -382,6 +388,9 @@ impl LightcraftApp {
     /// Run a UI or engine command by id. The single entry point for every frontend path.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         if let Some(r) = menus::run_ui_command(self, id, &params) {
+            if let Err(e) = &r {
+                self.fix_notes.saw_error(&format!("{id}: {e}"));
+            }
             return r;
         }
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
@@ -404,6 +413,7 @@ impl LightcraftApp {
         }
         if let Err(e) = &r {
             log::warn!("{id}: {e}");
+            self.fix_notes.saw_error(&format!("{id}: {e}"));
             self.ui.status = e.clone();
         }
         r
@@ -641,7 +651,9 @@ impl LightcraftApp {
     /// A toast for an error the user has to read and act on (stays 6 s).
     pub fn toast_error(&mut self, ctx: &egui::Context, text: impl Into<String>) {
         let t = ctx.input(|i| i.time);
-        self.ui.toast = Some((text.into(), t + 6.0, None));
+        let text = text.into();
+        self.fix_notes.saw_error(&text);
+        self.ui.toast = Some((text, t + 6.0, None));
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {
@@ -652,23 +664,34 @@ impl LightcraftApp {
                 control::Outcome::Done(v) => {
                     let _ = reply.send(v);
                 }
-                control::Outcome::Screenshot { path, headless } => {
-                    self.screenshot_token += 1;
-                    let now = now_ms();
-                    self.pending_screenshots.push(PendingShot {
-                        token: self.screenshot_token,
-                        path,
-                        reply,
-                        headless: headless && !self.headless_host,
-                        not_before: now + 120.0,
-                        deadline: now + SCREENSHOT_SETTLE_MS,
-                        frames: 0,
-                        sent_at: None,
-                    });
-                }
+                control::Outcome::Screenshot { path, headless } => self.push_screenshot(path, headless, reply),
             }
         }
         self.control_rx = Some(rx);
+    }
+
+    fn push_screenshot(&mut self, path: Option<String>, headless: bool, reply: Sender<ControlResponse>) {
+        self.screenshot_token += 1;
+        let now = now_ms();
+        self.pending_screenshots.push(PendingShot {
+            token: self.screenshot_token,
+            path,
+            reply,
+            headless: headless && !self.headless_host,
+            not_before: now + 120.0,
+            deadline: now + SCREENSHOT_SETTLE_MS,
+            frames: 0,
+            sent_at: None,
+        });
+    }
+
+    /// Take a screenshot of the window into `path` the way `ui.screenshot` does (the
+    /// compositor's frame once renders settle, headless when it delivers nothing); the reply
+    /// arrives on the returned channel (`{ok, result | error}`).
+    pub fn queue_screenshot(&mut self, path: String) -> Receiver<ControlResponse> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.push_screenshot(Some(path), false, tx);
+        rx
     }
 
     /// Advance pending screenshots: wait (≥ 3 frames, ≥ 120 ms) until no renders are in flight
@@ -890,6 +913,7 @@ impl LightcraftApp {
         self.session.persist_if_dirty();
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
+        fixnotes::poll(self);
         // keymap.json edited elsewhere: pick it up
         if self.keymap.tick(now) {
             if let Some(e) = self.keymap.error.clone() {
@@ -1031,6 +1055,7 @@ impl LightcraftApp {
             panels::notices::show(self, &ctx);
             panels::dialogs::show(self, &ctx);
             panels::library_problem::show(self, &ctx);
+            fixnotes::show(self, &ctx);
             panels::toast(self, &ctx);
             self.widgets = widgets::take_registry(&ctx);
             self.end_frame(t0);
@@ -1089,6 +1114,7 @@ impl LightcraftApp {
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);
         panels::library_problem::show(self, &ctx);
+        fixnotes::show(self, &ctx);
         import::progress(self, &ctx);
         import::scan_progress(self, &ctx);
         export_task::poll(self, &ctx);

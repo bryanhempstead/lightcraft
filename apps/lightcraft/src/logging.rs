@@ -294,6 +294,10 @@ impl log::Log for AppLogger {
         if !self.enabled(record.metadata()) {
             return;
         }
+        // the last few warnings and errors go with a fix note (`notes.add`)
+        if record.level() <= log::Level::Warn {
+            lightcraft_engine::logging::remember(&format!("{} {}: {}", record.level(), record.target(), record.args()));
+        }
         // Formatted before the sink is locked, so a message that logs while it is formatted can't deadlock.
         let thread = std::thread::current();
         let line =

@@ -6,6 +6,14 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (fixnotes agent, 2026-11-22, branch worktree-agent-abcb4f6b3b76a1a30, not merged) **LC-UI-FIXNOTES: notes. →
+  fix. → Claude** — `crates/ui-egui/src/fixnotes.rs` (new: top-bar `notes.` button with open-count badge, floating
+  panel ⌘⌥⇧N, context capture, screenshots via `LightcraftApp::queue_screenshot` (the `ui.screenshot` path), request
+  writer), `cmd:notes.toggle/add/list/send/markFixed/reopen/edit/remove/select`, `docs/fix-notes.md` (request format
+  for the Claude-side watcher). Files: `<config>/fix-notes.json`, `fix-notes-shots/`, `fix-inbox/<YYYYMMDD-HHMMSS>-fix.json`
+  (UTC; `LIGHTCRAFT_FIX_INBOX` overrides). `lightcraft_engine::logging::{remember, recent}` keep the last 40
+  warnings/errors (desktop AppLogger + StderrLog feed it); ui-egui build.rs sets `LIGHTCRAFT_GIT_COMMIT`. ⌘⇧N was
+  taken (New Folder), hence ⌘⌥⇧N. Left: the Claude-side folder watcher (not app code); Bryan to try it.
 - [ ] (plate agent, 2026-11-22, branch worktree-agent-aa8ef530a41bd0901, not merged) **LRC-UI-IDENTITYPLATE + clean
   launch** — `crates/ui-egui/src/identity.rs` (new: settings, decode with caps, SVG via resvg, tint, copy into
   `<config>/identity/`, layout that slides off controls, paint, preview), Settings ▸ identity. (`identity_tab`,
