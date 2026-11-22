@@ -97,6 +97,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.cropOverlaysToCycle", "Choose Crop Overlays to Cycle", None, ""),
     ("view.beforeAfterCycle", "Cycle Before/After Layouts", None, "View"),
     ("app.viewSpace", "Photo Color Space", None, ""),
+    ("curve.snapToGrid", "Snap to Grid", None, ""),
+    ("curve.showAll", "Show All Curves", None, ""),
+    ("curve.copyChannel", "Copy Point Curve Channel", None, ""),
+    ("curve.pasteChannel", "Paste Point Curve Channel", None, ""),
     ("view.back", "Back to Grid", Some("Escape"), ""),
     ("tool.done", "Done", Some("Enter"), ""),
     ("view.filterBar", "Filter Bar", Some("Shift+F"), "View"),
@@ -926,6 +930,38 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 }
                 Some(Err(e)) => Err(format!("view.cropOverlaysToCycle: `overlays`: {e}")),
                 None => Ok(json!({"overlays": app.ui.crop_overlay_cycle})),
+            }
+        }
+        "curve.snapToGrid" => {
+            app.ui.curve_snap = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.curve_snap);
+            Ok(json!({"snap": app.ui.curve_snap}))
+        }
+        "curve.showAll" => {
+            app.ui.curve_show_all = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.curve_show_all);
+            Ok(json!({"showAll": app.ui.curve_show_all}))
+        }
+        "curve.copyChannel" | "curve.pasteChannel" => {
+            // {channel?: master|red|green|blue (default: the one shown)}
+            let ch = p.get("channel").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| app.ui.curve_channel.clone());
+            if !["master", "red", "green", "blue"].contains(&ch.as_str()) {
+                return Some(Err(format!("{id}: `channel` is master, red, green or blue")));
+            }
+            if id == "curve.copyChannel" {
+                let d = app.session.active().and_then(|x| app.session.develop_of(x)).unwrap_or_default();
+                let pts = match ch.as_str() {
+                    "red" => &d.curve.red,
+                    "green" => &d.curve.green,
+                    "blue" => &d.curve.blue,
+                    _ => &d.curve.master,
+                };
+                let pts: Vec<[f64; 2]> = pts.iter().map(|q| [q.x, q.y]).collect();
+                app.ui.curve_clipboard = Some(pts.clone());
+                Ok(json!({"channel": ch, "points": pts}))
+            } else {
+                match app.ui.curve_clipboard.clone() {
+                    Some(pts) => app.run("develop.curve", json!({"channel": ch, "points": pts})),
+                    None => Err("curve.pasteChannel: no point curve copied".into()),
+                }
             }
         }
         "app.viewSpace" => {

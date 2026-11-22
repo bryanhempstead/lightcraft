@@ -595,3 +595,36 @@ fn view_space_follows_the_setting_and_skips_the_headless_host() {
     let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&h.app.ui).unwrap()).unwrap();
     assert_eq!(back.settings.view_space, crate::display_p3::ViewSpace::Srgb);
 }
+
+/// U10: point curve extras — Snap to Grid (points land on the eighths), Copy / Paste a channel,
+/// Show All Curves (a view option, remembered).
+#[test]
+fn point_curve_snap_copy_paste_and_show_all() {
+    let mut h = demo();
+    let first = h.app.session.catalog.photos().next().unwrap().id.0;
+    exec(&mut h, "library.select", json!({"ids": [first]}));
+    let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["toneCurve"]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.curve_channel = "red".into();
+    exec(&mut h, "curve.snapToGrid", json!({"on": true}));
+    h.settle(Duration::from_secs(60));
+    // a press a little off the 3/8 × 5/8 grid crossing adds a point on it (a tiny drag keeps it there)
+    let r = h.request("ui.dragWidget", json!({"id": "curve", "fx": 0.39, "fy": 0.39, "dx": 1.0, "dy": 0.0, "steps": 2}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let id = h.app.session.active().unwrap();
+    let red = h.app.session.develop_of(id).unwrap().curve.red.clone();
+    assert!(red.iter().any(|p| (p.x - 0.375).abs() < 1e-9 && (p.y - 0.625).abs() < 1e-9), "snapped: {red:?}");
+    // copy red, paste onto blue
+    exec(&mut h, "curve.copyChannel", json!({}));
+    exec(&mut h, "curve.pasteChannel", json!({"channel": "blue"}));
+    assert_eq!(h.app.session.develop_of(id).unwrap().curve.blue, red);
+    let r = h.request("engine.execute", json!({"command": "curve.pasteChannel", "params": {"channel": "purple"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    // show all curves: a remembered view option
+    exec(&mut h, "curve.showAll", json!({}));
+    assert!(h.app.ui.curve_show_all);
+    h.step();
+    let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&h.app.ui).unwrap()).unwrap();
+    assert!(back.curve_show_all && back.curve_snap);
+}

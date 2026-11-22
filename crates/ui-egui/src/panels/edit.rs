@@ -754,9 +754,22 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
             Stroke::new(1.0, Color32::from_gray(52)),
         );
     }
+    if app.ui.curve_snap && ch != "parametric" {
+        // the eighths points snap to
+        for i in (1..8).filter(|i| i % 2 == 1) {
+            let f = i as f32 / 8.0;
+            let s = Stroke::new(1.0, Color32::from_gray(42));
+            p.line_segment([pos2(r.left() + r.width() * f, r.top()), pos2(r.left() + r.width() * f, r.bottom())], s);
+            p.line_segment([pos2(r.left(), r.top() + r.height() * f), pos2(r.right(), r.top() + r.height() * f)], s);
+        }
+    }
     p.line_segment([r.left_bottom(), r.right_top()], Stroke::new(1.0, Color32::from_gray(70)));
     let to_screen = |x: f64, y: f64| pos2(r.left() + x as f32 * r.width(), r.bottom() - y as f32 * r.height());
-    let from_screen = |q: Pos2| (((q.x - r.left()) / r.width()).clamp(0.0, 1.0) as f64, ((r.bottom() - q.y) / r.height()).clamp(0.0, 1.0) as f64);
+    let snap = app.ui.curve_snap;
+    let from_screen = |q: Pos2| {
+        let (x, y) = (((q.x - r.left()) / r.width()).clamp(0.0, 1.0) as f64, ((r.bottom() - q.y) / r.height()).clamp(0.0, 1.0) as f64);
+        if snap { ((x * 8.0).round() / 8.0, (y * 8.0).round() / 8.0) } else { (x, y) }
+    };
     if ch == "parametric" {
         // draw the effective parametric curve by sampling the pipeline's region curve approximation
         let c = &d.curve;
@@ -803,6 +816,22 @@ fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &Dev
         "blue" => hex("#3377ee"),
         _ => Color32::from_gray(225),
     };
+    // Show All Curves: the other channels faintly behind this one
+    if app.ui.curve_show_all {
+        for (other, pts, col) in [
+            ("master", &d.curve.master, Color32::from_gray(225)),
+            ("red", &d.curve.red, hex("#dd3333")),
+            ("green", &d.curve.green, hex("#33bb55")),
+            ("blue", &d.curve.blue, hex("#3377ee")),
+        ] {
+            if other == ch.as_str() || lightcraft_develop::ToneCurve::point_curve_is_identity(pts) {
+                continue;
+            }
+            let c = lightcraft_color::spline::NaturalCurve::new(&pts.iter().map(|q| (q.x, q.y)).collect::<Vec<_>>());
+            let line: Vec<Pos2> = (0..=96).map(|i| to_screen(i as f64 / 96.0, c.eval(i as f64 / 96.0).clamp(0.0, 1.0))).collect();
+            p.add(egui::Shape::line(line, Stroke::new(1.0, col.gamma_multiply(0.45))));
+        }
+    }
     let line: Vec<Pos2> = (0..=96).map(|i| to_screen(i as f64 / 96.0, curve.eval(i as f64 / 96.0).clamp(0.0, 1.0))).collect();
     p.add(egui::Shape::line(line, Stroke::new(2.0, color)));
     // interaction: drag a point (both axes, between its neighbours), drag empty space to add and
@@ -988,6 +1017,38 @@ fn curve_reset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, ch: &str) {
     if r.clicked() {
         let _ = app.run("curve.reset", json!({"channel": "all"}));
         ui.close();
+    }
+    if ch == "parametric" {
+        return;
+    }
+    ui.separator();
+    let name = channel_label(ch);
+    let r = ui.button(format!("Copy {name} Channel"));
+    register(ui.ctx(), "curveMenu:copy", r.rect);
+    if r.clicked() {
+        let _ = app.run("curve.copyChannel", json!({"channel": ch}));
+        ui.close();
+    }
+    if app.ui.curve_clipboard.is_some() {
+        let r = ui.button(format!("Paste to {name} Channel"));
+        register(ui.ctx(), "curveMenu:paste", r.rect);
+        if r.clicked() {
+            let _ = app.run("curve.pasteChannel", json!({"channel": ch}));
+            ui.close();
+        }
+    }
+    ui.separator();
+    let mut snap = app.ui.curve_snap;
+    let r = ui.checkbox(&mut snap, crate::i18n::tr("Snap to Grid"));
+    register(ui.ctx(), "curveMenu:snap", r.rect);
+    if r.changed() {
+        let _ = app.run("curve.snapToGrid", json!({"on": snap}));
+    }
+    let mut all = app.ui.curve_show_all;
+    let r = ui.checkbox(&mut all, crate::i18n::tr("Show All Curves"));
+    register(ui.ctx(), "curveMenu:showAll", r.rect);
+    if r.changed() {
+        let _ = app.run("curve.showAll", json!({"on": all}));
     }
 }
 

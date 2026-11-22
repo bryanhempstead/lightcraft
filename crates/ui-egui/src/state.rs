@@ -412,6 +412,13 @@ pub struct UiState {
     pub crop_overlay: CropOverlay,
     /// The overlays O cycles through (empty: all of them).
     pub crop_overlay_cycle: Vec<CropOverlay>,
+    /// Point curve: points snap to the graph's eighths (Lightroom's Snap to Grid).
+    pub curve_snap: bool,
+    /// Point curve: the other channels' curves drawn faintly behind the one being edited.
+    pub curve_show_all: bool,
+    /// A point curve copied from a channel (Copy Channel / Paste Channel).
+    #[serde(skip)]
+    pub curve_clipboard: Option<Vec<[f64; 2]>>,
     pub show_filenames: bool,
     /// What the square grid's caption shows: `filename`, `exposure` (shutter · aperture · ISO ·
     /// focal length) or `date`.
@@ -820,6 +827,9 @@ impl Default for UiState {
             mask_pins: true,
             crop_overlay: CropOverlay::Thirds,
             crop_overlay_cycle: Vec::new(),
+            curve_snap: false,
+            curve_show_all: false,
+            curve_clipboard: None,
             crop_overlay_orient: 0,
             show_filenames: true,
             grid_info: "filename".into(),
