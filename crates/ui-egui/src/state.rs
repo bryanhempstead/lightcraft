@@ -310,6 +310,9 @@ pub struct AppSettings {
     /// Loupe Info 1 / Info 2 lines and Show Briefly When Photo Changes (L19, Library View
     /// Options ▸ Loupe View; ported from upstream).
     pub loupe_info: LoupeInfo,
+    /// Square Grid cells: compact (name and format) or expanded (L18: a second line with the
+    /// dimensions and capture date, rotate buttons in the footer).
+    pub grid_expanded: bool,
 }
 
 impl Default for AppSettings {
@@ -328,6 +331,7 @@ impl Default for AppSettings {
             grid_badges: GridBadges::Auto,
             grid_index: false,
             loupe_info: LoupeInfo::default(),
+            grid_expanded: false,
         }
     }
 }

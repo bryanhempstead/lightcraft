@@ -658,6 +658,9 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     check(ui, "settings.showFilenames", &mut app.ui.show_filenames, "Square Grid: show file names and formats");
     check(ui, "settings.gridIndex", &mut app.ui.settings.grid_index, "Square Grid: show each photo's index number");
+    row(ui, t, crate::i18n::tr("Square Grid cells"), |ui| {
+        choices(ui, "settingsGridStyle", &[(false, "compact."), (true, "expanded.")], &mut app.ui.settings.grid_expanded);
+    });
     heading(ui, t, crate::i18n::tr("Detail"));
     check(ui, "settings.navigator", &mut app.ui.navigator, "Show the Navigator while zoomed in");
     row(ui, t, crate::i18n::tr("Info overlay"), |ui| {
