@@ -457,3 +457,26 @@ slider, Clarity, Texture, Dehaze, Vibrance, Saturation and his whole Summer Fiel
   change).
 - LightCraft's base on the grid: 0.35 against PV5, 0.42 against PV6. Not worth a per-PV path; the
   photos' PV is kept in the acceptance set's cells so a PV-dependent change can be gated.
+
+### Point curve (R09)
+
+Camera Raw's point curve, read off a neutral ramp and a dense colour grid rendered by the oracle
+(`oracle/make_curve.py`, `curvefit.py`, `curvecolor.py`; Bryan's curve 0,6 62,39 98,84 181,167
+255,211, a second custom curve, an S-curve, a steep two-point curve, red and blue channel curves):
+
+- **Interpolation**: the natural cubic spline through the points (C2, zero second derivative at the
+  ends — the DNG SDK's `dng_spline_solver`), flat outside the end points and **clamped to 0..1**
+  (the steep curve overshoots to 1.26 and below 0: Camera Raw clips). In sRGB-curve encoding of
+  ProPhoto values it matches Camera Raw to 0.01–0.02 of a level on all four curves; LightCraft's
+  monotone spline was 0.8–1.3 levels off on average (2.9 at worst on Bryan's), gamma 1.8 3–4.
+- **Colour**: the master curve is applied **hue-preserving** (largest and smallest channel through
+  the curve, the middle one interpolated — the DNG reference RGB tone), not per channel: on the
+  grid 0.13 vs 0.65 ΔE (Bryan's curve), 0.15 vs 0.74 (S-curve); the R / G / B curves are per
+  channel (0.00). The parametric curve comes first and joins the master curve (0.30 vs 0.92
+  levels for the other order; colour 0.19 vs 0.67).
+
+LightCraft now does exactly this (`spline::NaturalCurve`, `finish::Curves`, CPU and GPU; the
+curve editor draws the same spline). Oracle renders of LightCraft against Camera Raw: Bryan's
+curve on the grid 1.17 → 0.43 ΔE (the base itself is 0.42), with his parametric preset 1.26 →
+0.46, ramps 0.24 → 0.05. Acceptance set: 4.01 / 10.9 / 23 → 4.02 / 10.9 / **25** (gate passes;
+Summer Fields M262 4.45 → 4.45, X100F −0.2, R6 +0.06).

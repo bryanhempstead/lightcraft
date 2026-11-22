@@ -171,7 +171,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     aux.extend_from_slice(&srgb_lut()[..]);
     let curve_off = aux.len();
     if let Some(c) = &fp.curves {
-        for l in c {
+        // red, green, blue, then the hue-preserving master curve (`finish::Curves`)
+        for l in c.chans.iter().chain(std::iter::once(&c.master)) {
             assert_eq!(l.v.len(), CURVE_N as usize);
             aux.extend_from_slice(&l.v);
         }
