@@ -176,6 +176,14 @@ fresh ones. The tests skip (pass with a note) when no adapter exists.
 Remaining differences come from f32 vs f64 coordinate math, fast-math transcendental functions on
 Metal and running-sum order in the box filters — all far below one 8-bit step.
 
+**HDR renders** (`OutputDepth::F32Hdr` of a photo edited in HDR, the EDR loupe's and Visualize
+HDR's): the finish kernel's HDR path (`PEAK` > 1: peak-aware highlight desaturation, gamut map and
+vignette, the look on the SDR part, the unbounded sRGB curve) writes the linear float result after
+the packed 8-bit image. `crates/gpu/tests/hdr.rs` compares the float samples in the extended sRGB
+encoding (1/255 of SDR white as the unit): mean < 0.001, max 0 on seven cases (limits 1–4, Basic
+tone, curve + grain, lightening vignette, rendered file, camera tone), plus Visualize HDR and
+SDRBlend. Other float / 16-bit depths and soft proofs still render on the CPU.
+
 ## Measurements
 `render_bench` on `corpus/raw/arw-sony-a7m3-compressed.arw` (24 MP; loupe = 2560 px preview →
 1920×1280), min of 7 runs, wall clock, on a heavily shared machine (load average 60–110 on 14 cores,
