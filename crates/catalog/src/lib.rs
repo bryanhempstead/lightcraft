@@ -592,6 +592,10 @@ impl Catalog {
             }
             Op::Relink { id, file_name, source, format } => {
                 let p = self.photo_mut(id)?;
+                // E01: the first rename remembers the name it was imported with
+                if p.original_name.is_none() && p.file_name != file_name {
+                    p.original_name = Some(p.file_name.clone());
+                }
                 let old_name = std::mem::replace(&mut p.file_name, file_name);
                 let old_format = format.map(|f| std::mem::replace(&mut p.format, f));
                 Op::Relink { id, file_name: old_name, source: std::mem::replace(&mut p.source, source), format: old_format }

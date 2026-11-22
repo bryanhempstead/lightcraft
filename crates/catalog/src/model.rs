@@ -294,6 +294,11 @@ pub struct Photo {
     /// library would write then, and the file's bytes, both hashed. `None`: never synced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xmp_sync: Option<XmpSync>,
+    /// The file's name when it was imported (E01's `{original}` token), when the import renamed
+    /// it or it was renamed since; `None`: the photo's `file_name` is the original one (and every
+    /// photo imported before this field existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_name: Option<String>,
 }
 
 /// Hashes of a photo's metadata as the library would write it and of its sidecar file, taken
@@ -373,6 +378,7 @@ impl Photo {
             preview_checked: String::new(),
             local_baseline: None,
             xmp_sync: None,
+            original_name: None,
         }
     }
     /// Sets [`Photo::preview_only`] as this build decided it, with its stamp.

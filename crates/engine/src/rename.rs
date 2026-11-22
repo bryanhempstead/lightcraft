@@ -482,9 +482,9 @@ pub fn expand_tokens_in(template: &str, p: &Photo, seq: usize, seq_width: usize,
         }
         let v = match name.trim().to_ascii_lowercase().as_str() {
             "name" | "filename" => stem.to_string(),
-            "original" | "originalname" => split_ext(p.file_name.as_str()).0.to_string(),
+            "original" | "originalname" => split_ext(p.original_name.as_deref().unwrap_or(p.file_name.as_str())).0.to_string(),
             "originalnum" => {
-                let o = split_ext(p.file_name.as_str()).0;
+                let o = split_ext(p.original_name.as_deref().unwrap_or(p.file_name.as_str())).0;
                 let digits = o.chars().rev().take_while(char::is_ascii_digit).count();
                 o[o.len() - digits..].to_string()
             }
