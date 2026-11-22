@@ -30,7 +30,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(out.join("tr-formats.rs"), generate()?)?;
     let (json, people) = credits::load();
     fs::write(out.join("credits.rs"), credits::generate(&json, &people))?;
+    git_commit();
     Ok(())
+}
+
+/// `LIGHTCRAFT_GIT_COMMIT`: the commit the binary was built from (the fix notes' request files
+/// name it), `unknown` outside a git checkout. Reruns when HEAD moves (a commit, a checkout).
+fn git_commit() {
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    for path in ["HEAD", "logs/HEAD"] {
+        if let Some(p) = git(&["rev-parse", "--git-path", path]) {
+            println!("cargo:rerun-if-changed={p}");
+        }
+    }
+    let commit = git(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=LIGHTCRAFT_GIT_COMMIT={commit}");
 }
 
 /// `ja` → `Ja`, `zh-hans` → `ZhHans`: the `Locale` variant the `language_table!` entry declares.

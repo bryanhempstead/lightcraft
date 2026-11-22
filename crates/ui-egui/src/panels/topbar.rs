@@ -107,6 +107,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     app.toast(ui.ctx(), e);
                 }
                 r.on_hover_text(crate::i18n::tr("Go to where I left off"));
+                // notes about what isn't working, sent to Claude with fix. (LC-UI-FIXNOTES)
+                ui.add_space(4.0);
+                crate::fixnotes::top_button(app, ui);
                 if !app.native_menu {
                     // no native menu bar (web, Windows, Linux): menus in the top bar
                     ui.add_space(10.0);

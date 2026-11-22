@@ -114,6 +114,16 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.viewSpace", "Photo Color Space", None, ""),
     ("app.identityPlate", "Identity Plate", None, ""),
     ("app.identityPlateSetup", "Identity Plate Setup…", None, "Edit"),
+    // LC-UI-FIXNOTES: notes about what isn't working, sent to the Claude session that builds LightCraft
+    ("notes.toggle", "Fix Notes", Some("Cmd+Alt+Shift+N"), "Window"),
+    ("notes.add", "Add Fix Note", None, ""),
+    ("notes.list", "List Fix Notes", None, ""),
+    ("notes.send", "Send Fix Notes", None, ""),
+    ("notes.markFixed", "Mark Fix Notes Fixed", None, ""),
+    ("notes.reopen", "Reopen Fix Notes", None, ""),
+    ("notes.edit", "Edit Fix Note", None, ""),
+    ("notes.remove", "Remove Fix Notes", None, ""),
+    ("notes.select", "Pick Fix Notes", None, ""),
     ("curve.snapToGrid", "Snap to Grid", None, ""),
     ("curve.showAll", "Show All Curves", None, ""),
     ("curve.copyChannel", "Copy Point Curve Channel", None, ""),
@@ -440,6 +450,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         return Some(r);
     }
     if let Some(r) = crate::panels::crop_overlay::run_command(app, id, p) {
+        return Some(r);
+    }
+    if let Some(r) = crate::fixnotes::run_command(app, id, p) {
         return Some(r);
     }
     let ctx = egui::Context::default();
