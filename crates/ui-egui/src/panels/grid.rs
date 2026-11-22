@@ -996,6 +996,14 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if ui.button(crate::i18n::tr("Rename…")).clicked() {
         let _ = app.run("dialog.rename", json!({}));
     }
+    // LR-LIB-CAPTURETIME: fix this photo's time, the selection moves along
+    let n = app.session.targets(&json!({})).len();
+    let label = if n > 1 { format!("Adjust Time of {n} Photos…") } else { crate::i18n::tr("Adjust Time…").to_string() };
+    let r = ui.button(label);
+    crate::widgets::register(ui.ctx(), "menu:adjustTime", r.rect);
+    if r.clicked() {
+        let _ = app.run("dialog.captureTime", json!({"anchor": id.0}));
+    }
     if ui.button(crate::i18n::tr("Reload from Disk")).clicked() {
         let _ = app.run("photo.reload", json!({}));
     }

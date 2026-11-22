@@ -1059,10 +1059,17 @@ pub enum Dialog {
         params: serde_json::Value,
         key: String,
     },
-    /// Edit Capture Time: `mode` "set" (`time`; the others shift along), "shift" (by `days`,
-    /// `hours`, `minutes`) or "zone" (time-zone shift by `zone` hours).
+    /// Edit Capture Time / Adjust Time… (`crate::capture_time_dialog`): `mode` "set" (`time` is
+    /// the anchor's corrected time; the others shift along), "shift" (by `days`, `hours`,
+    /// `minutes`), "zone" (time-zone shift by `zone` hours), "each" (every photo gets `time`),
+    /// "match" (match camera clocks: the anchor takes `reference`'s time, its camera moves),
+    /// "original" or "file".
     CaptureTime {
         mode: String,
+        /// The photo the corrected time is for (right-clicked, else the active photo; 0 = none).
+        anchor: u64,
+        /// Match camera clocks: the photo from the other camera (0 = not picked yet).
+        reference: u64,
         time: String,
         days: i32,
         hours: i32,

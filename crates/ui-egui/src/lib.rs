@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod capture_time_dialog;
 pub mod control;
 pub mod credits;
 pub mod display_p3;
@@ -46,6 +47,8 @@ mod tests_alt_preview;
 mod tests_backup_delete;
 #[cfg(test)]
 mod tests_cameras;
+#[cfg(test)]
+mod tests_capture_time;
 #[cfg(test)]
 mod tests_classic;
 #[cfg(test)]

@@ -12,6 +12,13 @@
   `app.identityPlate`.
 - LightCraft no longer opens on a blank grey window: the first frame already shows the app.
 
+### Fix a camera clock in one go
+- Right-click any photo ▸ Adjust Time…: type the time that photo should have (`3:34 pm`, `15:34`, `+1h`, `-1d`) or
+  pick a day, and every selected photo moves by the same amount — you see the offset and before → after first.
+  Virtual copies and collapsed stacks come along; one undo puts it all back.
+- match.cam.: pick one photo from each camera taken at the same moment, and the other camera's photos line up.
+- With XMP auto-write on, the corrected time is saved to the sidecar too.
+
 ## October 2026
 
 ### Library keyboard culling

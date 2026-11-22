@@ -104,6 +104,10 @@ fn auto_write_and_naming_preference() {
     // undo rewrites too
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(exposure(&sidecar), 0.0);
+    // so does Edit Capture Time (it didn't: the capture time wasn't an auto-written change)
+    s.execute("photo.setCaptureTime", &json!({"time": "2026-06-13 15:34:12", "each": true})).unwrap();
+    let xmp = std::fs::read_to_string(&sidecar).unwrap();
+    assert!(xmp.contains("2026-06-13T15:34:12"), "{xmp}");
 
     // the preference persists with the library
     drop(s);

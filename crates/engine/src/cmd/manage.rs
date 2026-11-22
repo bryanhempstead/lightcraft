@@ -219,50 +219,28 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Capture Time",
             [],
             None,
-            "{ids?, time?: `2026-09-30T14:05:00` (the active photo gets it, the others shift by the same amount), each?: bool (every photo gets `time`), shift?: seconds, hours?: time-zone shift in hours, revert?: bool (each photo back to the time its file records — Lightroom's Revert Capture Time to Original), fileDate?: bool (each photo to its file's creation date, UTC)} → {changed, captured: [..]}",
+            "{ids?, anchor?: id (the photo `time` is for: default the active photo), time?: `2026-09-30 14:05:00`, `3:34 pm`, `15:34`, `2026-06-14 3:34 pm`, or a step `+1h` `-30m` `+1d` `+1h30m` (the anchor gets it, the others shift by the same amount; seconds not typed are kept), each?: bool (every photo gets `time`), shift?: seconds, hours?: time-zone shift in hours, match?: id (match camera clocks: the anchor takes this photo's time — one from another camera taken at the same moment — and the selected photos from the anchor's camera move by the difference), revert?: bool (each photo back to the time its file records — Lightroom's Revert Capture Time to Original), fileDate?: bool (each photo to its file's creation date, UTC), dryRun?: bool (only the plan)} → {changed, captured: [..], anchor, delta, photos: [{id, from, to, follows}], skipped: [{id, reason}], copies, stacked} — virtual copies and originals move with the photo, photos in a collapsed stack with its top; photos without a capture time stay as they are when the others shift; one undo step",
             has_selection,
             |s, p| {
-                use lightcraft_catalog::dates::{iso_seconds, normalize_iso, shift_iso};
                 let c = "photo.setCaptureTime";
-                let targets: Vec<_> = s.targets(p).into_iter().filter(|id| s.catalog.photo(*id).is_some()).collect();
-                if targets.is_empty() {
-                    return Err(bad(c, "no photos"));
-                }
                 if bool_or(p, "revert", false) || bool_or(p, "fileDate", false) {
-                    return capture_time_from_files(s, &targets, bool_or(p, "fileDate", false));
-                }
-                // photos without a capture time start from their import time
-                let base = |s: &crate::Session, id| s.catalog.photo(id).map(|p| p.date().to_string()).unwrap_or_default();
-                let mut delta = (f64_or(p, "shift", 0.0) + f64_or(p, "hours", 0.0) * 3600.0).round() as i64;
-                let mut each: Option<String> = None;
-                if let Some(t) = str_param(p, "time") {
-                    let t = normalize_iso(t).ok_or_else(|| bad(c, format!("`{t}` is not a date (YYYY-MM-DDTHH:MM:SS)")))?;
-                    if bool_or(p, "each", false) {
-                        each = Some(t);
-                    } else {
-                        let anchor = s.active().filter(|a| targets.contains(a)).unwrap_or(targets[0]);
-                        let from = iso_seconds(&base(s, anchor)).ok_or_else(|| bad(c, "the photo's date doesn't parse"))?;
-                        delta += iso_seconds(&t).unwrap_or(from) - from;
+                    let targets: Vec<_> = s.targets(p).into_iter().filter(|id| s.catalog.photo(*id).is_some()).collect();
+                    if targets.is_empty() {
+                        return Err(bad(c, "no photos"));
                     }
+                    let all: Vec<_> = crate::capture_time::with_followers(s, &targets).into_iter().map(|(id, _)| id).collect();
+                    return capture_time_from_files(s, &all, bool_or(p, "fileDate", false));
                 }
-                let mut ops = Vec::new();
-                let mut out = Vec::new();
-                for id in &targets {
-                    let new = match &each {
-                        Some(t) => shift_iso(t, delta),
-                        None => shift_iso(&base(s, *id), delta),
-                    };
-                    let Some(new) = new else { continue };
-                    out.push(json!(new));
-                    if s.catalog.photo(*id).and_then(|p| p.captured.as_deref()) != Some(new.as_str()) {
-                        ops.push(Op::SetCaptured { id: *id, captured: Some(new) });
-                    }
-                }
+                let plan = crate::capture_time::plan(s, p)?;
+                let mut out = plan.to_json();
+                out["captured"] = json!(plan.rows.iter().map(|r| r.to.clone()).collect::<Vec<_>>());
+                let ops: Vec<Op> = plan.changed().map(|r| Op::SetCaptured { id: r.id, captured: Some(r.to.clone()) }).collect();
                 let n = ops.len();
-                if n > 0 {
+                out["changed"] = json!(n);
+                if n > 0 && !bool_or(p, "dryRun", false) {
                     s.commit("Edit Capture Time", Op::Batch { ops })?;
                 }
-                Ok(json!({"changed": n, "captured": out}))
+                Ok(out)
             }
         ),
         cmd!(
