@@ -34,6 +34,7 @@ pub mod softpaint;
 pub mod state;
 pub mod tasks;
 pub mod theme;
+pub mod tiles;
 pub mod video_ui;
 pub mod widgets;
 

@@ -207,6 +207,30 @@ fn photo_tile(
     } else {
         p.rect_filled(img.intersect(img_area), 0.0, Color32::from_gray(38));
     }
+    // native-resolution detail at 1:1 and beyond the preview size (`crate::tiles`), as in the loupe
+    let hdr_view = photo.develop.hdr.enabled && super::detail::hdr_headroom(app).is_some();
+    if !hdr_view && app.renderer.textures.get(&slot).is_some_and(|x| x.photo == id) {
+        let view = 10u8.saturating_add(slot_index(slot));
+        let w = crate::tiles::Want {
+            view,
+            photo: id,
+            img: display,
+            area: img_area,
+            ppp,
+            apply_crop: true,
+            before: false,
+            preview_long: want,
+            interacting: app.session.interaction.is_some(),
+            overlay: lightcraft_pipeline::Overlay::None,
+            proof: None,
+            now: ui.input(|i| i.time),
+        };
+        if crate::tiles::update(app, &w).is_some()
+            && let Some(t) = app.renderer.tiles.get_mut(&view)
+        {
+            t.draw(&p, display, img_area);
+        }
+    }
     if photo.flag == Flag::Reject {
         p.rect_filled(display, 0.0, Color32::from_black_alpha(110));
     }
