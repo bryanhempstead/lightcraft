@@ -204,6 +204,8 @@ pub struct AppSettings {
     pub film_badges: bool,
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
+    /// Square Grid: each cell's index number in front of its caption (Lightroom's Index Number).
+    pub grid_index: bool,
 }
 
 impl Default for AppSettings {
@@ -220,6 +222,7 @@ impl Default for AppSettings {
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
+            grid_index: false,
         }
     }
 }

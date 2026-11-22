@@ -269,3 +269,15 @@ fn export_with_several_presets() {
     }
     assert!(h.app.run("app.export", json!({"presets": []})).is_err());
 }
+
+/// L18: ⌘J opens the grid's view options; the index number shows in Square Grid captions.
+#[test]
+fn grid_view_options() {
+    let mut h = headless(lightcraft_engine::Session::with_demo());
+    h.app.ui.view = crate::state::ViewMode::SquareGrid;
+    h.request("ui.key", json!({"key": "j", "cmd": true}), T);
+    assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "interface".into() }));
+    click(&mut h, "check:settings.gridIndex");
+    assert!(h.app.ui.settings.grid_index);
+    shot(&mut h, "grid-options.png");
+}

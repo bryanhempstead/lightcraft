@@ -67,7 +67,6 @@ pub const CLASSIC: &[(&str, &str, &str)] = &[
 
 /// Classic shortcuts with no LightCraft command (shown on the shrt. page and in the report).
 pub const CLASSIC_SKIPPED: &[(&str, &str)] = &[
-    ("Cmd+J", "Library view options"),
     ("Cmd+Shift+M", "email photos"),
     ("Cmd+Alt+3…7", "Map, Book, Slideshow, Print, Web modules"),
     ("Cmd+N (Develop)", "new snapshot — Cmd+N stays New Album (Classic's Library: New Collection)"),
