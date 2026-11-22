@@ -553,3 +553,13 @@ Lights +48 / Darks +20, which Camera Raw applies at full strength, and LightCraf
 tables (`tone::lr::ADOBE_*`, fitted on previews) had absorbed the weak old curve. The Camera Raw
 oracle shows those tables are what's wrong (below), so the table stays out until Basic tone is
 refitted on top of it; the generator and the measured data are in `tools/lr-compare/oracle`.
+
+### HSL / Saturation / Vibrance on rendered files (R11)
+
+The oracle-measured HSL / Saturation / Vibrance tables (`colortab.bin`, round 4) act on the
+finished colour, whatever the profile, but were used only on Adobe camera bases; JPEG / HEIC /
+ProRAW / embedded-profile photos kept the older OkLCh approximation. They now use the tables too
+(`ColorOps::with_measured` for every source). Summer Fields iPhone JPEGs in the acceptance set
+(4): 7.03 → 6.80 ΔE (per photo 10.03 → 9.80, 5.87 → 5.22, 6.72 → 6.65, 5.49 → 5.52); no other
+photo changes. Their remaining error is tone (ΔL* +4.3: rendered files' Basic tone, R02) and the
+look table.
