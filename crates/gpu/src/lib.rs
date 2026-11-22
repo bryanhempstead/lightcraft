@@ -292,19 +292,38 @@ pub fn stage_bytes(stages: &StageCache) -> usize {
 /// Render `src` with `s` on the GPU, reusing the device-resident stages kept with `stages` (the
 /// view's CPU stage cache). `None`: render on the CPU instead.
 pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Rendered> {
+    use lightcraft_pipeline::{OutputDepth, Overlay};
+    // Visualize HDR: the SDR render with the HDR rendition of the same request painted over it
+    // (as `lightcraft_pipeline::render` does it)
+    if req.overlay == Overlay::HdrRange && req.depth == OutputDepth::U8 {
+        let plain = RenderRequest { overlay: Overlay::None, ..*req };
+        if !s.effective().hdr.enabled {
+            return render_one(src, info, s, &plain, stages);
+        }
+        let mut sdr = render_one(src, info, s, &plain, stages)?;
+        let hreq = RenderRequest { depth: OutputDepth::F32Hdr, proof: None, ..plain };
+        let hdr = render_one(src, info, s, &hreq, stages)?.deep?;
+        lightcraft_pipeline::visualize::hdr_range(&mut sdr.image, &hdr, req.space.luma());
+        return Some(sdr);
+    }
+    render_one(src, info, s, req, stages)
+}
+
+fn render_one(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Rendered> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         // sections switched off with their eye render as if at their defaults (issue #316)
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
-        // the kernel writes 8-bit output: high-bit-depth exports (and soft proofs) render on the CPU
-        // Visualize HDR needs the float HDR render: CPU too
-        // (and operators the kernel doesn't have yet: `lightcraft_pipeline::cpu_only`)
-        if !enabled()
-            || req.depth != lightcraft_pipeline::OutputDepth::U8
-            || req.proof.is_some()
-            || req.overlay == lightcraft_pipeline::Overlay::HdrRange
-            || lightcraft_pipeline::cpu_only(s)
+        // the kernel writes 8-bit output, plus linear float for an HDR render of an HDR edit:
+        // other high-bit-depth exports (and soft proofs) render on the CPU (and operators the
+        // kernel doesn't have yet: `lightcraft_pipeline::cpu_only`)
+        let depth_ok = match req.depth {
+            lightcraft_pipeline::OutputDepth::U8 => true,
+            lightcraft_pipeline::OutputDepth::F32Hdr => s.hdr.peak() > 1.0,
+            _ => false,
+        };
+        if !enabled() || !depth_ok || req.proof.is_some() || req.overlay == lightcraft_pipeline::Overlay::HdrRange || lightcraft_pipeline::cpu_only(s)
         {
             return None;
         }

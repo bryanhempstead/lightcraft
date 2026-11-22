@@ -84,10 +84,17 @@ impl HdrView for EdrView {
             self.slots.insert(slot.to_string(), Uploaded { key: 0, size: (w, h), texture, id });
         }
         let u = self.slots.get_mut(slot)?;
-        let bytes: Vec<u8> = px.rgba.iter().flat_map(|v| v.to_le_bytes()).collect();
+        // the halves as they are in memory (little-endian, as the texture wants them) — no copy
+        let swapped: Vec<u8>;
+        let bytes: &[u8] = if cfg!(target_endian = "little") {
+            bytemuck::cast_slice(&px.rgba)
+        } else {
+            swapped = px.rgba.iter().flat_map(|v| v.to_le_bytes()).collect();
+            &swapped
+        };
         self.rs.queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &u.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            &bytes,
+            bytes,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w as u32 * 8), rows_per_image: Some(h as u32) },
             extent,
         );
