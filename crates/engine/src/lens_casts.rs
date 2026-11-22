@@ -233,7 +233,7 @@ pub fn row_from_lightroom(camera: &str, lens: &str, captured: &str, format: &str
         return None;
     }
     let lens = match lens.trim() {
-        "" | "not selected" => lua_str(text, "LensProfileName").unwrap_or("").trim(),
+        l @ ("" | "not selected") => lua_str(text, "LensProfileName").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(l),
         l => l,
     };
     let rendered = RENDERED_FORMATS.iter().any(|f| f.eq_ignore_ascii_case(format.trim()));

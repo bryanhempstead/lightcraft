@@ -227,12 +227,15 @@ pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo),
 /// A synthetic target "photographed" by a raw file's camera ([`chart_source`], `camera_match`):
 /// scene colours (linear Rec.2020 D65, one per pixel, `width × height`), lit by `white` (the
 /// file's own as-shot white when `None`); the camera's as-shot white balance takes that light.
+/// With `light`, the chart is lit by that light instead while the camera keeps its own as-shot
+/// reading (two cameras at one scene: each one's white balance reads the same light its own way).
 #[derive(Clone, Debug, Default)]
 pub struct ChartShot {
     pub pixels: Vec<[f32; 3]>,
     pub width: usize,
     pub height: usize,
     pub white: Option<lightcraft_color::Xy>,
+    pub light: Option<lightcraft_color::Xy>,
 }
 
 impl ChartShot {
@@ -305,7 +308,18 @@ fn load_raw(
             .and_then(|m| crate::adobe::standard_for(raw.metadata.make.as_deref(), m))
             .and_then(|cam| crate::adobe::decode_color(&cam, &raw).map(|c| (cam, c)));
         if let Some((cam, color)) = adobe {
-            return load_adobe(raw, lens, max_edge, &cam, color, chart).map(|(img, info)| (img, info, xy));
+            // a chart lit by another light: the camera's response under it (its colour spec for
+            // that white), decoded with its own as-shot reading
+            let lit = match chart.and_then(|c| c.light) {
+                Some(l) => {
+                    let saved = raw.color.as_shot_white_xy.replace(l);
+                    let c = crate::adobe::decode_color(&cam, &raw);
+                    raw.color.as_shot_white_xy = saved;
+                    c.map(|c| (c.matrix, c.wb, c.gain_ev))
+                }
+                None => None,
+            };
+            return load_adobe(raw, lens, max_edge, &cam, color, chart.map(|c| (c, lit))).map(|(img, info)| (img, info, xy));
         }
         let lightroom = crate::camera_preview::lightroom_look(&raw, &t);
         let from_lightroom = lightroom.is_some();
@@ -321,7 +335,14 @@ fn load_raw(
         let t0 = web_time::Instant::now();
         let mut stages = Vec::new();
         let mut img = match chart {
-            Some(ch) => ch.camera_image(&m64, wb, gain)?,
+            Some(ch) => match ch.light {
+                Some(l) => {
+                    let tl = lightcraft_raw::color::camera_transform(&raw, l);
+                    let ml = camera_look.as_ref().map(|p| p.matrix.mul(&tl.matrix)).unwrap_or(tl.matrix);
+                    ch.camera_image(&ml, tl.wb, gain)?
+                }
+                None => ch.camera_image(&m64, wb, gain)?,
+            },
             None => {
                 let binned = match bin_factor(&raw, max_edge) {
                     Some(k) => raw.develop_binned(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,
@@ -353,7 +374,9 @@ fn load_raw(
         // with the file's own rendering (after the baseline exposure, before the look table). A
         // Lightroom-matched profile stands for Lightroom's Adobe profiles, under which Lightroom
         // renders these files without it (docs/lr-match.md → ProRAW gain table map).
-        let gain_map = if from_lightroom { None } else { lightcraft_raw::gainmap::GainMapper::for_raw(&raw, img.width, img.height) };
+        // (not on a chart: the map is a local tone map of the photo's own content)
+        let gain_map =
+            if from_lightroom || chart.is_some() { None } else { lightcraft_raw::gainmap::GainMapper::for_raw(&raw, img.width, img.height) };
         let width = img.width;
         lightcraft_raster::par_rows(&mut img.data, width, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
@@ -498,14 +521,15 @@ fn load_adobe(
     max_edge: usize,
     cam: &crate::adobe::Camera,
     color: crate::adobe::DecodeColor,
-    chart: Option<&ChartShot>,
+    chart: Option<(&ChartShot, Option<(lightcraft_color::Mat3, [f32; 3], f64)>)>,
 ) -> Result<(Rgb32f, SourceInfo), String> {
     let t0 = web_time::Instant::now();
     let m = color.matrix.to_f32();
     let wb = color.wb;
     let gain = 2f32.powf(color.gain_ev as f32);
     let mut img = match chart {
-        Some(ch) => ch.camera_image(&color.matrix, wb, gain)?,
+        Some((ch, Some((lm, lwb, lev)))) => ch.camera_image(&lm, lwb, 2f32.powf(lev as f32))?,
+        Some((ch, None)) => ch.camera_image(&color.matrix, wb, gain)?,
         None => {
             let binned = match bin_factor(&raw, max_edge) {
                 Some(k) => raw.develop_binned(k, HIGHLIGHT_CLIP).map_err(|e| e.to_string())?,

@@ -179,7 +179,7 @@ pub fn chart_shot(scale: f64, white: Option<Xy>) -> ChartShot {
         let c = colours.get(k).copied().unwrap_or(grey);
         *px = c.map(|v| (v * scale) as f32);
     }
-    ChartShot { pixels, width: w, height: h, white }
+    ChartShot { pixels, width: w, height: h, white, light: None }
 }
 
 /// Mean L\*a\*b\* of each patch's centre in a linear Rec.2020 render of the chart (`None`:
@@ -266,6 +266,11 @@ pub fn chart_de(a: &[[f64; 3]], b: &[[f64; 3]]) -> (f64, f64) {
 
 /// A slider the solver may move: control id, finite-difference step and "small move" scale
 /// (slider units; `wb.temp` is in mireds).
+/// Largest move of any slider, in its `sigma`s.
+const MAX_MOVE: f64 = 2.7;
+/// Largest mean chart ΔE2000 a kept match may leave.
+const MAX_AFTER: f64 = 3.5;
+
 struct Var {
     id: &'static str,
     step: f64,
@@ -275,9 +280,9 @@ struct Var {
 const BANDS: [&str; 8] = ["red", "orange", "yellow", "green", "aqua", "blue", "purple", "magenta"];
 
 fn vars() -> Vec<Var> {
-    let mut v = vec![Var { id: "wb.temp", step: 4.0, sigma: 20.0 }, Var { id: "wb.tint", step: 3.0, sigma: 10.0 }];
+    let mut v = vec![Var { id: "wb.temp", step: 4.0, sigma: 60.0 }, Var { id: "wb.tint", step: 3.0, sigma: 20.0 }];
     for id in HSL_IDS {
-        v.push(Var { id, step: 6.0, sigma: 25.0 });
+        v.push(Var { id, step: 6.0, sigma: 15.0 });
     }
     for id in [
         "calibration.redHue",
@@ -288,10 +293,10 @@ fn vars() -> Vec<Var> {
         "calibration.blueSat",
         "calibration.shadowsTint",
     ] {
-        v.push(Var { id, step: 6.0, sigma: 25.0 });
+        v.push(Var { id, step: 6.0, sigma: 15.0 });
     }
-    v.push(Var { id: "color.saturation", step: 5.0, sigma: 15.0 });
-    v.push(Var { id: "color.vibrance", step: 5.0, sigma: 15.0 });
+    v.push(Var { id: "color.saturation", step: 5.0, sigma: 10.0 });
+    v.push(Var { id: "color.vibrance", step: 5.0, sigma: 10.0 });
     v
 }
 
@@ -324,11 +329,10 @@ const HSL_IDS: [&str; 24] = [
 
 /// The target's white balance as (mireds, tint), As Shot read as its as-shot values.
 fn wb_of(d: &DevelopSettings, info: &SourceInfo) -> (f64, f64) {
-    if d.wb.mode == WbMode::Custom {
-        (1e6 / d.wb.temp.clamp(2000.0, 50000.0), d.wb.tint)
-    } else {
-        (1e6 / info.as_shot_temp.clamp(2000.0, 50000.0), info.as_shot_tint)
-    }
+    let (t, ti) = if d.wb.mode == WbMode::Custom { (d.wb.temp, d.wb.tint) } else { (info.as_shot_temp, info.as_shot_tint) };
+    // finite always: hostile settings must never reach a clamp bound as NaN
+    let t = if t.is_finite() { t.clamp(2000.0, 50000.0) } else { 5500.0 };
+    (1e6 / t, if ti.is_finite() { ti.clamp(-150.0, 150.0) } else { 0.0 })
 }
 
 /// `base` with the solver's offsets `x` added (white balance in mireds / tint units).
@@ -446,7 +450,9 @@ pub fn solve(
                 mu *= 10.0;
                 continue;
             };
-            let xn: Vec<f64> = x.iter().zip(&dx).map(|(a, b)| a + b).collect();
+            // no slider moves more than MAX_MOVE of its "small move" scale (a match that needs
+            // more is the scenes differing, not the cameras)
+            let xn: Vec<f64> = x.iter().zip(&dx).zip(&vars).map(|((a, b), v)| (a + b).clamp(-MAX_MOVE * v.sigma, MAX_MOVE * v.sigma)).collect();
             let dn = apply(target, info, &vars, &xn);
             // read back the clamped values so the step stays inside the slider ranges
             let xn: Vec<f64> = vars.iter().zip(&xn).map(|(v, xv)| clamped_offset(target, &dn, info, v, *xv)).collect();
@@ -478,7 +484,9 @@ pub fn solve(
     }
     let lab = render(&out)?;
     let after = chart_de(&lab, reference);
-    if after.0 > before.0 - 0.05 {
+    // kept only when it clearly helps and lands close: a partial fix of a big difference (an
+    // extreme white balance, scenes far apart) tends to look worse than none
+    if after.0 > before.0 - 0.05 || after.0 > MAX_AFTER || after.0 > 0.6 * before.0 {
         return Some(ChartMatch { before, after: before, settings: target.clone(), changed: Vec::new() });
     }
     let mut changed = Vec::new();
@@ -566,7 +574,7 @@ pub fn lens_name(p: &Photo) -> String {
     if !l.is_empty() && !l.eq_ignore_ascii_case("not selected") {
         return l.to_string();
     }
-    p.develop.optics.lens_profile_ref.as_ref().map(|r| r.name.trim().to_string()).unwrap_or_default()
+    p.develop.optics.lens_profile_ref.as_ref().map(|r| r.name.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| l.to_string())
 }
 
 /// Match the colour of `target` (settings `nd`, already synced) to `reference` (settings `rd`):
@@ -587,15 +595,18 @@ pub fn match_photo(
     report.insert("id".into(), json!(target.0));
     let same_camera = rp.meta.camera.trim().eq_ignore_ascii_case(tp.meta.camera.trim());
     let same_lens = lens_name(&rp).eq_ignore_ascii_case(&lens_name(&tp));
+    let scene = scene.unwrap_or_else(|| same_scene(&rp, &tp));
+    report.insert("sameScene".into(), json!(scene));
     // 1. chart
     if !same_camera && rp.develops_raw() && tp.develops_raw() {
-        match chart_match(&rp, rd, &tp, nd) {
+        match chart_match(&rp, rd, &tp, nd, scene) {
             Ok(m) => {
                 report.insert("deltaE_before".into(), json!(round2(m.before.0)));
                 report.insert("deltaE_after".into(), json!(round2(m.after.0)));
                 report.insert("deltaE_max_before".into(), json!(round2(m.before.1)));
                 report.insert("deltaE_max_after".into(), json!(round2(m.after.1)));
                 report.insert("chart".into(), changes_json(&m.changed));
+                report.insert("chartKept".into(), json!(!m.changed.is_empty()));
                 *nd = m.settings;
             }
             Err(e) => {
@@ -615,7 +626,6 @@ pub fn match_photo(
         }
     }
     // 3. scene pass
-    let scene = scene.unwrap_or_else(|| same_scene(&rp, &tp));
     if scene && let Some(v) = scene_pass(s, reference, rd, target, nd) {
         report.insert("scene".into(), v);
     }
@@ -631,14 +641,27 @@ fn changes_json(c: &[(String, f64, f64)]) -> Value {
 }
 
 /// The chart match between the reference photo `rp` (settings `rd`) and the target `tp` (`nd`).
-pub fn chart_match(rp: &Photo, rd: &DevelopSettings, tp: &Photo, nd: &DevelopSettings) -> Result<ChartMatch, String> {
-    let tb = raw_bytes(tp)?;
+/// Different scenes: both charts are lit by the target's light and both cameras read it right
+/// (only the profiles differ). The same scene (`same_scene`): the chart is lit by the light the
+/// reference read, and the target camera keeps its own as-shot reading of it, so a difference in
+/// how the two cameras' auto white balance read one light is matched too.
+pub fn chart_match(rp: &Photo, rd: &DevelopSettings, tp: &Photo, nd: &DevelopSettings, same_scene: bool) -> Result<ChartMatch, String> {
     let scale = 2f64.powf(-nd.light.exposure.clamp(-5.0, 5.0));
-    let (tsrc, tinfo, white) = crate::files::chart_source(&tb, &chart_shot(scale, None))?;
-    drop(tb);
-    let rb = raw_bytes(rp)?;
-    let (rsrc, rinfo, _) = crate::files::chart_source(&rb, &chart_shot(scale, Some(white)))?;
-    drop(rb);
+    let ((tsrc, tinfo), (rsrc, rinfo)) = if same_scene {
+        let rb = raw_bytes(rp)?;
+        let (rsrc, rinfo, light) = crate::files::chart_source(&rb, &chart_shot(scale, None))?;
+        drop(rb);
+        let tb = raw_bytes(tp)?;
+        let (tsrc, tinfo, _) = crate::files::chart_source(&tb, &ChartShot { light: Some(light), ..chart_shot(scale, None) })?;
+        ((tsrc, tinfo), (rsrc, rinfo))
+    } else {
+        let tb = raw_bytes(tp)?;
+        let (tsrc, tinfo, white) = crate::files::chart_source(&tb, &chart_shot(scale, None))?;
+        drop(tb);
+        let rb = raw_bytes(rp)?;
+        let (rsrc, rinfo, _) = crate::files::chart_source(&rb, &chart_shot(scale, Some(white)))?;
+        ((tsrc, tinfo), (rsrc, rinfo))
+    };
     let rchart = CameraChart { src: rsrc, info: rinfo };
     let tchart = CameraChart { src: tsrc, info: tinfo };
     let reference = rchart.render(&reference_settings(rd, nd)).ok_or("the reference chart didn't render")?;
@@ -673,39 +696,65 @@ fn chart_settings_keep_crop(d: &DevelopSettings) -> DevelopSettings {
     c
 }
 
-/// Scene statistics: mean a\*, b\* of near-neutral mid-tone pixels (and how many), and per hue
-/// band (8 × 45°) the pixel share, mean chroma and mean hue of the coloured ones.
+/// Scene statistics: the scene's cast (median a\*, b\* of the mid-tone pixels that aren't
+/// strongly coloured: robust to a subject, and still there when the whole frame is tinted), per
+/// hue band (8 × 45°) the share, mean chroma and mean hue of the coloured pixels, and the share of
+/// every band plus the near-neutrals (for "do the two photos show the same thing").
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SceneStats {
     pub neutral: Option<(f64, f64)>,
     pub bands: [Option<(f64, f64, f64)>; 8],
+    pub shares: [f64; 9],
 }
 
 pub fn scene_stats(lab: &[[f64; 3]]) -> SceneStats {
     let n = lab.len().max(1) as f64;
-    let (mut na, mut nb, mut nn) = (0.0, 0.0, 0.0);
+    let (mut ca, mut cb) = (Vec::new(), Vec::new());
     let mut acc = [(0.0f64, 0.0f64, 0.0f64, 0.0f64); 8]; // count, chroma, sin, cos
+    let mut shares = [0.0f64; 9];
     for p in lab {
         let c = p[1].hypot(p[2]);
-        if !(15.0..=92.0).contains(&p[0]) {
+        if !(15.0..=92.0).contains(&p[0]) || !c.is_finite() {
             continue;
         }
-        if c < 8.0 {
-            na += p[1];
-            nb += p[2];
-            nn += 1.0;
-        } else if c >= 12.0 {
+        if c < 40.0 {
+            ca.push(p[1]);
+            cb.push(p[2]);
+        }
+        if c >= 12.0 {
             let h = p[2].atan2(p[1]);
             let k = (((h.to_degrees() + 360.0 + 22.5) % 360.0) / 45.0) as usize % 8;
             if let Some(a) = acc.get_mut(k) {
                 *a = (a.0 + 1.0, a.1 + c, a.2 + h.sin(), a.3 + h.cos());
             }
+        } else {
+            shares[8] += 1.0 / n;
         }
     }
-    let neutral = (nn / n >= 0.02).then(|| (na / nn, nb / nn));
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v.get(v.len() / 2).copied().unwrap_or(0.0)
+    };
+    let neutral = (ca.len() as f64 / n >= 0.2).then(|| (median(&mut ca), median(&mut cb)));
+    for (s, a) in shares.iter_mut().zip(&acc) {
+        *s = a.0 / n;
+    }
     let bands = acc.map(|(k, c, sn, cs)| (k / n >= 0.02).then(|| (k / n, c / k, sn.atan2(cs).to_degrees())));
-    SceneStats { neutral, bands }
+    SceneStats { neutral, bands, shares }
 }
+
+/// How much two photos' colour content overlaps (0..1): the shared share of each hue band and of
+/// the near-neutrals.
+pub fn overlap(a: &SceneStats, b: &SceneStats) -> f64 {
+    let (sa, sb) = (a.shares.iter().sum::<f64>(), b.shares.iter().sum::<f64>());
+    if sa <= 0.0 || sb <= 0.0 {
+        return 0.0;
+    }
+    a.shares.iter().zip(&b.shares).map(|(x, y)| (x / sa).min(y / sb)).sum()
+}
+
+/// Least content overlap ([`overlap`]) for the scene pass to trust the two photos' difference.
+const MIN_OVERLAP: f64 = 0.85;
 
 /// The scene pass: even out the target's near-neutral cast against the reference's (Temp /
 /// Tint, measured response, damped) and nudge each well-populated hue band's saturation toward
@@ -716,9 +765,17 @@ fn scene_pass(s: &mut Session, reference: PhotoId, rd: &DevelopSettings, target:
     let start = nd.clone();
     let mut cur = scene_stats(&small_lab(s, target, nd)?);
     let mut out = serde_json::Map::new();
+    let ov = overlap(&rs, &cur);
+    out.insert("overlap".into(), json!(round2(ov)));
+    if ov < MIN_OVERLAP {
+        // different subjects: their colour difference is content, not camera or light
+        out.insert("skipped".into(), json!("the photos show different things"));
+        return Some(Value::Object(out));
+    }
+    let (m_start, t_start) = wb_of(&start, &info);
     if let (Some(rn), Some(_)) = (rs.neutral, cur.neutral) {
-        // two measured responses (mireds → b*, tint → a*), then a damped step, twice
-        for _ in 0..2 {
+        // two measured responses (mireds → b*, tint → a*), then a damped step, up to three times
+        for _ in 0..3 {
             let Some(tn) = cur.neutral else { break };
             let (da, db) = (rn.0 - tn.0, rn.1 - tn.1);
             if da.hypot(db) < 0.4 {
@@ -741,7 +798,11 @@ fn scene_pass(s: &mut Session, reference: PhotoId, rd: &DevelopSettings, target:
             let dt = (-j[1][0] * da + j[0][0] * db) / det;
             // damped and bounded: content differences must not swing it far
             let v = [Var { id: "wb.temp", step: 1.0, sigma: 1.0 }, Var { id: "wb.tint", step: 1.0, sigma: 1.0 }];
-            *nd = apply(nd, &info, &v, &[(0.6 * dm).clamp(-25.0, 25.0), (0.6 * dt).clamp(-10.0, 10.0)]);
+            let (m, t) = wb_of(nd, &info);
+            // ≤ ±25 mireds / ±10 tint from where the sync left it, in all
+            let dm = (0.7 * dm).clamp(-20.0, 20.0).clamp(m_start - 25.0 - m, m_start + 25.0 - m);
+            let dt = (0.7 * dt).clamp(-8.0, 8.0).clamp(t_start - 10.0 - t, t_start + 10.0 - t);
+            *nd = apply(nd, &info, &v, &[dm, dt]);
             nd.wb.temp = (nd.wb.temp / 10.0).round() * 10.0;
             nd.wb.tint = nd.wb.tint.round();
             cur = scene_stats(&small_lab(s, target, nd)?);

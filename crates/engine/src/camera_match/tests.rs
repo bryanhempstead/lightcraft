@@ -128,6 +128,11 @@ fn hostile_inputs_are_errors_not_panics() {
     d.wb.temp = f64::NAN;
     d.light.exposure = 5.0;
     let _ = cam.render(&d);
+    // a NaN white balance reads as a finite one (the scene pass clamps with it as a bound)
+    let (m, t) = wb_of(&d, &cam.info);
+    assert!(m.is_finite() && t.is_finite());
+    d.wb.tint = f64::INFINITY;
+    assert!(wb_of(&d, &cam.info).1.is_finite());
 }
 
 #[test]
@@ -141,6 +146,11 @@ fn scene_stats_find_the_neutral_cast_and_hue_bands() {
     let band = st.bands[0].unwrap();
     assert!((band.1 - 41.23).abs() < 0.1 && (band.0 - 0.3).abs() < 1e-9, "{band:?}");
     assert!(st.bands[1..].iter().all(Option::is_none));
+    // the same content overlaps fully; an all-blue frame hardly at all
+    assert!((overlap(&st, &st) - 1.0).abs() < 1e-9);
+    let blue = scene_stats(&vec![[40.0, 5.0, -45.0]; 100]);
+    assert!(overlap(&st, &blue) < MIN_OVERLAP, "{}", overlap(&st, &blue));
+    assert_eq!(overlap(&SceneStats::default(), &st), 0.0);
 }
 
 #[test]
