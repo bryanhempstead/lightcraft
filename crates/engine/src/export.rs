@@ -616,6 +616,10 @@ pub struct ExportOptions {
     /// Bits per channel: 8, 16 (PNG, TIFF), 32 (TIFF: float, linear) or 10 (AVIF); `None` = the
     /// format's default (TIFF 16, everything else 8). See [`ExportOptions::effective_depth`].
     pub bit_depth: Option<u8>,
+    /// HDR output for photos edited in HDR: JPEG as an ISO 21496-1 gain map JPEG (the SDR
+    /// rendition plus a gain map, so the file looks right everywhere), 32-bit float TIFF with the
+    /// highlights above SDR white kept. Other formats, and photos without an HDR edit, are SDR.
+    pub hdr: bool,
 }
 
 /// Where Add to Stack puts an exported photo: above or below its original.
@@ -826,6 +830,7 @@ impl Default for ExportOptions {
             color_space: OutputSpace::Srgb,
             icc_profile: None,
             bit_depth: None,
+            hdr: false,
         }
     }
 }
@@ -871,6 +876,7 @@ pub const OPTION_PARAMS: &[&str] = &[
     "watermark",
     "colorSpace",
     "bitDepth",
+    "hdr",
 ];
 
 /// The keys of a `watermark` object ([`Watermark`], camelCase).
@@ -1002,7 +1008,7 @@ impl ExportOptions {
                     }
                     serde_json::from_value::<Resize>(v.clone()).map_err(|e| bad(format!("`{k}`: {e}")))?;
                 }
-                "dontEnlarge" | "removeLocation" | "removePeople" | "keywordHierarchy" | "background" => {
+                "dontEnlarge" | "removeLocation" | "removePeople" | "keywordHierarchy" | "background" | "hdr" => {
                     boolean(k, v)?;
                 }
                 "extCase" => one_of(k, v, &["keep", "lower", "upper"])?,
@@ -1159,6 +1165,7 @@ impl ExportOptions {
                 None => d.icc_profile.clone(),
             },
             bit_depth: u("bitDepth").filter(|b| matches!(b, 8 | 10 | 16 | 32)).map(|b| b as u8),
+            hdr: p.get("hdr").and_then(Value::as_bool).unwrap_or(d.hdr),
         }
     }
 
@@ -1227,6 +1234,7 @@ impl ExportOptions {
             (ExportFormat::Png, Some(16 | 32)) => OutputDepth::U16,
             (ExportFormat::Png, _) => OutputDepth::U8,
             (ExportFormat::Tiff, Some(8)) => OutputDepth::U8,
+            (ExportFormat::Tiff, Some(32)) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Tiff, Some(32)) => OutputDepth::F32Linear,
             (ExportFormat::Tiff, _) => OutputDepth::U16,
             (ExportFormat::Avif, Some(10 | 16 | 32)) => OutputDepth::U16,
@@ -1246,6 +1254,12 @@ impl ExportOptions {
             ExportFormat::Jxl => &[(8, "8-bit"), (16, "16-bit")],
             ExportFormat::Psd => &[(16, "16-bit"), (8, "8-bit")],
         }
+    }
+
+    /// Whether these options write HDR files (for photos edited in HDR): JPEG (gain map) or
+    /// 32-bit float TIFF with [`ExportOptions::hdr`].
+    pub fn hdr_output(&self) -> bool {
+        self.hdr && matches!((self.format, self.bit_depth), (ExportFormat::Jpeg, _) | (ExportFormat::Tiff, Some(32)))
     }
 
     /// The colour space the file is actually written in (AVIF: sRGB).
@@ -1373,13 +1387,8 @@ pub fn encode_image(img: &Rgba8, o: &ExportOptions) -> Result<Vec<u8>, String> {
 
 /// Like [`encode_image`], embedding `meta` (already filtered by the policy) as EXIF + XMP.
 pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
-    let mut img = img.clone();
-    output_sharpen(&mut img, o.sharpen, o.sharpen_amount);
+    let mut img = finish_8bit(img, o);
     let space = o.effective_space();
-    if let Some(wm) = &o.watermark {
-        let wm = Watermark { color: srgb8_in(space, wm.color), target: Some(space), ..wm.clone() };
-        draw_watermark(&mut img, &wm);
-    }
     let mut profile = icc::write_named(named_space(space));
     let mut exif_space = exif_color_space(space);
     if let Some(target) = export_profile(o)? {
@@ -1475,6 +1484,56 @@ pub fn installed_profiles() -> Vec<String> {
     out
 }
 
+/// Output sharpening and the watermark on an 8-bit render in `o.effective_space()`.
+fn finish_8bit(img: &Rgba8, o: &ExportOptions) -> Rgba8 {
+    let mut img = img.clone();
+    output_sharpen(&mut img, o.sharpen, o.sharpen_amount);
+    let space = o.effective_space();
+    if let Some(wm) = &o.watermark {
+        let wm = Watermark { color: srgb8_in(space, wm.color), target: Some(space), ..wm.clone() };
+        draw_watermark(&mut img, &wm);
+    }
+    img
+}
+
+/// Output sharpening and the watermark on a high-bit-depth render.
+fn finish_deep(img: &DeepImage, o: &ExportOptions) -> DeepImage {
+    let mut img = img.clone();
+    output_sharpen_deep(&mut img, o.sharpen, o.sharpen_amount);
+    if let Some(wm) = &o.watermark {
+        let wm = Watermark { color: srgb8_in(img.space, wm.color), target: Some(img.space), ..wm.clone() };
+        draw_watermark_deep(&mut img, &wm);
+    }
+    img
+}
+
+/// Encode an ISO 21496-1 gain map JPEG from the SDR rendition `sdr` (8-bit, in the output space)
+/// and the HDR rendition `hdr` (float linear, same space and size). The gain map is measured
+/// against the base as written, so its 8-bit rounding is handed back by the map.
+pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+    use lightcraft_codecs::gainmap;
+    let base = finish_8bit(sdr, o);
+    let hdr = finish_deep(hdr, o);
+    let DeepSamples::F32(hv) = &hdr.samples else {
+        return Err("HDR export needs a float HDR render".into());
+    };
+    let (w, h) = (base.width, base.height);
+    if (hdr.width, hdr.height) != (w, h) || hv.len() < w * h * 3 {
+        return Err("HDR and SDR renders differ in size".into());
+    }
+    let space = o.effective_space();
+    let trc = space.trc();
+    let sdr_lin: Vec<[f32; 3]> = base.data.iter().map(|p| [0, 1, 2].map(|c| trc.decode(p[c] as f32 / 255.0))).collect();
+    let hdr_lin: &[[f32; 3]] = hv.as_chunks::<3>().0;
+    let (map, gm) = gainmap::compute(&sdr_lin, hdr_lin, w, h, space.luma(), &gainmap::GainMapOptions::default()).map_err(|e| e.to_string())?;
+    let profile = icc::write_named(named_space(space));
+    let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_color_space(space))));
+    let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
+    let em = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
+    let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
+    gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, o.quality, sub, &em).map_err(|e| e.to_string())
+}
+
 /// The codecs' name of an output space (for its ICC profile).
 pub fn named_space(s: OutputSpace) -> NamedSpace {
     match s {
@@ -1511,12 +1570,7 @@ pub fn encode_rendered(r: &lightcraft_pipeline::Rendered, o: &ExportOptions, met
 
 /// Encode a high-bit-depth image (see [`encode_rendered`]).
 pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
-    let mut img = img.clone();
-    output_sharpen_deep(&mut img, o.sharpen, o.sharpen_amount);
-    if let Some(wm) = &o.watermark {
-        let wm = Watermark { color: srgb8_in(img.space, wm.color), target: Some(img.space), ..wm.clone() };
-        draw_watermark_deep(&mut img, &wm);
-    }
+    let mut img = finish_deep(img, o);
     let mut profile = match img.samples {
         DeepSamples::F32(_) => icc::write_matrix_trc(&img.space.rgb_space(), &lightcraft_codecs::Trc::Linear),
         DeepSamples::U16(_) => icc::write_named(named_space(img.space)),
@@ -1765,6 +1819,8 @@ pub struct PreparedExport {
 
 struct RenderWork {
     job: crate::media::RenderJob,
+    /// The HDR rendition of a gain map JPEG (`job` renders its SDR base).
+    hdr_job: Option<crate::media::RenderJob>,
     meta: Option<Metadata>,
     opts: ExportOptions,
 }
@@ -1825,8 +1881,10 @@ fn prepare_guarded(
             let batch = crate::rename::Batch { total, text: o.custom_text.clone(), ..Default::default() };
             wm.text = crate::rename::expand_tokens_in(&wm.text, p, seq, 1, &batch);
         }
+        let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg && p.develop.hdr.enabled;
         let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
-        Work::Render(Box::new(RenderWork { job, meta, opts }))
+        let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
+        Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts }))
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
@@ -1856,9 +1914,16 @@ impl PreparedExport {
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
-                let RenderWork { job, meta, opts } = *w;
+                let RenderWork { job, hdr_job, meta, opts } = *w;
                 let r = job.run().rendered?;
-                let bytes = encode_rendered(&r, &opts, meta.as_ref())?;
+                let bytes = match hdr_job {
+                    Some(hj) => {
+                        let hr = hj.run().rendered?;
+                        let hdr = hr.deep.ok_or("the HDR render has no float samples")?;
+                        encode_gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?
+                    }
+                    None => encode_rendered(&r, &opts, meta.as_ref())?,
+                };
                 Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new() })
             }
             Work::File { path, read, packet, dng, label, size } => {
