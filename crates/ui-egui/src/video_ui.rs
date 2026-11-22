@@ -196,7 +196,7 @@ fn fetch_still(app: &mut LightcraftApp, p: &Photo) {
     let generation = app.video.still_gen;
     let (tx, rx) = channel();
     let spawned = std::thread::Builder::new().name("lc-video-still".into()).spawn(move || {
-        let r = video::frame_rgba(&path, t, size.0.max(size.1) as usize, develop.as_deref(), lightcraft_pipeline::Quality::Draft);
+        let r = video::frame_rgba(&path, t, size.0.max(size.1) as usize, develop.as_deref(), video::playback_quality());
         let _ = tx.send(r);
     });
     if spawned.is_ok() {

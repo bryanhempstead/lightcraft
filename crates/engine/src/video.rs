@@ -14,8 +14,10 @@
 //!
 //! A video's catalogued source path can carry the poster frame's time ([`frame_source`]), so the
 //! normal file loader, thumbnail and preview caches render the poster through the develop
-//! pipeline like any photo: Quick Develop edits show on it. Playback and export apply only the
-//! settings Lightroom Classic applies to video ([`video_settings`]).
+//! pipeline like any photo: its edits show on it. Poster, playback, Capture Frame and export
+//! apply the same settings ([`video_settings`]: the whole Edit panel except what changes a frame's
+//! geometry or is tied to one photo) through the same render ([`develop_frame`], on the GPU when
+//! there is one).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -447,24 +449,28 @@ pub fn load_frame(source: &str, max_edge: usize) -> Result<(Rgb32f, SourceInfo),
 
 // ------------------------------------------------------------------------- edits on video
 
-/// The develop settings Lightroom Classic applies to video (Quick Develop's and a preset's
-/// supported part): treatment / black & white mix, white balance, exposure, contrast, whites,
-/// blacks, tone curve, vibrance, saturation and split toning. Everything else is left out.
+/// The develop settings a video's frames get: the whole Edit panel as Lightroom (desktop)
+/// applies it to video (Classic only takes Quick Develop's part) — profile, treatment and B&W
+/// mix, white balance, every Basic tone slider (Highlights / Shadows too), presence (Texture,
+/// Clarity, Dehaze, Vibrance, Saturation), tone curve, HSL / Color mixer, Point Color, Color
+/// Grading, Detail (sharpening, noise reduction), Effects (vignette, grain) and Calibration.
+/// Left out: what would change a frame's size or geometry (crop, orientation, lens and
+/// perspective corrections), what belongs to one photo's pixels (masks, spots, red eye, Lens
+/// Blur and its depth map, Enhance) and HDR (frames are SDR: its SDR rendition applies).
 pub fn video_settings(s: &DevelopSettings) -> DevelopSettings {
     let d = DevelopSettings::default();
-    let mut v = d.clone();
-    v.version = s.version;
-    v.treatment = s.treatment;
-    v.bw_mix = s.bw_mix;
-    v.wb = s.wb;
-    v.light.exposure = s.light.exposure;
-    v.light.contrast = s.light.contrast;
-    v.light.whites = s.light.whites;
-    v.light.blacks = s.light.blacks;
-    v.curve = s.curve.clone();
-    v.color.vibrance = s.color.vibrance;
-    v.color.saturation = s.color.saturation;
-    v.grading = s.grading;
+    let mut v = s.sdr_rendition().into_owned();
+    v.hdr = d.hdr;
+    v.optics = d.optics;
+    v.geometry = d.geometry;
+    v.crop = d.crop;
+    v.orientation = d.orientation;
+    v.masks = Vec::new();
+    v.spots = Vec::new();
+    v.red_eye = Vec::new();
+    v.lens_blur = d.lens_blur;
+    v.enhance = d.enhance;
+    v.depth = None;
     v
 }
 
@@ -494,11 +500,19 @@ pub fn frame_to_source(img: &Rgba8) -> (Rgb32f, SourceInfo) {
     (lin, SourceInfo { camera_tone: curve, ..SourceInfo::default() })
 }
 
-/// One frame with the video's edits applied (`video_settings` of `s`), same size.
+/// The quality frames are developed at for playback: full where the GPU renders them (the same
+/// render as export's), draft on the CPU so playback keeps up.
+pub fn playback_quality() -> Quality {
+    if lightcraft_gpu::available() { Quality::Full } else { Quality::Draft }
+}
+
+/// One frame with the video's edits applied (`video_settings` of `s`), same size: the render the
+/// poster, the Loupe player, Capture Frame and export all use (on the GPU when there is one,
+/// [`crate::media::develop`]).
 pub fn develop_frame(img: &Rgba8, s: &DevelopSettings, quality: Quality) -> Rgba8 {
     let (src, info) = frame_to_source(img);
     let req = RenderRequest { quality, ..RenderRequest::fit(img.width.max(1), img.height.max(1)) };
-    let out = lightcraft_pipeline::render(&src, &info, &video_settings(s), &req).image;
+    let out = crate::media::develop(&Arc::new(src), &info, &video_settings(s), &req, None, true).image;
     if out.width == img.width && out.height == img.height {
         out
     } else {
@@ -599,6 +613,7 @@ impl Player {
         let error = Arc::new(std::sync::Mutex::new(None));
         let (d2, e2) = (done.clone(), error.clone());
         let fps = if info.fps.is_finite() && info.fps > 0.5 { info.fps } else { 25.0 };
+        let quality = playback_quality();
         std::thread::Builder::new()
             .name("lc-video-play".into())
             .spawn(move || {
@@ -614,7 +629,7 @@ impl Player {
                     }
                     let Some(mut image) = Rgba8::from_bytes(w as usize, h as usize, &buf) else { break };
                     if let Some(s) = &develop {
-                        image = develop_frame(&image, s, Quality::Draft);
+                        image = develop_frame(&image, s, quality);
                     }
                     if tx.send(Frame { t: from + n as f64 / fps, image }).is_err() {
                         break; // the player went away
