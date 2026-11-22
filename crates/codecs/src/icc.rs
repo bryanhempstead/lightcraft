@@ -330,6 +330,60 @@ fn linear_rec2020_profile() -> ColorProfile {
     p
 }
 
+/// ColorMatch RGB (E08), from its published numbers: D50 white, gamma 1.8, primaries
+/// 0.630/0.340, 0.295/0.605, 0.150/0.075.
+pub fn colormatch_profile() -> Vec<u8> {
+    let space = RgbSpace {
+        name: "ColorMatch RGB",
+        r: lightcraft_color::Xy::new(0.630, 0.340),
+        g: lightcraft_color::Xy::new(0.295, 0.605),
+        b: lightcraft_color::Xy::new(0.150, 0.075),
+        white: D50,
+    };
+    write_v2(&space, &Trc::Gamma(1.8), "ColorMatch RGB")
+}
+
+/// Largest ICC profile an export takes (printer profiles with big LUTs are a few MB).
+pub const MAX_EXPORT_ICC: usize = 16 << 20;
+
+/// Whether `icc` can be an export's target profile: it parses, and its device space is RGB.
+pub fn check_export_profile(icc: &[u8]) -> std::result::Result<(), String> {
+    if icc.len() > MAX_EXPORT_ICC {
+        return Err("the profile is larger than 16 MB".into());
+    }
+    let p = std::panic::catch_unwind(|| ColorProfile::new_from_slice(icc)).map_err(|_| "the profile can't be read".to_string())?;
+    let p = p.map_err(|e| format!("not an ICC profile: {e:?}"))?;
+    if p.color_space != DataColorSpace::Rgb {
+        return Err("an export profile must be an RGB profile (this is not)".into());
+    }
+    Ok(())
+}
+
+/// Convert interleaved RGB / RGBA samples (`channels` 3 or 4; alpha kept) in place from profile
+/// `from` to profile `to` (relative colorimetric). `max` is the samples' full scale (255 or 65535).
+pub fn convert_samples(from: &[u8], to: &[u8], samples: &mut [f32], channels: usize) -> std::result::Result<(), String> {
+    let run = || -> std::result::Result<(), String> {
+        let src = ColorProfile::new_from_slice(from).map_err(|e| format!("source profile: {e:?}"))?;
+        let dst = ColorProfile::new_from_slice(to).map_err(|e| format!("target profile: {e:?}"))?;
+        let layout = match channels {
+            3 => Layout::Rgb,
+            4 => Layout::Rgba,
+            _ => return Err("RGB or RGBA samples only".into()),
+        };
+        let opts = TransformOptions { rendering_intent: RenderingIntent::RelativeColorimetric, ..TransformOptions::default() };
+        let t = src.create_transform_f32(layout, &dst, layout, opts).map_err(|e| format!("profile transform: {e:?}"))?;
+        const PIXELS: usize = 1 << 16;
+        let mut out = vec![0f32; PIXELS * channels];
+        for chunk in samples.chunks_mut(PIXELS * channels) {
+            let o = out.get_mut(..chunk.len()).ok_or("buffer")?;
+            t.transform(chunk, o).map_err(|e| format!("profile transform: {e:?}"))?;
+            chunk.copy_from_slice(o);
+        }
+        Ok(())
+    };
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)).unwrap_or_else(|_| Err("the profile transform failed".into()))
+}
+
 /// Convert device samples (0..1, interleaved, `channels` = 1, 3 or 4 matching the profile's colour
 /// model) to linear Rec.2020 through a full CMS transform. `None` if the profile cannot be applied.
 pub(crate) fn cms_to_linear_rec2020(icc: &[u8], samples: &[f32], channels: usize) -> Option<Vec<[f32; 3]>> {

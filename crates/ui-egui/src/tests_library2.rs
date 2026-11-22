@@ -213,3 +213,20 @@ fn export_dialog_offers_psd_and_jpeg_xl() {
     );
     shot(&mut h, "e07-export-formats.png");
 }
+
+/// E08: the Export dialog's Profile popup (ColorMatch RGB, installed profiles).
+#[test]
+fn export_dialog_profile_popup() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let id = s.catalog.photos().next().unwrap().id.0;
+    s.execute("library.select", &json!({"ids": [id]})).unwrap();
+    let mut h = headless(s);
+    h.app.run("dialog.export", json!({})).unwrap();
+    if let Some(crate::state::Dialog::Export { opts, .. }) = &mut h.app.ui.dialog {
+        opts.icc_profile = Some("colorMatch".into());
+    }
+    settle(&mut h);
+    let w = request(&mut h, "ui.widgets", json!({})).to_string();
+    assert!(w.contains("combo:exportIccProfile"), "{w}");
+    shot(&mut h, "e08-export-profile.png");
+}

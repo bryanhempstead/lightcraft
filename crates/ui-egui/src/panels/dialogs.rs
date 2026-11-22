@@ -810,6 +810,41 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             &mut opts.color_space,
                         );
                     }
+                    // E08: convert to another profile (ColorMatch RGB, or any RGB profile on this Mac)
+                    if matches!(opts.format, F::Jpeg | F::Png | F::Tiff | F::Psd) {
+                        field(ui, "Profile", |ui| {
+                            let shown = match opts.icc_profile.as_deref() {
+                                None => crate::i18n::tr("the space above").to_string(),
+                                Some(x) if x.eq_ignore_ascii_case("colorMatch") => "ColorMatch RGB".to_string(),
+                                Some(x) => std::path::Path::new(x).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| x.to_string()),
+                            };
+                            let key = egui::Id::new("export-installed-profiles");
+                            let installed: Vec<String> = match ui.data(|d| d.get_temp::<Vec<String>>(key)) {
+                                Some(v) => v,
+                                None => {
+                                    let v = lightcraft_engine::export::installed_profiles();
+                                    ui.data_mut(|d| d.insert_temp(key, v.clone()));
+                                    v
+                                }
+                            };
+                            let r = egui::ComboBox::from_id_salt("exportIccProfile").width(260.0).selected_text(shown).show_ui(ui, |ui| {
+                                if ui.selectable_label(opts.icc_profile.is_none(), crate::i18n::tr("the space above")).clicked() {
+                                    opts.icc_profile = None;
+                                }
+                                if ui.selectable_label(opts.icc_profile.as_deref() == Some("colorMatch"), "ColorMatch RGB").clicked() {
+                                    opts.icc_profile = Some("colorMatch".into());
+                                }
+                                ui.separator();
+                                for path in &installed {
+                                    let name = std::path::Path::new(path).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                    if ui.selectable_label(opts.icc_profile.as_deref() == Some(path.as_str()), name).clicked() {
+                                        opts.icc_profile = Some(path.clone());
+                                    }
+                                }
+                            });
+                            crate::widgets::register(ui.ctx(), "combo:exportIccProfile", r.response.rect);
+                        });
+                    }
                     if matches!(opts.format, F::Jpeg | F::Avif | F::Jxl) {
                         let mut q = opts.quality as f64;
                         if num(ui, &QUALITY, &mut q) {

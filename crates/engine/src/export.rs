@@ -609,6 +609,10 @@ pub struct ExportOptions {
     pub watermark: Option<Watermark>,
     /// Output colour space (AVIF is always sRGB: its muxer cannot embed a profile).
     pub color_space: OutputSpace,
+    /// E08: an ICC profile the file is converted to and tagged with (`colorMatch`, or the path of an
+    /// `.icc` / `.icm` RGB profile): the photo is rendered in ProPhoto RGB, then converted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icc_profile: Option<String>,
     /// Bits per channel: 8, 16 (PNG, TIFF), 32 (TIFF: float, linear) or 10 (AVIF); `None` = the
     /// format's default (TIFF 16, everything else 8). See [`ExportOptions::effective_depth`].
     pub bit_depth: Option<u8>,
@@ -820,6 +824,7 @@ impl Default for ExportOptions {
             keyword_hierarchy: false,
             watermark: None,
             color_space: OutputSpace::Srgb,
+            icc_profile: None,
             bit_depth: None,
         }
     }
@@ -832,6 +837,7 @@ pub const TARGET_PARAMS: &[&str] = &["id", "ids", "path", "dir", "preset", "back
 /// The export option params [`ExportOptions::from_json`] reads (and [`ExportOptions::to_json`] writes).
 pub const OPTION_PARAMS: &[&str] = &[
     "format",
+    "iccProfile",
     "quality",
     "resize",
     "longEdge",
@@ -1009,7 +1015,7 @@ impl ExportOptions {
                 "afterApp" => {
                     string(cmd, k, v)?;
                 }
-                "naming" | "subfolder" | "path" | "dir" | "preset" | "customText" => {
+                "naming" | "subfolder" | "path" | "dir" | "preset" | "customText" | "iccProfile" => {
                     string(cmd, k, v)?;
                 }
                 "sharpen" => one_of(k, v, &["none", "screen", "matte", "glossy"])?,
@@ -1147,6 +1153,11 @@ impl ExportOptions {
             }
             .filter(|w: &Watermark| !w.text.trim().is_empty() || !w.image.trim().is_empty()),
             color_space: s("colorSpace").and_then(OutputSpace::parse).unwrap_or(d.color_space),
+            icc_profile: match p.get("iccProfile") {
+                Some(serde_json::Value::String(x)) if !x.trim().is_empty() => Some(x.trim().to_string()),
+                Some(_) => None,
+                None => d.icc_profile.clone(),
+            },
             bit_depth: u("bitDepth").filter(|b| matches!(b, 8 | 10 | 16 | 32)).map(|b| b as u8),
         }
     }
@@ -1241,6 +1252,8 @@ impl ExportOptions {
     pub fn effective_space(&self) -> OutputSpace {
         match (self.format, self.color_space) {
             (ExportFormat::Avif, _) => OutputSpace::Srgb,
+            // E08: rendered wide, then converted to the chosen profile
+            _ if self.icc_profile.is_some() && !matches!(self.format, ExportFormat::Jxl | ExportFormat::Webp) => OutputSpace::ProPhoto,
             // a lossy JPEG XL declares its colours by enum: no Adobe RGB / ProPhoto one
             (ExportFormat::Jxl, OutputSpace::AdobeRgb | OutputSpace::ProPhoto) if self.quality < 100 => OutputSpace::Srgb,
             (_, s) => s,
@@ -1367,8 +1380,19 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
         let wm = Watermark { color: srgb8_in(space, wm.color), target: Some(space), ..wm.clone() };
         draw_watermark(&mut img, &wm);
     }
-    let profile = icc::write_named(named_space(space));
-    let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_color_space(space))));
+    let mut profile = icc::write_named(named_space(space));
+    let mut exif_space = exif_color_space(space);
+    if let Some(target) = export_profile(o)? {
+        // E08: ProPhoto → the chosen profile (8-bit)
+        let mut f: Vec<f32> = img.data.iter().flat_map(|p| p.iter().map(|v| f32::from(*v) / 255.0)).collect();
+        icc::convert_samples(&profile, &target, &mut f, 4)?;
+        for (px, c) in img.data.iter_mut().zip(f.as_chunks::<4>().0) {
+            *px = [0, 1, 2, 3].map(|k| (c[k].clamp(0.0, 1.0) * 255.0).round() as u8);
+        }
+        profile = target;
+        exif_space = 0xFFFF;
+    }
+    let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_space)));
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let e = EncodeImage::rgba8(&img);
@@ -1409,6 +1433,46 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
         f @ (ExportFormat::Original | ExportFormat::Dng) => return Err(format!("{f:?} export does not encode pixels")),
     };
     r.map_err(|e| e.to_string())
+}
+
+/// E08: the ICC profile an export converts to (ColorMatch RGB, or a profile file), checked.
+pub fn export_profile(o: &ExportOptions) -> Result<Option<Vec<u8>>, String> {
+    let Some(p) = o.icc_profile.as_deref() else { return Ok(None) };
+    if matches!(o.format, ExportFormat::Jxl | ExportFormat::Webp | ExportFormat::Avif | ExportFormat::Original | ExportFormat::Dng) {
+        return Ok(None);
+    }
+    let bytes = if p.eq_ignore_ascii_case("colorMatch") {
+        icc::colormatch_profile()
+    } else {
+        let len = std::fs::metadata(p).map_err(|e| format!("{p}: {e}"))?.len();
+        if len > icc::MAX_EXPORT_ICC as u64 {
+            return Err(format!("{p}: larger than 16 MB, not an ICC profile"));
+        }
+        std::fs::read(p).map_err(|e| format!("{p}: {e}"))?
+    };
+    icc::check_export_profile(&bytes).map_err(|e| format!("{p}: {e}"))?;
+    Ok(Some(bytes))
+}
+
+/// RGB ICC profiles installed on this Mac (ColorSync folders), by file path, for the Export
+/// dialog's Profile popup.
+pub fn installed_profiles() -> Vec<String> {
+    let mut dirs = vec![std::path::PathBuf::from("/Library/ColorSync/Profiles"), std::path::PathBuf::from("/System/Library/ColorSync/Profiles")];
+    if let Some(h) = std::env::var_os("HOME") {
+        dirs.push(std::path::PathBuf::from(h).join("Library/ColorSync/Profiles"));
+    }
+    let mut out = Vec::new();
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten().take(500) {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("icc") || x.eq_ignore_ascii_case("icm")) {
+                out.push(p.display().to_string());
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// The codecs' name of an output space (for its ICC profile).
@@ -1453,11 +1517,22 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
         let wm = Watermark { color: srgb8_in(img.space, wm.color), target: Some(img.space), ..wm.clone() };
         draw_watermark_deep(&mut img, &wm);
     }
-    let profile = match img.samples {
+    let mut profile = match img.samples {
         DeepSamples::F32(_) => icc::write_matrix_trc(&img.space.rgb_space(), &lightcraft_codecs::Trc::Linear),
         DeepSamples::U16(_) => icc::write_named(named_space(img.space)),
     };
-    let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_color_space(img.space))));
+    let mut exif_space = exif_color_space(img.space);
+    if let (Some(target), DeepSamples::U16(v)) = (export_profile(o)?, &mut img.samples) {
+        // E08: ProPhoto → the chosen profile (16-bit)
+        let mut f: Vec<f32> = v.iter().map(|x| f32::from(*x) / 65535.0).collect();
+        icc::convert_samples(&profile, &target, &mut f, 3)?;
+        for (x, c) in v.iter_mut().zip(&f) {
+            *x = (c.clamp(0.0, 1.0) * 65535.0).round() as u16;
+        }
+        profile = target;
+        exif_space = 0xFFFF;
+    }
+    let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_space)));
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
     let meta = EncodeMeta { icc: Some(&profile), exif: exif.as_deref(), xmp: xmp.as_deref(), ppi: Some(o.ppi) };
     let (w, h) = (img.width as u32, img.height as u32);
