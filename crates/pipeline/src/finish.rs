@@ -26,6 +26,11 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 const PARAMETRIC_AMOUNT: f32 = 0.11;
 const PARAMETRIC_WIDTH: f32 = 1.05;
 
+/// Camera Raw's measured parametric curve (R08, [`crate::parametric_adobe`]) instead of the
+/// preview-fitted one. Off: alone it makes Bryan's acceptance set worse (3.85 → 4.04 ΔE); it goes
+/// on with [`ADOBE_HS_MEASURED`] (`docs/lr-match.md` → *Round 7*).
+const PARAMETRIC_MEASURED: bool = false;
+
 /// Camera Raw's measured Highlights / Shadows (R02, [`crate::tone::lr::adobe_hs_lut`]) over an
 /// Adobe base instead of the preview-fitted tables. Off: closer to Camera Raw on Bryan's raws
 /// (oracle ΔE with his tone sliders 3.88 → 2.67) but worse on the acceptance set (4.01 → 4.33)
@@ -91,11 +96,14 @@ fn curve_luts(c: &ToneCurve, look: Option<&[Vec<Point>; 4]>) -> Option<Curves> {
 }
 
 /// The parametric curve (encoded domain), `None` when all four regions are 0. Fitted on previews
-/// (`PARAMETRIC_AMOUNT`, `PARAMETRIC_WIDTH`); Camera Raw's own curve is measured (R08) but stays
-/// off until the Basic-tone tables are refitted on top of it.
+/// (`PARAMETRIC_AMOUNT`, `PARAMETRIC_WIDTH`), or Camera Raw's measured curve
+/// ([`parametric_adobe_lut`]) with [`PARAMETRIC_MEASURED`].
 fn parametric_lut(c: &ToneCurve) -> Option<Lut1> {
     if c.highlights == 0.0 && c.lights == 0.0 && c.darks == 0.0 && c.shadows == 0.0 {
         return None;
+    }
+    if PARAMETRIC_MEASURED {
+        return Some(parametric_adobe_lut(c));
     }
     let (s1, s2, s3) = ((c.split_shadows / 100.0) as f32, (c.split_mid / 100.0) as f32, (c.split_highlights / 100.0) as f32);
     let regions = [(0.0, s1, c.shadows), (s1, s2, c.darks), (s2, s3, c.lights), (s3, 1.0, c.highlights)];
@@ -117,6 +125,58 @@ fn parametric_lut(c: &ToneCurve) -> Option<Lut1> {
         base.v[i] = base.v[i].max(base.v[i - 1]);
     }
     Some(base)
+}
+
+/// Camera Raw's parametric curve: its measured change per region ([`crate::parametric_adobe`]),
+/// interpolated in the slider value and summed, with the input moved from the photo's splits to the
+/// default 25 / 50 / 75 (exact for Bryan's preset: 0.3 of a level; non-default splits are
+/// approximate, ~2–6 levels).
+fn parametric_adobe_lut(c: &ToneCurve) -> Lut1 {
+    use crate::parametric_adobe::{PARAMETRIC_N, PARAMETRIC_STOPS, PARAMETRIC_TABLE};
+    let fin = |v: f64, d: f64| if v.is_finite() { v } else { d };
+    // the slider value as (stop index, weight) pairs into the table (0 contributes nothing)
+    let weights = |v: f64| -> [(usize, f32); 2] {
+        let v = fin(v, 0.0).clamp(-100.0, 100.0) as f32;
+        let k = [PARAMETRIC_STOPS[0], PARAMETRIC_STOPS[1], 0.0, PARAMETRIC_STOPS[2], PARAMETRIC_STOPS[3]];
+        let i = (0..4).find(|&i| v <= k[i + 1]).unwrap_or(3);
+        let t = ((v - k[i]) / (k[i + 1] - k[i])).clamp(0.0, 1.0);
+        // stops 0, 1, (zero), 2, 3 → table index or none
+        let idx = |j: usize| match j {
+            0 => Some(0),
+            1 => Some(1),
+            3 => Some(2),
+            4 => Some(3),
+            _ => None,
+        };
+        let a = idx(i).map_or((0, 0.0), |s| (s, 1.0 - t));
+        let b = idx(i + 1).map_or((0, 0.0), |s| (s, t));
+        [a, b]
+    };
+    let regions = [c.shadows, c.darks, c.lights, c.highlights].map(weights);
+    let splits = [fin(c.split_shadows, 25.0), fin(c.split_mid, 50.0), fin(c.split_highlights, 75.0)].map(|v| (v / 100.0).clamp(0.0, 1.0) as f32);
+    let knots = [0.0, splits[0], splits[1].max(splits[0]), splits[2].max(splits[1]).max(splits[0]), 1.0];
+    let warp = |x: f32| {
+        // the photo's splits → the default ones the table was measured with
+        let i = (0..4).find(|&i| x <= knots[i + 1]).unwrap_or(3);
+        let span = knots[i + 1] - knots[i];
+        let t = if span > 1e-6 { ((x - knots[i]) / span).clamp(0.0, 1.0) } else { 0.0 };
+        (i as f32 + t) * 0.25
+    };
+    Lut1::from_fn(CURVE_LUT_N, |x| {
+        let f = warp(x) * (PARAMETRIC_N - 1) as f32;
+        let j = (f as usize).min(PARAMETRIC_N - 2);
+        let t = f - j as f32;
+        let mut d = 0.0;
+        for (r, w) in regions.iter().enumerate() {
+            for &(s, k) in w {
+                if k != 0.0 {
+                    let row = &PARAMETRIC_TABLE[r][s];
+                    d += k * (row[j] + (row[j + 1] - row[j]) * t);
+                }
+            }
+        }
+        (x + d).clamp(0.0, 1.0)
+    })
 }
 
 /// Vignette (post-crop) parameters.

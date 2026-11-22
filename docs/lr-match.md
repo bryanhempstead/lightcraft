@@ -639,3 +639,10 @@ parametric curve, 4.39 / 10.9 / 27 without it; Summer Fields M262 4.45 → 5.04�
 Next: a richer H/S model (the top end; texture-dependent lift), then R16 masks against the oracle
 (local Exposure / Shadows sidecars), then switch R02 + R08 on together and refit on split A.
 
+### Parametric curve (R08)
+
+The measured table is now in the code (`parametric_adobe.rs`, `finish::parametric_adobe_lut`) but
+off (`finish::PARAMETRIC_MEASURED`): alone it made the acceptance set worse last round (3.85 →
+4.04); on top of the measured H/S model it helps (4.39 → 4.33, ΔL* −0.42 → +0.74), so the two go
+on together once H/S passes.
+
