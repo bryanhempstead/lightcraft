@@ -28,3 +28,10 @@ Detail and Effects (round 9): `make_detail.py SET grain|grain6000|sharp|nr` (gre
 sizes, an edge / grating / texture chart, noisy flats), then `grain_ana.py` / `sharp_ana.py` /
 `nr_ana.py SET [LCDIR]`. Lateral CA on real raws: `make_ca.py SET sample.json` (profile × Remove
 CA sidecars, full size) and `ca_ana.py SET [LCDIR]`.
+
+Scene tone map (round 11: Clarity, positive Dehaze, the Highlights / Shadows rule; `scene_cr`):
+`make_r11.py SET syn,mask,real ACC` (synthetic scenes incl. a hazy landscape and a dark room, masks next
+to global sliders, Bryan's readable split-A raws with one-slider sidecars), `lcrun.sh SET OUT [filter]`
+(now also the raw clones in SET/v, at 1536 px), `r11cmp.py A.txt B.txt` (two `lccmp.py` runs side by side,
+per-setting means), `clafit.py SET DUMPDIR` (refits Clarity's weights from `LIGHTCRAFT_CLARITY_DUMP` term
+dumps). `LIGHTCRAFT_HS_CR=1` renders with the H/S rule while it is off.

@@ -19,13 +19,15 @@ use lightcraft_raster::{Plane, par_rows};
 pub const MEASURED: bool = true;
 
 /// Take each channel's detail in the camera's own (white-balanced) RGB when the source has a
-/// camera colour model (round 11), as RAWmakase does: the camera matrix then spreads a colour
-/// edge's channel detail into chroma the way Camera Raw's Texture does at colour edges.
-pub const CAMERA_SPACE: bool = true;
+/// camera colour model, as RAWmakase does. Off: measured worse (round 11, oracle grid Texture
+/// +50 / −50: 3.15 / 2.26 ΔE → 3.39 / 2.49; Bryan's raws unchanged at 1.46). Camera Raw's colour
+/// effect is a chroma change of saturated colours (+8 C* at +50 on the grid's most saturated
+/// patches, ours +0.5): each channel's large log detail is compressed away here, not there.
+pub const CAMERA_SPACE: bool = false;
 
 /// The working → camera matrices Texture's detail is taken in for `info` (and back), if any.
 pub fn space(info: &crate::SourceInfo) -> Option<([[f32; 3]; 3], [[f32; 3]; 3])> {
-    let cw = info.camera_wb.as_ref().filter(|_| CAMERA_SPACE && !crate::scene_cr::r11_off())?;
+    let cw = info.camera_wb.as_ref().filter(|_| CAMERA_SPACE)?;
     let ok = |m: &[[f32; 3]; 3]| m.iter().flatten().all(|v| v.is_finite());
     (ok(&cw.from_working) && ok(&cw.to_working)).then_some((cw.from_working, cw.to_working))
 }

@@ -656,10 +656,10 @@ impl FinishParams {
     ) -> FinishParams {
         use crate::scene_cr as sc;
         let masks = |f: fn(&LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
-        let clarity = sc::CLARITY_MEASURED && !sc::r11_off() && (self.clar != 0.0 || masks(|a| a.clarity));
+        let clarity = sc::CLARITY_MEASURED && (self.clar != 0.0 || masks(|a| a.clarity));
         let hs_used = s.light.highlights != 0.0 || s.light.shadows != 0.0 || masks(|a| a.highlights) || masks(|a| a.shadows);
         let hs = sc::hs_measured() && self.adobe.is_some() && hs_used;
-        let dehaze = sc::HAZE_MEASURED && !sc::r11_off() && (self.dehaze > 0.0 || s.masks.iter().any(|m| m.adjust.dehaze > 0.0));
+        let dehaze = sc::HAZE_MEASURED && (self.dehaze > 0.0 || s.masks.iter().any(|m| m.adjust.dehaze > 0.0));
         let map = map.filter(|_| clarity || hs);
         let haze = haze.filter(|_| dehaze);
         // a flat stand-in map when only the haze is needed (its grid is the haze's)
@@ -679,7 +679,7 @@ impl FinishParams {
             let _ = t.map.detail();
         }
         if hs && let Some(m) = map {
-            let hs_ev = if sc::hs_before_exposure() { 0.0 } else { self.ev };
+            let hs_ev = if sc::HS_BEFORE_EXPOSURE { 0.0 } else { self.ev };
             t.hs = Some((m.hs_curves(hs_ev), (s.light.shadows / 100.0) as f32, (s.light.highlights / 100.0) as f32));
             t.hs_shift = self.ev - hs_ev;
             self.hs_lut = None;

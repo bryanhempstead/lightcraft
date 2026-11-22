@@ -176,6 +176,13 @@ fresh ones. The tests skip (pass with a note) when no adapter exists.
 Remaining differences come from f32 vs f64 coordinate math, fast-math transcendental functions on
 Metal and running-sum order in the box filters — all far below one 8-bit step.
 
+Camera Raw's scene tone map (Bryan's fork, `lightcraft_pipeline::scene_cr`: Clarity, positive
+Dehaze, the Highlights / Shadows rule) is measured on the CPU from the GPU's read-back image (a
+512 px map, once per image) and read by the kernel from the aux table; `crates/gpu/tests/scene_cr.rs`
+checks it with the same bounds, except that positive Dehaze may differ by 5 LSB where it takes a
+channel to almost 0 (the subtraction of the airlight keeps the last bits of the GPU's own image;
+mean < 0.15 LSB).
+
 ## Measurements
 `render_bench` on `corpus/raw/arw-sony-a7m3-compressed.arw` (24 MP; loupe = 2560 px preview →
 1920×1280), min of 7 runs, wall clock, on a heavily shared machine (load average 60–110 on 14 cores,

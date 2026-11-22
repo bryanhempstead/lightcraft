@@ -324,7 +324,7 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
         if q == Quality::Draft { sigma.min(24.0) } else { sigma }
     });
     // LightCraft's band for Clarity the scene map does not render (`scene_cr::clarity_by_model`)
-    let model = crate::scene_cr::CLARITY_MEASURED && !crate::scene_cr::r11_off();
+    let model = crate::scene_cr::CLARITY_MEASURED;
     let negative = s.effects.clarity < 0.0 || s.masks.iter().any(|m| m.adjust.clarity < 0.0);
     let band = !model || (!crate::scene_cr::CLARITY_NEGATIVE_MEASURED && negative);
     let clarity = (band && (s.effects.clarity != 0.0 || local_any(|a| a.clarity))).then(|| (0.012 * ppl).max(1.0));

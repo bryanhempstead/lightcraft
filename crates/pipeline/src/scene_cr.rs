@@ -82,21 +82,10 @@ pub fn force_hs_measured(on: bool) {
     HS_FORCED.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
-// TUNE-TEMP (removed before commit): LC_R11_OFF=1 renders as before round 11
-pub fn r11_off() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("LC_R11_OFF").is_ok_and(|v| v == "1"))
-}
-
 /// Highlights / Shadows read the photo before Exposure (round 8's `hsorder` reading); `false`:
 /// RAWmakase's map at the render's Exposure, which round 11 measured closer on Bryan's tone recipe
 /// (Exposure −1.1 with H +30 / S +69: 3.37 before Exposure, 3.22 at it, mean of 9 raws).
 pub const HS_BEFORE_EXPOSURE: bool = false;
-// TUNE-TEMP
-pub fn hs_before_exposure() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("LC_HS_PRE").map_or(HS_BEFORE_EXPOSURE, |v| v == "1"))
-}
 
 /// Long edge of the map (RAWmakase's `MAP_EDGE`).
 pub const MAP_EDGE: usize = 512;
@@ -639,14 +628,8 @@ impl Haze {
 /// The fraction of the haze Dehaze `s` (0 to 1) removes.
 pub fn omega(s: f32) -> f32 {
     let s = if s.is_finite() { s.clamp(0., 1.) } else { 0. };
-    // TUNE-TEMP (removed before commit)
-    static T: OnceLock<[(f32, f32); 4]> = OnceLock::new();
-    let om = T.get_or_init(|| {
-        let v: Vec<f32> = std::env::var("LC_OMEGA").ok().map(|e| e.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default();
-        if v.len() == 3 { [(0., 0.), (0.2, v[0]), (0.4, v[1]), (1., v[2])] } else { OMEGA }
-    });
-    let j = om.windows(2).position(|w| s <= w[1].0).unwrap_or(om.len() - 2);
-    let ((s0, w0), (s1, w1)) = (om[j], om[j + 1]);
+    let j = OMEGA.windows(2).position(|w| s <= w[1].0).unwrap_or(OMEGA.len() - 2);
+    let ((s0, w0), (s1, w1)) = (OMEGA[j], OMEGA[j + 1]);
     w0 + (w1 - w0) * (s - s0) / (s1 - s0)
 }
 
@@ -1047,9 +1030,9 @@ impl RuleStats {
 pub fn needs(s: &lightcraft_develop::DevelopSettings) -> (bool, bool) {
     let effects = s.section_enabled("effects");
     let masks = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
-    let clarity = CLARITY_MEASURED && !r11_off() && ((effects && s.effects.clarity != 0.0) || masks(|a| a.clarity));
+    let clarity = CLARITY_MEASURED && ((effects && s.effects.clarity != 0.0) || masks(|a| a.clarity));
     let hs = hs_measured() && (s.light.highlights != 0.0 || s.light.shadows != 0.0 || masks(|a| a.highlights) || masks(|a| a.shadows));
-    let haze = HAZE_MEASURED && !r11_off() && ((effects && s.effects.dehaze > 0.0) || s.masks.iter().any(|m| m.adjust.dehaze > 0.0));
+    let haze = HAZE_MEASURED && ((effects && s.effects.dehaze > 0.0) || s.masks.iter().any(|m| m.adjust.dehaze > 0.0));
     (clarity || hs, haze)
 }
 

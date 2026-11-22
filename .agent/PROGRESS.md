@@ -6,9 +6,16 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
-- [ ] (fidelity agent round 11, 2026-11-22, branch worktree-agent-afb4702f45ae2dfcf, in progress) **Render round 11** —
-  Clarity (RAWmakase 4-scale), positive Dehaze (RAWmakase haze.rs), Texture colour edges, masks' H/S/Clarity/Dehaze,
-  global H/S (R02) against the Camera Raw oracle + acceptance gate. docs/lr-match.md → Round 11.
+- [ ] (fidelity agent round 11, 2026-11-22, branch worktree-agent-afb4702f45ae2dfcf, not merged) **Render round 11**
+  (docs/lr-match.md → Round 11): `crates/pipeline/src/scene_cr.rs` ports RAWmakase's scene map (512 px measurement
+  copy, guided base) with its Clarity, haze model and Highlights / Shadows global rule (networks copied verbatim,
+  NOTICE); CPU + GPU (`crates/gpu/tests/scene_cr.rs`). Clarity evaluated at each pixel's level and refit on the oracle
+  (`oracle/clafit.py`, `LIGHTCRAFT_CLARITY_DUMP`): raws +100 3.75 → 2.51 ΔE; negative Clarity keeps the old band.
+  Positive Dehaze: raws +100 10.1 → 4.7 (grid +15/+30 slightly worse). H/S rule **off** (`HS_MEASURED`;
+  `LIGHTCRAFT_HS_CR=1` measures it): oracle much better, acceptance 3.99 → 3.96 / passes 25 → 31 but the R6 cells
+  fail the gate (needs.you #171). Texture in camera RGB measured worse (off). New oracle set `make_r11.py`
+  (synthetic + 9 raws), `lcrun.sh` renders raws, `r11cmp.py`. Full 183-photo gate ran (LOT48 up): pass.
+  Next: R6 shadows lift of the H/S rule, Clarity's regional moves, Texture's chroma at colour edges.
 - [ ] (AI masks agent, 2026-11-22, branch worktree-agent-af352bb019bacca9d, not merged) **AI masks — parity K + REM rows**
   Done: 08552d289 SAM 3 downloads work (5 ungated HF copies, every file hash-pinned; DEFAULT_MIRRORS was empty);
   365717b7c SegFormer in pure Rust (crates/segment/src/segformer.rs, ported from candle-transformers) + three
