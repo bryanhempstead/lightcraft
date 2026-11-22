@@ -673,6 +673,70 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             *opts = o;
                         }
                     });
+                    // E05: several presets at once — pick them (click = just this one, ⌘-click adds
+                    // or removes one, ⇧-click the run from the last), each exports into a folder
+                    // named after it under the chosen folder
+                    let bid = egui::Id::new("export-batch-presets");
+                    let (mut picked, mut last): (Vec<String>, Option<usize>) = ui.data(|d| d.get_temp(bid)).unwrap_or_default();
+                    let names: Vec<String> = app.session.all_export_presets().into_iter().map(|(p, _)| p.name).collect();
+                    field(ui, "Several", |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+                            let mods = ui.input(|i| i.modifiers);
+                            for (i, n) in names.iter().enumerate() {
+                                let on = picked.contains(n);
+                                if crate::widgets::text_button(ui, &format!("exportBatch-{i}"), n, on).clicked() {
+                                    if mods.shift && let Some(a) = last {
+                                        let (lo, hi) = (a.min(i), a.max(i));
+                                        for m in names.iter().take(hi + 1).skip(lo) {
+                                            if !picked.contains(m) {
+                                                picked.push(m.clone());
+                                            }
+                                        }
+                                    } else if mods.command {
+                                        if on {
+                                            picked.retain(|x| x != n);
+                                        } else {
+                                            picked.push(n.clone());
+                                        }
+                                    } else {
+                                        picked = vec![n.clone()];
+                                    }
+                                    last = Some(i);
+                                }
+                            }
+                            if crate::widgets::text_button(ui, "exportBatchAll", "all.", false).clicked() {
+                                picked = names.clone();
+                            }
+                            if crate::widgets::text_button(ui, "exportBatchNone", "none.", false).clicked() {
+                                picked.clear();
+                            }
+                        });
+                    });
+                    if !picked.is_empty() {
+                        field(ui, "", |ui| {
+                            let label = format!("export.{}.presets.", picked.len());
+                            if crate::widgets::text_button(ui, "exportBatchRun", &label, false)
+                                .on_hover_text(crate::i18n::tr("Export with each checked preset, each into a folder named after it"))
+                                .clicked()
+                            {
+                                let order: Vec<String> = names.iter().filter(|n| picked.contains(n)).cloned().collect();
+                                let mut params = json!({"presets": order});
+                                if !dir.trim().is_empty() {
+                                    params["dir"] = json!(dir.trim());
+                                }
+                                match app.run("app.export", params) {
+                                    Ok(v) => {
+                                        let n = v["presets"].as_array().map_or(0, Vec::len);
+                                        app.toast(ui.ctx(), format!("Exported with {n} presets"));
+                                        close = true;
+                                    }
+                                    Err(e) => app.toast(ui.ctx(), e),
+                                }
+                            }
+                        });
+                    }
+                    ui.data_mut(|d| d.insert_temp(bid, (picked, last)));
                     ui.add_space(4.0);
                     let before = opts.format;
                     choices(
