@@ -53,6 +53,8 @@ mod tests_library2;
 #[cfg(test)]
 mod tests_library_problem;
 #[cfg(test)]
+mod tests_loupe_info;
+#[cfg(test)]
 mod tests_masking;
 #[cfg(test)]
 mod tests_offline;

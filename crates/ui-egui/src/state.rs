@@ -176,6 +176,107 @@ impl InfoOverlay {
     }
 }
 
+/// One line of the loupe's info overlay (Library View Options ▸ Loupe Info 1 / 2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LoupeInfoField {
+    #[default]
+    None,
+    FileName,
+    /// The file name and a virtual copy's name.
+    FileAndCopyName,
+    /// The capture date and time (the import date when the photo has none).
+    CaptureDate,
+    /// Width × height in pixels.
+    Dimensions,
+    /// Shutter speed, aperture, ISO and focal length.
+    Exposure,
+    Camera,
+    Lens,
+    /// Camera and lens on one line.
+    CameraAndLens,
+    Title,
+    Caption,
+    /// Rating and colour label.
+    RatingAndLabel,
+    Keywords,
+    Folder,
+}
+
+impl LoupeInfoField {
+    /// Every field, in the order View Options lists them.
+    pub const ALL: &'static [LoupeInfoField] = &[
+        LoupeInfoField::None,
+        LoupeInfoField::FileName,
+        LoupeInfoField::FileAndCopyName,
+        LoupeInfoField::CaptureDate,
+        LoupeInfoField::Dimensions,
+        LoupeInfoField::Exposure,
+        LoupeInfoField::Camera,
+        LoupeInfoField::Lens,
+        LoupeInfoField::CameraAndLens,
+        LoupeInfoField::Title,
+        LoupeInfoField::Caption,
+        LoupeInfoField::RatingAndLabel,
+        LoupeInfoField::Keywords,
+        LoupeInfoField::Folder,
+    ];
+
+    /// The name View Options shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            LoupeInfoField::None => "None",
+            LoupeInfoField::FileName => "File Name",
+            LoupeInfoField::FileAndCopyName => "File Name and Copy Name",
+            LoupeInfoField::CaptureDate => "Capture Date/Time",
+            LoupeInfoField::Dimensions => "Dimensions",
+            LoupeInfoField::Exposure => "Exposure and ISO",
+            LoupeInfoField::Camera => "Camera",
+            LoupeInfoField::Lens => "Lens",
+            LoupeInfoField::CameraAndLens => "Camera + Lens",
+            LoupeInfoField::Title => "Title",
+            LoupeInfoField::Caption => "Caption",
+            LoupeInfoField::RatingAndLabel => "Rating and Label",
+            LoupeInfoField::Keywords => "Keywords",
+            LoupeInfoField::Folder => "Folder",
+        }
+    }
+}
+
+/// The loupe's Info 1 and Info 2 lines, and Show Briefly When Photo Changes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LoupeInfo {
+    pub info1: [LoupeInfoField; 3],
+    pub info2: [LoupeInfoField; 3],
+    /// Which Info shows for a moment when the loupe changes photo with the overlay off (Off: none).
+    pub briefly: InfoOverlay,
+}
+
+impl LoupeInfo {
+    /// Info 1's lines before they are changed (and after Use Defaults).
+    pub const INFO1: [LoupeInfoField; 3] = [LoupeInfoField::FileName, LoupeInfoField::CaptureDate, LoupeInfoField::Dimensions];
+    /// Info 2's lines before they are changed (and after Use Defaults).
+    pub const INFO2: [LoupeInfoField; 3] = [LoupeInfoField::FileName, LoupeInfoField::Exposure, LoupeInfoField::CameraAndLens];
+}
+
+impl Default for LoupeInfo {
+    fn default() -> Self {
+        LoupeInfo { info1: LoupeInfo::INFO1, info2: LoupeInfo::INFO2, briefly: InfoOverlay::Off }
+    }
+}
+
+/// How long Show Briefly When Photo Changes shows the info overlay (seconds).
+pub const BRIEF_INFO_SECS: f64 = 1.5;
+
+/// When the loupe last changed photo, for Show Briefly When Photo Changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BriefInfo {
+    pub photo: Option<lightcraft_catalog::PhotoId>,
+    pub since: f64,
+    pub shown: bool,
+}
+
 /// App-level preferences (Settings dialog). They belong to the app, not a library, and are
 /// saved with the UI state in the app's config folder (`ui.json`, key `settings`); library
 /// preferences (import defaults, XMP, cache size) live in the library's `prefs.json`.
@@ -206,6 +307,9 @@ pub struct AppSettings {
     pub grid_badges: GridBadges,
     /// Square Grid: each cell's index number in front of its caption (Lightroom's Index Number).
     pub grid_index: bool,
+    /// Loupe Info 1 / Info 2 lines and Show Briefly When Photo Changes (L19, Library View
+    /// Options ▸ Loupe View; ported from upstream).
+    pub loupe_info: LoupeInfo,
 }
 
 impl Default for AppSettings {
@@ -223,6 +327,7 @@ impl Default for AppSettings {
             film_badges: true,
             grid_badges: GridBadges::Auto,
             grid_index: false,
+            loupe_info: LoupeInfo::default(),
         }
     }
 }
@@ -474,6 +579,9 @@ pub struct UiState {
     pub slideshow: Option<(f64, f64, bool)>,
     /// Info overlay on the loupe.
     pub info_overlay: InfoOverlay,
+    /// Show Briefly When Photo Changes: when the loupe changed photo (not saved).
+    #[serde(skip)]
+    pub brief_info: BriefInfo,
     /// Navigator mini map in the loupe while zoomed in.
     pub navigator: bool,
     /// App preferences (Settings dialog).
@@ -796,6 +904,7 @@ impl Default for UiState {
             keyword_painter: None,
             painter: None,
             info_overlay: InfoOverlay::Off,
+            brief_info: BriefInfo::default(),
             navigator: true,
             settings: AppSettings::default(),
             window_fullscreen: None,

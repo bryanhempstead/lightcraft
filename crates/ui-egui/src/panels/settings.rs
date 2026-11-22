@@ -662,8 +662,49 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     check(ui, "settings.navigator", &mut app.ui.navigator, "Show the Navigator while zoomed in");
     row(ui, t, crate::i18n::tr("Info overlay"), |ui| {
         use crate::state::InfoOverlay as I;
-        choices(ui, "settingsInfo", &[(I::Off, "Off"), (I::Basic, "File & date"), (I::Exposure, "Exposure")], &mut app.ui.info_overlay);
+        choices(ui, "settingsInfo", &[(I::Off, "off."), (I::Basic, "info.1."), (I::Exposure, "info.2.")], &mut app.ui.info_overlay);
     });
+    // L19: Loupe Info 1 / 2 lines (Library View Options ▸ Loupe View)
+    for (n, which) in [(1usize, "info1"), (2, "info2")] {
+        row(ui, t, &format!("Loupe info {n}"), |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            for i in 0..3 {
+                let cur = if n == 1 { app.ui.settings.loupe_info.info1[i] } else { app.ui.settings.loupe_info.info2[i] };
+                let mut pick = cur;
+                let r = egui::ComboBox::from_id_salt(format!("loupe-{which}-{i}")).width(128.0).selected_text(crate::i18n::tr(cur.label())).show_ui(
+                    ui,
+                    |ui| {
+                        for f in crate::state::LoupeInfoField::ALL {
+                            ui.selectable_value(&mut pick, *f, crate::i18n::tr(f.label()));
+                        }
+                    },
+                );
+                register(ui.ctx(), format!("combo:loupeInfo{n}-{i}"), r.response.rect);
+                if pick != cur {
+                    if n == 1 {
+                        app.ui.settings.loupe_info.info1[i] = pick;
+                    } else {
+                        app.ui.settings.loupe_info.info2[i] = pick;
+                    }
+                }
+            }
+        });
+    }
+    row(ui, t, crate::i18n::tr("Show briefly"), |ui| {
+        use crate::state::InfoOverlay as I;
+        choices(
+            ui,
+            "settingsBriefInfo",
+            &[(I::Off, "never."), (I::Basic, "info.1."), (I::Exposure, "info.2.")],
+            &mut app.ui.settings.loupe_info.briefly,
+        );
+    });
+    row(ui, t, "", |ui| {
+        if crate::widgets::text_button(ui, "settingsLoupeDefaults", "defaults.", false).clicked() {
+            app.ui.settings.loupe_info = crate::state::LoupeInfo::default();
+        }
+    });
+    hint(ui, t, "Show briefly: the info overlay appears for a moment when the loupe changes photo while it is off.");
 }
 
 // ------------------------------------------------------------------------------- Open Library…
