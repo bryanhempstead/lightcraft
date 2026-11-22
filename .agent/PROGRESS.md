@@ -6,8 +6,18 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
-- [ ] (faces agent, 2026-11-22, branch worktree-agent-a8e5dc1bc1eab7b7e, in progress) **Faces / People view, AI culling
-  criteria, natural-language search** (LR-PREF-PEOPLE, LR-LIB-PEOPLE, LRC-LIB-PEOPLE, LR-LIB-CULL, LR-FILT-SEARCH-AI).
+- [ ] (faces agent, 2026-11-22, branch worktree-agent-a8e5dc1bc1eab7b7e, not merged) **Faces / People view, AI culling
+  criteria, natural-language search** (LR-PREF-PEOPLE, LR-LIB-PEOPLE, LRC-LIB-PEOPLE, LR-FILT-PEOPLE, LR-LIB-CULL,
+  LR-FILT-SEARCH-AI; `docs/people.md`). New crate `crates/vision` (Apache-2.0): our own ONNX interpreter running OpenCV
+  Zoo's YuNet + SFace and Intel's open-closed-eye (checked against OpenCV 4.12), CLIP ViT-B/32 (LAION) ported from
+  candle-transformers, face clustering, append-only checksummed side indexes (`<library>/vision/*.lcidx`). **Catalog
+  v9** (`Op::SetRegions`, `Region.rejected`, `Analysis.faces/eyes_closed/face_focus`; older formats kept as
+  `catalog.snap.v8.bak` on upgrade). Engine: `faces.find` / `search.index` background runs (resumable, cancellable,
+  progress), People (named / unnamed stacks / suggestions / ✓ ✗ / person keywords / rename / remove / addFace),
+  `search.ai` + `Filter.semantic`, culling blinks + face focus, MWG regions written to XMP, Lightroom `AgLibraryFace`
+  migrated. UI: People view rewritten, loupe `?` name field, search field `ai.` mode, cull dialog face options.
+  Left: finding faces automatically at import, drawing face boxes with the mouse, eye model false positives on
+  dogs / squints (needs.you), throughput measured only under a load average of ~140 (other builders).
 - [ ] (AI masks agent, 2026-11-22, branch worktree-agent-af352bb019bacca9d, not merged) **AI masks — parity K + REM rows**
   Done: 08552d289 SAM 3 downloads work (5 ungated HF copies, every file hash-pinned; DEFAULT_MIRRORS was empty);
   365717b7c SegFormer in pure Rust (crates/segment/src/segformer.rs, ported from candle-transformers) + three
