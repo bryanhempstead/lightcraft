@@ -6,6 +6,15 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (export agent, 2026-11-22, branch worktree-agent-a3771648dd17295ab, not merged; main merged in twice, DNG
+  preview / lossy options kept) **LR-EXP-DIALOG: Export dialog laid out like Lightroom Classic's** —
+  `crates/ui-egui/src/export_dialog.rs` (new), `export_task.rs` (queue, pause), `crates/engine/src/export.rs`
+  (`ExportTo`, `Conflict::Ask` + `existing_targets` / `resolve`, `MetadataPolicy` ×6, `ResizeMode::WidthHeight`,
+  `SizeUnit`, `ResolutionUnit`, `ExportService`, `simple_copyright_watermark`, `photoshop_app`, `preview_job`),
+  `cmd/export.rs` (preset folders, rename, move, write / import incl. `.lrtemplate` via `export_lrtemplate.rs`,
+  `export.existingFiles`, `export.actionsFolder`). `Dialog::Export.opts` is boxed now; Dialog::ExportExisting;
+  `UiState.dialog_next`. New parity rows LR-EXP-PRESETFOLDERS / SERVICE / PLUGINS / PREVIEW / QUEUE. needs.you #189.
+  Left: watermark rotation / Fit / Fill, DPX video, a plug-in API, Lightroom custom watermarks in `.lrtemplate`s.
 - [ ] (faces agent round 2, 2026-11-22, branch worktree-agent-a60c94c49b5526429, not merged) **People / culling
   finished** (LR-PREF-PEOPLE, LR-LIB-PEOPLE, LRC-LIB-PEOPLE, LR-LIB-CULL, LR-FILT-CULL, LR-IMP-CULL-AT-IMPORT,
   LRC-IMP-PREVIEWCULL, LR-MASK-SUBJECT; `docs/people.md`). **Catalog v10** (`Region.drawn`, `Analysis.smiles` /
