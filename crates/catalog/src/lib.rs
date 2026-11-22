@@ -245,6 +245,17 @@ pub enum Op {
         label: Option<ColorLabel>,
         favorite: bool,
     },
+    /// A video's trim and poster frame (`None` clears them). Format version 8.
+    SetVideo {
+        id: PhotoId,
+        video: Option<VideoEdit>,
+    },
+    /// A library-wide record under `key` (publish services, saved map locations, …: a feature's
+    /// own JSON, see [`Catalog::record`]); `None` removes it. Format version 8.
+    SetRecord {
+        key: String,
+        value: Option<serde_json::Value>,
+    },
     /// Several ops as one step (undo applies the inverses in reverse).
     Batch {
         ops: Vec<Op>,
@@ -273,6 +284,10 @@ pub struct Catalog {
     /// What the library keeps about its folders (folder key → record), see [`folders`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     folder_records: BTreeMap<String, folders::FolderRecord>,
+    /// Library-wide records of features that keep their own JSON (`publish.*`, `map.*`), by key.
+    /// Format version 8.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    records: BTreeMap<String, serde_json::Value>,
     /// Increments on every applied op.
     #[serde(skip)]
     pub revision: u64,
@@ -303,6 +318,14 @@ impl Catalog {
 
     // ---- reads
 
+    /// A library-wide record ([`Op::SetRecord`]).
+    pub fn record(&self, key: &str) -> Option<&serde_json::Value> {
+        self.records.get(key)
+    }
+    /// Every record whose key starts with `prefix`, in key order.
+    pub fn records_with_prefix<'a>(&'a self, prefix: &'a str) -> impl Iterator<Item = (&'a String, &'a serde_json::Value)> + 'a {
+        self.records.range(prefix.to_string()..).take_while(move |(k, _)| k.starts_with(prefix))
+    }
     pub fn photo(&self, id: PhotoId) -> Option<&Arc<Photo>> {
         self.photos.get(&id)
     }
@@ -639,6 +662,21 @@ impl Catalog {
             Op::SetXmpSync { id, sync } => {
                 let p = self.photo_mut(id)?;
                 Op::SetXmpSync { id, sync: std::mem::replace(&mut p.xmp_sync, sync) }
+            }
+            Op::SetVideo { id, video } => {
+                let p = self.photo_mut(id)?;
+                Op::SetVideo { id, video: std::mem::replace(&mut p.video, video.filter(|v| !v.is_default())) }
+            }
+            Op::SetRecord { key, value } => {
+                let key = key.trim().to_string();
+                if key.is_empty() || key.len() > 200 {
+                    return Err(CatalogError::Invalid("a record key is 1-200 characters".into()));
+                }
+                let old = match value.filter(|v| !v.is_null()) {
+                    Some(v) => self.records.insert(key.clone(), v),
+                    None => self.records.remove(&key),
+                };
+                Op::SetRecord { key, value: old }
             }
             Op::SetAlbumMarks { id, label, favorite } => {
                 let a = self.album_mut(id)?;

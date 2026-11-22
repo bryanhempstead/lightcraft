@@ -182,9 +182,37 @@ fn op_variants_are_versioned() {
             Op::SetKeyword { .. } => 3,
             Op::SetFolderRecord { .. } | Op::SetAlbumMarks { .. } => 4,
             Op::SetXmpSync { .. } => 6,
+            Op::SetVideo { .. } | Op::SetRecord { .. } => 8,
         }
     }
-    let newest = since(&Op::SetXmpSync { id: PhotoId(1), sync: None });
+    let newest = since(&Op::SetVideo { id: PhotoId(1), video: None });
     // a format can also add a field (v5: `Meta.iptc_ext`), so the newest op may be older
     assert!(newest <= VERSION, "an op newer than the current format version");
+}
+
+/// v8: a video's trim / poster and a library record survive a snapshot round trip, undo restores
+/// them, and nonsense never inverts a trim range.
+#[test]
+fn v8_video_edit_and_records_round_trip() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let p = Photo::new(id, Source::File { path: "/v/clip.mov".into() }, "clip.mov", "MOV", 1920, 1080, "2026-11-22");
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let v = VideoEdit { trim_in: 1.5, trim_out: Some(4.0), poster: Some(2.0) };
+    let undo = c.apply(Op::SetVideo { id, video: Some(v) }).unwrap();
+    c.apply(Op::SetRecord { key: "map.locations".into(), value: Some(serde_json::json!([{"name": "Home"}])) }).unwrap();
+    let back: Catalog = serde_json::from_str(&c.to_snapshot()).unwrap();
+    assert_eq!(back.photo(id).unwrap().video, Some(v));
+    assert_eq!(back.record("map.locations").unwrap()[0]["name"], "Home");
+    assert_eq!(back.records_with_prefix("map.").count(), 1);
+    assert_eq!(back.records_with_prefix("publish.").count(), 0);
+    c.apply(undo).unwrap();
+    assert_eq!(c.photo(id).unwrap().video, None);
+    assert!(c.apply(Op::SetRecord { key: " ".into(), value: None }).is_err());
+    // a default edit is stored as none
+    c.apply(Op::SetVideo { id, video: Some(VideoEdit::default()) }).unwrap();
+    assert_eq!(c.photo(id).unwrap().video, None);
+    assert_eq!(VideoEdit { trim_in: 5.0, trim_out: Some(2.0), poster: None }.range(Some(10.0)), (0.0, Some(10.0)));
+    assert_eq!(VideoEdit { trim_in: 2.0, trim_out: None, poster: None }.range(Some(10.0)), (2.0, Some(10.0)));
+    assert_eq!(VideoEdit { trim_in: f64::NAN, trim_out: Some(f64::INFINITY), poster: None }.range(Some(3.0)), (0.0, Some(3.0)));
 }
