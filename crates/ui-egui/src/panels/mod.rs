@@ -12,6 +12,7 @@ pub mod edit;
 pub mod filmstrip;
 pub mod filterbar;
 pub mod grid;
+pub mod hdr_histogram;
 pub mod left;
 pub mod lens_blur;
 pub mod library_problem;

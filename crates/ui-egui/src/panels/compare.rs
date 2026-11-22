@@ -178,6 +178,11 @@ fn photo_tile(
     let want = (img.width().max(img.height()).min(img_area.width().max(img_area.height()) * 4.0) * ppp).min(2560.0) as usize;
     let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
     if let Some(job) = app.session.render_job(id, rw.max(8), rh.max(8), false, true) {
+        // an HDR edit on an HDR display: its HDR rendition, as in the loupe
+        let job = match super::detail::hdr_headroom(app) {
+            Some(h) if !app.ui.soft_proof => job.with_hdr_view(h),
+            _ => job,
+        };
         app.renderer.request(slot, job, 60);
     }
     if let Some(job) = app.session.thumb_job(id, 256) {
@@ -189,7 +194,12 @@ fn photo_tile(
     if let Some(tex) = app.renderer.textures.get(&slot).filter(|x| x.photo == id) {
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, pan);
-        p.image(tex.tex.id(), display, uv, Color32::WHITE);
+        // the HDR rendition where the window can show it (`hdr_view`), else the 8-bit texture
+        let shown = match (&tex.hdr, app.hdr_view.as_mut()) {
+            (Some(px), Some(view)) => view.texture(&format!("{slot:?}"), px).unwrap_or(tex.tex.id()),
+            _ => tex.tex.id(),
+        };
+        p.image(shown, display, uv, Color32::WHITE);
     } else if let Some(tex) = app.renderer.textures.get(&Slot::Thumb(id)) {
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, pan);

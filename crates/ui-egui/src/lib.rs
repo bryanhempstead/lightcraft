@@ -54,6 +54,8 @@ mod tests_grid;
 #[cfg(test)]
 mod tests_grid_cells;
 #[cfg(test)]
+mod tests_hdr;
+#[cfg(test)]
 mod tests_keys;
 #[cfg(test)]
 mod tests_labels;

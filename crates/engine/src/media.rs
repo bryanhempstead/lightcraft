@@ -589,6 +589,22 @@ impl RenderJob {
         self
     }
 
+    /// The HDR rendition of a photo edited in HDR at its own HDR Limit, whatever the display (a
+    /// float render, [`lightcraft_pipeline::OutputDepth::F32Hdr`]): what the HDR histogram
+    /// describes. Unchanged for photos without an HDR edit. Never cached as the view preview.
+    pub fn hdr_master(mut self) -> Self {
+        if !self.settings.hdr.enabled {
+            return self;
+        }
+        self.key ^= 0x4844_525f_6d73_7472; // "HDR_mstr"
+        self.request.depth = lightcraft_pipeline::OutputDepth::F32Hdr;
+        self.request.overlay = lightcraft_pipeline::Overlay::None;
+        self.request.proof = None;
+        self.view_cache = None;
+        self.cache = None;
+        self
+    }
+
     /// Draw a diagnostic overlay over the result (e.g. Point Color's visualized range). Gets its
     /// own result key.
     pub fn with_overlay(mut self, overlay: lightcraft_pipeline::Overlay) -> Self {

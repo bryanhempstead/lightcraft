@@ -161,15 +161,17 @@ fn visualize_hdr_matches_the_cpu() {
     }
     let src = sunset(240, 160);
     let raw = SourceInfo { raw: true, ..Default::default() };
-    let req = RenderRequest { overlay: Overlay::HdrRange, ..RenderRequest::fit(240, 160) };
+    // a display with 1.5 stops of headroom: the sun's core is beyond it
+    let req = RenderRequest { overlay: Overlay::HdrRange(15), ..RenderRequest::fit(240, 160) };
     let s = hdr_on(3.0);
     let cpu = render(&src, &raw, &s, &req).image;
     let gpu = lightcraft_gpu::render(&src, &raw, &s, &req, None).expect("gpu render").image;
     let differ = cpu.data.iter().zip(&gpu.data).filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 3)).count();
     // a pixel right at a band's edge may fall on the other side of it
     assert!(differ * 200 < cpu.data.len(), "{differ} of {} pixels differ", cpu.data.len());
-    let banded = gpu.data.iter().filter(|p| p[0] > p[2].saturating_add(40)).count();
-    assert!(banded > 0, "the sun should be painted with an HDR band");
+    let beyond = gpu.data.iter().filter(|p| p[0] > 180 && p[1] < 90 && p[2] < 90).count();
+    let banded = gpu.data.iter().filter(|p| p[2] > p[0].saturating_add(60)).count();
+    assert!(beyond > 0 && banded > 0, "the sun should be painted beyond the display ({beyond}) and with an HDR band ({banded})");
 }
 
 /// The loupe's case: timings of a ~2.5 MP draft HDR render on each (printed; `--nocapture`).

@@ -918,7 +918,9 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
         return Overlay::PointColorRange(app.ui.point_color as u8);
     }
     if edit && app.ui.hdr_visualize && d.hdr.enabled {
-        return Overlay::HdrRange;
+        // what lies beyond the HDR display's headroom is marked red (none on an SDR display)
+        let display = app.hdr_view.as_ref().and_then(|v| v.headroom());
+        return Overlay::HdrRange(lightcraft_pipeline::visualize::headroom_tenths(display));
     }
     Overlay::None
 }

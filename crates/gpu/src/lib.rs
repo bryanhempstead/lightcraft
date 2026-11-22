@@ -295,7 +295,9 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
     use lightcraft_pipeline::{OutputDepth, Overlay};
     // Visualize HDR: the SDR render with the HDR rendition of the same request painted over it
     // (as `lightcraft_pipeline::render` does it)
-    if req.overlay == Overlay::HdrRange && req.depth == OutputDepth::U8 {
+    if let Overlay::HdrRange(display) = req.overlay
+        && req.depth == OutputDepth::U8
+    {
         let plain = RenderRequest { overlay: Overlay::None, ..*req };
         if !s.effective().hdr.enabled {
             return render_one(src, info, s, &plain, stages);
@@ -303,7 +305,7 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
         let mut sdr = render_one(src, info, s, &plain, stages)?;
         let hreq = RenderRequest { depth: OutputDepth::F32Hdr, proof: None, ..plain };
         let hdr = render_one(src, info, s, &hreq, stages)?.deep?;
-        lightcraft_pipeline::visualize::hdr_range(&mut sdr.image, &hdr, req.space.luma());
+        lightcraft_pipeline::visualize::hdr_range(&mut sdr.image, &hdr, display);
         return Some(sdr);
     }
     render_one(src, info, s, req, stages)
@@ -323,7 +325,11 @@ fn render_one(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
             lightcraft_pipeline::OutputDepth::F32Hdr => s.hdr.peak() > 1.0,
             _ => false,
         };
-        if !enabled() || !depth_ok || req.proof.is_some() || req.overlay == lightcraft_pipeline::Overlay::HdrRange || lightcraft_pipeline::cpu_only(s)
+        if !enabled()
+            || !depth_ok
+            || req.proof.is_some()
+            || matches!(req.overlay, lightcraft_pipeline::Overlay::HdrRange(_))
+            || lightcraft_pipeline::cpu_only(s)
         {
             return None;
         }

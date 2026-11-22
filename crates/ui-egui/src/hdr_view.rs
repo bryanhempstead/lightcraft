@@ -124,7 +124,7 @@ fn encode_fast(x: f32, table: &[f32]) -> f32 {
 fn convert(src: &[[f32; 3]], dst: &mut [u16], p3: bool, table: &[f32]) -> f32 {
     let one = f32_to_f16(1.0);
     let mut peak = 0f32;
-    for (c, out) in src.iter().zip(dst.chunks_exact_mut(4)) {
+    for (c, out) in src.iter().zip(dst.as_chunks_mut::<4>().0) {
         let c = c.map(|x| if x.is_finite() { x } else { 0.0 });
         let d = if p3 { SRGB_TO_P3.map(|r| r[0] * c[0] + r[1] * c[1] + r[2] * c[2]) } else { c };
         peak = peak.max(c[0].max(c[1]).max(c[2]));
