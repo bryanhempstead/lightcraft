@@ -938,6 +938,13 @@ scale: grid 0.42, spatial 0.55, frequency scene 0.72, single gratings 0.70.
 | | local Highlights −60 / Shadows +60 / Clarity +40 / Dehaze +30 | 1.26 / 1.39 / 2.14 / 1.90 | unchanged |
 | R04 Nautica | grid, Amount 100 / 50 | 0.41 / 0.42 | (already matched) |
 
+**Acceptance gate.** The LOT48 network share (142 of the 183 acceptance originals) stopped
+answering reads mid-session, so the gate ran on the 41 photos on BONUSBOY and the internal disk
+(`acc41`: main at 1c2383d43 vs this round, both CPU): 7.36 → 7.36 ΔE overall, every cell within
+0.02, passes 7 → 7; one photo with masks moved (11.01 → 10.65). (Both builds put Summer Fields
+photos at ~10 ΔE here against 4.5 in round 6 — most likely the look was not matched in this
+scratch library; not investigated, the comparison is like for like.) The full set needs a re-run once LOT48 is back.
+
 ### Texture (R21)
 
 Camera Raw's Texture is a broad band of log-luminance contrast: at +100 on 0.4 EV gratings the

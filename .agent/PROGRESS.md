@@ -6,6 +6,16 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (fidelity agent, 2026-11-22, branch worktree-agent-aeda33008d910a26f, not merged) **Render-fidelity rows R16 R19–R23
+  R04** against the Camera Raw oracle (docs/lr-match.md → Round 10; `oracle/make_fx.py`, `make_fuji.py`, `fx2_ana.py`,
+  `grade_ana.py`, `bw_ana.py`, `local_ana.py` + `gen_local.py`, `lcrun.sh`). Found RAWmakase (github.com/pch/rawmakase,
+  MIT), whose operators were measured against Camera Raw 18.7, and ported + checked on our oracle: Texture (pyramid, per
+  channel), Color Grading (channel curves; legacy split toning = Blending 100), B&W grey chart, Point Color (XMP 19-number
+  form + catalog fields keep Lightroom's sample), negative Dehaze; masks' Contrast / Whites / Blacks are our own measured
+  curves. All CPU + GPU, each with a `MEASURED` switch (on). oracle_render now reads masks / spots / Point Color.
+  Left: Clarity (image-relative, RAWmakase's 4-scale model is the next port), positive Dehaze (RAWmakase `haze.rs`),
+  local Highlights / Shadows, Fuji base +0.16 EV (left until R02), Texture's colour-edge effect is ¼ of Camera Raw's.
+  The LOT48 SMB share hung mid-session (needs.you #158): the gate ran on the 41 photos not on it.
 - [ ] (detail agent, 2026-11-21 night, branch worktree-agent-af436a1c05b9b1fde, not merged) **Detail / Effects / Looks rows
   R03 R06 R07 R13 R15 R24 R25** measured with the Camera Raw oracle (`oracle/make_detail.py`, `grain_ana.py`,
   `sharp_ana.py`, `sharpfit.py`, `make_ca.py`, `make_nr_real.py`; docs/lr-match.md → Round 9): Look LUT profiles on the
