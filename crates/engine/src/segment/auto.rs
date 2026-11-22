@@ -165,13 +165,13 @@ pub fn people(m: &mut Models, labels: Option<&[String]>, faces: &[(f64, f64)]) -
             for &i in &comp {
                 let (x, y) = (((i % w) as f64 + 0.5) / w as f64, ((i / w) as f64 + 0.5) / h as f64);
                 // nearest face, bodies hanging below their face (vertical distance counts less
-                // below a face, more above it)
+                // below a face: a body hangs below its head)
                 let k = inside
                     .iter()
                     .enumerate()
                     .map(|(k, (fx, fy))| {
                         let dy = y - fy;
-                        let wy = if dy > 0.0 { 0.25 } else { 2.0 };
+                        let wy = if dy > 0.0 { 0.25 } else { 1.0 };
                         (k, (x - fx).powi(2) + (wy * dy).powi(2))
                     })
                     .min_by(|a, b| a.1.total_cmp(&b.1))

@@ -727,8 +727,25 @@ pub(crate) fn open_picker(app: &mut LightcraftApp, ctx: &egui::Context, id: Phot
     if !found {
         let cmd = if kind == "people" { "segment.detectPeople" } else { "segment.detectLandscape" };
         if let Err(e) = app.run(cmd, json!({})) {
+            // (no model: the panel's get. row says what to download)
+            app.ui.ai_pick = None;
             app.toast_error(ctx, e);
         }
+    }
+}
+
+/// While nothing is being computed but nothing was found yet (the search failed, or the photo
+/// changed): retry. runs `cmd` again.
+fn retry_row(app: &mut LightcraftApp, ui: &mut egui::Ui, cmd: &str) {
+    if app.session.segmenter.auto_busy() || app.session.segmenter.busy() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    }
+    ui.add_space(8.0);
+    if text_button(ui, "aiPickRetry", "retry.", false).clicked()
+        && let Err(e) = app.run(cmd, json!({}))
+    {
+        app.toast_error(ui.ctx(), e);
     }
 }
 
@@ -776,6 +793,7 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         match app.session.people_found(id).map(<[_]>::len) {
             None => {
                 ui.label(egui::RichText::new(crate::i18n::tr("Finding the people in this photo…")).color(t.text_dim));
+                retry_row(app, ui, "segment.detectPeople");
             }
             Some(0) => {
                 ui.label(egui::RichText::new(crate::i18n::tr("No people were found in this photo.")).color(t.text_dim));
@@ -795,6 +813,7 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         match app.session.coverage_found(id).map(<[_]>::to_vec) {
             None => {
                 ui.label(egui::RichText::new(crate::i18n::tr("Looking at the photo…")).color(t.text_dim));
+                retry_row(app, ui, "segment.detectLandscape");
             }
             Some(cov) => {
                 // every class, with how much of the photo it covers (a quiet 0 when none)
@@ -1094,7 +1113,7 @@ mod pick_tests {
         pick(&mut sel, &mut anchor, 2, egui::Modifiers::COMMAND);
         assert_eq!(sel, [5]);
         pick(&mut sel, &mut anchor, 8, egui::Modifiers::SHIFT);
-        assert_eq!(sel, [5, 6, 7, 8], "the run from the last click");
+        assert_eq!(sel, [2, 3, 4, 5, 6, 7, 8], "the run from the last click (2)");
         pick(&mut sel, &mut anchor, 1, none);
         assert_eq!(sel, [1]);
         // ⇧ with nothing clicked yet: just that one

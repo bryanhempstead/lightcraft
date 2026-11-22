@@ -520,10 +520,14 @@ enum Out {
 }
 
 fn run_job(state: &mut State, shared: &Shared, job: &mut Job) -> Result<Out, String> {
-    if let Kind::Auto(a) = std::mem::replace(&mut job.kind, Kind::Prepare) {
-        return run_auto(state, shared, job, a).map(Out::Auto);
+    match std::mem::replace(&mut job.kind, Kind::Prepare) {
+        Kind::Auto(a) => run_auto(state, shared, job, a).map(Out::Auto),
+        other => {
+            // (put it back: run_sam takes it)
+            job.kind = other;
+            run_sam(state, shared, job).map(Out::Seg)
+        }
     }
-    run_sam(state, shared, job).map(Out::Seg)
 }
 
 fn run_sam(state: &mut State, shared: &Shared, job: &mut Job) -> Result<Option<SegMask>, String> {
