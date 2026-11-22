@@ -143,9 +143,17 @@ pub struct ColorOps {
     pub mixer: bool,
     /// Point Color samples that change something (applied after the mixer).
     pub points: Vec<PointK>,
+    /// Lightroom's own Point Color swatches, rendered with Camera Raw's model
+    /// ([`crate::point_color_cr`]; linear ProPhoto HSV, after the mixer, before `points`).
+    pub points_cr: Vec<crate::point_color_cr::Swatch>,
     pub bw: Option<[f32; 8]>,
+    /// Camera Raw's measured B&W mix ([`crate::bw_cr`]), used in place of `bw`'s band mix.
+    pub bw_cr: Option<std::sync::Arc<crate::bw_cr::Mix>>,
     /// Wheels (shadows, midtones, highlights, global), blending, balance.
     pub grading: Option<([WheelK; 4], f32, f32)>,
+    /// Camera Raw's measured Color Grading ([`crate::grading_cr`]) in place of `grading`:
+    /// three channel curves of linear ProPhoto.
+    pub grading_cr: Option<std::sync::Arc<crate::grading_cr::Curves>>,
     /// OkLCh hue of skin tones (protected by vibrance).
     pub skin: f32,
     /// Lightroom's measured HSL / Saturation / Vibrance ([`crate::colortab`]) in place of the
@@ -173,10 +181,23 @@ impl ColorOps {
             points: if crate::is_bw(s) {
                 Vec::new()
             } else {
-                s.point_colors.iter().take(lightcraft_develop::MAX_POINT_COLORS).filter(|p| !p.is_neutral()).map(PointK::new).collect()
+                s.point_colors
+                    .iter()
+                    .take(lightcraft_develop::MAX_POINT_COLORS)
+                    .filter(|p| !p.is_neutral() && !(crate::point_color_cr::MEASURED && p.lr.is_some()))
+                    .map(PointK::new)
+                    .collect()
+            },
+            points_cr: if crate::is_bw(s) || !crate::point_color_cr::MEASURED {
+                Vec::new()
+            } else {
+                s.point_colors.iter().take(lightcraft_develop::MAX_POINT_COLORS).filter_map(crate::point_color_cr::Swatch::new).collect()
             },
             bw: crate::is_bw(s).then(|| s.bw_mix.bands().map(|v| (v / 100.0) as f32)),
-            grading: (!g.is_neutral()).then(|| {
+            bw_cr: (crate::bw_cr::MEASURED && crate::is_bw(s))
+                .then(|| std::sync::Arc::new(crate::bw_cr::Mix::new(s.bw_mix.bands().map(|v| (v / 100.0) as f32)))),
+            grading_cr: crate::grading_cr::Curves::for_settings(s).map(std::sync::Arc::new),
+            grading: (!g.is_neutral() && !crate::grading_cr::MEASURED).then(|| {
                 (
                     [wheel(&g.shadows), wheel(&g.midtones), wheel(&g.highlights), wheel(&g.global)],
                     (g.blending / 100.0) as f32,
@@ -208,8 +229,10 @@ impl ColorOps {
             && !self.mixer
             && self.table.is_none()
             && self.points.is_empty()
+            && self.points_cr.is_empty()
             && self.bw.is_none()
             && self.grading.is_none()
+            && self.grading_cr.is_none()
     }
 
     /// `local_sat` (−1..1) and `local_hue` (radians) come from masks.
@@ -221,7 +244,7 @@ impl ColorOps {
         let lab = oklab_from_2020(rgb);
         // only chroma changes (vibrance / saturation, maybe grading): scale a, b directly — the same
         // result as the OkLCh round trip without its sin / cos (and atan2 unless vibrance needs the hue)
-        if !self.mixer && self.table.is_none() && self.points.is_empty() && self.bw.is_none() && local_hue == 0.0 {
+        if !self.mixer && self.table.is_none() && self.points.is_empty() && self.points_cr.is_empty() && self.bw.is_none() && local_hue == 0.0 {
             let mut lab = lab;
             let c0 = (lab[1] * lab[1] + lab[2] * lab[2]).sqrt();
             let mut c = c0;
@@ -239,6 +262,10 @@ impl ColorOps {
                 lab[2] *= k;
             }
             return self.grade(lab);
+        }
+        if let Some(m) = &self.bw_cr {
+            let y = m.gray(mul3(&pp_matrices().0, rgb), lightcraft_color::luminance_2020(rgb)).min(1.0);
+            return self.grade(oklab_from_2020([y; 3]));
         }
         let [mut l, mut c, mut h] = lab_to_lch(lab);
         if let Some(bw) = &self.bw {
@@ -267,6 +294,14 @@ impl ColorOps {
             h += dh * chroma_w;
             c *= (1.0 + ds).max(0.0);
             l += dl * chroma_w * l.max(0.05).sqrt();
+        }
+        if !self.points_cr.is_empty() {
+            let m = pp_matrices();
+            let mut p = mul3(&m.0, oklab_to_2020(lch_to_lab([l, c, h])));
+            for w in &self.points_cr {
+                p = w.apply(p);
+            }
+            [l, c, h] = lab_to_lch(oklab_from_2020(mul3(&m.1, p)));
         }
         for p in &self.points {
             [l, c, h] = p.apply([l, c, h]);
@@ -298,8 +333,31 @@ impl ColorOps {
                 lab[0] += k.lum * wt;
             }
         }
-        oklab_to_2020(lab)
+        let rgb = oklab_to_2020(lab);
+        match &self.grading_cr {
+            Some(c) => {
+                let m = pp_matrices();
+                let p = mul3(&m.0, rgb);
+                mul3(&m.1, c.apply(p))
+            }
+            None => rgb,
+        }
     }
+}
+
+/// Linear Rec.2020 → linear ProPhoto and back (Camera Raw grades ProPhoto channels).
+pub fn pp_matrices() -> &'static ([[f32; 3]; 3], [[f32; 3]; 3]) {
+    static M: OnceLock<([[f32; 3]; 3], [[f32; 3]; 3])> = OnceLock::new();
+    M.get_or_init(|| (REC2020.to_space(&PROPHOTO).to_f32(), PROPHOTO.to_space(&REC2020).to_f32()))
+}
+
+#[inline]
+fn mul3(m: &[[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
+    [
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    ]
 }
 
 /// Calibration slider stops for [`CALIB_TABLE`].

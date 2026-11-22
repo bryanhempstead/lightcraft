@@ -299,10 +299,12 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
         let s: &DevelopSettings = &effective;
         // the kernel writes 8-bit output: high-bit-depth exports (and soft proofs) render on the CPU
         // Visualize HDR needs the float HDR render: CPU too
+        // (and operators the kernel doesn't have yet: `lightcraft_pipeline::cpu_only`)
         if !enabled()
             || req.depth != lightcraft_pipeline::OutputDepth::U8
             || req.proof.is_some()
             || req.overlay == lightcraft_pipeline::Overlay::HdrRange
+            || lightcraft_pipeline::cpu_only(s)
         {
             return None;
         }

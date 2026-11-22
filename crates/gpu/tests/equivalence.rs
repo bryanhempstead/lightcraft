@@ -163,6 +163,19 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.bw_mix.blue = 60.0;
             s.bw_mix.red = -30.0;
         }),
+        ("lightroom point color", |s| {
+            // swatches with Lightroom's own sample: Camera Raw's model (`point_color_cr`)
+            use lightcraft_develop::{LrSwatch, PointColor};
+            let lr = |h: f64, sat: f64, v: f64| {
+                let around = |c: f64| [c - 0.73, c - 0.18, c + 0.18, c + 0.73].map(|x| x.clamp(0.0, 1.0));
+                let enc = lightcraft_color::transfer::linear_to_srgb(v as f32) as f64;
+                Some(LrSwatch { source: [h, sat, v], hue_range: [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0], sat_range: around(sat), lum_range: around(enc) })
+            };
+            s.point_colors = vec![
+                PointColor { hue_shift: 50.0, sat_shift: -40.0, lr: lr(0.4, 0.5, 0.3), ..Default::default() },
+                PointColor { lum_shift: -60.0, variance: 50.0, range: 80.0, lr: lr(3.8, 0.4, 0.2), ..Default::default() },
+            ];
+        }),
         ("colour grading", |s| {
             s.grading.shadows = Wheel { hue: 220.0, sat: 40.0, lum: -10.0 };
             s.grading.highlights = Wheel { hue: 40.0, sat: 30.0, lum: 10.0 };

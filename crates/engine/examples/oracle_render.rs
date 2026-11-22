@@ -21,8 +21,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // a sidecar (`name.xmp`) wins over the file's own XMP, as in Camera Raw for raws
         let sidecar = std::path::Path::new(f).with_extension("xmp");
         let xmp = std::fs::read_to_string(&sidecar).ok().or_else(|| xmp_of(&bytes)).ok_or("no XMP")?;
-        let props = lightcraft_meta::parse_xmp(&xmp).map_err(|e| e.to_string())?.properties;
-        let mut partial = lightcraft_engine::crs::to_partial(&props, Some(true));
+        let data = lightcraft_meta::parse_xmp(&xmp).map_err(|e| e.to_string())?;
+        let props = data.properties;
+        // the structured containers too (masks, spots, Point Color), as a sidecar import reads them
+        let (img, info) = lightcraft_engine::files::load_bytes(&bytes, usize::MAX)?;
+        let aspect = img.width as f64 / img.height.max(1) as f64;
+        let (mut partial, _) = lightcraft_engine::crs::to_partial_report(&props, Some(&data.values), Some(true), aspect);
         // a creative look (its RGB table carried in the XMP)
         if let Ok(Some(p)) = lightcraft_engine::crs_table::profile_from_xmp(&xmp) {
             let id = format!("lut:{}", p.name);
@@ -33,7 +37,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let s = lightcraft_develop::apply_partial(&lightcraft_develop::DevelopSettings::default(), &partial, 1.0);
         // ORACLE_SIZE: the long edge (Camera Raw's "minimum" size is 1536), else full size
         let edge = std::env::var("ORACLE_SIZE").ok().and_then(|v| v.parse::<usize>().ok());
-        let (img, info) = lightcraft_engine::files::load_bytes(&bytes, usize::MAX)?;
         let (w, h) = match edge {
             Some(e) if img.width.max(img.height) > e => {
                 let k = e as f64 / img.width.max(img.height) as f64;

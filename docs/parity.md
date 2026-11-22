@@ -26,7 +26,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | C. Views & navigation (VIEW) | 15 | 3 | 0 | 0 | 8/10 (80%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 42 | 4 | 4 | 1 | 26/28 (93%) | 13/15 (87%) |
+| F. Edit panel — global adjustments (EDIT) | 40 | 6 | 4 | 1 | 24/28 (86%) | 13/15 (87%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 9 | 1 | 1 | 2 | 4/4 (100%) | 3/3 (100%) |
@@ -48,9 +48,9 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | Y. Menus | 82 | 1 | 2 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 76 | 3 | 2 | 1 | 49/52 (94%) | 23/24 (96%) |
 | Lightroom Classic extras | 65 | 18 | 38 | 9 | — | 34/35 (97%) |
-| **Total** | 443 | 49 | 69 | 36 | 191/201 (95%) | 160/169 (95%) |
+| **Total** | 441 | 51 | 69 | 36 | 189/201 (94%) | 160/169 (95%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.3%** of 561 in-scope rows — P0 97.5% of 201 · P1 96.4% of 169 · P2 56.8% of 190.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 561 in-scope rows — P0 97.0% of 201 · P1 96.4% of 169 · P2 56.8% of 190.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -254,12 +254,12 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-EDIT-COLOR-VIBRANCE | Vibrance | P0 | ✅ | `ctl:color.vibrance` | |
 | LR-EDIT-COLOR-SATURATION | Saturation | P0 | ✅ | `ctl:color.saturation` | |
 | LR-EDIT-COLOR-MIXER-HSL | 8-band colour mixer | P0 | ✅ | `ctl:mixer.*` | no targeted (drag-on-image) mode |
-| LR-EDIT-COLOR-MIXER-BW | B&W mix | P1 | ✅ | `ctl:bw.*`, `cmd:develop.autoBwMix` | eight bands; Auto pushes each hue band's colourful pixels away from the mean lightness (own rule) |
-| LR-EDIT-COLOR-POINTCOLOR | Point colour | P1 | ✅ | `cmd:pointColor.pick`, `cmd:pointColor.delete` | |
-| LR-EDIT-COLOR-GRADING | Colour grading wheels | P0 | ✅ | `ctl:grading.*` | |
-| LR-EDIT-EFFECTS-TEXTURE | Texture | P0 | ✅ | `ctl:effects.texture` | |
-| LR-EDIT-EFFECTS-CLARITY | Clarity | P0 | ✅ | `ctl:effects.clarity` | |
-| LR-EDIT-EFFECTS-DEHAZE | Dehaze | P0 | ✅ | `ctl:effects.dehaze` | |
+| LR-EDIT-COLOR-MIXER-BW | B&W mix | P1 | ✅ | `ctl:bw.*`, `cmd:develop.autoBwMix`, `crates/pipeline/src/bw_cr.rs` | eight bands rendered as Camera Raw does (RAWmakase's measured grey chart, Bryan's fork): oracle grid 0.74 → 0.33 ΔE at the default mix, single bands ±60 1.0–3.0 → 0.35–0.72 (`docs/lr-match.md` → Round 10); Auto pushes each hue band's colourful pixels away from the mean lightness (own rule, not Camera Raw's) |
+| LR-EDIT-COLOR-POINTCOLOR | Point colour | P1 | ✅ | `cmd:pointColor.pick`, `cmd:pointColor.delete`, `crates/pipeline/src/point_color_cr.rs` | Lightroom's swatches (XMP's 19-number form + `ColorVariance`, the catalog's fields) keep their own sample and render with Camera Raw's model (oracle 0.50–1.09 → 0.43–0.50 ΔE, `docs/lr-match.md` → Round 10); swatches picked in LightCraft use its own OkLCh model |
+| LR-EDIT-COLOR-GRADING | Colour grading wheels | P0 | ✅ | `ctl:grading.*`, `crates/pipeline/src/grading_cr.rs` | Camera Raw's per-channel curves (RAWmakase's measurements): oracle grid 2.2–14.2 → 0.4–0.8 ΔE for the wheels, Luminance, Blending, Balance, split toning; Shadows at 100 sat 3.1 (`docs/lr-match.md` → Round 10); legacy Split Toning (no `ColorGradeBlending`) reads as Blending 100 |
+| LR-EDIT-EFFECTS-TEXTURE | Texture | P0 | ✅ | `ctl:effects.texture`, `crates/pipeline/src/texture_cr.rs` | Camera Raw's band (RAWmakase's pyramid, per channel, full-resolution pixels): oracle gratings 1.07 → 0.79 ΔE (base 0.70), frequency response within ~0.07 of Camera Raw's gain; the colour grid is still 3.2 ΔE at +50 (`docs/lr-match.md` → Round 10) |
+| LR-EDIT-EFFECTS-CLARITY | Clarity | P0 | 🟡 | `ctl:effects.clarity` | works, but not as Camera Raw renders it: Camera Raw's is relative to the photo's brightest levels (a full-frame grating near the top barely moves) and acts at scales up to ~15 % of the long edge; ours is one 1.2 % edge-aware band, 1.0–3.8 ΔE on the oracle grid (`docs/lr-match.md` → Round 10). RAWmakase's 4-scale model is the next port |
+| LR-EDIT-EFFECTS-DEHAZE | Dehaze | P0 | 🟡 | `ctl:effects.dehaze`, `crates/pipeline/src/dehaze_cr.rs` | negative Dehaze is Camera Raw's per-channel curve (oracle grid 7.1 / 11.8 → 1.4 / 3.2 ΔE at −25 / −50); positive Dehaze is LightCraft's own dark-channel removal, 0.6–2.7 ΔE on the grid, 6.7 at +100 on the spatial scene (crushes the darks) (`docs/lr-match.md` → Round 10) |
 | LR-EDIT-EFFECTS-VIGNETTE | Post-crop vignette | P0 | ✅ | `ctl:vignette.*`, `crates/pipeline/src/finish.rs`, `crates/ui-egui/src/panels/edit.rs` | style picker (Highlight / Color / Paint) in the Effects section |
 | LR-EDIT-EFFECTS-GRAIN | Grain | P1 | ✅ | `ctl:grain.*` | strength, cell size and tone response measured against Camera Raw (`docs/lr-match.md` → Round 9): within ~5 % at 6,000 px |
 | LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | ✅ | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking` | amount / radius / detail / edge masking refitted to Camera Raw at 1:1 (`docs/lr-match.md` → Round 9); no Alt-drag mask preview |
@@ -361,7 +361,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-MASK-INVERT | Invert | P0 | ✅ | `cmd:mask.invert` | |
 | LR-MASK-AMOUNT | Mask amount | P1 | ✅ | `cmd:mask.adjust` (`amount`), `crates/ui-egui/src/panels/masking.rs` | |
 | LR-MASK-FEATHER-EDGE | Refine mask edges | P2 | ✅ | `cmd:mask.refine`, `crates/pipeline/src/masks.rs` (`evaluate_one`) | Refine Edges slider per mask: guided filter on the photo's luminance snaps soft mask edges to the photo's edges (rendered on the CPU) |
-| LR-MASK-SLIDERS | Local adjustment sliders | P0 | ✅ | `cmd:mask.adjust`, `crates/pipeline/src/finish.rs` | every slider renders (CPU + GPU), incl. Noise, Moiré, Defringe (negative Defringe has no effect); no local curve or effect presets |
+| LR-MASK-SLIDERS | Local adjustment sliders | P0 | ✅ | `cmd:mask.adjust`, `crates/pipeline/src/finish.rs`, `crates/pipeline/src/local_tone_cr.rs` | every slider renders (CPU + GPU), incl. Noise, Moiré, Defringe (negative Defringe has no effect); no local curve or effect presets. Against Camera Raw (`docs/lr-match.md` → Round 10): Exposure, Contrast, Whites, Blacks, Texture, negative Dehaze match (≤ 0.9 ΔE; Contrast / Whites / Blacks are Camera Raw's measured curves); Highlights / Shadows (1.3 / 1.4), Clarity (2.1) and positive Dehaze (1.9) still differ |
 | LR-MASK-EFFECTS | Local adjustment ("Effect") presets | P1 | ✅ | `cmd:mask.effects`, `cmd:mask.applyEffect`, `cmd:mask.saveEffect`, `cmd:mask.deleteEffect`, `cmd:mask.importEffects`, `cmd:mask.exportEffects`, `crates/ui-egui/src/panels/mask_effects.rs` | Masking ▸ Effect menu (groups, natural order), save. / del. / import.; `mask.importEffects {lightroom: true}` reads the `.lrtemplate` / Camera Raw local presets Lightroom keeps on this Mac in place (Burn, Dodge, Soften Skin…; never copied into the repo); a new mask starts with the effect last applied to one of its kind. Ported from upstream (no rename / group / favourite UI yet: commands only) |
 | LR-MASK-OVERLAY | Mask overlay | P0 | ✅ | `cmd:view.maskOverlay`, `cmd:view.maskOverlayMode`, `cmd:view.maskOverlayColor`, `crates/pipeline/src/visualize.rs` | rendered alpha of the selected mask (CPU + GPU): colour, colour on B&W, image on black/white, white on black; ⇧O cycles while masking; no auto-show on hover |
 | LR-MASK-PINS | Pins | P1 | ✅ | `cmd:view.maskPins`, `crates/ui-egui/src/panels/detail.rs` | a pin per radial/linear/brush component: click selects its mask, drag moves it; no pins for range/AI components, no Auto mode |

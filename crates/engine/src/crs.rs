@@ -342,6 +342,13 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
     n(o, "ColorGradeGlobalSat", "grading.global.sat");
     n(o, "ColorGradeGlobalLum", "grading.global.lum");
     n(o, "ColorGradeBlending", "grading.blending");
+    // Settings from before Color Grading (Split Toning only, no `ColorGradeBlending`) render
+    // as legacy split toning, i.e. at Blending 100 (Camera Raw oracle, round 10: a shadows-only
+    // tint without the key spreads over the midtones exactly as Blending 100 does)
+    let split = ["crs:SplitToningShadowSaturation", "crs:SplitToningHighlightSaturation"].iter().any(|k| num(props, k).is_some_and(|v| v != 0.0));
+    if split && num(props, "crs:ColorGradeBlending").is_none() {
+        put(o, "grading.blending", json!(100.0));
+    }
     n(o, "SplitToningBalance", "grading.balance");
 
     // ---- Detail
@@ -746,6 +753,23 @@ mod tests {
         );
         let c = s.crop.geometry;
         assert_eq!((c.rect.x0, c.rect.y0, c.rect.x1, c.rect.y1, c.angle), (0.05, 0.1, 0.8, 0.9, -1.5), "crs:CropAngle turns the other way");
+    }
+
+    /// R20: Split Toning without Color Grading's `ColorGradeBlending` renders as legacy split
+    /// toning (Blending 100, Camera Raw oracle); an explicit Blending is kept.
+    #[test]
+    fn legacy_split_toning_blends_at_100() {
+        let x = |extra: &str| {
+            format!(
+                r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
+            xmlns:c="http://ns.adobe.com/camera-raw-settings/1.0/" c:SplitToningShadowHue="210" c:SplitToningShadowSaturation="20" {extra}/></rdf:RDF>"#
+            )
+        };
+        assert_eq!(to_partial(&props(&x("")), None)["grading"]["blending"], json!(100.0));
+        assert_eq!(to_partial(&props(&x(r#"c:ColorGradeBlending="50""#)), None)["grading"]["blending"], json!(50.0));
+        let none = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description
+            xmlns:c="http://ns.adobe.com/camera-raw-settings/1.0/" c:SplitToningShadowHue="210" c:SplitToningShadowSaturation="0"/></rdf:RDF>"#;
+        assert!(to_partial(&props(none), None)["grading"].get("blending").is_none());
     }
 
     #[test]

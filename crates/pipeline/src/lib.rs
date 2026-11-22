@@ -25,22 +25,28 @@
 
 pub mod adobe;
 pub mod auto;
+pub mod bw_cr;
 pub mod colorops;
 pub mod colortab;
 pub mod cull;
+pub mod dehaze_cr;
 pub mod dump;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod grading_cr;
 pub mod local;
+pub mod local_tone_cr;
 pub mod lut;
 pub mod masks;
 pub mod optics;
 pub mod output;
 pub mod parametric_adobe;
+pub mod point_color_cr;
 pub mod profiles;
 pub mod redeye;
 pub mod spots;
+pub mod texture_cr;
 pub mod tone;
 pub mod tone_adobe;
 pub mod transform;
@@ -255,7 +261,13 @@ pub(crate) struct Prepared {
     pub tone_stats: Option<tone::lr::ToneStats>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
+    /// Camera Raw's Texture detail ([`texture_cr`]): each channel's log2 change per unit of
+    /// strength.
+    pub texture_detail: Option<Arc<Rgb32f>>,
     pub dark: Option<Arc<Plane>>,
+    /// The photo's 99th log2 luminance percentile before exposure ([`dehaze_cr::p99_of`]), when
+    /// negative Dehaze may apply.
+    pub p99: Option<f32>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
     /// Airlight of `dark` (before exposure).
@@ -538,7 +550,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if p.key == lin_key => p,
         _ => local::Planes { key: lin_key, ..Default::default() },
     };
-    let prep = local::prepare(lin.clone(), s, frame, px_per_long, req.quality, &mut planes);
+    let prep = local::prepare(lin.clone(), s, frame, px_per_long, info.native_long, req.quality, &mut planes);
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });
@@ -613,6 +625,12 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
     let mut b = DevelopSettings { crop: s.crop, orientation: s.orientation, ..DevelopSettings::default() };
     b.wb = lightcraft_develop::WhiteBalance { mode: lightcraft_develop::WbMode::AsShot, ..b.wb };
     b
+}
+
+/// Settings the GPU kernel doesn't render yet: such renders take the CPU pipeline (none at the
+/// moment; round 10's measured operators all have a kernel path).
+pub fn cpu_only(_s: &DevelopSettings) -> bool {
+    false
 }
 
 pub(crate) fn is_bw(s: &DevelopSettings) -> bool {

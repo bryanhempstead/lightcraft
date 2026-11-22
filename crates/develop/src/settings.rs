@@ -303,6 +303,24 @@ pub struct PointColor {
     pub hue_range: f64,
     pub sat_range: f64,
     pub lum_range: f64,
+    /// Lightroom's own sample and ranges, when the swatch came from Lightroom (XMP
+    /// `crs:PointColors` or the catalog): rendered with Camera Raw's model then (Bryan's fork,
+    /// `lightcraft_pipeline::point_color_cr`), with this swatch's shifts, Range and Variance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lr: Option<LrSwatch>,
+}
+
+/// Lightroom's Point Color sample: HSV of linear ProPhoto RGB (hue in sixths of a turn, 0..6;
+/// saturation; value, linear 0..1) and the hue / saturation / luminance ranges (outer, inner,
+/// inner, outer points; hue across the swatch's window with the swatch at 0.5, saturation on HSV
+/// saturation, luminance on sRGB-encoded value).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LrSwatch {
+    pub source: [f64; 3],
+    pub hue_range: [f64; 4],
+    pub sat_range: [f64; 4],
+    pub lum_range: [f64; 4],
 }
 
 impl Default for PointColor {
@@ -319,6 +337,7 @@ impl Default for PointColor {
             hue_range: 50.0,
             sat_range: 50.0,
             lum_range: 50.0,
+            lr: None,
         }
     }
 }

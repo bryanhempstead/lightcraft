@@ -521,6 +521,9 @@ pub struct FinishParams {
     pub air_pre: f32,
     pub gain: f32,
     pub ev: f32,
+    /// Camera Raw's negative Dehaze key (the photo's 99th log2 luminance percentile plus
+    /// Exposure, [`crate::dehaze_cr`]) when it applies; read by the GPU kernel.
+    pub dz_key: Option<f32>,
     /// Grain ([`grain_params`]): amplitude, cells per long edge, seed.
     pub grain: Option<(f32, f32, u32)>,
     /// Output px → normalized oriented coordinates.
@@ -624,6 +627,7 @@ impl FinishParams {
             air_pre,
             gain,
             ev,
+            dz_key: None,
             grain,
             out_to_norm: frame.out_to_norm(w, h),
             ow: frame.ow,
@@ -795,6 +799,14 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 if dz > 0.0 {
                     let t = (1.0 - 0.95 * dz.min(1.0) * d).max(0.12);
                     c = c.map(|v| ((v - air * (1.0 - t)) / t).max(0.0));
+                } else if let Some(p99) = p.p99.filter(|_| crate::dehaze_cr::MEASURED) {
+                    // Camera Raw's negative Dehaze (`dehaze_cr`): a tone curve per ProPhoto
+                    // channel, relative to the photo's 99th percentile
+                    let key = p99 + ev;
+                    let m = crate::colorops::pp_matrices();
+                    let q = mul3(&m.0, c);
+                    let q = q.map(|v| if v > 0.0 { v * crate::dehaze_cr::gain(dz.max(-1.0), key, crate::dehaze_cr::level(v)).exp2() } else { v });
+                    c = mul3(&m.1, q);
                 } else {
                     let k = (-dz).min(1.0) * 0.7 * (0.35 + 0.65 * d);
                     c = c.map(|v| v + (air * 0.9 - v) * k);
@@ -835,14 +847,20 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 };
                 delta += wb * legacy(base) + (1.0 - wb) * legacy(l1);
             }
-            if l_wh != 0.0 {
-                delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);
-            }
-            if l_bl != 0.0 {
-                delta += l_bl * 0.8 * (1.0 - smooth(-6.0, -1.5, l1));
-            }
-            if l_con != 0.0 {
-                delta += l_con * 0.14 * l1.clamp(-6.0, 4.0);
+            if crate::local_tone_cr::MEASURED {
+                // Camera Raw's local Contrast / Whites / Blacks (`local_tone_cr`): curves of the level
+                use crate::local_tone_cr::{BLACKS, CONTRAST, WHITES, at};
+                delta += at(&WHITES, l_wh, l1) + at(&BLACKS, l_bl, l1) + at(&CONTRAST, l_con, l1);
+            } else {
+                if l_wh != 0.0 {
+                    delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);
+                }
+                if l_bl != 0.0 {
+                    delta += l_bl * 0.8 * (1.0 - smooth(-6.0, -1.5, l1));
+                }
+                if l_con != 0.0 {
+                    delta += l_con * 0.14 * l1.clamp(-6.0, 4.0);
+                }
             }
             let cl = clar + l_clar;
             if cl != 0.0
@@ -853,7 +871,17 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
             }
             let tx = tex + l_tex;
-            if tx != 0.0
+            // Camera Raw's Texture (`texture_cr`): each channel's pyramid detail, scaled
+            let tex_gain = match &p.texture_detail {
+                Some(d) if tx != 0.0 => {
+                    let k = crate::texture_cr::strength(tx);
+                    let dd = d.data[i];
+                    Some([(k * dd[0]).exp2(), (k * dd[1]).exp2(), (k * dd[2]).exp2()])
+                }
+                _ => None,
+            };
+            if tex_gain.is_none()
+                && tx != 0.0
                 && let Some(b) = &p.texture_blur
             {
                 let det = l_pre - b.data[i];
@@ -878,6 +906,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             if delta != 0.0 {
                 let g = delta.exp2();
                 c = c.map(|v| v * g);
+            }
+            if let Some(g) = tex_gain {
+                c = [c[0] * g[0], c[1] * g[1], c[2] * g[2]];
             }
 
             let tone_in = c;

@@ -16,3 +16,8 @@ plan/
 *.safetensors.part
 # Adobe's DNG SDK (tools/fetch-dng-sdk.sh): never committed (Adobe's licence terms are not in the download)
 /vendor/
+# Camera Raw oracle run files (tools/lr-compare/oracle/ps.sh)
+tools/lr-compare/oracle/manifest.txt
+tools/lr-compare/oracle/batch.log
+tools/lr-compare/oracle/.batch-run.jsx
+tools/lr-compare/oracle/.run.applescript
