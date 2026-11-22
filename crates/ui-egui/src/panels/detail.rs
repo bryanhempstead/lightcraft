@@ -1556,7 +1556,14 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
     for (i, s) in d.spots.iter().enumerate() {
         let r = (s.size * long) as f32;
         let sel = Some(i) == active;
-        let col = Color32::from_white_alpha(if sel { 230 } else { 150 });
+        // a spot over a whole detected object has hundreds of points: draw it quieter unless selected
+        let col = Color32::from_white_alpha(if sel {
+            230
+        } else if s.points.len() > 24 {
+            60
+        } else {
+            150
+        });
         for q in &s.points {
             p.circle_stroke(map.screen(*q), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
         }
@@ -1575,6 +1582,46 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         pin(&p, tq, sel);
         register(ui.ctx(), format!("spotPin:{i}"), Rect::from_center_size(tq, vec2(14.0, 14.0)));
         grips.push((i, false, tq, r));
+    }
+    // Remove ▸ Detect: the candidates, highlighted when hovered (here or on their chip) and when picked
+    let photo_hover = resp.hover_pos().and_then(|q| candidate_at(app, map, q, long));
+    if app.session.remove_found.photo == app.session.active() {
+        let accent = Tokens::get(ui.ctx()).accent;
+        for (i, c) in app.session.remove_found.items.iter().enumerate() {
+            let picked = app.ui.remove_picked.contains(&i);
+            let hot = photo_hover == Some(i) || app.ui.remove_hover_chip == Some(i);
+            let a = map.screen(Point::new(c.rect[0], c.rect[1]));
+            let b = map.screen(Point::new(c.rect[2], c.rect[3]));
+            let rect = Rect::from_two_pos(a, b);
+            if picked || hot {
+                let fill = if picked { accent.gamma_multiply(0.22) } else { Color32::from_white_alpha(28) };
+                for s in &c.spots {
+                    let r = (s.size * long) as f32;
+                    for q in &s.points {
+                        p.circle_filled(map.screen(*q), r, fill);
+                    }
+                }
+            }
+            let col = if picked {
+                accent
+            } else if hot {
+                Color32::WHITE
+            } else {
+                Color32::from_white_alpha(140)
+            };
+            if c.kind == lightcraft_engine::remove_detect::Kind::Dust {
+                // dust is scattered: a ring on each speck, no box
+                for s in &c.spots {
+                    for q in &s.points {
+                        p.circle_stroke(map.screen(*q), ((s.size * long) as f32).max(4.0), Stroke::new(1.0, col));
+                    }
+                }
+            } else {
+                p.rect_stroke(rect, 2.0, Stroke::new(if picked || hot { 1.5 } else { 1.0 }, col), egui::StrokeKind::Outside);
+                p.text(rect.left_top() + vec2(4.0, 4.0), egui::Align2::LEFT_TOP, &c.label, egui::FontId::proportional(12.0), col);
+            }
+            register(ui.ctx(), format!("removeCandidate:{i}"), rect);
+        }
     }
     let r = (app.ui.remove_size as f64 * long) as f32;
     // a target or source under `q`: the selected spot's first, then the nearest pin
@@ -1651,6 +1698,15 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         let _ = app.run("spot.select", json!({"index": spot}));
         return;
     }
+    // a click on a detected object picks it (⌘ adds / removes, ⇧ the run from the last one); painting still drags
+    if resp.clicked()
+        && let Some(i) = press.and_then(|q| candidate_at(app, map, q, long))
+    {
+        let m = ui.input(|i| i.modifiers);
+        let n = app.session.remove_found.items.len();
+        pick_candidate(app, i, n, m.command, m.shift);
+        return;
+    }
     if let Some(q) = resp.interact_pointer_pos()
         && (resp.drag_started() || resp.dragged() || resp.clicked())
     {
@@ -1675,11 +1731,65 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
             _ => "remove",
         };
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
-        let _ = app.run(
+        // Use Generative AI: Remove and Fill strokes become generative spots (Heal and Clone keep their source)
+        let generative = app.ui.remove_generative && matches!(mode, "remove" | "fill");
+        match app.run(
             "spot.add",
-            json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
-        );
+            json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "generative": generative}),
+        ) {
+            Ok(r) => {
+                if let Some(n) = r["notice"].as_str()
+                    && !app.session.genremove.missing_said
+                {
+                    app.session.genremove.missing_said = true;
+                    app.toast_for(ui.ctx(), n.to_string(), 6.0);
+                }
+            }
+            Err(e) => app.toast(ui.ctx(), e.to_string()),
+        }
     }
+}
+
+/// The detected object (Remove ▸ Detect) under screen point `q`: inside one of its discs; the smallest wins.
+fn candidate_at(app: &LightcraftApp, map: &CanvasMap, q: Pos2, long: f64) -> Option<usize> {
+    if app.session.remove_found.photo != app.session.active() {
+        return None;
+    }
+    app.session
+        .remove_found
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.spots.iter().any(|s| s.points.iter().any(|p| map.screen(*p).distance(q) <= (s.size * long) as f32)))
+        .min_by(|a, b| {
+            let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+            area(&a.1.rect).partial_cmp(&area(&b.1.rect)).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| i)
+}
+
+/// Pick detected object `i` of `n`: click = just this one, ⌘ = add / remove it, ⇧ = the run from the last click.
+pub(crate) fn pick_candidate(app: &mut LightcraftApp, i: usize, n: usize, command: bool, shift: bool) {
+    let picked = &mut app.ui.remove_picked;
+    picked.retain(|p| *p < n);
+    if shift && let Some(a) = app.ui.remove_pick_anchor.filter(|a| *a < n) {
+        for k in a.min(i)..=a.max(i) {
+            if !picked.contains(&k) {
+                picked.push(k);
+            }
+        }
+    } else if command {
+        match picked.iter().position(|p| *p == i) {
+            Some(k) => {
+                picked.remove(k);
+            }
+            None => picked.push(i),
+        }
+    } else {
+        *picked = vec![i];
+    }
+    picked.sort_unstable();
+    app.ui.remove_pick_anchor = Some(i);
 }
 
 // ------------------------------------------------------------------------ red eye

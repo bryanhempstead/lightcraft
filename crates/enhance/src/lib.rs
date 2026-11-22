@@ -8,6 +8,8 @@
 //!   once, like Lightroom's Denoise.
 //! - [`esrgan`]: 2× Super Resolution (Real-ESRGAN x2plus).
 //! - [`depth`]: relative depth (Depth Anything V2 Small).
+//! - [`lama`]: Generative Remove's inpainting (LaMa, big-lama).
+//! - [`dsrnet`]: Remove reflections (DSRNet with VGG-19 features).
 //!
 //! Model files are hostile input: sizes are capped and checked, a malformed file is an error, never a panic.
 //!
@@ -38,9 +40,13 @@ mod dinov2;
 #[cfg(feature = "models")]
 pub mod depth;
 #[cfg(feature = "models")]
+pub mod dsrnet;
+#[cfg(feature = "models")]
 pub mod esrgan;
 #[cfg(feature = "models")]
 pub mod job;
+#[cfg(feature = "models")]
+pub mod lama;
 #[cfg(feature = "models")]
 pub mod netrun;
 

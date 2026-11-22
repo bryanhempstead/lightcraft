@@ -5,6 +5,11 @@
 //!   (frequency separation — a fast, stable approximation of gradient-domain healing).
 //! - **Remove** is Heal with an automatically chosen source: candidate offsets on rings around the
 //!   spot are scored by how well the source's surrounding annulus matches the target's.
+//! - **Generative** (a Fill spot with [`Spot::generative`]): the pixels an inpainting model made for the spot
+//!   ([`GenFill`], handed over by the engine through [`set_gen_loader`]) in normalized photo coordinates, resampled
+//!   to the output's resolution; without them (no model, not made yet) the spot is filled like any Fill spot.
+
+use std::sync::{Arc, PoisonError, RwLock};
 
 use lightcraft_develop::{Spot, SpotMode};
 use lightcraft_geom::Point;
@@ -120,13 +125,143 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
     }
 }
 
+/// Generative Remove's pixels for one spot.
+pub struct GenFill {
+    /// [`gen_geometry`] of the spot they were made for: a moved or resized spot doesn't use them.
+    pub geometry: u64,
+    /// The rectangle they cover, normalized photo coordinates `[x0, y0, x1, y1]` (like the spot's points).
+    pub rect: [f64; 4],
+    /// Scene-linear working RGB *before* white balance (so a later white-balance change applies to them too).
+    pub image: Rgb32f,
+}
+
+/// Finds the pixels a [`lightcraft_develop::Generative::name`] names (the engine's cache).
+pub type GenLoader = dyn Fn(&str) -> Option<Arc<GenFill>> + Send + Sync;
+
+static LOADER: RwLock<Option<Arc<GenLoader>>> = RwLock::new(None);
+
+/// Install (or remove) the function renders get Generative Remove pixels from.
+pub fn set_gen_loader(f: Option<Arc<GenLoader>>) {
+    *LOADER.write().unwrap_or_else(PoisonError::into_inner) = f;
+}
+
+/// FNV-1a: stable across builds (the hash is stored with generated pixels).
+fn fnv(bytes: impl IntoIterator<Item = u8>) -> u64 {
+    bytes.into_iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// What a spot's generated pixels depend on in the spot itself: where it is and how big (feather and opacity
+/// only blend them).
+pub fn gen_geometry(spot: &Spot) -> u64 {
+    let nums = spot.points.iter().flat_map(|p| [p.x, p.y]).chain([spot.size]);
+    fnv(nums.flat_map(|v| v.to_bits().to_le_bytes()))
+}
+
+/// The pixels `name` names, through the installed loader.
+pub fn load_named(name: &str) -> Option<Arc<GenFill>> {
+    let load = LOADER.read().unwrap_or_else(PoisonError::into_inner).clone()?;
+    load(name)
+}
+
+/// Tests: pixels by name, served by a loader over this list (one for every test in the crate: the loader is
+/// process-wide).
+#[cfg(test)]
+pub(crate) fn test_fill(name: &str, fill: GenFill) {
+    static FILLS: std::sync::Mutex<Vec<(String, Arc<GenFill>)>> = std::sync::Mutex::new(Vec::new());
+    fn find(name: &str) -> Option<Arc<GenFill>> {
+        FILLS.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(n, _)| n == name).map(|(_, f)| f.clone())
+    }
+    FILLS.lock().unwrap_or_else(PoisonError::into_inner).push((name.to_string(), Arc::new(fill)));
+    set_gen_loader(Some(Arc::new(find)));
+}
+
+/// The generated pixels of `spot`, when it is a generative spot and they are there for its current geometry.
+pub fn gen_fill(spot: &Spot) -> Option<Arc<GenFill>> {
+    let g = spot.generative.as_ref()?;
+    let fill = load_named(&g.name())?;
+    let ok = fill.geometry == gen_geometry(spot)
+        && fill.image.width > 0
+        && fill.image.height > 0
+        && fill.image.data.len() == fill.image.width * fill.image.height
+        && fill.rect.iter().all(|v| v.is_finite())
+        && fill.rect[2] > fill.rect[0]
+        && fill.rect[3] > fill.rect[1];
+    ok.then_some(fill)
+}
+
+/// Which generative spots have their pixels (part of the scene-linear stage's cache key: pixels that arrive later
+/// must replace the stand-in fill).
+pub fn gen_state(spots: &[Spot]) -> u64 {
+    spots
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.generative.is_some())
+        .fold(0, |h, (i, s)| if gen_fill(s).is_some() { h ^ (i as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15) } else { h })
+}
+
+/// The generated pixels under the stroke (`alpha > 0`) of the box at `(x0, y0)`, resampled from `g` (averaging
+/// several of its pixels when they are finer than the output's) and white-balanced like the photo.
+fn generated_box(
+    src: &mut [[f32; 3]],
+    alpha: &[f32],
+    g: &GenFill,
+    wb: Option<[[f32; 3]; 3]>,
+    to_norm: &lightcraft_geom::Affine,
+    (x0, y0, bw, bh): (usize, usize, usize, usize),
+) {
+    let (gw, gh) = (g.image.width as f64, g.image.height as f64);
+    let (rw, rh) = (g.rect[2] - g.rect[0], g.rect[3] - g.rect[1]);
+    let at = |px: f64, py: f64| {
+        let n = to_norm.apply(Point::new(px, py));
+        ((n.x - g.rect[0]) / rw * gw, (n.y - g.rect[1]) / rh * gh)
+    };
+    // generated pixels per output pixel
+    let (a, b) = (at(0.0, 0.0), at(1.0, 0.0));
+    let k = (b.0 - a.0).hypot(b.1 - a.1);
+    let taps = if k.is_finite() { (k.ceil() as usize).clamp(1, 4) } else { 1 };
+    for y in 0..bh {
+        for x in 0..bw {
+            let i = y * bw + x;
+            if alpha.get(i).is_none_or(|a| *a <= 0.0) {
+                continue;
+            }
+            let mut acc = [0f32; 3];
+            for ty in 0..taps {
+                for tx in 0..taps {
+                    let (px, py) = ((x0 + x) as f64 + (tx as f64 + 0.5) / taps as f64, (y0 + y) as f64 + (ty as f64 + 0.5) / taps as f64);
+                    let (u, v) = at(px, py);
+                    let c = g.image.sample_bilinear(u as f32, v as f32);
+                    for (o, c) in acc.iter_mut().zip(c) {
+                        *o += c;
+                    }
+                }
+            }
+            let n = (taps * taps) as f32;
+            let c = acc.map(|v| v / n);
+            let c = match &wb {
+                Some(m) => std::array::from_fn(|r| m[r][0] * c[0] + m[r][1] * c[1] + m[r][2] * c[2]),
+                None => c,
+            };
+            if let Some(d) = src.get_mut(i) {
+                *d = c;
+            }
+        }
+    }
+}
+
 /// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit.
 pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
+    apply_with_wb(img, spots, frame, ppl, None);
+}
+
+/// [`apply`], with the white balance `img` has (generated pixels are kept before it).
+pub fn apply_with_wb(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, wb: Option<[[f32; 3]; 3]>) {
     if spots.is_empty() {
         return;
     }
     let (w, h) = (img.width, img.height);
     let to_out = frame.norm_to_out(w, h);
+    let to_norm = frame.out_to_norm(w, h);
     for spot in spots {
         let r = (spot.size * ppl).max(1.0) as f32;
         let pts: Vec<(f32, f32)> = spot
@@ -138,6 +273,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
             })
             .collect();
         let Some(&first) = pts.first() else { continue };
+        let generated = if spot.mode == SpotMode::Fill { gen_fill(spot) } else { None };
         let fill = spot.mode == SpotMode::Fill;
         let offset = match spot.source_offset {
             _ if fill => (0.0, 0.0),
@@ -170,18 +306,40 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
         let mut alpha = vec![0.0f32; bw * bh];
         let mut src = vec![[0.0f32; 3]; bw * bh];
         let mut tgt = vec![[0.0f32; 3]; bw * bh];
+        // distance to the nearest point, from each point's own neighbourhood (a spot covering a detected object has
+        // hundreds of points; beyond a radius a point doesn't change the alpha)
+        let mut dist = vec![f32::MAX; bw * bh];
+        for p in &pts {
+            if !(p.0.is_finite() && p.1.is_finite()) {
+                continue;
+            }
+            let lo = |c: f32, b: usize| ((c - r - 1.0).floor().max(b as f32) as usize).saturating_sub(b);
+            let hi = |c: f32, b: usize, n: usize| (((c + r + 1.0).ceil().max(0.0) as usize).saturating_sub(b)).min(n);
+            for y in lo(p.1, by0)..hi(p.1, by0, bh) {
+                for x in lo(p.0, bx0)..hi(p.0, bx0, bw) {
+                    let (px, py) = ((bx0 + x) as f32 + 0.5, (by0 + y) as f32 + 0.5);
+                    let d = ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt();
+                    if let Some(m) = dist.get_mut(y * bw + x) {
+                        *m = m.min(d);
+                    }
+                }
+            }
+        }
         for y in 0..bh {
             for x in 0..bw {
                 let (px, py) = ((bx0 + x) as f32 + 0.5, (by0 + y) as f32 + 0.5);
-                let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
-                let inner = r * (1.0 - feather * 0.8);
+                let d = dist[y * bw + x];
+                // a generated fill replaces the spot outright: its feather only softens the rim
+                let inner = if generated.is_some() { r * (1.0 - feather * 0.25) } else { r * (1.0 - feather * 0.8) };
                 alpha[y * bw + x] = (1.0 - smooth(inner, r, d)) * opacity;
                 src[y * bw + x] = img.sample_bilinear(px + offset.0, py + offset.1);
                 tgt[y * bw + x] = img.get(bx0 + x, by0 + y);
             }
         }
-        if fill {
-            fill_box(&mut src, &tgt, &alpha, bw, bh);
+        match &generated {
+            Some(g) => generated_box(&mut src, &alpha, g, wb, &to_norm, (bx0, by0, bw, bh)),
+            None if fill => fill_box(&mut src, &tgt, &alpha, bw, bh),
+            None => {}
         }
         let heal = matches!(spot.mode, SpotMode::Remove | SpotMode::Heal);
         let low = if heal {
@@ -322,6 +480,53 @@ mod tests {
             let spot = Spot { mode: SpotMode::Fill, points: vec![Point::new(p.0, p.1)], size, ..Default::default() };
             apply(&mut img, &[spot], &frame, frame.px_per_long(40));
             assert!(img.data.iter().flatten().all(|v| v.is_finite()));
+        }
+    }
+
+    #[test]
+    fn generated_pixels_render_at_any_size_white_balanced_and_only_for_their_spot() {
+        let spot = Spot {
+            mode: SpotMode::Fill,
+            points: vec![Point::new(0.5, 0.5)],
+            size: 0.1,
+            feather: 0.0,
+            generative: Some(lightcraft_develop::Generative { variation: 0, count: 3, key: "00000000000000ab".into() }),
+            ..Default::default()
+        };
+        // a left-to-right ramp over the middle of the photo
+        let image = Rgb32f::from_fn(100, 100, |x, _| [x as f32 / 100.0, 0.5, 0.25]);
+        test_fill("00000000000000ab-0", GenFill { geometry: gen_geometry(&spot), rect: [0.25, 0.25, 0.75, 0.75], image });
+        assert_ne!(gen_state(std::slice::from_ref(&spot)), 0);
+        for w in [80usize, 400] {
+            let mut img = Rgb32f::from_fn(w, w, |_, _| [0.1; 3]);
+            let frame = Frame::new(w, w, &DevelopSettings::default(), true);
+            apply_with_wb(
+                &mut img,
+                std::slice::from_ref(&spot),
+                &frame,
+                frame.px_per_long(w),
+                Some([[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+            );
+            let c = img.get(w / 2, w / 2);
+            // the middle of the ramp (0.5), red doubled by the white balance
+            assert!((c[0] - 1.0).abs() < 0.05 && (c[1] - 0.5).abs() < 0.02 && (c[2] - 0.25).abs() < 0.02, "{w}: {c:?}");
+            let left = img.get(w / 2 - w / 20, w / 2)[0];
+            assert!(left < c[0], "the ramp runs left to right: {left} vs {}", c[0]);
+            // outside the spot the photo is untouched
+            assert_eq!(img.get(2, 2), [0.1; 3]);
+        }
+        // another variation (none made) and a moved spot fall back to content-aware fill
+        let mut other = spot.clone();
+        other.generative.as_mut().unwrap().variation = 1;
+        let mut moved = spot.clone();
+        moved.points[0].x = 0.51;
+        for sp in [other, moved] {
+            assert!(gen_fill(&sp).is_none());
+            assert_eq!(gen_state(std::slice::from_ref(&sp)), 0);
+            let mut img = Rgb32f::from_fn(80, 80, |_, _| [0.1; 3]);
+            let frame = Frame::new(80, 80, &DevelopSettings::default(), true);
+            apply(&mut img, &[sp], &frame, frame.px_per_long(80));
+            assert!((img.get(40, 40)[0] - 0.1).abs() < 0.02);
         }
     }
 

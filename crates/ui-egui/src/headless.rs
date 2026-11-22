@@ -189,6 +189,8 @@ impl Headless {
             // AI masks being computed (a script waits for them like for a render)
             || self.app.session.segmenter.busy()
             || self.app.session.segmenter.auto_busy()
+            // Generative Remove making its pixels
+            || self.app.session.genremove.busy() > 0
     }
 
     /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in

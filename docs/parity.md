@@ -29,7 +29,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | F. Edit panel — global adjustments (EDIT) | 43 | 7 | 0 | 1 | 24/28 (86%) | 13/15 (87%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
-| I. Remove / healing (REM) | 9 | 1 | 1 | 2 | 4/4 (100%) | 3/3 (100%) |
+| I. Remove / healing (REM) | 11 | 2 | 0 | 0 | 4/4 (100%) | 3/4 (75%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
 | K. Masking (MASK) | 21 | 2 | 1 | 0 | 8/8 (100%) | 6/6 (100%) |
 | L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
@@ -46,11 +46,11 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | W. Cloud & AI infrastructure (CLOUD / AI) | 2 | 0 | 0 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 17 | 4 | 1 | 1 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 83 | 1 | 1 | 8 | 47/47 (100%) | 23/23 (100%) |
-| Z. Keyboard shortcuts (desktop) | 77 | 3 | 1 | 1 | 49/52 (94%) | 24/24 (100%) |
+| Z. Keyboard shortcuts (desktop) | 78 | 3 | 1 | 0 | 49/52 (94%) | 24/24 (100%) |
 | Lightroom Classic extras | 68 | 20 | 33 | 9 | — | 34/35 (97%) |
-| **Total** | 460 | 54 | 47 | 36 | 189/201 (94%) | 163/169 (96%) |
+| **Total** | 463 | 55 | 46 | 33 | 189/201 (94%) | 163/170 (96%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **86.8%** of 561 in-scope rows — P0 97.0% of 201 · P1 98.2% of 169 · P2 66.1% of 190.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **87.0%** of 564 in-scope rows — P0 97.0% of 201 · P1 97.9% of 170 · P2 66.9% of 192.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -73,7 +73,8 @@ Take the first one nobody is working on.
    Sky, Landscape and People (with their parts) run public SegFormer checkpoints in pure Rust, Object / Describe /
    Subject SAM 3 (`crates/segment`); every model is an optional, consented, hash-pinned download (SAM 3 from
    ungated Hugging Face copies). Left: the SAM 3 subject path verified on real photos, the camera's focus point for
-   Subject, Remove ▸ Detect picking one object at a time with a generative fill. Enhance (Denoise, Raw Details,
+   Subject. Remove ▸ Detect now offers what it finds to pick, and Generative Remove fills with LaMa
+   (`docs/remove.md`; Remove Reflections runs DSRNet; left: diffusion-grade variety, fills above 1024 px, speed). Enhance (Denoise, Raw Details,
    Super Resolution, in place or a new DNG), Lens Blur and Depth Range work (`docs/enhance.md`, open models
    downloaded on request); Super Resolution takes ~35 s per megapixel on an M3 Pro and needs a faster runner.
 7. **Classic output modules** (Book, Slideshow module, Print, online publish services): large, well understood, lower
@@ -324,14 +325,14 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-REM-CONTENTAWARE | Content-aware remove | P1 | ✅ | `cmd:spot.add` (`mode: fill`), `crates/pipeline/src/spots.rs` (`fill_box`), `crates/inpaint/src/lib.rs`, `crates/engine/src/crs_spots.rs` | Remove panel ▸ Fill: the spot is rebuilt from patches of its surroundings (PatchMatch completion, `crates/inpaint` ported from upstream / PhotoCraft; membrane fill when no whole patch fits); Lightroom's content-aware `heal_patchmatch` spots import as Fill; Remove stays heal with an automatic source |
 | LR-REM-HEAL | Heal | P0 | ✅ | `cmd:spot.add` (`mode: heal`) | |
 | LR-REM-CLONE | Clone | P0 | ✅ | `cmd:spot.add` (`mode: clone`) | |
-| LR-REM-GEN | Generative remove | OOS | 🚫 | | |
-| LR-REM-DETECT | Object detection for remove | P2 | 🟡 | `cmd:remove.detect`, `crates/engine/src/segment/mod.rs` (`spots_covering`) | finds people (SAM 3 or the Scene parser), wires and cables (SAM 3) and sensor dust (`cmd:spot.findDust`) and covers each object with content-aware (Fill) Remove spots, brushed along its rows, one undo step; Lightroom lets you pick which detected object to remove first (here every one is added: delete spots you want back) and fills generatively 
+| LR-REM-GEN | Generative remove | P1 | 🟡 | `cmd:spot.add` (`generative`), `cmd:spot.variation`, `cmd:spot.moreVariations`, `cmd:remove.generate`, `cmd:remove.status`, `crates/enhance/src/lama.rs`, `crates/engine/src/genremove.rs`, `crates/pipeline/src/spots.rs` (`GenFill`), `docs/remove.md` | Remove panel ▸ gen.ai. (⌥⇧G): Remove / Fill strokes are filled by LaMa big-lama (Apache-2.0, consented pinned download `enhance.model.download {model: inpaint}`) on candle, matched to the PyTorch reference to 3e-6; three variations (< / >, ⌥← / ⌥→; more. adds three, up to 8); fills are cached outside the catalog in scene-linear light before white balance and remade from the photo when missing (deterministic), resampled at every render size (preview vs 2400 px export < 1 level); without the model the spot is filled with PatchMatch and the panel says so. Left: LaMa is an inpainter, not a diffusion model like Lightroom's, so variations differ less; the model sees at most 1024 px of the spot's surroundings (a larger fill is softer in a full-size export); ~5 s per 1024² variation on an M3 Pro; Lightroom's generative spots in XMP / catalogs aren't imported as generative |
+| LR-REM-DETECT | Object detection for remove | P2 | ✅ | `cmd:remove.detect`, `cmd:remove.candidates`, `cmd:remove.apply`, `cmd:remove.clearCandidates`, `crates/engine/src/remove_detect.rs`, `crates/engine/src/segment/mod.rs` (`spots_covering`), `crates/ui-egui/src/panels/right.rs` (`detect_rows`) | Remove panel ▸ det. (⌥⇧O) finds people (SAM 3 or the Scene parser), wires and cables (SAM 3) and sensor dust and offers them as chips and highlighted outlines on the photo (hover highlights; click, ⌘-click, ⇧-click, all. / none.); rem.N removes the picked ones in one undo step, each object as one Generative Remove spot when the model is installed (else content-aware rows), dust with heal spots. Verified headless on a public-domain photo (7 people found, picked person removed generatively). Wires (SAM 3) not run here; Find Dust Spots over-reports on textured scenes (44 on that photo) |
 | LR-REM-BRUSH-PARAMS | Brush size / feather / opacity | P0 | ✅ | `cmd:spot.add` (`size`, `feather`, `opacity`), `cmd:brush.smaller`, `cmd:brush.larger`, `cmd:brush.featherLess`, `cmd:brush.featherMore`, `crates/ui-egui/src/panels/right.rs` | Size / Feather / Opacity sliders (for new spots and the selected one); `[` `]` size, ⇧`[` ⇧`]` feather (also the Masking brush) |
 | LR-REM-SPOT-EDIT | Edit existing spots | P0 | ✅ | `cmd:spot.select`, `cmd:spot.update`, `cmd:spot.refreshSource`, `cmd:spot.delete` | click a pin to select, drag target or source, ⌫ deletes the selected spot, `/` picks another source; automatic sources are resolved when the spot is added |
 | LR-REM-MARQUEE | Delete spots by rectangle | P2 | ✅ | `cmd:spot.deleteInRect`, `crates/ui-egui/src/panels/detail.rs` (`remove_overlay`) | ⌥-drag a marquee in the Remove tool: the spots whose targets lie inside go, one undo step |
 | LR-REM-VISUALIZE | Visualize spots | P1 | ✅ | `cmd:view.visualizeSpots` | |
-| LR-REM-PEOPLE | Remove people (generative) | OOS | 🚫 | | |
-| LR-REM-REFLECT | Remove reflections | P2 | ⬜ | | |
+| LR-REM-PEOPLE | Remove people (generative) | P2 | ✅ | `cmd:remove.detect`, `cmd:remove.apply`, `docs/remove.md` | Remove ▸ det. lists each person found; picked ones become Generative Remove spots (LaMa) in one undo step |
+| LR-REM-REFLECT | Remove reflections | P2 | 🟡 | `cmd:reflection.set`, `cmd:reflection.status`, `ctl:reflection.amount`, `crates/enhance/src/dsrnet.rs`, `crates/pipeline/src/reflection.rs`, `docs/remove.md` | Remove panel ▸ refl. with rmv. / keep. and Amount: DSRNet (ICCV 2023, Apache-2.0) + VGG-19 features (BSD-3), consented pinned downloads (`enhance.model.download` reflection + vgg19), on candle, matched to the authors' PyTorch code to 1.4e-6; the reflection layer is computed on the whole photo at ≤ 512 px (at 1024 px DSRNet took a wall behind the glass for a reflection), kept before white balance outside the catalog and subtracted at every render size. Left: the layer is only as sharp as the 512 px analysis (soft reflection edges stay on big exports); DSRNet is a 2023 research model (weaker than Lightroom's on strong reflections); Lightroom's own reflection settings in XMP aren't read |
 | LR-REM-DUST | Dust detection | P2 | ✅ | `cmd:spot.findDust`, `cmd:library.lightroomDust`, `crates/pipeline/src/dust.rs`, `crates/engine/src/lr_dust.rs` | Remove panel ▸ Find Dust Spots: small, soft, round dark spots on smooth areas become heal spots (sensitivity; one undo step); Visualize Spots for checking by eye. Photos Lightroom cleaned with its Dust Removal filter (baked patches) get Find Dust Spots inside the areas Lightroom patched, at migration or with `cmd:library.lightroomDust`; a small patch with nothing found gets a heal spot where Lightroom put it |
 | LR-REM-SYNC | Sync spots | P1 | ✅ | `cmd:develop.copy` (`groups`), `crates/develop/src/presets.rs` | |
 
@@ -713,7 +714,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-BA-SPLIT | Split before/after — ⇧Y | P0 | ✅ | `cmd:view.beforeAfterSplit` | |
 | KEY-CHOOSECOPY | Choose settings to copy — ⇧⌘C | P0 | ✅ | `cmd:dialog.copySettings` | |
 | KEY-RESETALL | Reset all — ⇧⌘R | P0 | ✅ | `cmd:develop.reset` | |
-| KEY-GENAI | Generative toggles / variations — ⌥⇧G, ⌥←/→ | OOS | 🚫 | | |
+| KEY-GENAI | Generative toggles / variations — ⌥⇧G, ⌥←/→ | P2 | ✅ | `crates/ui-egui/src/shortcuts.rs` (`genToggle`, `genVariation`), `cmd:spot.variation` | in the Remove tool: ⌥⇧G turns Use Generative AI on and off; ⌥← / ⌥→ (and < / >) show the selected generative spot's other variations |
 | KEY-DETECT | Detect objects — ⌥⇧O | P2 | ✅ | `cmd:remove.detect` | |
 | KEY-CROP-CONSTRAIN | Lock crop aspect — A | P1 | ✅ | `cmd:crop.aspect` (`toggle`, `current`) | A while cropping locks the current shape / unlocks |
 | KEY-CROP-SWAP | Swap crop orientation — X | P0 | ✅ | `cmd:crop.rotateAspect` | |

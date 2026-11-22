@@ -664,7 +664,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Detect Objects to Remove",
             [],
             Some("Alt+Shift+O"),
-            "{people?: bool (true), wires?: bool (true when SAM 3 is installed), dust?: bool (true)} — Lightroom's Remove ▸ Detect: finds people (SAM 3 or the Scene model), wires and cables (SAM 3) and sensor dust, and covers each with content-aware Remove spots (one undo step per kind) → {objects, dust} (in the app people and wires come in the background: {pending})",
+            "{people?: bool (true), wires?: bool (true when SAM 3 is installed), dust?: bool (true), add?: bool (false)} — Lightroom's Remove ▸ Detect: finds people (SAM 3 or the Scene model), wires and cables (SAM 3) and sensor dust and lists them as candidates to pick (remove.candidates, remove.apply) → {candidates: [{index, kind, label, rect}], pending?} (in the app people and wires come in the background); with `add` every object at once becomes content-aware Remove spots → {objects, dust}",
             has_active,
             |s, p| {
                 let c = "remove.detect";
@@ -672,6 +672,49 @@ pub fn specs() -> Vec<CommandSpec> {
                 let people = bool_or(p, "people", true);
                 let wires = p.get("wires").and_then(Value::as_bool).unwrap_or(s.segmenter.installed());
                 let dust = bool_or(p, "dust", true);
+                if !bool_or(p, "add", false) {
+                    s.remove_found_reset(id);
+                    let mut errors = Vec::new();
+                    if dust {
+                        match s.execute("spot.findDust", &json!({"add": false})) {
+                            Ok(r) => {
+                                let base = Spot::default();
+                                let spots: Vec<Spot> = r["spots"]
+                                    .as_array()
+                                    .map(|a| {
+                                        a.iter()
+                                            .filter_map(|d| {
+                                                Some(Spot {
+                                                    mode: SpotMode::Heal,
+                                                    points: vec![Point::new(d["x"].as_f64()?, d["y"].as_f64()?)],
+                                                    size: d["size"].as_f64()?.clamp(SPOT_SIZE.0, SPOT_SIZE.1),
+                                                    feather: base.feather,
+                                                    ..Default::default()
+                                                })
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                if !spots.is_empty() {
+                                    s.remove_found_dust(id, spots);
+                                }
+                            }
+                            Err(e) => errors.push(e.to_string()),
+                        }
+                    }
+                    if (people || wires) && s.segmenter.any_auto_model() {
+                        if let Err(e) = s.detect_remove(id, people, wires, true) {
+                            errors.push(e);
+                        }
+                    } else if people || wires {
+                        errors.push(format!("{}: people and wires need them.", crate::segment::NO_AUTO_MODEL));
+                    }
+                    let mut out = s.remove_candidates(id);
+                    if !errors.is_empty() {
+                        out["errors"] = json!(errors);
+                    }
+                    return Ok(out);
+                }
                 let mut out = json!({"objects": 0, "dust": 0});
                 let mut errors = Vec::new();
                 if dust {
@@ -681,7 +724,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                 }
                 if (people || wires) && s.segmenter.any_auto_model() {
-                    match s.detect_remove(id, people, wires) {
+                    match s.detect_remove(id, people, wires, false) {
                         Ok(Some(n)) => out["objects"] = json!(n),
                         Ok(None) => out["pending"] = json!(true),
                         Err(e) => errors.push(e),
@@ -693,6 +736,55 @@ pub fn specs() -> Vec<CommandSpec> {
                     out["errors"] = json!(errors);
                 }
                 Ok(out)
+            }
+        ),
+        cmd!(
+            query "remove.candidates",
+            "Detected Objects",
+            [],
+            None,
+            "{} — what Remove ▸ Detect found in the active photo and hasn't been removed: {candidates: [{index, kind: person|wires|dust, label, rect: [x0,y0,x1,y1], spots: [{points, size}]}], pending: searches still running}",
+            has_active,
+            |s, _| {
+                let id = s.active().ok_or_else(|| bad("remove.candidates", "no active photo"))?;
+                Ok(s.remove_candidates(id))
+            }
+        ),
+        cmd!(
+            "remove.apply",
+            "Remove Detected Objects",
+            [],
+            None,
+            "{indices: [n,…] | all: true, generative?: bool (default: when the inpainting model is installed)} — remove the picked candidates in one undo step: one Generative Remove spot per object (else content-aware Fill spots), heal spots on dust → {added, remaining}",
+            has_active,
+            |s, p| {
+                let c = "remove.apply";
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let n = if s.remove_found.photo == Some(id) { s.remove_found.items.len() } else { 0 };
+                let indices: Vec<usize> = if bool_or(p, "all", false) {
+                    (0..n).collect()
+                } else {
+                    p.get("indices")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_u64).map(|v| v as usize).collect())
+                        .unwrap_or_default()
+                };
+                let generative =
+                    p.get("generative").and_then(Value::as_bool).unwrap_or_else(|| crate::genremove::model_installed(&s.enhancer.models_root));
+                let added = s.remove_apply(&indices, generative).map_err(|e| bad(c, e))?;
+                Ok(json!({"added": added, "remaining": s.remove_found.items.len()}))
+            }
+        ),
+        cmd!(
+            query "remove.clearCandidates",
+            "Clear Detected Objects",
+            [],
+            None,
+            "{} — forget what Remove ▸ Detect found",
+            super::always,
+            |s, _| {
+                s.remove_found = crate::remove_detect::Found::default();
+                ok()
             }
         ),
         cmd!(
@@ -971,6 +1063,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         feather: base.feather,
                         opacity: 100.0,
                         source_offset: None,
+                        generative: None,
                     };
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                     dd.spots.push(spot);
@@ -984,7 +1077,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Remove Spot",
             [],
             None,
-            "{mode?: remove|heal|clone|fill (content-aware, no source), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby)} — selects the new spot; returns {index}",
+            "{mode?: remove|heal|clone|fill (content-aware, no source), generative?: bool (Use Generative AI: a Fill spot LaMa fills, 3 variations), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby)} — selects the new spot; returns {index} (+ {status: remove.status, notice?} for a generative spot; in the app its pixels come in the background)",
             has_active,
             |s, p| {
                 let mode: SpotMode =
@@ -1005,18 +1098,31 @@ pub fn specs() -> Vec<CommandSpec> {
                     feather: f64_or(p, "feather", d.feather).clamp(0.0, 100.0),
                     opacity: f64_or(p, "opacity", d.opacity).clamp(0.0, 100.0),
                     source_offset: point(p, "source"),
+                    generative: None,
                 };
                 let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
+                let generative = bool_or(p, "generative", false);
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
-                if spot.source_offset.is_none() {
+                if spot.source_offset.is_none() && !generative {
                     // resolve the automatic source now: it gets a pin and stays put at every size
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                 }
                 dd.spots.push(spot);
                 let n = dd.spots.len();
-                s.set_develop(id, dd, "Remove")?;
+                if generative {
+                    s.gen_make(id, &mut dd, n - 1);
+                }
+                s.set_develop(id, dd, if generative { "Generative Remove" } else { "Remove" })?;
                 s.active_spot = Some(n - 1);
-                Ok(json!({"index": n - 1}))
+                if !generative {
+                    return Ok(json!({"index": n - 1}));
+                }
+                let (_, errors) = s.gen_schedule(id);
+                let mut out = json!({"index": n - 1, "status": s.gen_status(id)});
+                if let Some(e) = errors.first() {
+                    out["notice"] = json!(e);
+                }
+                Ok(out)
             }
         ),
         cmd!("spot.select", "Select Spot", [], None, "{index|null}", has_active, |s, p| {
@@ -1033,7 +1139,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Spot",
             [],
             None,
-            "{index? (the selected spot), move?: [dx,dy] (the target, normalized), source?: [dx,dy] (offset from the target), moveSource?: [dx,dy], size?, feather?, opacity?, mode?}",
+            "{index? (the selected spot), move?: [dx,dy] (the target, normalized), source?: [dx,dy] (offset from the target), moveSource?: [dx,dy], size?, feather?, opacity?, mode?, generative?: bool (fill it with Generative Remove, or not)}",
             has_active,
             |s, p| {
                 let c = "spot.update";
@@ -1067,6 +1173,19 @@ pub fn specs() -> Vec<CommandSpec> {
                     if let Some(m) = mode {
                         sp.mode = m;
                     }
+                    match p.get("generative").and_then(Value::as_bool) {
+                        Some(true) if sp.generative.is_none() => {
+                            sp.mode = SpotMode::Fill;
+                            sp.source_offset = None;
+                            sp.generative =
+                                Some(lightcraft_develop::Generative { variation: 0, count: crate::genremove::VARIATIONS, key: String::new() });
+                        }
+                        Some(false) => sp.generative = None,
+                        _ => {}
+                    }
+                    if sp.mode != SpotMode::Fill {
+                        sp.generative = None;
+                    }
                     Ok(())
                 })?;
                 Ok(json!({"index": i}))
@@ -1091,6 +1210,156 @@ pub fn specs() -> Vec<CommandSpec> {
                     Ok(())
                 })?;
                 Ok(json!({"index": i, "source": [next.x, next.y]}))
+            }
+        ),
+        cmd!(
+            "spot.variation",
+            "Generative Variation",
+            [],
+            None,
+            "{index? (the selected spot), variation?: 0-based, delta?: ±1 (cycles; `<` / `>` in the Remove tool)} — show another variation of a Generative Remove spot → {index, variation, count}",
+            has_active,
+            |s, p| {
+                let c = "spot.variation";
+                let i = spot_index(s, p, c)?;
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let g = s
+                    .develop_of(id)
+                    .and_then(|d| d.spots.get(i).and_then(|sp| sp.generative.clone()))
+                    .ok_or_else(|| bad(c, "not a Generative Remove spot"))?;
+                let n = i64::from(g.count.max(1));
+                let v = match (p.get("variation").and_then(Value::as_i64), p.get("delta").and_then(Value::as_i64)) {
+                    (Some(v), _) if (0..n).contains(&v) => v,
+                    (Some(_), _) => return Err(bad(c, format!("variation is 0..{}", n - 1))),
+                    (None, Some(d)) => (i64::from(g.variation) + d.clamp(-n, n)).rem_euclid(n),
+                    (None, None) => return Err(bad(c, "give `variation` or `delta`")),
+                };
+                if v != i64::from(g.variation) {
+                    spots_edit(s, c, "Generative Variation", |spots| {
+                        if let Some(g) = spots.get_mut(i).and_then(|sp| sp.generative.as_mut()) {
+                            g.variation = v as u8;
+                        }
+                        Ok(())
+                    })?;
+                }
+                Ok(json!({"index": i, "variation": v, "count": g.count}))
+            }
+        ),
+        cmd!(
+            "spot.moreVariations",
+            "More Generative Variations",
+            [],
+            None,
+            "{index? (the selected spot)} — Lightroom's refresh: three more variations of a Generative Remove spot (up to 8), the first new one shown → {index, variation, count}",
+            has_active,
+            |s, p| {
+                let c = "spot.moreVariations";
+                let i = spot_index(s, p, c)?;
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let g = s
+                    .develop_of(id)
+                    .and_then(|d| d.spots.get(i).and_then(|sp| sp.generative.clone()))
+                    .ok_or_else(|| bad(c, "not a Generative Remove spot"))?;
+                if g.count >= lightcraft_develop::Generative::MAX {
+                    return Err(bad(c, format!("a spot keeps at most {} variations", lightcraft_develop::Generative::MAX)));
+                }
+                let count = (g.count + crate::genremove::VARIATIONS).min(lightcraft_develop::Generative::MAX);
+                spots_edit(s, c, "More Variations", |spots| {
+                    if let Some(g) = spots.get_mut(i).and_then(|sp| sp.generative.as_mut()) {
+                        g.variation = g.count;
+                        g.count = count;
+                    }
+                    Ok(())
+                })?;
+                Ok(json!({"index": i, "variation": g.count, "count": count}))
+            }
+        ),
+        cmd!(
+            "remove.generate",
+            "Make Generative Fills",
+            [],
+            None,
+            "{} — make the missing pixels of the active photo's Generative Remove spots (after cleared caches, another computer, or the model arriving; their keys follow the photo as it is now) → {spots, errors} (in the app they come in the background)",
+            has_active,
+            |s, _| {
+                let c = "remove.generate";
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                if let Some(d) = s.develop_of(id) {
+                    let mut next = (*d).clone();
+                    s.gen_rekey(id, &mut next);
+                    if next != *d {
+                        s.set_develop(id, next, "Update Generative Remove")?;
+                    }
+                }
+                let (n, mut errors) = s.gen_schedule(id);
+                if let Some(d) = s.develop_of(id)
+                    && d.reflection.enabled
+                {
+                    let mut next = (*d).clone();
+                    s.reflection_rekey(id, &mut next);
+                    if next != *d {
+                        s.set_develop(id, next, "Update Remove Reflections")?;
+                    }
+                    errors.extend(s.reflection_schedule(id));
+                }
+                Ok(json!({"spots": n, "errors": errors}))
+            }
+        ),
+        cmd!(
+            query "remove.status",
+            "Generative Remove Status",
+            [],
+            None,
+            "{} — the active photo's Generative Remove spots ({index, variation, count, made: [bool per variation]}), whether the model is installed, how many are being made",
+            has_active,
+            |s, _| {
+                let id = s.active().ok_or_else(|| bad("remove.status", "no active photo"))?;
+                Ok(s.gen_status(id))
+            }
+        ),
+        cmd!(
+            "reflection.set",
+            "Remove Reflections",
+            [],
+            None,
+            "{enabled?: bool, keep?: bool (Keep: show only the reflection), amount?: 0..100} — Lightroom's Reflection Removal on the active photo: the photo is split into the scene behind the glass and the reflection (DSRNet, downloaded on request: enhance.model.download reflection + vgg19), made in the background in the app → reflection.status (+ notice when a model is missing)",
+            has_active,
+            |s, p| {
+                let c = "reflection.set";
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
+                if let Some(v) = p.get("enabled").and_then(Value::as_bool) {
+                    d.reflection.enabled = v;
+                }
+                if let Some(v) = p.get("keep").and_then(Value::as_bool) {
+                    d.reflection.keep = v;
+                }
+                if let Some(v) = p.get("amount").and_then(Value::as_f64) {
+                    if !v.is_finite() {
+                        return Err(bad(c, "amount is 0..100"));
+                    }
+                    d.reflection.amount = v.clamp(0.0, 100.0);
+                }
+                s.reflection_rekey(id, &mut d);
+                s.set_develop(id, d, "Remove Reflections")?;
+                let notice = s.reflection_schedule(id);
+                let mut out = s.reflection_status(id);
+                if let Some(n) = notice {
+                    out["notice"] = json!(n);
+                }
+                Ok(out)
+            }
+        ),
+        cmd!(
+            query "reflection.status",
+            "Remove Reflections Status",
+            [],
+            None,
+            "{} — the active photo's Remove Reflections settings, whether its layers are made, whether the models are installed, the work in progress",
+            has_active,
+            |s, _| {
+                let id = s.active().ok_or_else(|| bad("reflection.status", "no active photo"))?;
+                Ok(s.reflection_status(id))
             }
         ),
         cmd!("spot.delete", "Delete Spot", [], None, "{index? (the selected spot)}", has_active, |s, p| {
@@ -1221,7 +1490,19 @@ fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spo
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     f(&mut d.spots)?;
-    s.set_develop(id, d, label)
+    let generative = d.spots.iter().any(|sp| sp.generative.is_some());
+    // a moved or resized generative spot (or one after it) needs its pixels made again
+    s.gen_rekey(id, &mut d);
+    s.set_develop(id, d, label)?;
+    if generative {
+        s.gen_schedule(id);
+    }
+    Ok(())
+}
+
+/// [`pick_source`] for other modules (Remove ▸ Detect's dust).
+pub(crate) fn spot_source(s: &mut Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &Spot) -> Option<Point> {
+    pick_source(s, id, d, spot, None)
 }
 
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).

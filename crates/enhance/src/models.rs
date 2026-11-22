@@ -1,4 +1,4 @@
-//! The open models Enhance uses: what each one is, its licence, and where it is downloaded from.
+//! The open models Enhance (and Generative Remove) use: what each one is, its licence, and where it is downloaded from.
 //!
 //! None is part of LightCraft: each is downloaded only when the user asks (and has seen its licence), into
 //! `<models dir>/<id>/`, size- and SHA-256-checked by `lightcraft-fetch` before it is used.
@@ -15,6 +15,12 @@ pub enum ModelId {
     SuperResolution,
     /// Depth Anything V2 Small: relative depth for Lens Blur and Depth Range masks.
     Depth,
+    /// LaMa big-lama: Generative Remove's inpainting.
+    Inpaint,
+    /// DSRNet: Remove Reflections (with [`ModelId::Vgg19`]).
+    Reflection,
+    /// VGG-19's ImageNet weights: the features DSRNet is built on.
+    Vgg19,
 }
 
 pub struct ModelInfo {
@@ -38,7 +44,7 @@ pub struct ModelInfo {
     pub entry: Option<&'static str>,
 }
 
-pub const MODELS: [ModelInfo; 3] = [
+pub const MODELS: [ModelInfo; 6] = [
     ModelInfo {
         id: ModelId::RawDenoise,
         key: "raw-denoise",
@@ -81,6 +87,50 @@ pub const MODELS: [ModelInfo; 3] = [
         weights: "depth_anything_v2_vits.safetensors",
         entry: None,
     },
+    ModelInfo {
+        id: ModelId::Inpaint,
+        key: "inpaint",
+        name: "LaMa big-lama (Generative Remove)",
+        licence: "Apache-2.0",
+        licence_url: "https://github.com/advimman/lama/blob/main/LICENSE",
+        source: "https://github.com/advimman/lama",
+        // the generator of the published big-lama checkpoint as safetensors (Apache-2.0 mirror, pinned commit)
+        url: "https://huggingface.co/AEmotionStudio/lama-inpainting/resolve/d194c0932b1b022f0e34b9e574dc25e24db27c27/big-lama.safetensors",
+        file: "big-lama.safetensors",
+        size: 204_348_820,
+        sha256: "12cb5eb5d515400f262b48d4e7c1994183e170aedb4b86699d9a55b770038e16",
+        weights: "big-lama.safetensors",
+        entry: None,
+    },
+    ModelInfo {
+        id: ModelId::Reflection,
+        key: "reflection",
+        name: "DSRNet (Remove Reflections)",
+        licence: "Apache-2.0",
+        licence_url: "https://github.com/mingcv/DSRNet/blob/main/LICENSE",
+        source: "https://github.com/mingcv/DSRNet",
+        // the authors' released checkpoint (setting II, with the Nature data), from their Google Drive folder
+        url: "https://drive.usercontent.google.com/download?id=19His-4uV0C_fteSOI_mBL8vyQn_Fdh_8&export=download&confirm=t",
+        file: "dsrnet_l_4000_epoch33.pt",
+        size: 495_086_231,
+        sha256: "09a7acdb3efef6ad7065164e205bf5173a016ce8b24fc56d9751c8791cf65cff",
+        weights: "dsrnet_l_4000_epoch33.pt",
+        entry: None,
+    },
+    ModelInfo {
+        id: ModelId::Vgg19,
+        key: "vgg19",
+        name: "VGG-19 ImageNet features (for Remove Reflections)",
+        licence: "BSD-3-Clause",
+        licence_url: "https://github.com/pytorch/vision/blob/main/LICENSE",
+        source: "https://huggingface.co/timm/vgg19.tv_in1k",
+        url: "https://huggingface.co/timm/vgg19.tv_in1k/resolve/6ee3e2c532177d3b28c99c0eb12b069f160879c7/model.safetensors",
+        file: "model.safetensors",
+        size: 574_672_302,
+        sha256: "11aea017b543ff59233749d8f1cf544cda749378f5790d2fedab841fb86b7669",
+        weights: "model.safetensors",
+        entry: None,
+    },
 ];
 
 pub fn info(id: ModelId) -> &'static ModelInfo {
@@ -88,6 +138,9 @@ pub fn info(id: ModelId) -> &'static ModelInfo {
         ModelId::RawDenoise => &MODELS[0],
         ModelId::SuperResolution => &MODELS[1],
         ModelId::Depth => &MODELS[2],
+        ModelId::Inpaint => &MODELS[3],
+        ModelId::Reflection => &MODELS[4],
+        ModelId::Vgg19 => &MODELS[5],
     }
 }
 
