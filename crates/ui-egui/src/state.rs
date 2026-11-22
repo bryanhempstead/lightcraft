@@ -572,6 +572,26 @@ pub struct UiState {
     pub show_counts: bool,
     /// Face / pet boxes (read from XMP) over the photo in the loupe.
     pub face_boxes: bool,
+    /// People view: the person whose page is open.
+    #[serde(skip)]
+    pub people_page: Option<String>,
+    /// People view: picked stacks / faces (photo id, face index) and the last click.
+    #[serde(skip)]
+    pub people_sel: Vec<(u64, usize)>,
+    #[serde(skip)]
+    pub people_anchor: Option<(u64, usize)>,
+    /// People view: names being typed under unnamed stacks, by the stack's cover face.
+    #[serde(skip)]
+    pub people_names: std::collections::HashMap<(u64, usize), String>,
+    /// People view: the open person's name being edited.
+    #[serde(skip)]
+    pub people_rename: Option<String>,
+    /// Loupe: the name being typed for a face box (region index, text).
+    #[serde(skip)]
+    pub face_name_edit: Option<(usize, String)>,
+    /// The search field runs AI (natural-language) search instead of the text filter.
+    #[serde(skip)]
+    pub search_ai: bool,
     /// Left-sidebar sections folded shut by their header (`albums`, `local`, `byDate`,
     /// `keywords`); the rest are open.
     pub collapsed_sidebar: Vec<String>,
@@ -861,6 +881,12 @@ pub enum Dialog {
     Cull {
         reject_below: f32,
         pick_best: bool,
+        /// Reject photos where a main face blinks (L09; needs the face models).
+        #[serde(default)]
+        reject_eyes: bool,
+        /// Reject photos whose main face is softer than this (0 = none).
+        #[serde(default)]
+        reject_face_below: f32,
     },
     /// Help ▸ System Info: (label, value) rows.
     SystemInfo {
@@ -1055,6 +1081,13 @@ impl Default for UiState {
             grid_info: "filename".into(),
             show_counts: true,
             face_boxes: true,
+            people_page: None,
+            people_sel: Vec::new(),
+            people_anchor: None,
+            people_names: Default::default(),
+            people_rename: None,
+            face_name_edit: None,
+            search_ai: false,
             collapsed_sidebar: Vec::new(),
             folders_open: Default::default(),
             hidden_locations: Vec::new(),

@@ -1450,7 +1450,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(r)
         }
         "dialog.cull" => {
-            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true });
+            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, reject_eyes: false, reject_face_below: 0.0 });
             Ok(Value::Null)
         }
         "app.whatsNew" => {
