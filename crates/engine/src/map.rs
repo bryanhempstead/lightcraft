@@ -105,6 +105,72 @@ pub fn in_private_location(c: &Catalog, gps: Option<(f64, f64)>) -> bool {
     c.record(LOCATIONS_KEY).is_some() && locations(c).iter().any(|l| l.private && distance_m(g, (l.lat, l.lon)) <= l.radius)
 }
 
+// ------------------------------------------------------------------------ location filter
+
+/// LRC-MAP-FILTER: the Map module's location filter bar — which of the view's photos the
+/// filmstrip shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "mode")]
+pub enum LocationFilter {
+    /// No location filter.
+    #[default]
+    None,
+    /// Visible on Map: photos placed inside the map's view (degrees; `west > east` crosses the
+    /// antimeridian).
+    Visible { south: f64, west: f64, north: f64, east: f64 },
+    /// Photos with a GPS position.
+    Tagged,
+    /// Photos without one.
+    Untagged,
+    /// Photos inside any saved location (the Saved Locations panel as a filter).
+    Saved,
+}
+
+impl LocationFilter {
+    /// The id the filter bar's buttons and `map.locationFilter` use.
+    pub fn mode(&self) -> &'static str {
+        match self {
+            LocationFilter::None => "none",
+            LocationFilter::Visible { .. } => "visible",
+            LocationFilter::Tagged => "tagged",
+            LocationFilter::Untagged => "untagged",
+            LocationFilter::Saved => "saved",
+        }
+    }
+
+    /// A photo at `gps` passes (`saved`: the library's saved locations, for [`LocationFilter::Saved`]).
+    pub fn matches(&self, gps: Option<(f64, f64)>, saved: &[SavedLocation]) -> bool {
+        let gps = gps.filter(|g| valid(g.0, g.1));
+        match *self {
+            LocationFilter::None => true,
+            LocationFilter::Tagged => gps.is_some(),
+            LocationFilter::Untagged => gps.is_none(),
+            LocationFilter::Saved => gps.is_some_and(|g| saved.iter().any(|l| distance_m(g, (l.lat, l.lon)) <= l.radius)),
+            LocationFilter::Visible { south, west, north, east } => gps.is_some_and(|(lat, lon)| {
+                let in_lon = if west <= east { lon >= west && lon <= east } else { lon >= west || lon <= east };
+                lat >= south && lat <= north && in_lon
+            }),
+        }
+    }
+
+    /// The map view's bounds as a filter (degrees): longitudes wrapped into ±180, a view as wide
+    /// as the world keeps every longitude. `None` for bounds that aren't numbers or are upside down.
+    pub fn visible(south: f64, west: f64, north: f64, east: f64) -> Option<LocationFilter> {
+        if ![south, west, north, east].iter().all(|v| v.is_finite()) || south > north || west > east {
+            return None;
+        }
+        let wrap = |l: f64| (l + 180.0).rem_euclid(360.0) - 180.0;
+        let (w, e) = if east - west >= 360.0 {
+            (-180.0, 180.0)
+        } else {
+            let (w, e) = (wrap(west), wrap(east));
+            // an edge exactly on the antimeridian keeps its own side
+            (if w == -180.0 && west > 0.0 { 180.0 } else { w }, if e == -180.0 && east > 0.0 { 180.0 } else { e })
+        };
+        Some(LocationFilter::Visible { south: south.clamp(-90.0, 90.0), west: w, north: north.clamp(-90.0, 90.0), east: e })
+    }
+}
+
 // --------------------------------------------------------------------------- web mercator
 
 /// World pixel position of a latitude / longitude at `zoom` (the world is `256 · 2^zoom` px wide).

@@ -498,6 +498,18 @@ pub fn request_thumb(app: &mut LightcraftApp, id: PhotoId, size: usize, priority
 /// Rendered thumbnails replacing embedded previews: after everything on screen.
 pub const BACKGROUND_THUMB_PRIORITY: u32 = 3;
 
+/// A grid cell's info tooltip: file name, dimensions, capture date and exposure.
+pub(crate) fn cell_tooltip(photo: &lightcraft_catalog::Photo) -> String {
+    let mut lines = vec![photo.file_name.clone(), format!("{} × {}", photo.width, photo.height)];
+    if let Some(c) = photo.captured.as_deref() {
+        lines.push(crate::i18n::display_time(c));
+    }
+    if let Some(e) = super::detail::info_line(crate::state::LoupeInfoField::Exposure, photo).filter(|e| !e.starts_with("No exposure")) {
+        lines.push(e);
+    }
+    lines.join("\n")
+}
+
 #[allow(clippy::too_many_arguments)]
 fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool, onscreen: bool, ppp: f32, index: usize) {
     let t = Tokens::get(ui.ctx());
@@ -520,11 +532,17 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         spoken.push_str(&crate::i18n::tr_format!(", {} label", crate::i18n::color_label(&app.session.catalog, l)));
     }
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &spoken));
+    if app.ui.settings.grid_tooltips && resp.hovered() {
+        // Grid View Options ▸ Show Image Info Tooltips: name, size, capture date, exposure
+        resp.clone().on_hover_text(cell_tooltip(&photo));
+    }
     let active = state == lightcraft_engine::SelectionState::Active;
     let p = ui.painter();
     let img_rect = if square {
         let base = if selected { t.cell_selected } else { t.cell };
-        p.rect_filled(r, 0.0, crate::theme::label_background(base, photo.label, selected));
+        // (Grid View Options ▸ Tint grid cells with label colors)
+        let tint = if app.ui.settings.grid_tint { photo.label } else { None };
+        p.rect_filled(r, 0.0, crate::theme::label_background(base, tint, selected));
         if app.ui.settings.grid_expanded {
             // L18 expanded cells: two header lines and a footer row of their own
             Rect::from_min_max(r.min + vec2(10.0, 40.0), r.max - vec2(10.0, 30.0))
@@ -601,8 +619,10 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
             if date.is_empty() { format!("{} × {}", photo.width, photo.height) } else { format!("{} × {}  ·  {date}", photo.width, photo.height) };
         let g = p.layout_no_wrap(line, t.font(9.5), Color32::PLACEHOLDER);
         p.galley(pos2(r.left() + 8.0, r.top() + 22.0), g, t.text_dim);
-        // footer: rotate buttons at the right (the rating and flag stay on the image's badge bar)
-        for (k, (glyph, cmd)) in [("↺", "photo.rotateLeft"), ("↻", "photo.rotateRight")].into_iter().enumerate() {
+        // footer: rotate buttons at the right (the rating and flag stay on the image's badge bar;
+        // Grid View Options ▸ Include Rotation Buttons)
+        let rotate: &[(&str, &str)] = if app.ui.settings.grid_rotate { &[("↺", "photo.rotateLeft"), ("↻", "photo.rotateRight")] } else { &[] };
+        for (k, (glyph, cmd)) in rotate.iter().copied().enumerate() {
             let br = Rect::from_min_size(pos2(r.right() - 58.0 + k as f32 * 26.0, r.bottom() - 26.0), vec2(22.0, 20.0));
             let rr = ui.interact(br, egui::Id::new(("cell-rotate", id.0, k)), Sense::click());
             let fill = if rr.hovered() { t.hover } else { Color32::from_gray(30) };
@@ -621,7 +641,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         crate::state::GridBadges::Never => false,
     };
     let badge_bar = Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - 24.0), img_rect.right_bottom());
-    if !square && photo.label.is_some() {
+    if !square && photo.label.is_some() && app.ui.settings.grid_tint {
         // Justified photos fill the whole cell, so the label shows as a translucent tinted footer
         // over the photo's bottom edge (opaque, it would hide 24 px of every labelled photo).
         p.rect_filled(badge_bar, 0.0, crate::theme::label_background(t.cell, photo.label, selected).gamma_multiply(0.7));
@@ -643,13 +663,13 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
             x += 5.0 * 13.0;
         }
         x += photo.rating as f32 * 13.0 + 4.0;
-        match photo.flag {
+        match if app.ui.settings.grid_flags { photo.flag } else { Flag::None } {
             Flag::Pick => paint(p, Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::FlagPick, t.pick),
             Flag::Reject => paint(p, Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::FlagReject, t.reject),
             Flag::None => {}
         }
         let mut right = bar.right();
-        if photo.is_edited() {
+        if photo.is_edited() && app.ui.settings.grid_edit_badge {
             paint(p, Rect::from_min_size(pos2(right - 20.0, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::Sliders, t.text_label);
             right -= 20.0;
         }

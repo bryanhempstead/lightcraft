@@ -739,7 +739,7 @@ mod tests {
             let rect = |id: &str| app.widgets.iter().find(|entry| entry.0 == id).unwrap().1;
             if export {
                 let dialog = rect("dialog:window");
-                for id in ["button:exportNamingTags", "button:exportChooseFolder", "button:exportSavePreset"] {
+                for id in ["button:exportChooseFolder", "button:exportPresetAdd", "button:exportDone", "button:dialogOk"] {
                     assert!(dialog.contains_rect(rect(id)), "{id} spills outside {dialog:?}: {:?}", rect(id));
                 }
             } else {

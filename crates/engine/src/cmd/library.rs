@@ -448,6 +448,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("library.clearFilter", "Clear Filters", ["View"], None, "{}", always, |s, _| {
             s.filter = Default::default();
+            s.location_filter = crate::map::LocationFilter::None;
             Ok(json!({"count": s.visible().len()}))
         }),
         cmd!(

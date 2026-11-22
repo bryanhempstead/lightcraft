@@ -127,32 +127,6 @@ fn folder_and_collection_marks_in_the_sidebar() {
     shot(&mut h, "l24-favorites.png");
 }
 
-/// E05: the Export dialog's Several row picks presets (all. / none. / click / ⌘-click) and
-/// export.N.presets. exports with each into its own folder.
-#[test]
-fn export_dialog_several_presets() {
-    let dir = temp("e05");
-    let mut s = lightcraft_engine::Session::with_demo();
-    let id = s.catalog.photos().next().unwrap().id.0;
-    s.execute("library.select", &json!({"ids": [id]})).unwrap();
-    let mut h = headless(s);
-    h.app.run("dialog.export", json!({})).unwrap();
-    if let Some(crate::state::Dialog::Export { dir: d, .. }) = &mut h.app.ui.dialog {
-        *d = dir.0.to_string_lossy().to_string();
-    }
-    settle(&mut h);
-    click(&mut h, "button:exportBatch-0");
-    click(&mut h, "button:exportBatchAll");
-    click(&mut h, "button:exportBatchNone");
-    click(&mut h, "button:exportBatch-1");
-    shot(&mut h, "e05-export-several.png");
-    click(&mut h, "button:exportBatchRun");
-    assert!(h.app.ui.dialog.is_none(), "the dialog closes");
-    let folders: Vec<_> = std::fs::read_dir(&dir.0).unwrap().flatten().filter(|e| e.path().is_dir()).collect();
-    assert_eq!(folders.len(), 1, "one preset picked: one folder");
-    assert!(std::fs::read_dir(folders[0].path()).unwrap().count() >= 1, "with the photo in it");
-}
-
 /// L30: File ▸ Import from Another Library… previews what the other library holds and asks what to
 /// do with the photos both have (keep mine / take metadata / take all).
 #[test]
@@ -192,43 +166,6 @@ fn import_from_another_library_dialog() {
     click(&mut h, "button:dialogOk");
     assert_eq!(h.app.session.catalog.photos().count(), 2);
     assert!(h.app.session.catalog.photos().all(|p| p.meta.title == "From A"), "the shared photo took A's metadata");
-}
-
-/// E07: the Export dialog offers PSD and JPEG XL.
-#[test]
-fn export_dialog_offers_psd_and_jpeg_xl() {
-    let mut s = lightcraft_engine::Session::with_demo();
-    let id = s.catalog.photos().next().unwrap().id.0;
-    s.execute("library.select", &json!({"ids": [id]})).unwrap();
-    let mut h = headless(s);
-    h.app.run("dialog.export", json!({})).unwrap();
-    settle(&mut h);
-    click(&mut h, "button:exportFormat-7");
-    assert!(
-        matches!(&h.app.ui.dialog, Some(crate::state::Dialog::Export { opts, .. }) if opts.format == lightcraft_engine::export::ExportFormat::Psd)
-    );
-    click(&mut h, "button:exportFormat-8");
-    assert!(
-        matches!(&h.app.ui.dialog, Some(crate::state::Dialog::Export { opts, .. }) if opts.format == lightcraft_engine::export::ExportFormat::Jxl)
-    );
-    shot(&mut h, "e07-export-formats.png");
-}
-
-/// E08: the Export dialog's Profile popup (ColorMatch RGB, installed profiles).
-#[test]
-fn export_dialog_profile_popup() {
-    let mut s = lightcraft_engine::Session::with_demo();
-    let id = s.catalog.photos().next().unwrap().id.0;
-    s.execute("library.select", &json!({"ids": [id]})).unwrap();
-    let mut h = headless(s);
-    h.app.run("dialog.export", json!({})).unwrap();
-    if let Some(crate::state::Dialog::Export { opts, .. }) = &mut h.app.ui.dialog {
-        opts.icc_profile = Some("colorMatch".into());
-    }
-    settle(&mut h);
-    let w = request(&mut h, "ui.widgets", json!({})).to_string();
-    assert!(w.contains("combo:exportIccProfile"), "{w}");
-    shot(&mut h, "e08-export-profile.png");
 }
 
 /// I03: the Import window's Embedded & Sidecar previews (grid thumbnails first) and Assisted

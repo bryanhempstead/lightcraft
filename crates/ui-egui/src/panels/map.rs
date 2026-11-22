@@ -38,6 +38,8 @@ pub struct MapRuntime {
     frame: u64,
     /// The map area's last width (px), for a new saved location's radius.
     width: f32,
+    /// The map area (screen), for Visible on Map.
+    area: Option<Rect>,
     /// (catalog revision, `map.locations`).
     locations: Option<(u64, Vec<Value>)>,
 }
@@ -95,6 +97,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let bar = Rect::from_min_size(full.min, vec2(full.width(), BAR));
     let area = Rect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
     app.map.width = area.width();
+    app.map.area = Some(area);
     app.map.frame += 1;
     let pins: Vec<(u64, f64, f64)> = app
         .session
@@ -114,14 +117,37 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     toolbar(app, ui, bar, &pins);
     canvas(app, ui, area, &pins, &t);
+    follow_view(app, area);
 }
 
 fn toolbar(app: &mut LightcraftApp, ui: &mut egui::Ui, bar: Rect, pins: &[(u64, f64, f64)]) {
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_filled(bar, 0.0, t.chrome);
     ui.painter().hline(bar.x_range(), bar.bottom() - 0.5, Stroke::new(1.0, t.divider));
-    let mut child =
-        ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(12.0, 8.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    let inner = bar.shrink2(vec2(12.0, 8.0));
+    // LRC-MAP-FILTER: Lightroom's Location Filter bar, on the right (what the filmstrip shows);
+    // laid out first, so the buttons on the left get what is left and never overlap it
+    let mut right = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    right.spacing_mut().item_spacing.x = 8.0;
+    let cur = app.session.location_filter.mode();
+    for (mode, label, tip) in FILTERS.iter().rev() {
+        if text_button(&mut right, &format!("mapFilter-{mode}"), label, cur == *mode).on_hover_text(crate::i18n::tr(tip)).clicked() {
+            let mut p = json!({"mode": mode});
+            if *mode == "visible" {
+                p["bounds"] = json!(view_bounds(app, app.map.area.unwrap_or(bar)));
+            }
+            if let Err(e) = app.run("map.locationFilter", p) {
+                app.toast(ui.ctx(), e);
+            }
+        }
+    }
+    right.label(egui::RichText::new(crate::i18n::tr("filter:")).font(t.font(12.0)).color(t.text_dim));
+    let left_end = (right.min_rect().left() - 16.0).max(inner.left());
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_max(inner.min, pos2(left_end, inner.bottom())))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
     child.spacing_mut().item_spacing.x = 8.0;
     let run = |app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, cmd: &str, params: Value, tip: &str| {
         if text_button(ui, id, label, false).on_hover_text(crate::i18n::tr(tip)).clicked()
@@ -137,9 +163,41 @@ fn toolbar(app: &mut LightcraftApp, ui: &mut egui::Ui, bar: Rect, pins: &[(u64, 
     let ids: Vec<u64> = pins.iter().map(|p| p.0).collect();
     run(app, &mut child, "mapAll", "all.", "library.select", json!({"ids": ids, "mode": "replace"}), "Select every photo on the map");
     run(app, &mut child, "mapNone", "none.", "library.selectNone", json!({}), "Select none");
-    let total = app.session.visible_cloned().len();
-    let text = format!("{} of {total} photos placed", pins.len());
-    child.label(egui::RichText::new(text).font(t.font(12.0)).color(t.text_dim));
+    let total = app.session.visible_unlocated().len();
+    let text = format!("{} of {total} placed", pins.len());
+    if child.available_width() > 40.0 {
+        child.add(egui::Label::new(egui::RichText::new(text).font(t.font(12.0)).color(t.text_dim)).truncate());
+    }
+}
+
+/// The location filter bar's buttons: (mode, label, tooltip), left to right.
+const FILTERS: &[(&str, &str, &str)] = &[
+    ("visible", "visible.", "Visible on Map: the filmstrip shows the photos placed inside this view"),
+    ("tagged", "tagged.", "Tagged: photos with a GPS position"),
+    ("untagged", "untagged.", "Untagged: photos without a GPS position"),
+    ("saved", "saved.", "Saved: photos inside a saved location"),
+    ("none", "off.", "No location filter"),
+];
+
+/// The map view's bounds `[south, west, north, east]` (degrees; longitudes not wrapped).
+fn view_bounds(app: &LightcraftApp, area: Rect) -> [f64; 4] {
+    let (c, world) = centre(app);
+    let (hw, hh) = (area.width() as f64 / 2.0, area.height() as f64 / 2.0);
+    let lon = |x: f64| if world > 0.0 { x / world * 360.0 - 180.0 } else { 0.0 };
+    let (north, _) = map::lat_lon(c.0, c.1 - hh, app.ui.map.zoom);
+    let (south, _) = map::lat_lon(c.0, c.1 + hh, app.ui.map.zoom);
+    [south, lon(c.0 - hw), north, lon(c.0 + hw)]
+}
+
+/// Visible on Map follows the view as it pans and zooms.
+fn follow_view(app: &mut LightcraftApp, area: Rect) {
+    if !matches!(app.session.location_filter, map::LocationFilter::Visible { .. }) || area.width() < 10.0 {
+        return;
+    }
+    let [s, w, n, e] = view_bounds(app, area);
+    if let Some(f) = map::LocationFilter::visible(s, w, n, e) {
+        app.session.location_filter = f;
+    }
 }
 
 /// The world pixel (at the current zoom) of the map's centre, and the world's width.

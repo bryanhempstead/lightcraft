@@ -104,3 +104,64 @@ fn saved_locations_round_trip_and_filter() {
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// LRC-MAP-FILTER: the location filter bar narrows the view (not the map's pins), follows the
+/// map's bounds (across the antimeridian too), only applies while it is on, and Clear Filters
+/// turns it off.
+#[test]
+fn location_filter_bar() {
+    let mut s = Session::with_demo();
+    let all: Vec<u64> = s.visible_cloned().iter().map(|i| i.0).collect();
+    assert!(all.len() >= 4);
+    s.execute("map.clearGps", &json!({"ids": all})).unwrap();
+    // Lisbon, Tokyo, Fiji (just east of 180°), the rest untagged
+    s.execute("map.geotag", &json!({"ids": [all[0]], "lat": 38.72, "lon": -9.14})).unwrap();
+    s.execute("map.geotag", &json!({"ids": [all[1]], "lat": 35.68, "lon": 139.69})).unwrap();
+    s.execute("map.geotag", &json!({"ids": [all[2]], "lat": -17.7, "lon": -179.5})).unwrap();
+    let shown = |s: &mut Session| -> Vec<u64> {
+        let mut v: Vec<u64> = s.visible_cloned().iter().map(|i| i.0).collect();
+        v.sort();
+        v
+    };
+    let r = s.execute("map.locationFilter", &json!({"mode": "tagged"})).unwrap();
+    assert_eq!((r["photos"].as_u64(), r["of"].as_u64()), (Some(3), Some(all.len() as u64)), "{r}");
+    assert_eq!(shown(&mut s).len(), 3);
+    // the pins stay the whole view's
+    assert_eq!(s.execute("map.pins", &json!({})).unwrap()["pins"].as_array().unwrap().len(), 3);
+    s.execute("map.locationFilter", &json!({"mode": "untagged"})).unwrap();
+    assert_eq!(shown(&mut s).len(), all.len() - 3);
+    // Visible on Map: Europe only, then a view across the antimeridian (130°E … 190°E)
+    s.execute("map.locationFilter", &json!({"mode": "visible", "bounds": [30.0, -20.0, 60.0, 30.0]})).unwrap();
+    assert_eq!(shown(&mut s), vec![all[0]]);
+    s.execute("map.locationFilter", &json!({"mode": "visible", "bounds": [-30.0, 130.0, 40.0, 190.0]})).unwrap();
+    let mut want = vec![all[1], all[2]];
+    want.sort();
+    assert_eq!(shown(&mut s), want);
+    // a view wider than the world: everything placed
+    s.execute("map.locationFilter", &json!({"mode": "visible", "bounds": [-85.0, -400.0, 85.0, 400.0]})).unwrap();
+    assert_eq!(shown(&mut s).len(), 3);
+    // in a saved location
+    s.execute("map.saveLocation", &json!({"name": "Tokyo", "lat": 35.68, "lon": 139.7, "radius": 5000})).unwrap();
+    s.execute("map.locationFilter", &json!({"mode": "saved"})).unwrap();
+    assert_eq!(shown(&mut s), vec![all[1]]);
+    // off outside the Map module
+    s.location_filter_on = false;
+    assert_eq!(shown(&mut s).len(), all.len());
+    s.location_filter_on = true;
+    assert_eq!(shown(&mut s).len(), 1);
+    // read back, then Clear Filters
+    assert_eq!(s.execute("map.locationFilter", &json!({})).unwrap()["mode"], "saved");
+    s.execute("library.clearFilter", &json!({})).unwrap();
+    assert_eq!(shown(&mut s).len(), all.len());
+    // nonsense is an error and leaves the filter alone
+    for bad in [
+        json!({"mode": "visible"}),
+        json!({"mode": "visible", "bounds": [10.0, 0.0, -10.0, 5.0]}),
+        json!({"mode": "visible", "bounds": [0.0, "x", 1.0, 2.0]}),
+        json!({"mode": "everywhere"}),
+        json!({"mode": 3}),
+    ] {
+        assert!(s.execute("map.locationFilter", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.execute("map.locationFilter", &json!({})).unwrap()["mode"], "none");
+}

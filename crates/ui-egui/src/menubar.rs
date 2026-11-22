@@ -611,14 +611,16 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
         }
         "Export with Preset" => {
             let sel = !app.session.selection.ids.is_empty() || has;
+            // the preset list's folders in its order (Lightroom Presets, LightCraft Presets, User
+            // Presets, the user's folders), a separator between them
             let mut v: Vec<MenuNode> = Vec::new();
-            let mut builtin = true;
-            for (p, b) in app.session.all_export_presets() {
-                if builtin && !b {
+            for (_, _, presets) in app.session.export_preset_tree().into_iter().filter(|f| !f.2.is_empty()) {
+                if !v.is_empty() {
                     v.push(MenuNode::Separator);
                 }
-                builtin = b;
-                v.push(item("app.export", json!({"preset": p.name, "background": true}), p.name, None, sel, None));
+                for name in presets {
+                    v.push(item("app.export", json!({"preset": name, "background": true}), name, None, sel, None));
+                }
             }
             v.push(MenuNode::Separator);
             v.push(item("dialog.export", Value::Null, "Custom…", None, sel, None));
@@ -1057,7 +1059,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(presets.first().map(String::as_str), Some("JPEG (Small)"));
+        assert_eq!(presets.first().map(String::as_str), Some("Burn Full-Sized JPEGs"), "Lightroom Presets first, as in its list");
         assert!(find(children, "dialog.export").is_some(), "Custom… opens the dialog");
         // a user preset appears after the built-ins; choosing it exports with its settings
         app.session.execute("export.savePreset", &json!({"name": "Tiny PNG", "params": {"format": "png", "width": 40}})).unwrap();

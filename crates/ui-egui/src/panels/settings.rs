@@ -23,6 +23,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("performance", "Performance"),
     ("backup", "bkup."),
     ("interface", "Interface"),
+    ("develop", "dev.view."),
     ("shortcuts", "shrt."),
     ("controllers", "ctrl."),
     ("cameras", "cams."),
@@ -53,6 +54,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         "performance" => performance_tab(app, ui, &t),
         "backup" => backup_tab(app, ui, &t),
         "interface" => interface_tab(app, ui, &t),
+        "develop" => develop_tab(app, ui, &t),
         "shortcuts" => shortcuts_tab(app, ui, &t),
         "controllers" => controllers_tab(app, ui, &t),
         "cameras" => cameras_tab(app, ui, &t),
@@ -661,6 +663,12 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Square Grid cells"), |ui| {
         choices(ui, "settingsGridStyle", &[(false, "compact."), (true, "expanded.")], &mut app.ui.settings.grid_expanded);
     });
+    // LRC-LIB-GRIDOPTIONS: Cell Icons and Extras, one switch each
+    check(ui, "settings.gridFlags", &mut app.ui.settings.grid_flags, "Show pick and reject flags");
+    check(ui, "settings.gridEditBadge", &mut app.ui.settings.grid_edit_badge, "Show the edited badge");
+    check(ui, "settings.gridTint", &mut app.ui.settings.grid_tint, "Tint grid cells with label colors");
+    check(ui, "settings.gridRotate", &mut app.ui.settings.grid_rotate, "Expanded cells: include rotation buttons");
+    check(ui, "settings.gridTooltips", &mut app.ui.settings.grid_tooltips, "Show image info tooltips");
     heading(ui, t, crate::i18n::tr("Detail"));
     check(ui, "settings.navigator", &mut app.ui.navigator, "Show the Navigator while zoomed in");
     row(ui, t, crate::i18n::tr("Info overlay"), |ui| {
@@ -678,46 +686,66 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .color(t.text_dim),
     );
     // L19: Loupe Info 1 / 2 lines (Library View Options ▸ Loupe View)
+    loupe_info_rows(ui, t, &mut app.ui.settings.loupe_info, "", "settingsLoupeDefaults");
+    check(ui, "settings.loadingMessage", &mut app.ui.settings.loading_message, "Show message when loading or rendering photos");
+    hint(
+        ui,
+        t,
+        "Show briefly: the info overlay appears for a moment when the loupe changes photo while it is off. Develop's loupe has its own (dev.view.).",
+    );
+}
+
+/// Loupe Info 1 / 2 (three lines each), Show Briefly and defaults. for one module's loupe
+/// (`prefix` "" = Library, "dev" = Develop: widget ids `combo:{prefix}loupeInfo{n}-{i}`).
+fn loupe_info_rows(ui: &mut egui::Ui, t: &Tokens, info: &mut crate::state::LoupeInfo, prefix: &str, defaults_id: &str) {
     for (n, which) in [(1usize, "info1"), (2, "info2")] {
         row(ui, t, &format!("Loupe info {n}"), |ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             for i in 0..3 {
-                let cur = if n == 1 { app.ui.settings.loupe_info.info1[i] } else { app.ui.settings.loupe_info.info2[i] };
+                let line = if n == 1 { &mut info.info1[i] } else { &mut info.info2[i] };
+                let cur = *line;
                 let mut pick = cur;
-                let r = egui::ComboBox::from_id_salt(format!("loupe-{which}-{i}")).width(128.0).selected_text(crate::i18n::tr(cur.label())).show_ui(
-                    ui,
-                    |ui| {
+                let r = egui::ComboBox::from_id_salt(format!("{prefix}loupe-{which}-{i}"))
+                    .width(128.0)
+                    .selected_text(crate::i18n::tr(cur.label()))
+                    .show_ui(ui, |ui| {
                         for f in crate::state::LoupeInfoField::ALL {
                             ui.selectable_value(&mut pick, *f, crate::i18n::tr(f.label()));
                         }
-                    },
-                );
-                register(ui.ctx(), format!("combo:loupeInfo{n}-{i}"), r.response.rect);
-                if pick != cur {
-                    if n == 1 {
-                        app.ui.settings.loupe_info.info1[i] = pick;
-                    } else {
-                        app.ui.settings.loupe_info.info2[i] = pick;
-                    }
-                }
+                    });
+                register(ui.ctx(), format!("combo:{prefix}loupeInfo{n}-{i}"), r.response.rect);
+                *line = pick;
             }
         });
     }
     row(ui, t, crate::i18n::tr("Show briefly"), |ui| {
         use crate::state::InfoOverlay as I;
-        choices(
-            ui,
-            "settingsBriefInfo",
-            &[(I::Off, "never."), (I::Basic, "info.1."), (I::Exposure, "info.2.")],
-            &mut app.ui.settings.loupe_info.briefly,
-        );
+        choices(ui, &format!("{prefix}settingsBriefInfo"), &[(I::Off, "never."), (I::Basic, "info.1."), (I::Exposure, "info.2.")], &mut info.briefly);
     });
     row(ui, t, "", |ui| {
-        if crate::widgets::text_button(ui, "settingsLoupeDefaults", "defaults.", false).clicked() {
-            app.ui.settings.loupe_info = crate::state::LoupeInfo::default();
+        if crate::widgets::text_button(ui, defaults_id, "defaults.", false).clicked() {
+            *info = crate::state::LoupeInfo::default();
         }
     });
-    hint(ui, t, "Show briefly: the info overlay appears for a moment when the loupe changes photo while it is off.");
+}
+
+// ------------------------------------------------------------------------------ dev.view.
+
+/// LRC-DEV-VIEWOPTIONS: Develop's View Options (⌘J in Develop) — its own info overlay and Loupe
+/// Info lines, the loading message, and the Video options.
+fn develop_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, crate::i18n::tr("Develop loupe"));
+    row(ui, t, crate::i18n::tr("Info overlay"), |ui| {
+        use crate::state::InfoOverlay as I;
+        choices(ui, "settingsDevInfo", &[(I::Off, "off."), (I::Basic, "info.1."), (I::Exposure, "info.2.")], &mut app.ui.develop_info_overlay);
+    });
+    loupe_info_rows(ui, t, &mut app.ui.settings.develop_view.loupe_info, "dev", "settingsDevLoupeDefaults");
+    heading(ui, t, crate::i18n::tr("General"));
+    check(ui, "settings.devLoadingMessage", &mut app.ui.settings.develop_view.loading_message, "Show message when loading or rendering photos");
+    heading(ui, t, crate::i18n::tr("Video"));
+    check(ui, "settings.videoFrames", &mut app.ui.settings.develop_view.video_frames, "Show frame number when displaying video time");
+    check(ui, "settings.videoDraft", &mut app.ui.settings.develop_view.video_draft, "Play HD video at draft quality");
+    hint(ui, t, "These apply to the loupe in Develop (I / ⌘I cycle its overlay there); the Library loupe keeps its own on Interface.");
 }
 
 // ------------------------------------------------------------------------------- Open Library…
@@ -826,6 +854,13 @@ fn shortcuts_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             save_keymap(app, f.clone());
         }
     });
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "lr.p.picks.: Lightroom's keys with P = pick, Z = zoom. lr.z.picks.: Lightroom desktop exactly (Z = pick, P = photos panel, Space = zoom). lr.classic.: Lightroom Classic.",
+        ),
+    );
     row(ui, t, "Import", |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         for (id, label, source) in [("keysImportLrkeys", "lrkeys.", "lrkeys"), ("keysImportSuperkeys", "superkeys.", "superkeys")] {

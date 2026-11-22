@@ -248,7 +248,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 x -= 40.0;
             }
             // an import or export in progress: Classic shows it where its identity plate is
-            progress_strip(app, ui, Rect::from_min_max(pos2(x - 200.0, full.center().y - 9.0), pos2(x, full.center().y + 9.0)));
+            progress_strip(app, ui, Rect::from_min_max(pos2(x - 260.0, full.center().y - 9.0), pos2(x, full.center().y + 9.0)));
             let _ = Align2::CENTER_CENTER;
         });
 }
@@ -303,6 +303,59 @@ pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> 
 /// A small progress bar with its label (import / export running), ending at `r.right()`.
 fn progress_strip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get(ui.ctx());
+    // an export: its count, the bar, then pause. / resume. and × (cancel) after it
+    if let Some(task) = app.export.as_ref() {
+        let (done, total, current) = task.counts();
+        let paused = task.paused.load(std::sync::atomic::Ordering::Relaxed);
+        let queued: usize = app.export_queue.len();
+        let mut label = format!("Exporting {} of {}", (done + 1).min(total), total);
+        if paused {
+            label = format!("Paused at {} of {}", (done + 1).min(total), total);
+        }
+        if queued > 0 {
+            label += &format!(" (+{queued})");
+        }
+        let cancel_r = Rect::from_center_size(pos2(r.right() - 8.0, r.center().y), vec2(16.0, 16.0));
+        let pause_r = Rect::from_center_size(pos2(r.right() - 30.0, r.center().y), vec2(16.0, 16.0));
+        let bar = Rect::from_min_max(pos2(r.right() - 132.0, r.center().y - 3.0), pos2(r.right() - 44.0, r.center().y + 3.0));
+        ui.painter().rect_filled(bar, 3.0, t.inset);
+        let frac = done as f32 / total.max(1) as f32;
+        let filled = Rect::from_min_max(bar.min, pos2(bar.left() + bar.width() * frac.clamp(0.0, 1.0), bar.bottom()));
+        ui.painter().rect_filled(filled, 3.0, if paused { t.caution } else { t.text_label });
+        ui.painter().text(pos2(bar.left() - 8.0, r.center().y), Align2::RIGHT_CENTER, label, t.font(11.5), t.text_label);
+        let pr = ui.interact(pause_r, egui::Id::new("export-pause"), Sense::click()).on_hover_text(crate::i18n::tr(if paused {
+            "resume."
+        } else {
+            "pause."
+        }));
+        register(ui.ctx(), "button:exportPause", pause_r);
+        let (a, b) = (pause_r.shrink(4.0).left_top(), pause_r.shrink(4.0).right_bottom());
+        if paused {
+            ui.painter().add(egui::Shape::convex_polygon(vec![a, pos2(b.x, pause_r.center().y), pos2(a.x, b.y)], t.text_label, egui::Stroke::NONE));
+        } else {
+            ui.painter().rect_filled(Rect::from_min_max(a, pos2(a.x + 3.0, b.y)), 1.0, t.text_label);
+            ui.painter().rect_filled(Rect::from_min_max(pos2(b.x - 3.0, a.y), b), 1.0, t.text_label);
+        }
+        let cr = ui
+            .interact(cancel_r, egui::Id::new("export-cancel"), Sense::click())
+            .on_hover_text(crate::i18n::tr("cancel. the export (and the queued ones)"));
+        register(ui.ctx(), "button:exportCancel", cancel_r);
+        let c = cancel_r.shrink(4.0);
+        let stroke = egui::Stroke::new(1.5, if cr.hovered() { t.text } else { t.text_label });
+        ui.painter().line_segment([c.left_top(), c.right_bottom()], stroke);
+        ui.painter().line_segment([c.right_top(), c.left_bottom()], stroke);
+        register(ui.ctx(), "progress:top", r);
+        if !current.is_empty() {
+            ui.interact(bar, egui::Id::new("export-bar"), Sense::hover()).on_hover_text(current);
+        }
+        if pr.clicked() {
+            crate::export_task::toggle_pause(app);
+        }
+        if cr.clicked() {
+            crate::export_task::cancel_all(app);
+        }
+        return;
+    }
     let (label, frac) = if let Some(task) = app.import.as_ref().filter(|t| !t.browse && !t.auto) {
         (crate::i18n::tr_format!("Importing {} of {}", task.done, task.total), task.done as f32 / task.total.max(1) as f32)
     } else if let Some(task) = app.scan.as_ref() {

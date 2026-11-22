@@ -33,7 +33,9 @@ impl Session {
             }
         }
         folders.sort_by_key(|f| f.to_lowercase());
-        out.extend(folders.into_iter().filter(|f| !out.iter().any(|(o, _, _)| o.eq_ignore_ascii_case(f))).map(|f| (f, false, vec![])).collect::<Vec<_>>());
+        out.extend(
+            folders.into_iter().filter(|f| !out.iter().any(|(o, _, _)| o.eq_ignore_ascii_case(f))).map(|f| (f, false, vec![])).collect::<Vec<_>>(),
+        );
         for (p, _) in self.all_export_presets() {
             if let Some(row) = out.iter_mut().find(|(f, _, _)| f.eq_ignore_ascii_case(p.folder_name())) {
                 row.2.push(p.name.clone());
@@ -93,7 +95,9 @@ fn list(s: &Session) -> Value {
 }
 
 fn tree(s: &Session) -> Value {
-    Value::Array(s.export_preset_tree().into_iter().map(|(name, builtin, presets)| json!({"name": name, "builtin": builtin, "presets": presets})).collect())
+    Value::Array(
+        s.export_preset_tree().into_iter().map(|(name, builtin, presets)| json!({"name": name, "builtin": builtin, "presets": presets})).collect(),
+    )
 }
 
 /// Params that describe a selection or a single run, not the export settings. (`dir` is kept:
@@ -140,7 +144,9 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         o.retain(|k, _| !NOT_SETTINGS.contains(&k.as_str()));
         // the folder only matters for a specific folder
         let specific = o.get("exportTo").and_then(Value::as_str).is_none_or(|t| t == "specificFolder");
-        if !specific || o.get("sameFolder").and_then(Value::as_bool) == Some(true) || o.get("dir").and_then(Value::as_str).is_some_and(|d| d.trim().is_empty())
+        if !specific
+            || o.get("sameFolder").and_then(Value::as_bool) == Some(true)
+            || o.get("dir").and_then(Value::as_str).is_some_and(|d| d.trim().is_empty())
         {
             o.remove("dir");
         }
@@ -183,7 +189,8 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     if is_builtin(to) || s.export_presets.iter().any(|x| x.name.eq_ignore_ascii_case(to) && !x.name.eq_ignore_ascii_case(name)) {
         return Err(bad(ID, format!("there is a preset called `{to}` already")));
     }
-    let x = s.export_presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(ID, format!("no user export preset `{name}`")))?;
+    let x =
+        s.export_presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(ID, format!("no user export preset `{name}`")))?;
     x.name = to.to_string();
     s.save_prefs()?;
     Ok(list(s))
@@ -193,7 +200,8 @@ fn move_preset(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "export.movePreset";
     let name = name_param(ID, p, "name")?;
     let folder = folder_param(ID, p)?.ok_or_else(|| bad(ID, "missing `folder`"))?;
-    let x = s.export_presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(ID, format!("no user export preset `{name}`")))?;
+    let x =
+        s.export_presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(ID, format!("no user export preset `{name}`")))?;
     x.folder = folder;
     s.save_prefs()?;
     Ok(tree(s))
@@ -220,7 +228,8 @@ fn delete_folder(s: &mut Session, p: &Value) -> Result<Value> {
     if is_builtin_folder(name) || name.eq_ignore_ascii_case(USER_PRESETS) {
         return Err(bad(ID, format!("`{name}` can't be removed")));
     }
-    let exists = s.export_preset_folders.iter().any(|f| f.eq_ignore_ascii_case(name)) || s.export_presets.iter().any(|x| x.folder.eq_ignore_ascii_case(name));
+    let exists =
+        s.export_preset_folders.iter().any(|f| f.eq_ignore_ascii_case(name)) || s.export_presets.iter().any(|x| x.folder.eq_ignore_ascii_case(name));
     if !exists {
         return Err(bad(ID, format!("no preset folder `{name}`")));
     }
@@ -236,7 +245,8 @@ fn delete_folder(s: &mut Session, p: &Value) -> Result<Value> {
 fn write_presets(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "export.writePresets";
     let path = name_param(ID, p, "path")?;
-    let names: Option<Vec<String>> = p.get("names").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
+    let names: Option<Vec<String>> =
+        p.get("names").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
     let chosen: Vec<ExportPreset> = match &names {
         Some(n) => s.all_export_presets().into_iter().map(|(x, _)| x).filter(|x| n.iter().any(|m| m.eq_ignore_ascii_case(&x.name))).collect(),
         None => s.export_presets.clone(),
@@ -410,8 +420,24 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("export.deletePreset", "Delete Export Preset", [], None, "{name} — removes a user preset → presets", always, delete),
         cmd!("export.renamePreset", "Rename Export Preset", [], None, "{name, to} — renames a user preset → presets", always, rename),
-        cmd!("export.movePreset", "Move Export Preset", [], None, "{name, folder} — puts a user preset in a folder (`User Presets` = none) → folders", always, move_preset),
-        cmd!("export.createPresetFolder", "New Export Preset Folder", [], None, "{name} — a folder for export presets → folders", always, create_folder),
+        cmd!(
+            "export.movePreset",
+            "Move Export Preset",
+            [],
+            None,
+            "{name, folder} — puts a user preset in a folder (`User Presets` = none) → folders",
+            always,
+            move_preset
+        ),
+        cmd!(
+            "export.createPresetFolder",
+            "New Export Preset Folder",
+            [],
+            None,
+            "{name} — a folder for export presets → folders",
+            always,
+            create_folder
+        ),
         cmd!(
             "export.deletePresetFolder",
             "Remove Export Preset Folder",

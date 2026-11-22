@@ -291,3 +291,120 @@ pub fn srational(v: f64) -> (i32, i32) {
     }
     (0, 1)
 }
+
+/// Put one tag into a classic TIFF's IFD0 without touching the rest of the file: the value is
+/// appended, IFD0 is written again after it (sorted, `tag` replaced or added) and the header
+/// points at the new copy, so every other entry's out-of-line value keeps its offset. `data` is
+/// the value's bytes in the file's byte order (`field_type` 1 BYTE / 7 UNDEFINED for an XMP
+/// packet). Used to give a DNG re-saved by Adobe's SDK (built without XMP) its XMP back.
+pub fn set_ifd0_tag(file: &[u8], tag: u16, field_type: u16, data: &[u8]) -> Result<Vec<u8>> {
+    let order = match file.get(0..2) {
+        Some(b"II") => ByteOrder::Little,
+        Some(b"MM") => ByteOrder::Big,
+        _ => return Err(TiffError::NotTiff),
+    };
+    let u16_at = |o: usize| -> Result<u16> {
+        let b = file.get(o..o.saturating_add(2)).ok_or(TiffError::Truncated(o as u64))?;
+        let a = [b.first().copied().unwrap_or(0), b.get(1).copied().unwrap_or(0)];
+        Ok(if order == ByteOrder::Little { u16::from_le_bytes(a) } else { u16::from_be_bytes(a) })
+    };
+    let u32_at = |o: usize| -> Result<u32> {
+        let b = file.get(o..o.saturating_add(4)).ok_or(TiffError::Truncated(o as u64))?;
+        let mut a = [0u8; 4];
+        a.copy_from_slice(b);
+        Ok(if order == ByteOrder::Little { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) })
+    };
+    if u16_at(2)? != 42 {
+        return Err(TiffError::Invalid("only a classic TIFF's IFD0 can be edited (not BigTIFF)".into()));
+    }
+    let unit = match field_type {
+        1 | 2 | 6 | 7 => 1,
+        3 | 8 => 2,
+        4 | 9 | 11 | 13 => 4,
+        5 | 10 | 12 => 8,
+        _ => return Err(TiffError::Invalid(format!("unknown field type {field_type}"))),
+    };
+    if !data.len().is_multiple_of(unit) {
+        return Err(TiffError::Invalid("the value isn't a whole number of its type".into()));
+    }
+    let ifd0 = u32_at(4)? as usize;
+    let n = u16_at(ifd0)? as usize;
+    let mut entries: Vec<[u8; 12]> = Vec::with_capacity(n + 1);
+    for i in 0..n {
+        let at = ifd0 + 2 + 12 * i;
+        let b = file.get(at..at + 12).ok_or(TiffError::Truncated(at as u64))?;
+        let mut e = [0u8; 12];
+        e.copy_from_slice(b);
+        entries.push(e);
+    }
+    let next = u32_at(ifd0 + 2 + 12 * n)?;
+    let put16 = |v: u16| if order == ByteOrder::Little { v.to_le_bytes() } else { v.to_be_bytes() };
+    let put32 = |v: u32| if order == ByteOrder::Little { v.to_le_bytes() } else { v.to_be_bytes() };
+    let mut out = file.to_vec();
+    let count = u32::try_from(data.len() / unit).map_err(|_| TiffError::Limit("tag value larger than 4 GB"))?;
+    let mut e = [0u8; 12];
+    e[0..2].copy_from_slice(&put16(tag));
+    e[2..4].copy_from_slice(&put16(field_type));
+    e[4..8].copy_from_slice(&put32(count));
+    if data.len() <= 4 {
+        e[8..8 + data.len()].copy_from_slice(data);
+    } else {
+        if !out.len().is_multiple_of(2) {
+            out.push(0);
+        }
+        let at = u32::try_from(out.len()).map_err(|_| TiffError::Limit("file larger than 4 GB"))?;
+        e[8..12].copy_from_slice(&put32(at));
+        out.extend_from_slice(data);
+    }
+    let tag_of = |e: &[u8; 12]| if order == ByteOrder::Little { u16::from_le_bytes([e[0], e[1]]) } else { u16::from_be_bytes([e[0], e[1]]) };
+    entries.retain(|x| tag_of(x) != tag);
+    entries.push(e);
+    entries.sort_by_key(tag_of);
+    let len = u16::try_from(entries.len()).map_err(|_| TiffError::Limit("too many IFD0 entries"))?;
+    if !out.len().is_multiple_of(2) {
+        out.push(0);
+    }
+    let new_ifd = u32::try_from(out.len()).map_err(|_| TiffError::Limit("file larger than 4 GB"))?;
+    out.extend_from_slice(&put16(len));
+    for x in &entries {
+        out.extend_from_slice(x);
+    }
+    out.extend_from_slice(&put32(next));
+    if u32::try_from(out.len()).is_err() {
+        return Err(TiffError::Limit("file larger than 4 GB"));
+    }
+    out[4..8].copy_from_slice(&put32(new_ifd));
+    Ok(out)
+}
+
+#[cfg(test)]
+mod set_tag_tests {
+    use super::*;
+
+    #[test]
+    fn a_tag_is_added_or_replaced_and_the_rest_survives() {
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            let mut ifd = IfdBuilder::new();
+            ifd.set(tags::IMAGE_WIDTH, Value::Long(vec![2]));
+            ifd.set(tags::IMAGE_LENGTH, Value::Long(vec![1]));
+            ifd.set(tags::MAKE, Value::Ascii("A long camera make that is stored out of line".into()));
+            let file = TiffWriter::new(order, false).write(&[ifd]).unwrap();
+            let xmp = b"<x:xmpmeta>hello</x:xmpmeta>".to_vec();
+            let edited = set_ifd0_tag(&file, 700, 1, &xmp).unwrap();
+            let t = crate::Tiff::parse(&edited).unwrap();
+            let ifd0 = t.ifds.first().unwrap();
+            assert_eq!(ifd0.get(700).and_then(|e| e.value.as_bytes()).map(|b| b.to_vec()), Some(xmp.clone()));
+            assert_eq!(ifd0.get(tags::MAKE).and_then(|e| e.value.as_str()).as_deref(), Some("A long camera make that is stored out of line"));
+            // replaced, not duplicated
+            let again = set_ifd0_tag(&edited, 700, 1, b"<x/>").unwrap();
+            let t = crate::Tiff::parse(&again).unwrap();
+            assert_eq!(t.ifds.first().unwrap().entries.iter().filter(|e| e.tag == 700).count(), 1);
+        }
+        // nonsense is an error, never a panic
+        assert!(set_ifd0_tag(b"", 700, 1, b"x").is_err());
+        assert!(set_ifd0_tag(b"II*\0\xff\xff\xff\xff", 700, 1, b"x").is_err());
+        assert!(set_ifd0_tag(b"II*\0\x08\0\0\0\x05\0", 700, 1, b"x").is_err());
+        assert!(set_ifd0_tag(b"II+\0\x08\0\0\0", 700, 1, b"x").is_err());
+        assert!(set_ifd0_tag(b"II*\0\x08\0\0\0\0\0\0\0\0\0", 700, 99, b"x").is_err());
+    }
+}

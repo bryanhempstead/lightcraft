@@ -49,6 +49,8 @@ mod tests_classic;
 #[cfg(test)]
 mod tests_curve;
 #[cfg(test)]
+mod tests_export_dialog;
+#[cfg(test)]
 mod tests_filmstrip;
 #[cfg(test)]
 mod tests_grid;
@@ -255,6 +257,8 @@ pub struct LightcraftApp {
     pub scan: Option<import::ScanTask>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// Exports waiting for the running one (started in order).
+    pub export_queue: Vec<export_task::Queued>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
@@ -332,6 +336,7 @@ impl LightcraftApp {
             import: None,
             scan: None,
             export: None,
+            export_queue: Vec::new(),
             tasks: Default::default(),
             last_export_result: None,
             hover_preview: None,
@@ -961,6 +966,8 @@ impl LightcraftApp {
         // (module picker) and the filmstrip span the window; the side panels run between them; the
         // toolbar sits under the photo, between the side panels.
         self.ui.sync_module();
+        // LRC-MAP-FILTER: the location filter bar is the Map module's (the filmstrip there)
+        self.session.location_filter_on = self.ui.view == state::ViewMode::Map;
         if self.ui.top_panel {
             panels::topbar::show(self, ui);
         }

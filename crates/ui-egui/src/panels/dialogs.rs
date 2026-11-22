@@ -1,6 +1,5 @@
 //! Modal dialogs (new album, rename, create preset, choose settings to copy, export, about, shortcuts).
 
-use lightcraft_develop::{ControlSpec, Section, Track};
 use serde_json::json;
 
 use crate::LightcraftApp;
@@ -172,7 +171,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     // own so the size it is given doesn't carry over to the other dialogs. Its content scrolls
     // rather than growing the window when the options below the grid get taller (e.g. Copy).
     let import = matches!(dlg, Dialog::Import { .. });
-    let window_id = egui::Id::new(if import { "lightcraft-import-dialog" } else { "lightcraft-dialog" });
+    // (the Export dialogs too: their width must not carry over to the small dialogs)
+    let window_id = egui::Id::new(match dlg {
+        Dialog::Import { .. } => "lightcraft-import-dialog",
+        Dialog::Export { .. } => "lightcraft-export-dialog",
+        Dialog::ExportExisting { .. } => "lightcraft-export-ask-dialog",
+        _ => "lightcraft-dialog",
+    });
     let shown = egui::Window::new(crate::i18n::tr(&title)).id(window_id)
         .collapsible(false)
         .resizable(import)
@@ -1210,7 +1215,6 @@ pub fn prompt(app: &mut LightcraftApp, title: &str, hint: &str, value: &str, com
         Some(Dialog::TextPrompt { title: title.into(), hint: hint.into(), value: value.into(), command: command.into(), params, key: key.into() });
 }
 
-
 // ------------------------------------------------------------------------------------------ dialog widgets
 
 /// Merge or replace the photos' masks with the copied ones.
@@ -1455,95 +1459,6 @@ fn group_checklist(app: &mut LightcraftApp, ui: &mut egui::Ui, tag: &str, groups
 /// Width of the label column in dialogs.
 const LABEL_W: f32 = 78.0;
 
-const fn spec(id: &'static str, label: &'static str, min: f64, max: f64, default: f64, step: f64) -> ControlSpec {
-    ControlSpec { id, label, section: Section::Light, min, max, default, step, decimals: 0, track: Track::Plain }
-}
-const QUALITY: ControlSpec = spec("export.quality", "Quality", 1.0, 100.0, 90.0, 1.0);
-const LIMIT_KB: ControlSpec = spec("export.limitKb", "Limit file size (KB, 0 = off)", 0.0, 20_000.0, 0.0, 10.0);
-const SIZE_PX: ControlSpec = spec("export.sizePx", "Pixels", 16.0, 20_000.0, 2048.0, 16.0);
-const SIZE_W: ControlSpec = spec("export.sizeW", "Width (px)", 16.0, 20_000.0, 2048.0, 16.0);
-const SIZE_H: ControlSpec = spec("export.sizeH", "Height (px)", 16.0, 20_000.0, 2048.0, 16.0);
-const SIZE_MP: ControlSpec = ControlSpec { decimals: 1, ..spec("export.sizeMp", "Megapixels", 0.1, 100.0, 12.0, 0.1) };
-const SIZE_PCT: ControlSpec = spec("export.sizePercent", "Percent", 1.0, 400.0, 50.0, 1.0);
-const START_NUMBER: ControlSpec = spec("export.startNumber", "Start number", 1.0, 9999.0, 1.0, 1.0);
-const PPI: ControlSpec = spec("export.ppi", "Resolution (ppi)", 1.0, 1200.0, 240.0, 1.0);
-
-/// Image Sizing: full size, or a resize mode and its value(s), don't enlarge, ppi.
-fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft_engine::export::Resize, ppi: &mut u16) {
-    use lightcraft_engine::export::ResizeMode as R;
-    const MODES: [(R, &str); 7] = [
-        (R::LongEdge, "Long Edge"),
-        (R::ShortEdge, "Short Edge"),
-        (R::Width, "Width"),
-        (R::Height, "Height"),
-        (R::Dimensions, "Width × Height"),
-        (R::Megapixels, "Megapixels"),
-        (R::Percent, "Percentage"),
-    ];
-    let r_full = ui.checkbox(full, crate::i18n::tr("Full size"));
-    crate::widgets::register(ui.ctx(), "check:exportFullSize", r_full.rect);
-    if !*full {
-        field(ui, "Resize to", |ui| {
-            let cur = MODES.iter().find(|m| m.0 == r.mode).map_or("Long Edge", |m| m.1);
-            let before = r.mode;
-            let c = egui::ComboBox::from_id_salt("exportResizeMode").width(150.0).selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
-                for (m, l) in MODES {
-                    ui.selectable_value(&mut r.mode, m, crate::i18n::tr(l));
-                }
-            });
-            crate::widgets::register(ui.ctx(), "combo:exportResizeMode", c.response.rect);
-            if r.mode != before {
-                // a sensible value for the new unit
-                r.value = match r.mode {
-                    R::Megapixels => 12.0,
-                    R::Percent => 50.0,
-                    _ if matches!(before, R::Megapixels | R::Percent) => 2048.0,
-                    _ => r.value,
-                };
-                if r.mode == R::Dimensions && r.height == 0 {
-                    r.height = r.value as u32;
-                }
-            }
-        });
-        let mut v = r.value as f64;
-        let spec = match r.mode {
-            R::Megapixels => &SIZE_MP,
-            R::Percent => &SIZE_PCT,
-            R::Dimensions => &SIZE_W,
-            _ => &SIZE_PX,
-        };
-        if num(ui, spec, &mut v) {
-            r.value = v as f32;
-        }
-        if r.mode == R::Dimensions {
-            let mut h = r.height as f64;
-            if num(ui, &SIZE_H, &mut h) {
-                r.height = h as u32;
-            }
-        }
-        let c = ui.checkbox(&mut r.dont_enlarge, crate::i18n::tr("Don't enlarge"));
-        crate::widgets::register(ui.ctx(), "check:exportDontEnlarge", c.rect);
-    }
-    let mut p = *ppi as f64;
-    if num(ui, &PPI, &mut p) {
-        *ppi = p as u16;
-    }
-}
-const WM_IMAGE_WIDTH: ControlSpec = spec("export.watermarkImageWidth", "Width (% of photo)", 2.0, 100.0, 20.0, 1.0);
-const WM_SIZE: ControlSpec = spec("export.watermarkSize", "Size (% of short edge)", 1.0, 15.0, 3.5, 0.5);
-const WM_OPACITY: ControlSpec = spec("export.watermarkOpacity", "Opacity (%)", 5.0, 100.0, 70.0, 1.0);
-
-/// A themed slider row editing `v`; true when it changed.
-fn num(ui: &mut egui::Ui, spec: &ControlSpec, v: &mut f64) -> bool {
-    match crate::widgets::slider(ui, spec, *v, true, None).value {
-        Some(n) => {
-            *v = n;
-            true
-        }
-        None => false,
-    }
-}
-
 /// A labelled row (fixed label column).
 fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
@@ -1555,14 +1470,6 @@ fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R
         add(ui)
     })
     .inner
-}
-
-/// The rest of a [`field`] row, laid out right to left: `add` places its trailing button(s) first,
-/// then a text field taking exactly the width that's left. (Subtracting a guessed button width
-/// instead made the auto-sized dialog grow every frame when the real button was wider, #8.)
-fn trailing_button_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    let h = ui.spacing().interact_size.y.max(24.0);
-    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), h), egui::Layout::right_to_left(egui::Align::Center), add);
 }
 
 /// A labelled row of mutually exclusive choice buttons (ids `button:{id}-{index}`).

@@ -334,6 +334,11 @@ fn run_fired(app: &mut LightcraftApp, ctx: &egui::Context, f: String) {
         app.toast(ctx, label);
     } else if let Some(l) = f.strip_prefix("label:") {
         cull(app, "photo.label", json!({"label": l}), false);
+    } else if f == "panel.remove" && app.ui.right == crate::state::RightPanel::Masking {
+        // KEY-HIDEPINS: H while masking shows / hides the mask pins (Lightroom); elsewhere it is Remove
+        if let Ok(r) = app.run("view.maskPins", json!({})) {
+            app.toast(ctx, if r["maskPins"] == true { crate::i18n::tr("Mask pins shown") } else { crate::i18n::tr("Mask pins hidden") });
+        }
     } else if f == "panel.presets" && library_grid(app) {
         // Classic's Shift+P picks and advances in Library; keep the Presets binding elsewhere.
         cull(app, "photo.flag", json!({"flag": "pick"}), true);

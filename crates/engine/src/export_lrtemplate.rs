@@ -112,7 +112,8 @@ pub fn read_export_lrtemplate(text_in: &str, fallback_name: &str) -> Result<(Exp
         return Err(format!("not an export preset (a {kind} preset)"));
     }
     let v = field(&root, "value").ok_or("no `value` table: not a Lightroom export preset")?;
-    let title = text(&root, "title").map(crate::preset_import::delocalize).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| fallback_name.to_string());
+    let title =
+        text(&root, "title").map(crate::preset_import::delocalize).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| fallback_name.to_string());
     let mut p = Map::new();
     let mut notes: Vec<String> = Vec::new();
     let mut put = |k: &str, x: Value| {
@@ -188,9 +189,9 @@ pub fn read_export_lrtemplate(text_in: &str, fallback_name: &str) -> Result<(Exp
         put("hdr", json!(true));
     }
     // Image Sizing
-    let ppi = num(v, "LR_size_resolution").filter(|r| *r > 0.0).map(|r| {
-        if text(v, "LR_size_resolutionUnits").is_some_and(|u| u.eq_ignore_ascii_case("cm")) { r * 2.54 } else { r }
-    });
+    let ppi = num(v, "LR_size_resolution")
+        .filter(|r| *r > 0.0)
+        .map(|r| if text(v, "LR_size_resolutionUnits").is_some_and(|u| u.eq_ignore_ascii_case("cm")) { r * 2.54 } else { r });
     if let Some(r) = ppi {
         put("ppi", json!(r.round().clamp(1.0, f64::from(u16::MAX)) as u64));
     }
@@ -313,12 +314,14 @@ pub fn read_export_lrtemplate(text_in: &str, fallback_name: &str) -> Result<(Exp
         put("exportTo", json!(t));
     }
     if export_to == Some("specificFolder")
-        && let Some(d) = text(v, "LR_export_destinationPathPrefix").or_else(|| text(v, "export_destinationPathPrefix")).filter(|d| !d.trim().is_empty())
+        && let Some(d) =
+            text(v, "LR_export_destinationPathPrefix").or_else(|| text(v, "export_destinationPathPrefix")).filter(|d| !d.trim().is_empty())
     {
         put("dir", json!(d));
     }
     if flag(v, "LR_export_useSubfolder").or_else(|| flag(v, "export_useSubfolder")) == Some(true)
-        && let Some(s) = text(v, "LR_export_destinationPathSuffix").or_else(|| text(v, "export_destinationPathSuffix")).filter(|s| !s.trim().is_empty())
+        && let Some(s) =
+            text(v, "LR_export_destinationPathSuffix").or_else(|| text(v, "export_destinationPathSuffix")).filter(|s| !s.trim().is_empty())
     {
         put("subfolder", json!(s));
     }
