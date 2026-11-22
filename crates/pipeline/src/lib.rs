@@ -32,6 +32,7 @@ pub mod dump;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod grading_cr;
 pub mod local;
 pub mod lut;
 pub mod masks;
@@ -605,7 +606,7 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
 /// Settings the GPU kernel doesn't render yet (Bryan's fork, round 10: Camera Raw's measured
 /// Texture): such renders take the CPU pipeline.
 pub fn cpu_only(s: &DevelopSettings) -> bool {
-    local::texture_level(s, 1.0, 1.0).is_some()
+    local::texture_level(s, 1.0, 1.0).is_some() || grading_cr::Curves::for_settings(s).is_some()
 }
 
 pub(crate) fn is_bw(s: &DevelopSettings) -> bool {

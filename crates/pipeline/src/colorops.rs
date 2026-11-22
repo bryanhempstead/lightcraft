@@ -146,6 +146,9 @@ pub struct ColorOps {
     pub bw: Option<[f32; 8]>,
     /// Wheels (shadows, midtones, highlights, global), blending, balance.
     pub grading: Option<([WheelK; 4], f32, f32)>,
+    /// Camera Raw's measured Color Grading ([`crate::grading_cr`]) in place of `grading`:
+    /// three channel curves of linear ProPhoto.
+    pub grading_cr: Option<std::sync::Arc<crate::grading_cr::Curves>>,
     /// OkLCh hue of skin tones (protected by vibrance).
     pub skin: f32,
     /// Lightroom's measured HSL / Saturation / Vibrance ([`crate::colortab`]) in place of the
@@ -176,7 +179,9 @@ impl ColorOps {
                 s.point_colors.iter().take(lightcraft_develop::MAX_POINT_COLORS).filter(|p| !p.is_neutral()).map(PointK::new).collect()
             },
             bw: crate::is_bw(s).then(|| s.bw_mix.bands().map(|v| (v / 100.0) as f32)),
-            grading: (!g.is_neutral()).then(|| {
+
+            grading_cr: crate::grading_cr::Curves::for_settings(s).map(std::sync::Arc::new),
+            grading: (!g.is_neutral() && !crate::grading_cr::MEASURED).then(|| {
                 (
                     [wheel(&g.shadows), wheel(&g.midtones), wheel(&g.highlights), wheel(&g.global)],
                     (g.blending / 100.0) as f32,
@@ -210,6 +215,7 @@ impl ColorOps {
             && self.points.is_empty()
             && self.bw.is_none()
             && self.grading.is_none()
+            && self.grading_cr.is_none()
     }
 
     /// `local_sat` (−1..1) and `local_hue` (radians) come from masks.
@@ -298,8 +304,31 @@ impl ColorOps {
                 lab[0] += k.lum * wt;
             }
         }
-        oklab_to_2020(lab)
+        let rgb = oklab_to_2020(lab);
+        match &self.grading_cr {
+            Some(c) => {
+                let m = pp_matrices();
+                let p = mul3(&m.0, rgb);
+                mul3(&m.1, c.apply(p))
+            }
+            None => rgb,
+        }
     }
+}
+
+/// Linear Rec.2020 → linear ProPhoto and back (Camera Raw grades ProPhoto channels).
+pub fn pp_matrices() -> &'static ([[f32; 3]; 3], [[f32; 3]; 3]) {
+    static M: OnceLock<([[f32; 3]; 3], [[f32; 3]; 3])> = OnceLock::new();
+    M.get_or_init(|| (REC2020.to_space(&PROPHOTO).to_f32(), PROPHOTO.to_space(&REC2020).to_f32()))
+}
+
+#[inline]
+fn mul3(m: &[[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
+    [
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    ]
 }
 
 /// Calibration slider stops for [`CALIB_TABLE`].
