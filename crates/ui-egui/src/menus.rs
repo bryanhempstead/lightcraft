@@ -54,6 +54,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.survey", "Survey", Some("N"), "View"),
     ("view.people", "People", None, "View"),
     ("view.faceBoxes", "Face Boxes", None, "View"),
+    ("view.drawFace", "Draw Face Region", None, "View"),
     ("view.reference", "Reference View", Some("Shift+R"), "View"),
     ("photo.setReference", "Set as Reference Photo", None, ""),
     ("compare.swap", "Swap Compare Photos", None, "View"),
@@ -651,7 +652,28 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.compare" => crate::panels::compare::enter_compare(app),
         "view.faceBoxes" => {
             app.ui.face_boxes = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.face_boxes);
+            if !app.ui.face_boxes {
+                app.ui.draw_face = false;
+            }
             Ok(json!({"show": app.ui.face_boxes}))
+        }
+        // Lightroom's Draw Face Region tool (the loupe): drag on the photo to draw a face box, then type the name;
+        // with the tool on, boxes move by dragging them
+        "view.drawFace" => {
+            let on = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.draw_face);
+            if on {
+                if app.session.active().is_none() {
+                    return Some(Err("no photo to draw a face on".into()));
+                }
+                if app.ui.view != ViewMode::Detail {
+                    enter_library(app, Some(ViewMode::Detail));
+                    app.ui.view = ViewMode::Detail;
+                    app.ui.library_view = ViewMode::Detail;
+                }
+                app.ui.face_boxes = true;
+            }
+            app.ui.draw_face = on;
+            Ok(json!({"on": on}))
         }
         "view.map" => {
             // Lightroom Classic's Map module (⌘⌥3): {lat?, lon?, zoom?} looks there
@@ -1456,7 +1478,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(r)
         }
         "dialog.cull" => {
-            app.ui.dialog = Some(Dialog::Cull { reject_below: 0.0, pick_best: true, reject_eyes: false, reject_face_below: 0.0 });
+            app.ui.dialog =
+                Some(Dialog::Cull { reject_below: 0.0, pick_best: true, reject_eyes: false, reject_face_below: 0.0, reject_expression_below: 0.0 });
             Ok(Value::Null)
         }
         "app.whatsNew" => {

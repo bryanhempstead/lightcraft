@@ -220,6 +220,8 @@ pub struct Session {
     /// Keep an automatic version when leaving an edited photo ([`Session::auto_version`]; off by
     /// default, like Lightroom, which never snapshots by itself; prefs.json).
     pub auto_versions: bool,
+    /// When faces are found without being asked (People; prefs.json).
+    pub face_prefs: vision::FacePrefs,
     /// When each photo was last exported (photo id → ISO time; the library's `exports.json`).
     pub export_log: std::collections::BTreeMap<u64, String>,
     /// Named watermarks (Lightroom's Watermark Editor presets; prefs.json).
@@ -291,6 +293,8 @@ pub struct Session {
     pub label_sets: Vec<cmd::manage::LabelSet>,
     /// Look-alike signatures by content key (Find Similar).
     pub signatures: std::collections::HashMap<String, [f32; 64]>,
+    /// Assisted Culling measuring on worker threads ([`Session::cull_poll`]).
+    pub cull_job: Option<cmd::cull::CullJob>,
     /// Imported `.cube` LUT profiles.
     pub lut_profiles: Vec<cmd::lut_profiles::LutProfile>,
     /// The target album B adds to (`None` = the Quick Collection).
@@ -374,6 +378,7 @@ impl Session {
             naming_templates: Vec::new(),
             naming_counters: Default::default(),
             auto_versions: false,
+            face_prefs: vision::FacePrefs::default(),
             export_log: Default::default(),
             watermark_presets: Vec::new(),
             trash_dir: None,
@@ -409,6 +414,7 @@ impl Session {
             curve_presets: Vec::new(),
             label_sets: Vec::new(),
             signatures: Default::default(),
+            cull_job: None,
             lut_profiles: Vec::new(),
             target_album: None,
             auto_import_seen: Default::default(),
@@ -1050,6 +1056,8 @@ mod tests_export;
 mod tests_export_formats;
 #[cfg(test)]
 mod tests_export_icc;
+#[cfg(test)]
+mod tests_faces_auto;
 #[cfg(test)]
 mod tests_folders;
 #[cfg(test)]

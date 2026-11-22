@@ -254,11 +254,19 @@ fn import_previews_and_culling() {
     let mut h = headless(s);
     h.app.session.execute("library.select", &json!({"ids": ids})).unwrap();
     let prefs = crate::import::ImportPrefs { previews: "embedded".into(), cull: true, ..Default::default() };
+    let undo0 = h.app.session.undo.len();
     crate::import_window::after_window_import(&mut h.app, &prefs, ids.len(), &[]);
     settle(&mut h);
+    // measured on worker threads, applied by the frame loop
+    let t0 = std::time::Instant::now();
+    while h.app.session.cull_job.is_some() && t0.elapsed() < std::time::Duration::from_secs(60) {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     for id in &ids {
         assert!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(*id)).unwrap().analysis.is_some(), "scored at import");
     }
+    assert_eq!(h.app.session.undo.len(), undo0, "culling at import is bookkeeping, not an undo step");
     let b = h.app.session.preview_build.clone().expect("a thumbnail build started");
     assert_eq!(b.total, ids.len());
     assert!(h.app.session.execute("library.buildPreviews", &json!({"size": "huge"})).is_err());

@@ -511,6 +511,22 @@ fn broadcast(a: &T, b: &T, f: impl Fn(f32, f32) -> f32 + Sync) -> Result<T> {
             return Ok(map(a, |x| f(x, y)));
         }
     }
+    // per channel (PRelu slopes, biases): `[1, C, H, W]` with `[1, C, 1, 1]` or `[C, 1, 1]`, a plane at a time
+    if let [1, c, h, w] = a.shape[..] {
+        let per_channel = match b.shape[..] {
+            [1, bc, 1, 1] | [bc, 1, 1] => bc == c,
+            _ => false,
+        };
+        if per_channel && b.data.len() == c && h * w > 0 {
+            let mut out = T::zeros(a.shape.clone())?;
+            out.data.par_chunks_mut(h * w).zip(a.data.par_chunks(h * w)).zip(&b.data).for_each(|((dst, src), &y)| {
+                for (d, &x) in dst.iter_mut().zip(src) {
+                    *d = f(x, y);
+                }
+            });
+            return Ok(out);
+        }
+    }
     let rank = a.shape.len().max(b.shape.len());
     let pad = |s: &[usize]| -> Vec<usize> { std::iter::repeat_n(1, rank - s.len()).chain(s.iter().copied()).collect() };
     let (sa, sb) = (pad(&a.shape), pad(&b.shape));
@@ -1036,6 +1052,24 @@ mod tests {
                 (s >> 8) as f32 / (1 << 24) as f32 - 0.5
             })
             .collect()
+    }
+
+    #[test]
+    fn per_channel_broadcast_matches_the_general_rule() {
+        let a = T::new(vec![1, 3, 2, 2], (0..12).map(|v| v as f32 - 6.0).collect()).unwrap();
+        for b in [T::new(vec![1, 3, 1, 1], vec![0.5, 2.0, -1.0]).unwrap(), T::new(vec![3, 1, 1], vec![0.5, 2.0, -1.0]).unwrap()] {
+            let r = broadcast(&a, &b, |x, s| if x >= 0.0 { x } else { x * s }).unwrap();
+            assert_eq!(r.shape, vec![1, 3, 2, 2]);
+            let want: Vec<f32> = (0..12)
+                .map(|i| {
+                    let x = i as f32 - 6.0;
+                    if x >= 0.0 { x } else { x * [0.5, 2.0, -1.0][i / 4] }
+                })
+                .collect();
+            assert_eq!(r.data, want);
+        }
+        // a channel count that doesn't match is an error, never a panic
+        assert!(broadcast(&a, &T::new(vec![1, 2, 1, 1], vec![1.0, 2.0]).unwrap(), |x, y| x + y).is_err());
     }
 
     #[test]

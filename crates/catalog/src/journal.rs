@@ -52,6 +52,7 @@
 //! | 7 | the name a photo was imported with (fork) | `Photo.original_name` |
 //! | 8 | video trim / poster frame, library records (fork: publish services, map locations) | `Op::SetVideo`, `Photo.video`, `Op::SetRecord`, `Catalog.records` |
 //! | 9 | faces: found faces, rejected suggestions, AI culling (fork) | `Op::SetRegions`, `Region.rejected`, `Analysis.faces` / `eyes_closed` / `face_focus` |
+//! | 10 | hand-drawn faces, expressions in culling (fork) | `Region.drawn`, `Analysis.smiles` / `expression` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -78,7 +79,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 10;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

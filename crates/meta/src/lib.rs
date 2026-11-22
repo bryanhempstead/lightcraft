@@ -15,6 +15,7 @@ mod container;
 pub mod cr3;
 mod datetime;
 mod exif;
+pub mod focus;
 mod gpx;
 mod iptc;
 pub mod iptc_ext;
@@ -25,6 +26,7 @@ mod xmp_merge;
 pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
 pub use datetime::DateTime;
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, write_exif, write_exif_with};
+pub use focus::FocusPoint;
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
 pub use lightcraft_geom::{Orientation, Rect};
@@ -68,12 +70,21 @@ pub struct Region {
     /// LightCraft's own (catalog format v9); not written to XMP.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rejected: Vec<String>,
+    /// Drawn by hand (Lightroom's Draw Face Region): a face even when the face finder doesn't see one, so it is
+    /// recognised and grouped like a found face. LightCraft's own (catalog format v10); not written to XMP.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drawn: bool,
 }
 
 impl Region {
     /// A face box with no name.
     pub fn face(rect: Rect) -> Region {
-        Region { rect, kind: RegionKind::Face, name: None, description: None, rejected: Vec::new() }
+        Region { rect, kind: RegionKind::Face, name: None, description: None, rejected: Vec::new(), drawn: false }
+    }
+
+    /// A face box drawn by hand.
+    pub fn drawn_face(rect: Rect) -> Region {
+        Region { drawn: true, ..Region::face(rect) }
     }
 }
 

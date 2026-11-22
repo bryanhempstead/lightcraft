@@ -207,5 +207,16 @@
   "downloading the AI search model {d} / {n} MB…": "baixando o modelo de busca por IA {d} / {n} MB…",
   "AI search needs {m} ({mb} MB, {l}): Return downloads it": "A busca por IA precisa de {m} ({mb} MB, {l}): Return baixa",
   "Describe a photo… (indexing {d} / {n})": "Descreva uma foto… (indexando {d} / {n})",
-  "{n} photos match “{q}”, best first": "{n} fotos correspondem a “{q}”, as melhores primeiro"
+  "{n} photos match “{q}”, best first": "{n} fotos correspondem a “{q}”, as melhores primeiro",
+  "Assisted Culling: {n} photos, {g} groups of look-alikes": "Seleção assistida: {n} fotos, {g} grupos de fotos parecidas",
+  "Confirm the {n} suggested faces as who they're suggested as": "Confirmar os {n} rostos sugeridos como a pessoa sugerida",
+  "Culling {d} of {n}": "Selecionando {d} de {n}",
+  "Download {m} — {mb} MB, {l}": "Baixar {m} — {mb} MB, {l}",
+  "Finding faces {d} of {n}": "Encontrando rostos {d} de {n}",
+  "Smiles need the expression model ({mb} MB, {l})": "Sorrisos precisam do modelo de expressões ({mb} MB, {l})",
+  "These {n} faces aren't who they're suggested as": "Estes {n} rostos não são a pessoa sugerida",
+  "Unnamed · looks like {s}": "Sem nome · parece {s}",
+  "name the {n} picked {what}": "nomear os {n} {what} escolhidos",
+  "{f} faces · {s} suggested": "{f} rostos · {s} sugeridos",
+  "{r} rejected, {p} picked": "{r} rejeitadas, {p} escolhidas"
 }

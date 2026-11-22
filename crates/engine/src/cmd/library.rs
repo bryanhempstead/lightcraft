@@ -984,7 +984,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }
                 let n = ops.len();
-                s.commit("Edit Info", Op::Batch { ops })?;
+                // a person keyword taken off a photo takes the name off its face too
+                let op = s.sync_faces_with_keywords(Op::Batch { ops });
+                s.commit("Edit Info", op)?;
                 // keywords just added become the Recent Keywords set
                 let added: Vec<String> = strs("addKeywords").unwrap_or_default().into_iter().chain(strs("keywords").unwrap_or_default()).collect();
                 if n > 0 && !added.is_empty() {
@@ -1447,7 +1449,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Photos",
             ["File"],
             Some("Cmd+Shift+I"),
-            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source — only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`) — dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {date} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext} {EXT} {original} {originalnum} {copyname} {text} {shoot} {total} {import} {image} {yyyymmdd} {yymmdd} {yyyy} {yy} {month} {mon} {mm} {dd} {julian} {hour} {minute} {second} {longdate} {caption} {copyright} {location} {city} {state} {country} {make} {model} {focal} {aperture} {shutter} {dimensions} {label}, {seq:N}, {date:%Y%m%d}; photo.renameTokens explains each; blank = keep names), renameTemplate?: a naming.templates name instead, renameText?: Custom Text, shootName?: Shoot Name, renameExtCase?: keep|lower|upper, renameStart?: 1, metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, keywords?: [..], onDeleted?: skip|restore|fresh (a file that is in Recently Deleted: skip = leave it there and say so, restore = bring the photo back with its edits, fresh = delete the trashed record and import the file as new)} → {imported, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
+            "{paths: [file or folder (recursive)], mode?: add|copy|move (add = reference the files in place; copy = into the library's Originals/YYYY/YYYY-MM-DD/; move = as copy, then each original and its XMP sidecars are removed from the source — only after the copy is verified (a hard link on the same volume, else copied, synced and compared byte for byte) and its catalog record is saved; failed, duplicate and unchecked files keep their sources; a taken name gets -1, -2…; undo removes the photos from the library but leaves the files at the destination), destination?: folder for copies / moves, organize?: date (YYYY/YYYY-MM-DD) | month (YYYY/YYYY-MM) | flat | a folder template, e.g. `{date:%Y}/{date:%Y%m%d}` → 2026/20260114 (the template's `/` make the folders, each level expanded with the rename tokens and made a safe folder name: never outside the destination; must be relative, no `..`; a level with missing metadata is `unknown`) — dated by capture time, else the import time, rename?: file-name template for copies, original extension added (tokens: {name} {num} {seq} {date} {folder} {camera} {lens} {iso} {rating} {title} {creator} {ext} {EXT} {original} {originalnum} {copyname} {text} {shoot} {total} {import} {image} {yyyymmdd} {yymmdd} {yyyy} {yy} {month} {mon} {mm} {dd} {julian} {hour} {minute} {second} {longdate} {caption} {copyright} {location} {city} {state} {country} {make} {model} {focal} {aperture} {shutter} {dimensions} {label}, {seq:N}, {date:%Y%m%d}; photo.renameTokens explains each; blank = keep names), renameTemplate?: a naming.templates name instead, renameText?: Custom Text, shootName?: Shoot Name, renameExtCase?: keep|lower|upper, renameStart?: 1, metadataPreset?: name, dng?: bool (copy raws as DNG; copy only), local?: bool (browsing: the photos stay out of the library, like library.browse; not with move), album?: albumId, albumName?: new album, preset?: presetId, keywords?: [..], onDeleted?: skip|restore|fresh (a file that is in Recently Deleted: skip = leave it there and say so, restore = bring the photo back with its edits, fresh = delete the trashed record and import the file as new), cull?: bool (Assisted Culling of what came in: focus, clipping and look-alike groups, with the face models faces, eyes and smiles; LightCraft's bookkeeping, nothing flagged; on worker threads in the app)} → {imported, culled?, duplicates: [{path, existing, reason, existingDeleted?}], restored?: [photoId], failed, moved?: [{from, to, sidecars?}], kept?: [{path, reason}] (move: sources left in place and why), album?}",
             always,
             |s, p| {
                 let req = import_params(s, p)?;
@@ -1466,6 +1468,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 let imported = if imported.is_empty() { restored } else { imported };
                 if let Some(f) = imported.first() {
                     s.selection = Selection::single(PhotoId(*f));
+                }
+                let mut report = report;
+                if bool_or(p, "cull", false) && !imported.is_empty() {
+                    let ids: Vec<PhotoId> = imported.iter().map(|i| PhotoId(*i)).collect();
+                    let opts = super::cull::CullOptions { bookkeeping: true, ..Default::default() };
+                    let background = s.vision.background;
+                    report["culled"] = s.cull_start(&ids, opts, true, background)?;
                 }
                 Ok(report)
             }

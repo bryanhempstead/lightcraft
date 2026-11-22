@@ -2,7 +2,8 @@
 //! downloaded from. None is part of LightCraft: each is downloaded only when the user asks (having seen its size and
 //! licence) into `<models dir>/<package>/`, size- and SHA-256-checked before it is used.
 //!
-//! Two packages: **faces** (YuNet + SFace + the eye-state network, 39 MB, for People and culling) and **search**
+//! Three packages: **faces** (YuNet + SFace + the eye-state network, 39 MB, for People and culling), **expressions**
+//! (OpenCV Zoo's facial expression network, 4.8 MB, for culling's smiles; optional on top of faces) and **search**
 //! (CLIP ViT-B/32 trained by LAION, 607 MB, for natural-language search).
 
 use std::path::{Path, PathBuf};
@@ -15,6 +16,8 @@ pub enum Package {
     Faces,
     /// CLIP image and text embeddings.
     Search,
+    /// Facial expressions (smiles), on the faces the face package finds.
+    Expressions,
 }
 
 /// One file of a package.
@@ -41,11 +44,12 @@ pub struct PackageInfo {
 pub const YUNET: &str = "face_detection_yunet_2023mar.onnx";
 pub const SFACE: &str = "face_recognition_sface_2021dec.onnx";
 pub const EYES: &str = "open_closed_eye.onnx";
+pub const EXPRESSION: &str = "facial_expression_recognition_mobilefacenet_2022july.onnx";
 pub const CLIP_WEIGHTS: &str = "model.safetensors";
 pub const CLIP_VOCAB: &str = "vocab.json";
 pub const CLIP_MERGES: &str = "merges.txt";
 
-pub const PACKAGES: [PackageInfo; 2] = [
+pub const PACKAGES: [PackageInfo; 3] = [
     PackageInfo {
         id: Package::Faces,
         key: "faces",
@@ -129,12 +133,33 @@ pub const PACKAGES: [PackageInfo; 2] = [
             },
         ],
     },
+    PackageInfo {
+        id: Package::Expressions,
+        key: "expressions",
+        name: "Facial expressions (OpenCV Zoo FER)",
+        models: "facial_expression_recognition_mobilefacenet_2022july (OpenCV Zoo, Progressive Teacher on MobileFaceNet, Apache-2.0)",
+        licence: "Apache-2.0",
+        source: "https://github.com/opencv/opencv_zoo/tree/main/models/facial_expression_recognition",
+        files: &[ModelFile {
+            name: EXPRESSION,
+            size: 4_791_892,
+            sha256: "4f61307602fc089ce20488a31d4e4614e3c9753a7d6c41578c854858b183e1a9",
+            urls: &[
+                concat!(
+                    "https://huggingface.co/opencv/facial_expression_recognition/resolve/b473270576eabddaacffd08adb4bed27b3fc54e6/",
+                    "facial_expression_recognition_mobilefacenet_2022july.onnx"
+                ),
+                "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/facial_expression_recognition/facial_expression_recognition_mobilefacenet_2022july.onnx",
+            ],
+        }],
+    },
 ];
 
 pub fn info(id: Package) -> &'static PackageInfo {
     match id {
         Package::Faces => &PACKAGES[0],
         Package::Search => &PACKAGES[1],
+        Package::Expressions => &PACKAGES[2],
     }
 }
 

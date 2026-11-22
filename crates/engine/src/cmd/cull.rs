@@ -3,8 +3,10 @@
 //! each group's best. With the face models (L09, Lightroom's AI culling criteria) also: the faces
 //! in each photo, how many blink (eyes closed) and how sharp the main face is — a burst's best is
 //! then the one with nobody blinking and the sharpest face, and photos can be rejected for closed
-//! eyes or a soft face. Scores are kept on the photos (rules / smart albums: `sharpness`,
-//! `bestOfGroup`, `faceFocus`, `eyesClosed`, `faceCount`).
+//! eyes or a soft face. With the expression model too: smiles and how pleasant the main faces look
+//! (`expression`, 0..100) — a burst's best then also prefers smiles, and photos can be rejected below an
+//! expression score. Scores are kept on the photos (rules / smart albums: `sharpness`, `bestOfGroup`,
+//! `faceFocus`, `eyesClosed`, `faceCount`, `smiles`, `expression`).
 
 use lightcraft_catalog::{Analysis, Flag, Op, PhotoId};
 use serde_json::{Value, json};
@@ -22,45 +24,215 @@ fn secs(iso: &str) -> Option<i64> {
     Some(((d.year as i64 * 372 + d.month as i64 * 31 + d.day as i64) * 24 + d.hour as i64) * 3600 + d.minute as i64 * 60 + d.second as i64)
 }
 
+/// What a culling run does besides scoring.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CullOptions {
+    pub reject_below: Option<f32>,
+    pub pick_best: bool,
+    pub reject_eyes: bool,
+    pub reject_face_below: Option<f32>,
+    pub reject_expression_below: Option<f32>,
+    /// Write the scores as LightCraft's bookkeeping (culling at import), not as an undo step. Flags are never set
+    /// this way.
+    pub bookkeeping: bool,
+}
+
+impl CullOptions {
+    fn from_params(p: &Value) -> CullOptions {
+        let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v as f32);
+        CullOptions {
+            reject_below: num("rejectBelow"),
+            pick_best: super::bool_or(p, "pickBest", false),
+            reject_eyes: super::bool_or(p, "rejectEyesClosed", false),
+            reject_face_below: num("rejectFaceBelow"),
+            reject_expression_below: num("rejectExpressionBelow"),
+            bookkeeping: super::bool_or(p, "bookkeeping", false),
+        }
+    }
+
+    fn flags(&self) -> bool {
+        !self.bookkeeping
+            && (self.reject_below.is_some()
+                || self.pick_best
+                || self.reject_eyes
+                || self.reject_face_below.is_some()
+                || self.reject_expression_below.is_some())
+    }
+}
+
+/// One photo measured for culling: capture time (seconds), focus, clipping, look.
+#[derive(Clone, Debug)]
+pub struct Row {
+    pub id: PhotoId,
+    pub t: Option<i64>,
+    pub sharp: f32,
+    pub clip: f32,
+    pub sig: [f32; 64],
+}
+
+fn measure(src: &lightcraft_raster::Rgb32f) -> (f32, f32, [f32; 64]) {
+    use lightcraft_pipeline::cull;
+    (cull::sharpness(src), cull::clipped(src), cull::signature(src))
+}
+
+/// A culling run on worker threads (the app): photos are measured from thumbnail-level sources off the UI thread
+/// (as background work: the grid and loupe go first); [`Session::cull_poll`] applies the result when all are in.
+pub struct CullJob {
+    pub total: usize,
+    done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    rx: std::sync::mpsc::Receiver<std::result::Result<Row, (PhotoId, String)>>,
+    rows: Vec<Row>,
+    failed: Vec<Value>,
+    opts: CullOptions,
+    faces_pending: usize,
+    generation: u64,
+}
+
+impl CullJob {
+    /// Photos measured so far.
+    pub fn done(&self) -> usize {
+        self.done.load(std::sync::atomic::Ordering::Relaxed).min(self.total)
+    }
+}
+
+impl Drop for CullJob {
+    fn drop(&mut self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Workers measuring photos for a culling run at once.
+const CULL_WORKERS: usize = 2;
+
 fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     let ids: Vec<PhotoId> = if p.get("ids").is_some() || s.selection.ids.len() > 1 { s.targets(p) } else { s.visible_cloned() };
-    let reject_below = p.get("rejectBelow").and_then(Value::as_f64).map(|v| v as f32);
-    let pick_best = p.get("pickBest").and_then(Value::as_bool).unwrap_or(false);
-    let reject_eyes = p.get("rejectEyesClosed").and_then(Value::as_bool).unwrap_or(false);
-    let reject_face_below = p.get("rejectFaceBelow").and_then(Value::as_f64).map(|v| v as f32);
-    // faces: from the faces index; photos not in it yet are analysed first (in the background in the
-    // app: their face scores arrive with the results, `Session::vision_poll`)
-    let mut faces_pending = 0;
-    if s.vision.installed(lightcraft_vision::models::Package::Faces) && p.get("faces").and_then(Value::as_bool).unwrap_or(true) {
-        let todo = s.vision_items(crate::vision::Kind::Faces, &ids, false)?.len();
-        if todo > 0 && !s.vision.busy() {
-            s.vision_start(crate::vision::Kind::Faces, &ids, false)?;
-            if s.vision.background {
-                faces_pending = todo;
+    let opts = CullOptions::from_params(p);
+    let background = super::bool_or(p, "background", false) && s.vision.background;
+    s.cull_start(&ids, opts, super::bool_or(p, "faces", true), background)
+}
+
+impl Session {
+    /// Assisted Culling of `ids` (see [`analyze`]'s command): with `background`, on worker threads (→ `{queued}`;
+    /// the result lands with [`Session::cull_poll`]), else to the end.
+    pub fn cull_start(&mut self, ids: &[PhotoId], opts: CullOptions, faces: bool, background: bool) -> Result<Value> {
+        // faces: from the faces index; photos not in it yet are analysed first (in the background in the
+        // app: their face scores arrive with the results, `Session::vision_poll`)
+        let mut faces_pending = 0;
+        if faces && s_installed_faces(self) {
+            let queued = self.vision_enqueue(crate::vision::Kind::Faces, ids)?;
+            if self.vision.background {
+                faces_pending = queued;
             }
         }
-    }
-    // measure (thumbnail-level sources: fast, and enough for focus at 512 px)
-    let mut rows: Vec<(PhotoId, Option<i64>, f32, f32, [f32; 64])> = Vec::new();
-    let mut failed = Vec::new();
-    for id in ids {
-        match s.source_now(id, crate::media::SourceLevel::Thumb) {
-            Ok(src) => {
-                let t = s.catalog.photo(id).and_then(|p| p.captured.as_deref().and_then(secs));
-                use lightcraft_pipeline::cull;
-                rows.push((id, t, cull::sharpness(&src), cull::clipped(&src), cull::signature(&src)));
+        if !background {
+            // measure (thumbnail-level sources: fast, and enough for focus at 512 px)
+            let mut rows: Vec<Row> = Vec::new();
+            let mut failed = Vec::new();
+            for &id in ids {
+                match self.source_now(id, crate::media::SourceLevel::Thumb) {
+                    Ok(src) => {
+                        let t = self.catalog.photo(id).and_then(|p| p.captured.as_deref().and_then(secs));
+                        let (sharp, clip, sig) = measure(&src);
+                        rows.push(Row { id, t, sharp, clip, sig });
+                    }
+                    Err(e) => failed.push(json!([id.0, e])),
+                }
             }
-            Err(e) => failed.push(json!([id.0, e])),
+            return cull_finish(self, rows, failed, opts, faces_pending);
         }
+        // a new run replaces one still measuring
+        self.cull_job = None;
+        let mut work: std::collections::VecDeque<(PhotoId, Option<i64>, crate::media::SourceRef)> = Default::default();
+        let mut seen = std::collections::HashSet::new();
+        for &id in ids {
+            let Some(p) = self.catalog.photo(id).cloned() else { continue };
+            if !seen.insert(id) {
+                continue;
+            }
+            let t = p.captured.as_deref().and_then(secs);
+            work.push_back((id, t, self.media.source_ref(&p, crate::media::SourceLevel::Thumb)));
+        }
+        let total = work.len();
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(work));
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        for _ in 0..CULL_WORKERS.min(total.max(1)) {
+            let (queue, done, cancel, tx) = (queue.clone(), done.clone(), cancel.clone(), tx.clone());
+            std::thread::Builder::new()
+                .name("cull".into())
+                .spawn(move || {
+                    loop {
+                        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                        let next = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop_front();
+                        let Some((id, t, src)) = next else { break };
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            crate::memory::in_background(|| src.load()).map(|img| measure(&img))
+                        }))
+                        .unwrap_or_else(|_| Err("the analysis stopped unexpectedly".into()));
+                        let msg = match r {
+                            Ok((sharp, clip, sig)) => Ok(Row { id, t, sharp, clip, sig }),
+                            Err(e) => Err((id, e)),
+                        };
+                        done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if tx.send(msg).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .map_err(|e| crate::EngineError::Other(format!("can't start culling: {e}")))?;
+        }
+        let generation = self.library_generation();
+        self.cull_job = Some(CullJob { total, done, cancel, rx, rows: Vec::new(), failed: Vec::new(), opts, faces_pending, generation });
+        Ok(json!({"queued": total, "background": true, "facesPending": faces_pending}))
     }
+
+    /// Collect what the culling workers measured; when every photo is in, score the run (one undo step, or
+    /// bookkeeping at import) and return its result. Cheap when nothing is running.
+    pub fn cull_poll(&mut self) -> Option<Result<Value>> {
+        let job = self.cull_job.as_mut()?;
+        while let Ok(m) = job.rx.try_recv() {
+            match m {
+                Ok(r) => job.rows.push(r),
+                Err((id, e)) => job.failed.push(json!([id.0, e])),
+            }
+        }
+        if job.rows.len() + job.failed.len() < job.total {
+            return None;
+        }
+        let job = self.cull_job.take()?;
+        if job.generation != self.library_generation() {
+            return None;
+        }
+        let (rows, failed, opts, pending) = (job.rows.clone(), job.failed.clone(), job.opts, job.faces_pending);
+        Some(cull_finish(self, rows, failed, opts, pending))
+    }
+
+    /// Stop a culling run still measuring (nothing is written).
+    pub fn cull_cancel(&mut self) -> bool {
+        self.cull_job.take().is_some()
+    }
+}
+
+fn s_installed_faces(s: &Session) -> bool {
+    s.vision.installed(lightcraft_vision::models::Package::Faces)
+}
+
+/// Score measured photos: bursts, their best, face scores from the index, flags as `opts` says.
+pub(crate) fn cull_finish(s: &mut Session, mut rows: Vec<Row>, failed: Vec<Value>, opts: CullOptions, faces_pending: usize) -> Result<Value> {
+    // photos deleted (or another library opened) while they were measured
+    rows.retain(|r| s.catalog.photo(r.id).is_some());
     // bursts: consecutive (by capture time) look-alike shots
-    rows.sort_by_key(|r| (r.1.unwrap_or(i64::MAX), r.0));
+    rows.sort_by_key(|r| (r.t.unwrap_or(i64::MAX), r.id));
     let mut group_of: Vec<Option<u32>> = vec![None; rows.len()];
     let mut next = 1u32;
     for i in 1..rows.len() {
         let (a, b) = (&rows[i - 1], &rows[i]);
-        let close = matches!((a.1, b.1), (Some(x), Some(y)) if (y - x).abs() <= BURST_GAP);
-        if close && lightcraft_pipeline::cull::similarity(&a.4, &b.4) >= SAME {
+        let close = matches!((a.t, b.t), (Some(x), Some(y)) if (y - x).abs() <= BURST_GAP);
+        if close && lightcraft_pipeline::cull::similarity(&a.sig, &b.sig) >= SAME {
             let g = *group_of[i - 1].get_or_insert_with(|| {
                 next += 1;
                 next - 1
@@ -68,13 +240,18 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
             group_of[i] = Some(g);
         }
     }
+    for r in &rows {
+        if let Some(key) = s.catalog.photo(r.id).map(|p| crate::media::content_key(p)) {
+            s.signatures.insert(key, r.sig);
+        }
+    }
     // face scores, from the index
-    let faces: Vec<Option<FaceScores>> = rows.iter().map(|r| face_scores(s, r.0)).collect();
-    // a burst's best: nobody blinking first, then the sharpest main face, then the sharpest photo
+    let faces: Vec<Option<FaceScores>> = rows.iter().map(|r| face_scores(s, r.id)).collect();
+    // a burst's best: nobody blinking first, then smiles and the sharpest main face, then the sharpest photo
     let rank = |i: usize| -> f32 {
         match faces.get(i).copied().flatten().filter(|f| f.faces > 0) {
-            Some(f) => -1000.0 * f32::from(f.eyes_closed) + f.focus.unwrap_or(0.0) * 2.0 + rows[i].2,
-            None => rows[i].2,
+            Some(f) => -1000.0 * f32::from(f.eyes_closed) + f.focus.unwrap_or(0.0) * 2.0 + f.expression.unwrap_or(0.0) * 1.5 + rows[i].sharp,
+            None => rows[i].sharp,
         }
     };
     let mut best: std::collections::HashMap<u32, (usize, f32)> = Default::default();
@@ -89,36 +266,42 @@ fn analyze(s: &mut Session, p: &Value) -> Result<Value> {
     let mut ops = Vec::new();
     let (mut rejected, mut picked) = (0, 0);
     let mut out = Vec::new();
-    for (i, (id, _, sharp, clip, _)) in rows.iter().enumerate() {
+    let set_flags = opts.flags();
+    for (i, r) in rows.iter().enumerate() {
         let g = group_of[i];
         let is_best = g.is_some_and(|g| best.get(&g).is_some_and(|b| b.0 == i));
-        let prev = s.catalog.photo(*id).and_then(|p| p.analysis).unwrap_or_default();
+        let prev = s.catalog.photo(r.id).and_then(|p| p.analysis).unwrap_or_default();
         let fs = faces.get(i).copied().flatten();
-        let (n_faces, eyes_closed, face_focus) = match fs {
-            Some(f) => (f.faces, f.eyes_closed, f.focus),
-            None => (prev.faces, prev.eyes_closed, prev.face_focus),
+        let (n_faces, eyes_closed, face_focus, smiles, expression) = match fs {
+            Some(f) => (f.faces, f.eyes_closed, f.focus, f.smiles, f.expression),
+            None => (prev.faces, prev.eyes_closed, prev.face_focus, prev.smiles, prev.expression),
         };
-        ops.push(Op::SetAnalysis {
-            id: *id,
-            analysis: Some(Analysis { sharpness: *sharp, clipped: *clip, group: g, best: is_best, faces: n_faces, eyes_closed, face_focus }),
-        });
-        let flag = s.catalog.photo(*id).map(|p| p.flag).unwrap_or_default();
-        let blink = reject_eyes && eyes_closed > 0;
-        let soft_face = reject_face_below.is_some_and(|t| face_focus.is_some_and(|f| f < t));
-        if (reject_below.is_some_and(|t| *sharp < t) || blink || soft_face) && flag != Flag::Reject {
-            ops.push(Op::SetFlag { id: *id, flag: Flag::Reject });
+        let analysis =
+            Analysis { sharpness: r.sharp, clipped: r.clip, group: g, best: is_best, faces: n_faces, eyes_closed, face_focus, smiles, expression };
+        ops.push(Op::SetAnalysis { id: r.id, analysis: Some(analysis) });
+        let flag = s.catalog.photo(r.id).map(|p| p.flag).unwrap_or_default();
+        let blink = opts.reject_eyes && eyes_closed > 0;
+        let soft_face = opts.reject_face_below.is_some_and(|t| face_focus.is_some_and(|f| f < t));
+        let frown = opts.reject_expression_below.is_some_and(|t| expression.is_some_and(|e| e < t));
+        if set_flags && (opts.reject_below.is_some_and(|t| r.sharp < t) || blink || soft_face || frown) && flag != Flag::Reject {
+            ops.push(Op::SetFlag { id: r.id, flag: Flag::Reject });
             rejected += 1;
-        } else if pick_best && is_best && flag == Flag::None {
-            ops.push(Op::SetFlag { id: *id, flag: Flag::Pick });
+        } else if set_flags && opts.pick_best && is_best && flag == Flag::None {
+            ops.push(Op::SetFlag { id: r.id, flag: Flag::Pick });
             picked += 1;
         }
         out.push(json!({
-            "id": id.0, "sharpness": (sharp * 10.0).round() / 10.0, "clipped": clip, "group": g, "best": is_best,
+            "id": r.id.0, "sharpness": (r.sharp * 10.0).round() / 10.0, "clipped": r.clip, "group": g, "best": is_best,
             "faces": n_faces, "eyesClosed": eyes_closed, "faceFocus": face_focus.map(|f| (f * 10.0).round() / 10.0),
+            "smiles": smiles, "expression": expression.map(|e| (e * 10.0).round() / 10.0),
         }));
     }
     if !ops.is_empty() {
-        s.commit("Assisted Culling", Op::Batch { ops })?;
+        if opts.bookkeeping {
+            s.apply_bookkeeping(Op::Batch { ops })?;
+        } else {
+            s.commit("Assisted Culling", Op::Batch { ops })?;
+        }
     }
     Ok(json!({"photos": out, "groups": best.len(), "rejected": rejected, "picked": picked, "failed": failed, "facesPending": faces_pending}))
 }
@@ -129,7 +312,14 @@ pub(crate) struct FaceScores {
     pub faces: u16,
     pub eyes_closed: u16,
     pub focus: Option<f32>,
+    /// Main faces smiling (`None`-like 0 when expressions weren't read: see `expression`).
+    pub smiles: u16,
+    /// 0..100: how pleasant the main faces look (`None`: expressions not read, or no face big enough).
+    pub expression: Option<f32>,
 }
+
+/// A face smiles: the expression model's `happy` at least even odds.
+pub(crate) const SMILE: f32 = 0.5;
 
 /// Both eyes of a face shut: neither clearly open and together more likely shut than not (a squint or a wink
 /// isn't a blink).
@@ -143,9 +333,23 @@ pub(crate) fn scores_of(record: &lightcraft_vision::index::FaceRecord) -> FaceSc
     let found: Vec<&lightcraft_vision::index::FaceEntry> = record.faces.iter().filter(|f| f.score > 0.0).collect();
     let largest = found.iter().map(|f| area(f)).fold(0f32, f32::max);
     let main = found.iter().filter(|f| area(f) >= largest * 0.25);
-    let eyes_closed = main.filter(|f| f.eyes.is_some_and(blinking)).count();
+    let main: Vec<&&lightcraft_vision::index::FaceEntry> = main.collect();
+    let eyes_closed = main.iter().filter(|f| f.eyes.is_some_and(blinking)).count();
     let focus = found.iter().max_by(|a, b| area(a).total_cmp(&area(b))).map(|f| f.sharpness).filter(|v| v.is_finite());
-    FaceScores { faces: found.len().min(u16::MAX as usize) as u16, eyes_closed: eyes_closed.min(u16::MAX as usize) as u16, focus }
+    let read: Vec<[f32; 7]> = main.iter().filter_map(|f| f.expression).collect();
+    let smiles = read.iter().filter(|e| e[lightcraft_vision::expression::HAPPY] >= SMILE).count();
+    let expression = (record.expressions && !read.is_empty()).then(|| {
+        let pleasant: f32 =
+            read.iter().map(|e| e[lightcraft_vision::expression::HAPPY] + 0.5 * e[lightcraft_vision::expression::NEUTRAL]).sum::<f32>();
+        (100.0 * pleasant / read.len() as f32).clamp(0.0, 100.0)
+    });
+    FaceScores {
+        faces: found.len().min(u16::MAX as usize) as u16,
+        eyes_closed: eyes_closed.min(u16::MAX as usize) as u16,
+        focus,
+        smiles: smiles.min(u16::MAX as usize) as u16,
+        expression: expression.filter(|v| v.is_finite()),
+    }
 }
 
 fn face_scores(s: &mut Session, id: PhotoId) -> Option<FaceScores> {
@@ -312,7 +516,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Assisted Culling",
             [],
             None,
-            "{ids?, rejectBelow?: sharpness 0..100, rejectEyesClosed?: bool, rejectFaceBelow?: face focus 0..100, pickBest?: bool, faces?: bool (true)} — score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots taken within 10 s and mark the best of each (nobody blinking, sharpest face, sharpest photo); with the face models also the faces, blinks and main-face focus (photos not analysed yet are first: in the background in the app → facesPending); optionally reject blurry photos, blinks or soft faces and pick each group's best; one undo step → {photos: [{id, sharpness, clipped, group, best, faces, eyesClosed, faceFocus}], groups, rejected, picked, facesPending}",
+            "{ids?, rejectBelow?: sharpness 0..100, rejectEyesClosed?: bool, rejectFaceBelow?: face focus 0..100, rejectExpressionBelow?: expression 0..100, pickBest?: bool, faces?: bool (true), background?: bool, bookkeeping?: bool} — background: true measures on worker threads in the app (→ {queued}; the result lands when all are in), bookkeeping: true writes the scores without an undo step and never flags (culling at import); score the selected photos (else all in view) for focus (0..100) and clipping, group look-alike shots taken within 10 s and mark the best of each (nobody blinking, smiles and the sharpest face, sharpest photo); with the face models also the faces, blinks and main-face focus, and with the expression model smiles and an expression score (0..100: smiling high, neutral about 50, frowning low); photos not analysed yet are first (in the background in the app → facesPending); optionally reject blurry photos, blinks, soft faces or poor expressions and pick each group's best; one undo step → {photos: [{id, sharpness, clipped, group, best, faces, eyesClosed, faceFocus, smiles, expression}], groups, rejected, picked, facesPending}",
             always,
             analyze
         ),

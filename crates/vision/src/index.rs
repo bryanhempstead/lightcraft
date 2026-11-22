@@ -295,6 +295,8 @@ pub struct FaceEntry {
     pub eyes: Option<[f32; 2]>,
     /// Detail in the face, 0..100 (the culling focus measure, on the face alone).
     pub sharpness: f32,
+    /// Probability of each facial expression (`crate::expression::LABELS`; `None`: too small, or not read).
+    pub expression: Option<[f32; 7]>,
 }
 
 /// Everything the face indexer found in one photo.
@@ -304,13 +306,18 @@ pub struct FaceRecord {
     /// The analysed picture's size (pixels): how much detail the coordinates carry.
     pub width: u32,
     pub height: u32,
+    /// The expression model ran on this photo's faces (records written before it was installed haven't: the
+    /// photo is analysed again once it is).
+    pub expressions: bool,
 }
 
 impl Codec for FaceRecord {
     fn encode(&self, out: &mut Vec<u8>) {
-        out.push(1); // version
+        // version 2: + expressions (flag byte; per face, a flag byte and 7 numbers)
+        out.push(2);
         out.extend_from_slice(&self.width.to_le_bytes());
         out.extend_from_slice(&self.height.to_le_bytes());
+        out.push(u8::from(self.expressions));
         out.extend_from_slice(&(self.faces.len().min(u16::MAX as usize) as u16).to_le_bytes());
         for f in self.faces.iter().take(u16::MAX as usize) {
             put_f32s(out, &f.rect);
@@ -328,15 +335,24 @@ impl Codec for FaceRecord {
             let n = f.embedding.len().min(u16::MAX as usize);
             out.extend_from_slice(&(n as u16).to_le_bytes());
             put_f32s(out, f.embedding.get(..n).unwrap_or(&[]));
+            match f.expression {
+                Some(e) => {
+                    out.push(1);
+                    put_f32s(out, &e);
+                }
+                None => out.push(0),
+            }
         }
     }
 
     fn decode(b: &[u8]) -> Option<FaceRecord> {
         let mut r = Reader { b };
-        if r.u8()? != 1 {
+        let version = r.u8()?;
+        if !(1..=2).contains(&version) {
             return None;
         }
         let (width, height) = (r.u32()?, r.u32()?);
+        let expressions = version >= 2 && r.u8()? != 0;
         let n = r.u16()? as usize;
         let mut faces = Vec::with_capacity(n.min(1024));
         for _ in 0..n {
@@ -352,9 +368,16 @@ impl Codec for FaceRecord {
             };
             let dim = r.u16()? as usize;
             let embedding = r.f32s(dim)?;
-            faces.push(FaceEntry { rect, landmarks, score, embedding, eyes, sharpness });
+            let expression = match version {
+                2 => match r.u8()? {
+                    1 => Some(r.f32s(7)?.try_into().ok()?),
+                    _ => None,
+                },
+                _ => None,
+            };
+            faces.push(FaceEntry { rect, landmarks, score, embedding, eyes, sharpness, expression });
         }
-        Some(FaceRecord { faces, width, height })
+        Some(FaceRecord { faces, width, height, expressions })
     }
 }
 
@@ -396,7 +419,15 @@ mod tests {
     }
 
     fn face(x: f32) -> FaceEntry {
-        FaceEntry { rect: [x, 0.1, 0.2, 0.3], landmarks: [[0.5; 2]; 5], score: 0.9, embedding: vec![x; 128], eyes: Some([0.1, 0.9]), sharpness: 42.0 }
+        FaceEntry {
+            rect: [x, 0.1, 0.2, 0.3],
+            landmarks: [[0.5; 2]; 5],
+            score: 0.9,
+            embedding: vec![x; 128],
+            eyes: Some([0.1, 0.9]),
+            sharpness: 42.0,
+            expression: Some([0.0, 0.0, 0.0, 0.9, 0.1, 0.0, 0.0]),
+        }
     }
 
     #[test]
@@ -405,9 +436,9 @@ mod tests {
         let p = d.join("faces.lcidx");
         {
             let mut s: Store<FaceRecord> = Store::open(&p, "faces v1").unwrap();
-            s.put("a", FaceRecord { faces: vec![face(0.1)], width: 10, height: 20 }).unwrap();
-            s.put("b", FaceRecord { faces: vec![face(0.2), face(0.3)], width: 10, height: 20 }).unwrap();
-            s.put("a", FaceRecord { faces: vec![], width: 1, height: 1 }).unwrap();
+            s.put("a", FaceRecord { faces: vec![face(0.1)], width: 10, height: 20, expressions: true }).unwrap();
+            s.put("b", FaceRecord { faces: vec![face(0.2), face(0.3)], width: 10, height: 20, expressions: false }).unwrap();
+            s.put("a", FaceRecord { faces: vec![], width: 1, height: 1, expressions: false }).unwrap();
             s.remove("b").unwrap();
             s.put("c", FaceRecord::default()).unwrap();
         }
@@ -448,10 +479,34 @@ mod tests {
     fn damaged_values_are_refused() {
         assert!(FaceRecord::decode(&[1, 0, 0]).is_none());
         assert!(FaceRecord::decode(&[2]).is_none());
+        assert!(FaceRecord::decode(&[3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).is_none(), "a newer version");
         assert!(Embedding::decode(&[1, 255, 255, 0]).is_none());
         let mut b = Vec::new();
-        FaceRecord { faces: vec![face(0.5)], width: 3, height: 4 }.encode(&mut b);
-        assert_eq!(FaceRecord::decode(&b).map(|r| r.faces[0].clone()), Some(face(0.5)));
+        FaceRecord { faces: vec![face(0.5)], width: 3, height: 4, expressions: true }.encode(&mut b);
+        let r = FaceRecord::decode(&b).unwrap();
+        assert_eq!(r.faces[0], face(0.5));
+        assert!(r.expressions);
         assert!(FaceRecord::decode(&b[..b.len() - 1]).is_none());
+    }
+
+    /// Records written before expressions (version 1) still read: no expression, not analysed for it.
+    #[test]
+    fn version_1_records_still_read() {
+        let mut b = vec![1u8];
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&4u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        put_f32s(&mut b, &[0.1, 0.2, 0.3, 0.4]);
+        put_f32s(&mut b, &[0.5; 10]);
+        put_f32s(&mut b, &[0.9, 42.0]);
+        b.push(0);
+        b.extend_from_slice(&2u16.to_le_bytes());
+        put_f32s(&mut b, &[1.0, 0.0]);
+        let r = FaceRecord::decode(&b).unwrap();
+        assert!(!r.expressions);
+        assert_eq!(r.faces.len(), 1);
+        assert_eq!(r.faces[0].expression, None);
+        assert_eq!(r.faces[0].embedding, vec![1.0, 0.0]);
+        assert_eq!((r.width, r.height), (3, 4));
     }
 }

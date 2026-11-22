@@ -27,6 +27,8 @@ fn commit_keywords(s: &mut Session, label: &str, op: lightcraft_catalog::Op, fol
         _ => (0, 1),
     };
     if photos + listed > 0 {
+        // a person keyword renamed, merged or deleted: the faces with that name follow
+        let op = s.sync_faces_with_keywords(op);
         s.commit(label, op)?;
     }
     if let Some(k) = s.filter.keyword.clone() {

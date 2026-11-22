@@ -43,8 +43,8 @@ authors, licensed under the MIT License or the Apache License 2.0, and the CLIP 
 tokenizer does; its face pre- and post-processing follows OpenCV's FaceDetectorYN and
 FaceRecognizerSF (https://github.com/opencv/opencv, modules/objdetect, Apache License 2.0). The
 ports were modified by the LightCraft contributors (2026); crates/vision is licensed under the
-Apache License 2.0 only. The models it runs (YuNet, SFace, open-closed-eye-0001, LAION's CLIP
-ViT-B/32) are not part of LightCraft: a user downloads them only when they choose to, under each
+Apache License 2.0 only. The models it runs (YuNet, SFace, open-closed-eye-0001, OpenCV Zoo's
+facial_expression_recognition_mobilefacenet_2022july, LAION's CLIP ViT-B/32) are not part of LightCraft: a user downloads them only when they choose to, under each
 model's own terms (see docs/people.md).
 patches/egui-wgpu is egui-wgpu 0.36.2 (https://github.com/emilk/egui, crates/egui-wgpu), Copyright
 the egui authors, licensed under the MIT License or the Apache License 2.0, at your option. It is

@@ -623,9 +623,18 @@ pub struct UiState {
     /// People view: names being typed under unnamed stacks, by the stack's cover face.
     #[serde(skip)]
     pub people_names: std::collections::HashMap<(u64, usize), String>,
+    /// People view: the unnamed stack opened to show its faces (by its cover face).
+    #[serde(skip)]
+    pub people_stack: Option<(u64, usize)>,
+    /// People view: the name typed for the picked stacks / faces.
+    #[serde(skip)]
+    pub people_bulk_name: String,
     /// People view: the open person's name being edited.
     #[serde(skip)]
     pub people_rename: Option<String>,
+    /// Loupe: the Draw Face Region tool is on (a drag on the photo draws a face box; boxes move by dragging).
+    #[serde(skip)]
+    pub draw_face: bool,
     /// Loupe: the name being typed for a face box (region index, text).
     #[serde(skip)]
     pub face_name_edit: Option<(usize, String)>,
@@ -937,6 +946,9 @@ pub enum Dialog {
         /// Reject photos whose main face is softer than this (0 = none).
         #[serde(default)]
         reject_face_below: f32,
+        /// Reject photos whose main faces' expression score is below this (0 = none; needs the expression model).
+        #[serde(default)]
+        reject_expression_below: f32,
     },
     /// Help ▸ System Info: (label, value) rows.
     SystemInfo {
@@ -1136,6 +1148,9 @@ impl Default for UiState {
             people_anchor: None,
             people_names: Default::default(),
             people_rename: None,
+            people_stack: None,
+            people_bulk_name: String::new(),
+            draw_face: false,
             face_name_edit: None,
             search_ai: false,
             collapsed_sidebar: Vec::new(),

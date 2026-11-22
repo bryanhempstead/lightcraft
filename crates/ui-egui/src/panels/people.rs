@@ -5,8 +5,10 @@
 //! the picked ones.
 //!
 //! Stacks and faces are picked like everything else: click, ⌘-click, ⇧-click, `all.` / `none.`; dragging picked
-//! stacks or faces onto a named card names them all. The header finds faces in the view (`find.`), shows the
-//! background run (`stop.`) and offers the models when they aren't installed (`get.`).
+//! stacks or faces onto a named card names them all. With stacks picked, a row above them names them all at once,
+//! confirms (`yes.`) or rejects (`no.`) their suggestions, or removes them (`rm.`: not faces). A stack's count opens
+//! it: its faces one by one, to name, confirm or take out the odd one. The header finds faces in the view (`find.`),
+//! shows the background run (`stop.`) and offers the models when they aren't installed (`get.`).
 //!
 //! Only the rows on screen ask for face renders (the engine caches them, memory and disk).
 
@@ -78,6 +80,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         app.ui.people_page = None;
     }
+    // an opened stack, while it is still there (found by any of its faces: regrouping can change its cover)
+    if let Some(k) = app.ui.people_stack {
+        if let Some(st) = people.unnamed.iter().find(|s| s.faces.iter().any(|f| key(f) == k)) {
+            let st = st.clone();
+            return stack_page(app, ui, &st);
+        }
+        app.ui.people_stack = None;
+    }
     header(app, ui, &people, None);
     let chips = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog);
     super::chips::show(app, ui, &chips);
@@ -131,6 +141,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // Unnamed People
         let keys: Vec<Key> = people.unnamed.iter().map(|s| key(&s.cover)).collect();
         section(ui, "Unnamed People", people.unnamed.len(), Some(&keys), app);
+        let picked: Vec<Vec<&FaceInfo>> =
+            people.unnamed.iter().filter(|s| app.ui.people_sel.contains(&key(&s.cover))).map(|s| s.faces.iter().collect()).collect();
+        if !picked.is_empty() {
+            bulk_row(app, ui, &picked, "stacks");
+        }
         if people.unindexed > 0 {
             let t = Tokens::get(ui.ctx());
             ui.horizontal(|ui| {
@@ -255,6 +270,16 @@ fn finder(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let r = app.run("faces.find", json!({"scope": "view"}));
         after(app, ui.ctx(), r);
     }
+    // automatic finding stopped with stop.: it waits until resumed
+    if app.session.vision.auto_paused
+        && app.session.face_prefs.detect != lightcraft_engine::vision::FaceDetect::Off
+        && text_button(ui, "peopleResume", "resume.", false)
+            .on_hover_text(crate::i18n::tr("Go on finding faces by themselves (Settings ▸ General ▸ Find faces)"))
+            .clicked()
+    {
+        let r = app.run("faces.auto", json!({"paused": false}));
+        after(app, ui.ctx(), r);
+    }
     if let Some(e) = p.error.filter(|_| !p.cancelled) {
         ui.label(egui::RichText::new(format!("⚠ {e}")).font(t.font(12.0)).color(t.text_dim));
     } else if p.total > 0 {
@@ -366,12 +391,24 @@ fn stack_card(app: &mut LightcraftApp, ui: &mut egui::Ui, stack: &lightcraft_eng
     } else if resp.hovered() {
         ui.painter().rect_stroke(face, 3.0, Stroke::new(1.0, t.text_dim), StrokeKind::Outside);
     }
+    let mut opened = false;
     if stack.faces.len() > 1 {
+        // the count opens the stack (Lightroom: expand the stack)
         let b = Rect::from_min_size(face.right_top() + vec2(-34.0, 6.0), vec2(28.0, 18.0));
-        ui.painter().rect_filled(b, 9.0, Color32::from_black_alpha(190));
+        let br = ui.interact(b, egui::Id::new(("stack-count", k)), Sense::click());
+        register(ui.ctx(), format!("stackCount:{}:{}", k.0, k.1), b);
+        ui.painter().rect_filled(b, 9.0, Color32::from_black_alpha(if br.hovered() { 240 } else { 190 }));
         ui.painter().text(b.center(), Align2::CENTER_CENTER, stack.faces.len().to_string(), t.semibold(10.5), Color32::WHITE);
+        if br.on_hover_text(crate::i18n::tr("Open the stack: its faces one by one")).clicked() {
+            app.ui.people_stack = Some(k);
+            app.ui.people_sel.clear();
+            opened = true;
+        }
     }
-    if resp.clicked() {
+    if resp.double_clicked() && !opened {
+        app.ui.people_stack = Some(k);
+        app.ui.people_sel.clear();
+    } else if resp.clicked() && !opened {
         let m = ui.input(|i| i.modifiers);
         pick(app, keys, i, m);
     }
@@ -422,14 +459,124 @@ fn stack_card(app: &mut LightcraftApp, ui: &mut egui::Ui, stack: &lightcraft_eng
         }
     }
     if let Some(name) = name_with {
-        // the picked stacks when this one is among them, else this stack
-        let faces: Vec<&FaceInfo> = stack.faces.iter().collect();
-        let r = app.run("people.name", json!({"faces": faces_json(&faces), "name": name}));
+        // this stack, and the other picked stacks when this one is among them
+        let mut faces: Vec<FaceInfo> = stack.faces.clone();
+        if picked {
+            let filter = app.session.view_filter();
+            let people = app.session.people(&filter);
+            for s in people.unnamed.iter().filter(|s| key(&s.cover) != k && app.ui.people_sel.contains(&key(&s.cover))) {
+                faces.extend(s.faces.iter().cloned());
+            }
+            app.ui.people_sel.clear();
+        }
+        let refs: Vec<&FaceInfo> = faces.iter().collect();
+        let r = app.run("people.name", json!({"faces": faces_json(&refs), "name": name}));
         app.ui.people_names.remove(&k);
         after(app, ui.ctx(), r);
     }
     let n = crate::i18n::tr_format!("{n} face{}", if stack.faces.len() == 1 { "" } else { "s" }, n = stack.faces.len());
     ui.painter().text(pos2(r.left() + 2.0, field.bottom() + 10.0), Align2::LEFT_CENTER, n, t.font(11.5), t.text_dim);
+}
+
+/// What to do with the picked stacks (or faces): a name for all of them (Return or `name.`), ✓ their suggestions
+/// (`yes.`), ✗ them (`no.`), or remove them as not faces (`rm.`). `groups`: the faces of each picked stack.
+fn bulk_row(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Vec<&FaceInfo>], what: &str) {
+    let t = Tokens::get(ui.ctx());
+    let faces: Vec<&FaceInfo> = groups.iter().flatten().copied().collect();
+    let suggested: Vec<&FaceInfo> = faces.iter().copied().filter(|f| f.suggestion.is_some()).collect();
+    let mut done = false;
+    ui.horizontal(|ui| {
+        ui.add_space(PAD);
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let edit = ui.add(
+            egui::TextEdit::singleline(&mut app.ui.people_bulk_name)
+                .hint_text(crate::i18n::tr_format!("name the {n} picked {what}", n = groups.len(), what = crate::i18n::tr(what)))
+                .font(t.font(12.5))
+                .desired_width(200.0)
+                // the buttons' height: one control height per row
+                .min_size(vec2(200.0, 24.0))
+                .vertical_align(egui::Align::Center),
+        );
+        register(ui.ctx(), "field:peopleBulkName", edit.rect);
+        let name = app.ui.people_bulk_name.trim().to_string();
+        let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let named = text_button(ui, "peopleBulkName", "name.", false).on_hover_text(crate::i18n::tr("Give the picked faces this name")).clicked();
+        if (enter || named) && !name.is_empty() {
+            let r = app.run("people.name", json!({"faces": faces_json(&faces), "name": name}));
+            app.ui.people_bulk_name.clear();
+            after(app, ui.ctx(), r);
+            done = true;
+        }
+        if !suggested.is_empty() {
+            let n = suggested.len();
+            if text_button(ui, "peopleBulkYes", "yes.", false)
+                .on_hover_text(crate::i18n::tr_format!("Confirm the {n} suggested faces as who they're suggested as", n = n))
+                .clicked()
+            {
+                let r = app.run("people.confirm", json!({"faces": faces_json(&suggested)}));
+                after(app, ui.ctx(), r);
+                done = true;
+            }
+            if text_button(ui, "peopleBulkNo", "no.", false)
+                .on_hover_text(crate::i18n::tr_format!("These {n} faces aren't who they're suggested as", n = n))
+                .clicked()
+            {
+                let r = app.run("people.reject", json!({"faces": faces_json(&suggested)}));
+                after(app, ui.ctx(), r);
+                done = true;
+            }
+        }
+        if text_button(ui, "peopleBulkRemove", "rm.", false).on_hover_text(crate::i18n::tr("Not faces: remove these face boxes")).clicked() {
+            let r = app.run("people.removeFaces", json!({"faces": faces_json(&faces)}));
+            after(app, ui.ctx(), r);
+            done = true;
+        }
+        let msg = crate::i18n::tr_format!("{f} faces · {s} suggested", f = faces.len(), s = suggested.len());
+        ui.label(egui::RichText::new(msg).font(t.font(12.0)).color(t.text_dim));
+    });
+    ui.add_space(12.0);
+    if done {
+        app.ui.people_sel.clear();
+    }
+}
+
+/// An opened unnamed stack: its faces one by one, picked with click / ⌘ / ⇧ / `all.` / `none.`, and the bulk row for
+/// the picked ones (name, ✓ / ✗ the suggestion, remove). Double-click opens a face's photo.
+fn stack_page(app: &mut LightcraftApp, ui: &mut egui::Ui, stack: &lightcraft_engine::people::Stack) {
+    let t = Tokens::get(ui.ctx());
+    let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_H), Sense::hover());
+    let mut child =
+        ui.new_child(egui::UiBuilder::new().max_rect(head.shrink2(vec2(PAD, 10.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.spacing_mut().item_spacing.x = 8.0;
+    if text_button(&mut child, "stackBack", "back.", false).on_hover_text(crate::i18n::tr("Back to People")).clicked() {
+        app.ui.people_stack = None;
+        app.ui.people_sel.clear();
+    }
+    let title = match &stack.suggestion {
+        Some(s) => crate::i18n::tr_format!("Unnamed · looks like {s}", s = s),
+        None => crate::i18n::tr("Unnamed").to_string(),
+    };
+    child.label(egui::RichText::new(title).font(t.semibold(15.0)).color(t.text));
+    child.label(
+        egui::RichText::new(crate::i18n::tr_format!("{n} face{}", if stack.faces.len() == 1 { "" } else { "s" }, n = stack.faces.len()))
+            .font(t.font(12.0))
+            .color(t.text_dim),
+    );
+    let keys: Vec<Key> = stack.faces.iter().map(key).collect();
+    let ppp = ui.ctx().pixels_per_point();
+    egui::ScrollArea::vertical().auto_shrink(false).id_salt("stack-scroll").show(ui, |ui| {
+        let width = ui.available_width();
+        let cell = 112.0;
+        let cols = (((width - PAD * 2.0 + GAP) / (cell + GAP)).floor() as usize).max(1);
+        section(ui, "Faces", stack.faces.len(), Some(&keys), app);
+        let picked: Vec<&FaceInfo> = stack.faces.iter().filter(|f| app.ui.people_sel.contains(&key(f))).collect();
+        if !picked.is_empty() {
+            let groups: Vec<Vec<&FaceInfo>> = picked.iter().map(|f| vec![*f]).collect();
+            bulk_row(app, ui, &groups, "faces");
+        }
+        face_grid(app, ui, &stack.faces, &keys, cols, cell, ppp, None);
+        ui.add_space(PAD);
+    });
 }
 
 /// A small square glyph button (✓ / ✗); true when clicked.

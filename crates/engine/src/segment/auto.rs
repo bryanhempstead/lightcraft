@@ -101,24 +101,64 @@ pub fn coverage(scene: &Parsed, labels: &[String]) -> Vec<(String, f32)> {
         .collect()
 }
 
-/// The subject: SAM 3's people and animals (the most prominent), else what SAM 3 selects at the
-/// photo's centre; without SAM 3 the scene parser's people and animals.
-pub fn subject(m: &mut Models) -> Result<Option<SegMask>, String> {
+/// The subject: SAM 3's people and animals — the ones the camera's focus point (`focus`, normalized in the model
+/// input's frame; `None` when the file doesn't record one) falls on, else the most prominent —, else what SAM 3
+/// selects at the focus point (or the photo's centre); without SAM 3 the scene parser's people and animals.
+pub fn subject(m: &mut Models, focus: Option<(f64, f64)>) -> Result<Option<SegMask>, String> {
     if let Some((sam, enc)) = m.sam.as_mut() {
-        if let Some(p) = sam.segment_subject(enc, None, 0.5).map_err(|e| e.to_string())? {
+        let f = focus.map(|(x, y)| (x as f32, y as f32));
+        if let Some(p) = sam.segment_subject(enc, f, 0.5).map_err(|e| e.to_string())? {
             return Ok(Some(SegMask::from_logits(lightcraft_segment::MASK_SIDE, &p.logits)));
         }
-        let p = sam.segment_clicks(enc, &[lightcraft_segment::Click { x: 0.5, y: 0.5, positive: true }]).map_err(|e| e.to_string())?;
+        let (x, y) = f.unwrap_or((0.5, 0.5));
+        let p = sam.segment_clicks(enc, &[lightcraft_segment::Click { x, y, positive: true }]).map_err(|e| e.to_string())?;
         return Ok(seg_if_any(lightcraft_segment::MASK_SIDE, &p.logits));
     }
     Ok(None)
 }
 
-/// The subject from the scene parse (people and animals covering at least 1 % of the photo).
-pub fn scene_subject(scene: &Parsed, labels: &[String]) -> Option<SegMask> {
+/// A focus point this close to a person or animal (share of the photo's long side) still picks them: the AF box
+/// can sit on an eye at the edge of a parsed outline, or just beside a small subject.
+const FOCUS_REACH: f64 = 0.04;
+
+/// The subject from the scene parse (people and animals covering at least 1 % of the photo). With the camera's
+/// `focus` point on (or next to) one of them, just that one: the person the photographer focused on, not everybody.
+pub fn scene_subject(scene: &Parsed, labels: &[String], focus: Option<(f64, f64)>) -> Option<SegMask> {
     let p = scene_prob(scene, labels, parsers::SCENE_SUBJECT);
-    let big = parsers::components(&p, scene.vw, scene.vh, 0.5).first().is_some_and(|c| c.len() as f32 >= 0.01 * p.len() as f32);
+    let comps = parsers::components(&p, scene.vw, scene.vh, 0.5);
+    let big = comps.first().is_some_and(|c| c.len() as f32 >= 0.01 * p.len() as f32);
+    if let Some(cells) = focus.and_then(|f| focused_component(&comps, scene.vw, scene.vh, f)) {
+        // that component only: the others' cells set to "not subject"
+        let mut keep = vec![0f32; p.len()];
+        for &i in cells {
+            if let (Some(k), Some(v)) = (keep.get_mut(i), p.get(i)) {
+                *k = *v;
+            }
+        }
+        return Some(SegMask::from_logits(SIDE, &square_logits(&keep, scene.vw, scene.vh, SIDE)));
+    }
     big.then(|| SegMask::from_logits(SIDE, &square_logits(&p, scene.vw, scene.vh, SIDE)))
+}
+
+/// The component of a `w × h` grid that holds the focus point, else the nearest one within [`FOCUS_REACH`]; one
+/// smaller than 0.2 % of the photo is noise.
+pub fn focused_component(comps: &[Vec<usize>], w: usize, h: usize, focus: (f64, f64)) -> Option<&Vec<usize>> {
+    if w == 0 || h == 0 || !focus.0.is_finite() || !focus.1.is_finite() {
+        return None;
+    }
+    let (fx, fy) = (focus.0.clamp(0.0, 1.0) * w as f64, focus.1.clamp(0.0, 1.0) * h as f64);
+    let reach = FOCUS_REACH * w.max(h) as f64;
+    let min = (0.002 * (w * h) as f64).max(1.0) as usize;
+    comps
+        .iter()
+        .filter(|c| c.len() >= min)
+        .map(|c| {
+            let d = c.iter().map(|&i| (((i % w) as f64 + 0.5 - fx).powi(2) + ((i / w) as f64 + 0.5 - fy).powi(2)).sqrt()).fold(f64::MAX, f64::min);
+            (c, d)
+        })
+        .filter(|(_, d)| *d <= reach.max(0.75))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(c, _)| c)
 }
 
 /// The bounding box of the cells above 0 of a `side²` grid, normalized; `None` when empty.
@@ -396,9 +436,44 @@ mod tests {
         let ppl = people(&mut m, Some(&labels), &[]).unwrap();
         assert_eq!(ppl.len(), 1);
         assert_eq!(ppl[0].rect, [0.0, 0.5, 0.5, 1.0]);
-        assert!(scene_subject(&scene, &labels).is_some());
+        assert!(scene_subject(&scene, &labels, None).is_some());
         // without any model: no people, no subject
         assert!(people(&mut Models { sam: None, scene: None }, None, &[]).unwrap().is_empty());
-        assert!(subject(&mut Models { sam: None, scene: None }).unwrap().is_none());
+        assert!(subject(&mut Models { sam: None, scene: None }, Some((0.5, 0.5))).unwrap().is_none());
+    }
+
+    /// LR-MASK-SUBJECT: with two people, the camera's focus point picks the one it was on.
+    #[test]
+    fn the_focus_point_picks_the_subject() {
+        // 16 × 8 cells: two people (columns 1–3 and 11–13, rows 2–7), sky elsewhere
+        let labels: Vec<String> = ["sky", "person"].iter().map(|s| s.to_string()).collect();
+        let (w, h) = (16usize, 8usize);
+        let person = |i: usize| (i / w) >= 2 && matches!(i % w, 1..=3 | 11..=13);
+        let mut probs = vec![0f32; 2 * w * h];
+        for i in 0..w * h {
+            probs[usize::from(person(i)) * w * h + i] = 1.0;
+        }
+        let scene = Parsed { classes: 2, w, h, vw: w, vh: h, probs };
+        let covered = |m: &SegMask, x: f64, y: f64| {
+            let l = m.logits().unwrap();
+            let (cx, cy) = ((x * SIDE as f64) as usize, (y * SIDE as f64) as usize);
+            l[cy * SIDE + cx] > 0.0
+        };
+        // no focus point: both
+        let both = scene_subject(&scene, &labels, None).unwrap();
+        assert!(covered(&both, 0.15, 0.7) && covered(&both, 0.75, 0.7));
+        // focused on the right one (on them, then just beside them): only them
+        for f in [(0.78, 0.6), (0.88, 0.56)] {
+            let right = scene_subject(&scene, &labels, Some(f)).unwrap();
+            assert!(!covered(&right, 0.15, 0.7) && covered(&right, 0.75, 0.7), "{f:?}");
+        }
+        // focused on the sky, far from both: everybody, as without a point
+        let far = scene_subject(&scene, &labels, Some((0.5, 0.05))).unwrap();
+        assert!(covered(&far, 0.15, 0.7) && covered(&far, 0.75, 0.7));
+        // hostile values: no panic
+        let comps = parsers::components(&scene.prob(&[1]), w, h, 0.5);
+        assert!(focused_component(&comps, w, h, (f64::NAN, 0.5)).is_none());
+        assert!(focused_component(&comps, 0, h, (0.5, 0.5)).is_none());
+        assert!(focused_component(&comps, w, h, (9.0, -3.0)).is_none());
     }
 }
