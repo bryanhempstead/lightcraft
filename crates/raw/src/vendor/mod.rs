@@ -38,9 +38,10 @@ pub(crate) fn black_from_columns(data: &[u16], width: usize, cols: Range<usize>,
 /// The part of the masked columns `cols` that is really black: Canon's `SensorInfo` left border
 /// can lie past the first image columns (the EOS Rebel T3 / 1100D's image starts ~10 columns
 /// before the border it reports; those columns lifted its black level by up to ~230 of 16383,
-/// varying with the scene, and crushed the shadows). The reference is the median column mean of
-/// the left half; the range ends two columns before the first column that leaves it by more than
-/// a noise margin, so a clean masked area is kept whole.
+/// varying with the scene, and crushed the shadows; on CC0 files the 6D read 2591 for 2047, the
+/// 5DS R 2178, the 40D 1165 for 1024). The reference is the median column mean of the left half;
+/// the result is the longest run of columns within a noise margin of it, ending two columns early
+/// when image data follows, so a clean masked area is kept whole.
 pub(crate) fn black_columns(data: &[u16], width: usize, cols: Range<usize>, rows: Range<usize>) -> Range<usize> {
     let height = data.len() / width.max(1);
     let (r0, r1) = (rows.start.min(height), rows.end.min(height));
@@ -67,10 +68,21 @@ pub(crate) fn black_columns(data: &[u16], width: usize, cols: Range<usize>, rows
     dev.sort_by(f64::total_cmp);
     let spread = dev.get(dev.len() / 2).copied().unwrap_or(0.0);
     let tol = (8.0 * spread).max(16.0);
-    match means.iter().position(|m| (m - reference).abs() > tol) {
-        Some(i) => cols.start..(cols.start + i).saturating_sub(2).max(cols.start),
-        None => cols.start..c1,
+    // the longest run of columns at the reference level (the outermost columns of some bodies
+    // stray too: the 5D Mark II's first six), less two guard columns where image data follows
+    let (mut best, mut run) = ((0usize, 0usize), None::<usize>);
+    for (i, m) in means.iter().enumerate() {
+        if (m - reference).abs() <= tol {
+            let s = *run.get_or_insert(i);
+            if i + 1 - s > best.1 - best.0 {
+                best = (s, i + 1);
+            }
+        } else {
+            run = None;
+        }
     }
+    let end = if best.1 < means.len() { best.1.saturating_sub(2).max(best.0) } else { best.1 };
+    cols.start + best.0..cols.start + end
 }
 
 /// White level estimate: the saturation plateau if a noticeable number of samples sit at one top
@@ -165,6 +177,19 @@ mod tests {
         // the old range took the image columns in
         let old = black_from_columns(&data, w, 2..78, 0..h, Rect::new(80, 0, 10, h));
         assert!(old.values.iter().all(|v| *v > 2300.0), "{:?}", old.values);
+        // stray outermost columns (5D Mark II: 991, 1002, … around 1024) are skipped, not the area
+        let edge: Vec<u16> = (0..w * h)
+            .map(|i| {
+                if i % w < 2 {
+                    990
+                } else if i % w < 80 {
+                    1024 + (i % 3) as u16
+                } else {
+                    2700
+                }
+            })
+            .collect();
+        assert_eq!(black_columns(&edge, w, 0..78, 0..h), 2..78);
         // a clean masked area is kept whole; empty input stays empty
         let clean: Vec<u16> = (0..w * h).map(|i| if i % w < 78 { 512 + (i % 5) as u16 } else { 9000 }).collect();
         assert_eq!(black_columns(&clean, w, 2..76, 0..h), 2..76);
