@@ -302,7 +302,9 @@ impl Op {
             | Op::SetKeyword { .. }
             | Op::SetFolderRecord { .. }
             | Op::SetAlbumMarks { .. }
-            | Op::SetXmpSync { .. } => {}
+            | Op::SetXmpSync { .. }
+            | Op::SetRecord { .. } => {}
+            Op::SetVideo { id, .. } => out(*id),
         }
     }
 }

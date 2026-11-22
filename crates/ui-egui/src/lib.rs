@@ -26,6 +26,7 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 pub mod panels;
+pub mod publish_ui;
 pub mod recheck;
 pub mod render;
 pub mod shortcuts;
@@ -33,6 +34,7 @@ pub mod softpaint;
 pub mod state;
 pub mod tasks;
 pub mod theme;
+pub mod video_ui;
 pub mod widgets;
 
 #[cfg(test)]
@@ -62,13 +64,19 @@ mod tests_library_problem;
 #[cfg(test)]
 mod tests_loupe_info;
 #[cfg(test)]
+mod tests_map;
+#[cfg(test)]
 mod tests_masking;
+#[cfg(test)]
+mod tests_media;
 #[cfg(test)]
 mod tests_metadata_views;
 #[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
 mod tests_panels;
+#[cfg(test)]
+mod tests_publish;
 #[cfg(test)]
 mod tests_quit_unsaved;
 #[cfg(test)]
@@ -168,6 +176,10 @@ pub struct Perf {
 }
 
 pub struct LightcraftApp {
+    /// The Map module's tiles and textures (LR-MAP-MODULE).
+    pub map: panels::map::MapRuntime,
+    /// The Loupe's video playback (LR-VID-PLAY).
+    pub video: video_ui::VideoView,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
     pub caches: Caches,
@@ -296,6 +308,8 @@ impl LightcraftApp {
             font_language: i18n::Locale::En,
             fonts_ready: false,
             last_time: 0.0,
+            map: Default::default(),
+            video: Default::default(),
             canvas_rect: None,
             image_rect: None,
             hdr_view: None,
@@ -450,6 +464,13 @@ impl LightcraftApp {
 
     pub fn toast(&mut self, ctx: &egui::Context, text: impl Into<String>) {
         self.toast_for(ctx, text, TOAST_SECONDS);
+    }
+
+    /// A toast that stays `secs` seconds counted from the frame that first draws it: for feedback
+    /// set outside a frame or after a modal file/folder picker, when every clock the app has is
+    /// still the one from before the picker blocked (the tethered-capture toast vanished that way).
+    pub fn toast_soon(&mut self, text: impl Into<String>, secs: f64) {
+        self.ui.toast = Some((text.into(), -secs.max(0.1), None));
     }
 
     /// A toast that stays `secs` seconds (messages that say where to look or what to do next).
@@ -921,6 +942,8 @@ impl LightcraftApp {
         if self.ui.left_panel {
             if develop {
                 panels::develop_left::show(self, ui);
+            } else if self.ui.view == state::ViewMode::Map {
+                panels::map::left(self, ui);
             } else {
                 panels::left::show(self, ui);
             }
@@ -942,6 +965,7 @@ impl LightcraftApp {
             state::ViewMode::Survey => panels::compare::show_survey(self, ui),
             state::ViewMode::Reference => panels::compare::show_reference(self, ui),
             state::ViewMode::People => panels::people::show(self, ui),
+            state::ViewMode::Map => panels::map::show(self, ui),
         });
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);

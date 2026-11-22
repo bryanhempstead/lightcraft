@@ -299,6 +299,49 @@ pub struct Photo {
     /// photo imported before this field existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_name: Option<String>,
+    /// A video's trim and poster frame (non-destructive; the file is never changed). `None`: the
+    /// whole clip, poster at its first frame. Format version 8.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<VideoEdit>,
+}
+
+/// What the library keeps about a video (LR-VID-TRIM / LR-VID-COVER), in seconds from its start.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VideoEdit {
+    /// In point (0 = the start).
+    #[serde(default)]
+    pub trim_in: f64,
+    /// Out point (`None` = the end).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trim_out: Option<f64>,
+    /// The poster frame shown as its thumbnail (`None` = the first frame).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<f64>,
+}
+
+impl VideoEdit {
+    /// Nothing set: the same as no record.
+    pub fn is_default(&self) -> bool {
+        *self == VideoEdit::default()
+    }
+    /// The trimmed range within a clip of `duration` seconds (`None` = unknown length): always
+    /// `0 <= in < out` when both are known; an empty range means the whole clip.
+    pub fn range(&self, duration: Option<f64>) -> (f64, Option<f64>) {
+        let fin = |v: f64| if v.is_finite() { v.max(0.0) } else { 0.0 };
+        let d = duration.filter(|d| d.is_finite() && *d > 0.0);
+        let mut a = fin(self.trim_in);
+        let mut b = self.trim_out.map(fin);
+        if let Some(d) = d {
+            a = a.min(d);
+            b = Some(b.unwrap_or(d).min(d));
+        }
+        if let Some(bb) = b
+            && bb <= a
+        {
+            (a, b) = (0.0, d);
+        }
+        (a, b)
+    }
 }
 
 /// Hashes of a photo's metadata as the library would write it and of its sidecar file, taken
@@ -379,6 +422,7 @@ impl Photo {
             local_baseline: None,
             xmp_sync: None,
             original_name: None,
+            video: None,
         }
     }
     /// Sets [`Photo::preview_only`] as this build decided it, with its stamp.

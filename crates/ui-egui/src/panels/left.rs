@@ -226,6 +226,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             shoots_section(app, ui, viewport);
             folders_section(app, ui, viewport);
             collections_section(app, ui, viewport);
+            publish_section(app, ui, viewport);
             // Local (a folder browsed without importing) only while one is shown
             if src == LibrarySource::Folder {
                 ui.add_space(10.0);
@@ -1017,6 +1018,302 @@ fn collections_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rec
         }
         albums_tree_view(app, ui, &shown, None, 0.0, &view);
     }
+}
+
+/// Per published collection: (to publish = New + Modified + Deleted, photos), computed once per
+/// catalog revision (a state compares each photo's settings and metadata with what was published).
+fn publish_counts(app: &LightcraftApp, ui: &egui::Ui) -> std::sync::Arc<std::collections::HashMap<u64, (usize, usize)>> {
+    type Counts = (u64, std::sync::Arc<std::collections::HashMap<u64, (usize, usize)>>);
+    let key = egui::Id::new("publish-counts");
+    let rev = app.session.catalog.revision;
+    if let Some((r, m)) = ui.data(|d| d.get_temp::<Counts>(key))
+        && r == rev
+    {
+        return m;
+    }
+    let cat = &app.session.catalog;
+    let m: std::collections::HashMap<u64, (usize, usize)> = lightcraft_engine::publish::collections(cat)
+        .iter()
+        .map(|c| {
+            let n = lightcraft_engine::publish::counts(cat, c);
+            let g = |k: &str| n[k].as_u64().unwrap_or(0) as usize;
+            (c.id, (g("new") + g("modified") + g("deleted"), g("total")))
+        })
+        .collect();
+    let m = std::sync::Arc::new(m);
+    ui.data_mut(|d| d.insert_temp(key, (rev, m.clone())));
+    m
+}
+
+/// LRC-LIB-PUBLISH: Publish Services — each service with its published collections and sets.
+/// A collection's count reads `+3 · 12` when 3 of its 12 photos wait to be published (new,
+/// modified or to remove); photos dragged onto it join it; `pub.` publishes the one on screen.
+fn publish_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
+    use lightcraft_engine::publish::{self, ServiceKind};
+    ui.add_space(10.0);
+    let (hr, open) = sidebar_section_header(app, ui, "publish", "Publish Services");
+    let plus = header_plus(ui, hr, viewport, "publishNew", "Set Up a Publish Service");
+    egui::Popup::menu(&plus).show(|ui| {
+        let mut r = None;
+        if menu_item(ui, "publishNewHardDrive", crate::i18n::tr("Hard Drive…"), "Publish to a folder: each collection becomes a folder in it")
+            .clicked()
+        {
+            r = Some(crate::publish_ui::create_service(app, "hardDrive"));
+        }
+        if lightcraft_engine::apple_photos::available()
+            && menu_item(ui, "publishNewPhotos", crate::i18n::tr("Apple Photos"), "Publish into albums in Photos").clicked()
+        {
+            r = Some(crate::publish_ui::create_service(app, "photos"));
+        }
+        if let Some(Err(e)) = r {
+            app.toast(ui.ctx(), e);
+        }
+    });
+    if !open {
+        return;
+    }
+    let services = publish::services(&app.session.catalog);
+    let t = Tokens::get(ui.ctx());
+    if services.is_empty() {
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 18, right: 12, top: 2, bottom: 6 }).show(ui, |ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("Set one up with +: Hard Drive publishes to a folder")).size(11.0).color(t.text_dim));
+        });
+        return;
+    }
+    let cols = publish::collections(&app.session.catalog);
+    let counts = publish_counts(app, ui);
+    for svc in &services {
+        let icon = match svc.kind {
+            ServiceKind::HardDrive => Icon::Disk,
+            ServiceKind::Photos => Icon::Photos,
+        };
+        let open_id = egui::Id::new(("publish-service-open", svc.id));
+        let is_open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
+        let resp = row_ex(app, ui, &format!("publishService:{}", svc.id), icon, &svc.name, None, None, false, 0.0, &RowExtra::default());
+        let resp = resp.on_hover_text(match svc.kind {
+            ServiceKind::HardDrive => format!("Hard Drive: {}", svc.dir),
+            ServiceKind::Photos => crate::i18n::tr("Apple Photos: an album per collection").to_string(),
+        });
+        if resp.clicked() {
+            ui.data_mut(|d| d.insert_temp(open_id, !is_open));
+        }
+        service_menu(app, &resp, svc);
+        if is_open {
+            publish_tree(app, ui, &cols, &counts, svc.id, None, 16.0);
+        }
+    }
+    // the collection on screen: publish it, or count it as published as it is
+    if let LibrarySource::Published(cid) = app.session.source
+        && cols.iter().any(|c| c.id == cid)
+    {
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 18, right: 12, top: 12, bottom: 8 }).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let busy = app.tasks.is_running(crate::publish_ui::PUBLISHING);
+                let label = if busy { "pub. …" } else { "pub." };
+                if crate::widgets::text_button(ui, "publishNow", label, false)
+                    .on_hover_text(crate::i18n::tr("Publish New and Modified photos, remove Deleted ones"))
+                    .clicked()
+                    && let Err(e) = app.run("dialog.publish", json!({"id": cid}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
+                if crate::widgets::text_button(ui, "publishMarkDone", "mark.", false)
+                    .on_hover_text(crate::i18n::tr("Mark as Up-to-Date: count the selected photos (or all) as published as they are"))
+                    .clicked()
+                {
+                    let sel: Vec<u64> = app.session.selection.ids.iter().map(|i| i.0).collect();
+                    let p = if sel.len() > 1 { json!({"id": cid, "ids": sel}) } else { json!({"id": cid}) };
+                    if let Err(e) = app.run("publish.markUpToDate", p) {
+                        app.toast(ui.ctx(), e);
+                    }
+                }
+                if crate::widgets::text_button(ui, "publishRemove", "rem.", false)
+                    .on_hover_text(crate::i18n::tr("Take the selected photos out (their copies are removed on the next publish)"))
+                    .clicked()
+                    && let Err(e) = app.run("publish.removePhotos", json!({"id": cid}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
+            });
+        });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_tree(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    cols: &[lightcraft_engine::publish::Collection],
+    counts: &std::collections::HashMap<u64, (usize, usize)>,
+    service: u64,
+    parent: Option<u64>,
+    indent: f32,
+) {
+    if indent > 16.0 * 32.0 {
+        return;
+    }
+    for c in cols.iter().filter(|c| c.service == service && c.parent == parent) {
+        let (todo, total) = counts.get(&c.id).copied().unwrap_or((0, 0));
+        if c.set {
+            let open_id = egui::Id::new(("publish-set-open", c.id));
+            let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
+            let resp =
+                row_ex(app, ui, &format!("publishSet:{}", c.id), Icon::CollectionSet, &c.name, None, None, false, indent, &RowExtra::default());
+            if resp.clicked() {
+                ui.data_mut(|d| d.insert_temp(open_id, !open));
+            }
+            collection_menu(app, &resp, c);
+            if open {
+                publish_tree(app, ui, cols, counts, service, Some(c.id), indent + 16.0);
+            }
+            continue;
+        }
+        let sel = app.session.source == LibrarySource::Published(c.id);
+        let extra = RowExtra { badge: (todo > 0 && app.ui.show_counts).then(|| format!("+{todo} · {total}")), ..Default::default() };
+        let resp = row_ex(app, ui, &format!("published:{}", c.id), Icon::Share, &c.name, None, Some(total), sel, indent, &extra);
+        let resp = if todo > 0 { resp.on_hover_text(format!("{todo} to publish")) } else { resp };
+        publish_drop_target(app, ui, &resp, c);
+        if resp.clicked() {
+            let _ = app.run("library.source", json!({"kind": "published", "id": c.id}));
+        }
+        collection_menu(app, &resp, c);
+    }
+}
+
+/// A published collection's row while photos are dragged from the grid: a release adds them.
+fn publish_drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, c: &lightcraft_engine::publish::Collection) {
+    let Some(ids) = app.ui.dragging_photos.clone() else { return };
+    let over = ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| resp.rect.contains(p));
+    if !over {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    ui.painter().rect_stroke(resp.rect.shrink2(vec2(8.0, 1.0)), 4.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+    if ui.input(|i| i.pointer.any_released()) {
+        let n = ids.len();
+        match app.run("publish.addPhotos", json!({"id": c.id, "ids": ids})) {
+            Ok(_) => app.toast(ui.ctx(), format!("Added {n} photo{} to “{}” (to publish)", if n == 1 { "" } else { "s" }, c.name)),
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+        app.ui.dragging_photos = None;
+    }
+}
+
+fn service_menu(app: &mut LightcraftApp, resp: &egui::Response, svc: &lightcraft_engine::publish::Service) {
+    use crate::panels::dialogs::prompt;
+    resp.context_menu(|ui| {
+        let id = svc.id;
+        let mut r: Option<Result<serde_json::Value, String>> = None;
+        if menu_item(ui, "publishCreateCollection", crate::i18n::tr("Create Published Collection…"), "A collection of photos to publish").clicked()
+        {
+            prompt(app, "Create Published Collection", "Name", "", "publish.createCollection", json!({"service": id}), "name");
+            ui.close();
+        }
+        if menu_item(ui, "publishCreateSet", crate::i18n::tr("Create Published Collection Set…"), "A set to arrange collections in").clicked() {
+            prompt(app, "Create Published Collection Set", "Name", "", "publish.createCollection", json!({"service": id, "set": true}), "name");
+            ui.close();
+        }
+        ui.separator();
+        ui.menu_button(crate::i18n::tr("Export Settings"), |ui| {
+            for (p, builtin) in app.session.all_export_presets() {
+                if ui.button(crate::i18n::builtin_label(&p.name, builtin)).clicked() {
+                    r = Some(app.run("publish.editService", json!({"id": id, "preset": p.name})));
+                    ui.close();
+                }
+            }
+        });
+        if svc.kind == lightcraft_engine::publish::ServiceKind::HardDrive
+            && menu_item(ui, "publishChangeFolder", crate::i18n::tr("Change Folder…"), "Where the collections' folders go").clicked()
+        {
+            if let Some(dir) = app.services.pick_folder.as_mut().and_then(|f| f()) {
+                r = Some(app.run("publish.editService", json!({"id": id, "dir": dir})));
+            }
+            ui.close();
+        }
+        if menu_item(ui, "publishRenameService", crate::i18n::tr("Rename…"), "The service's name").clicked() {
+            prompt(app, "Rename Publish Service", "Name", &svc.name, "publish.editService", json!({"id": id}), "name");
+            ui.close();
+        }
+        ui.separator();
+        if menu_item(
+            ui,
+            "publishDeleteService",
+            crate::i18n::tr("Delete Service"),
+            "The service and its collections (published files stay; ⌘Z brings it back)",
+        )
+        .clicked()
+        {
+            r = Some(app.run("publish.deleteService", json!({"id": id})));
+            ui.close();
+        }
+        if let Some(Err(e)) = r {
+            app.toast(ui.ctx(), e);
+        }
+    });
+}
+
+fn collection_menu(app: &mut LightcraftApp, resp: &egui::Response, c: &lightcraft_engine::publish::Collection) {
+    use crate::panels::dialogs::prompt;
+    resp.context_menu(|ui| {
+        let id = c.id;
+        let mut r: Option<Result<serde_json::Value, String>> = None;
+        if c.set {
+            if menu_item(ui, "publishCreateInSet", crate::i18n::tr("Create Published Collection…"), "A collection inside this set").clicked() {
+                prompt(
+                    app,
+                    "Create Published Collection",
+                    "Name",
+                    "",
+                    "publish.createCollection",
+                    json!({"service": c.service, "parent": id}),
+                    "name",
+                );
+                ui.close();
+            }
+            if menu_item(ui, "publishCreateSetInSet", crate::i18n::tr("Create Published Collection Set…"), "A set inside this set").clicked() {
+                prompt(
+                    app,
+                    "Create Published Collection Set",
+                    "Name",
+                    "",
+                    "publish.createCollection",
+                    json!({"service": c.service, "parent": id, "set": true}),
+                    "name",
+                );
+                ui.close();
+            }
+        } else {
+            if menu_item(ui, "publishCollectionNow", crate::i18n::tr("Publish Now"), "Publish New and Modified photos, remove Deleted ones").clicked()
+            {
+                r = Some(app.run("dialog.publish", json!({"id": id})));
+                ui.close();
+            }
+            if menu_item(ui, "publishMarkAll", crate::i18n::tr("Mark as Up-to-Date"), "Count every photo as published as it is now").clicked() {
+                r = Some(app.run("publish.markUpToDate", json!({"id": id})));
+                ui.close();
+            }
+            if menu_item(ui, "publishAddSelected", crate::i18n::tr("Add Selected Photos"), "They show as New until published").clicked() {
+                r = Some(app.run("publish.addPhotos", json!({"id": id})));
+                ui.close();
+            }
+        }
+        ui.separator();
+        if menu_item(ui, "publishRenameCollection", crate::i18n::tr("Rename…"), "The collection's name").clicked() {
+            prompt(app, "Rename Published Collection", "Name", &c.name, "publish.editCollection", json!({"id": id}), "name");
+            ui.close();
+        }
+        if menu_item(ui, "publishDeleteCollection", crate::i18n::tr("Delete"), "Published files stay where they are; ⌘Z brings it back").clicked() {
+            r = Some(app.run("publish.deleteCollection", json!({"id": id})));
+            if app.session.source == LibrarySource::Published(id) {
+                let _ = app.run("library.source", json!({"kind": "all"}));
+            }
+            ui.close();
+        }
+        if let Some(Err(e)) = r {
+            app.toast(ui.ctx(), e);
+        }
+    });
 }
 
 /// How Collections lists its albums (L24).

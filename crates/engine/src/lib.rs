@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adobe;
+pub mod apple_photos;
 pub mod availability;
 pub mod backup;
 pub mod camera_match;
@@ -41,6 +42,7 @@ pub mod lr_dust;
 pub mod lr_history;
 pub mod lr_migrate;
 pub mod lr_sync;
+pub mod map;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -48,11 +50,13 @@ pub mod originals;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
+pub mod publish;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
 pub mod smart;
 pub mod trash;
+pub mod video;
 mod view;
 
 use std::sync::Arc;
@@ -852,7 +856,10 @@ impl Session {
                 let (cat, avail) = (&self.catalog, &self.media.availability);
                 visible.retain(|id| cmd::missing::is_missing(cat, avail, *id));
             }
-            if self.source != LibrarySource::RecentlyDeleted {
+            if let LibrarySource::Published(c) = self.source {
+                // grouped by state, in the order the photos were added (stacks don't fold here)
+                visible = publish::view_order(&self.catalog, c, &visible);
+            } else if self.source != LibrarySource::RecentlyDeleted {
                 visible = self.catalog.arrange_stacks(&visible);
             }
             self.visible = visible.into();
@@ -973,6 +980,8 @@ mod tests_libops;
 #[cfg(test)]
 mod tests_library;
 #[cfg(test)]
+mod tests_map;
+#[cfg(test)]
 mod tests_merge;
 #[cfg(test)]
 mod tests_metadata_status;
@@ -984,6 +993,8 @@ mod tests_organize;
 mod tests_persist;
 #[cfg(test)]
 mod tests_prefs;
+#[cfg(test)]
+mod tests_publish;
 #[cfg(test)]
 mod tests_rating_keys;
 #[cfg(test)]
@@ -998,5 +1009,7 @@ mod tests_spots;
 mod tests_tether;
 #[cfg(test)]
 mod tests_validate_dng;
+#[cfg(test)]
+mod tests_video;
 #[cfg(test)]
 mod tests_xmp;

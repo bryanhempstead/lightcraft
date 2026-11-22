@@ -207,6 +207,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // L33: File ▸ Tethered Capture
     ("dialog.tetherStart", "Start Tethered Capture…", None, "File"),
     ("dialog.tetherStop", "Stop Tethered Capture", None, "File"),
+    // LRC-LIB-PUBLISH: publish the published collection on screen; LR-EXP-PHOTOS
+    ("dialog.publish", "Publish Now", None, "Library"),
+    ("dialog.exportToPhotos", "Export to Photos…", None, "File"),
     // E12: File ▸ Email Photos…
     ("file.emailPhotos", "Email Photos…", Some("Cmd+Shift+M"), "File"),
     // L26: Compare ▸ Link Focus
@@ -243,6 +246,18 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // Lightroom Classic modules and "super keys" (Settings ▸ shrt.; see keymap.rs)
     ("view.library", "Library", Some("Cmd+Alt+1"), "Window"),
     ("view.develop", "Develop", Some("Cmd+Alt+2"), "Window"),
+    ("view.map", "Map", Some("Cmd+Alt+3"), "Window"),
+    ("map.fit", "Fit Map to Photos", None, ""),
+    // LR-VID-*: the Loupe's video controls (Space plays and pauses a video: shortcuts.rs)
+    ("video.playPause", "Play / Pause Video", None, "Photo>Video"),
+    ("video.trimMode", "Trim Video", None, "Photo>Video"),
+    ("video.posterHere", "Set Poster Frame", None, "Photo>Video"),
+    ("video.captureHere", "Capture Frame", None, "Photo>Video"),
+    ("video.sound", "Video Sound On / Off", None, "Photo>Video"),
+    ("video.seek", "Go to Time in Video", None, ""),
+    ("map.zoomIn", "Zoom In on Map", None, ""),
+    ("map.zoomOut", "Zoom Out of Map", None, ""),
+    ("dialog.mapSaveLocation", "Save Map Location…", None, ""),
     ("view.colorMixer", "Color Mixer", None, ""),
     ("view.resumeLastLeftOff", "Go to Where I Left Off", None, "View"),
     ("preset.applyByName", "Apply Preset by Name", None, ""),
@@ -288,8 +303,11 @@ pub fn enter_develop(app: &mut LightcraftApp) {
 pub fn enter_library(app: &mut LightcraftApp, view: Option<ViewMode>) {
     let v = view.unwrap_or(app.ui.library_view);
     app.ui.module = Module::Library;
-    app.ui.view = if v == ViewMode::Reference { ViewMode::PhotoGrid } else { v };
-    app.ui.library_view = app.ui.view;
+    // (Library from the map goes back to the grid: the map is a module of its own)
+    app.ui.view = if v == ViewMode::Reference || (view.is_none() && v == ViewMode::Map) { ViewMode::PhotoGrid } else { v };
+    if app.ui.view != ViewMode::Map {
+        app.ui.library_view = app.ui.view;
+    }
     // Develop's on-canvas tools end with it
     if app.ui.tool != "wbPicker" {
         app.ui.tool.clear();
@@ -525,7 +543,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
             let r = app.run("preset.apply", q);
             if r.is_ok() {
-                app.ui.toast = Some((name.clone(), app.last_time + 1.4, None));
+                app.toast_soon(name.clone(), 1.4);
             }
             r
         })(),
@@ -634,6 +652,47 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.faceBoxes" => {
             app.ui.face_boxes = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.face_boxes);
             Ok(json!({"show": app.ui.face_boxes}))
+        }
+        "view.map" => {
+            // Lightroom Classic's Map module (⌘⌥3): {lat?, lon?, zoom?} looks there
+            enter_library(app, Some(ViewMode::Map));
+            if let (Some(la), Some(lo)) = (p.get("lat").and_then(Value::as_f64), p.get("lon").and_then(Value::as_f64))
+                && lightcraft_engine::map::valid(la, lo)
+            {
+                (app.ui.map.lat, app.ui.map.lon, app.ui.map.fit_pending) = (la, lo, false);
+            }
+            if let Some(z) = p.get("zoom").and_then(Value::as_f64).filter(|z| z.is_finite()) {
+                app.ui.map.zoom = z.clamp(1.0, lightcraft_engine::map::MAX_ZOOM);
+                app.ui.map.fit_pending = false;
+            }
+            Ok(json!({"view": "map", "lat": app.ui.map.lat, "lon": app.ui.map.lon, "zoom": app.ui.map.zoom, "tiles": app.map.status()}))
+        }
+        "video.playPause" | "video.seek" | "video.trimMode" | "video.sound" | "video.posterHere" | "video.captureHere" => {
+            crate::video_ui::command(app, id, p)
+        }
+        "map.fit" => {
+            app.ui.map.fit_pending = true;
+            Ok(Value::Null)
+        }
+        "map.zoomIn" | "map.zoomOut" => {
+            let d = if id == "map.zoomIn" { 1.0 } else { -1.0 };
+            app.ui.map.zoom = (app.ui.map.zoom.round() + d).clamp(1.0, lightcraft_engine::map::MAX_ZOOM);
+            Ok(json!({"zoom": app.ui.map.zoom}))
+        }
+        "dialog.mapSaveLocation" => {
+            // name the place at the map's centre (radius: a sixth of the view's width)
+            let (lat, lon) = (app.ui.map.lat, app.ui.map.lon);
+            let radius = crate::panels::map::default_radius(app);
+            crate::panels::dialogs::prompt(
+                app,
+                "Save Location",
+                "Name",
+                "",
+                "map.saveLocation",
+                json!({"lat": lat, "lon": lon, "radius": radius}),
+                "name",
+            );
+            Ok(Value::Null)
         }
         "view.people" => {
             app.ui.view = ViewMode::People;
@@ -1479,14 +1538,16 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let r = app.run("tether.start", json!({"folder": folder, "session": session}));
             if let Ok(v) = &r {
                 let how = if v["gphoto2"] == true { "gphoto2 is capturing from the camera" } else { "save shots into it from the camera's app" };
-                app.ui.toast = Some((format!("Tethered: {} — {how}", v["folder"].as_str().unwrap_or("")), app.last_time + 8.0, None));
+                app.toast_soon(format!("Tethered: {} — {how}", v["folder"].as_str().unwrap_or("")), 8.0);
             }
             r
         }
+        "dialog.publish" => crate::publish_ui::start_publish(app, p),
+        "dialog.exportToPhotos" => crate::publish_ui::start_photos(app, p),
         "dialog.tetherStop" => {
             let r = app.run("tether.stop", json!({}));
             if r.is_ok() {
-                app.ui.toast = Some(("Tethered capture stopped".into(), app.last_time + 4.0, None));
+                app.toast_soon("Tethered capture stopped", 4.0);
             }
             r
         }
@@ -1508,7 +1569,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             if n("damaged") > 0 {
                 let _ = app.run("library.select", json!({"ids": r["damaged"]}));
             }
-            app.ui.toast = Some((msg, app.last_time + 8.0, None));
+            app.toast_soon(msg, 8.0);
             Ok(r)
         }
         "file.emailPhotos" => {
@@ -1567,7 +1628,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let Some(path) = path else { return Some(Ok(Value::Null)) };
             let r = app.run("keyword.import", json!({"path": path}));
             if let Ok(v) = &r {
-                app.ui.toast = Some((format!("Imported keywords: {} added, {} updated", v["added"], v["updated"]), app.last_time + 4.0, None));
+                app.toast_soon(format!("Imported keywords: {} added, {} updated", v["added"], v["updated"]), 4.0);
             }
             r
         }
@@ -1579,7 +1640,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let Some(path) = path else { return Some(Ok(Value::Null)) };
             let r = app.run("keyword.export", json!({"path": path}));
             if let Ok(v) = &r {
-                app.ui.toast = Some((format!("Exported {} keywords", v["keywords"]), app.last_time + 4.0, None));
+                app.toast_soon(format!("Exported {} keywords", v["keywords"]), 4.0);
             }
             r
         }
@@ -1912,6 +1973,8 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
         s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
         "dialog.syncSettings" => app.session.selection.ids.len() > 1,
+        "dialog.publish" => matches!(app.session.source, lightcraft_engine::LibrarySource::Published(_)),
+        "dialog.exportToPhotos" => app.session.active().is_some() && lightcraft_engine::apple_photos::available(),
         "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {
             app.session.active().is_some()
         }

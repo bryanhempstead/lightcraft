@@ -910,3 +910,45 @@ fn files_sharing_a_stem_get_their_own_sidecars() {
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+/// LR-IMP-SIDECAR-SPLIT: the JPEG (here a PNG) half of a raw + JPEG pair never imports the raw's
+/// `<stem>.xmp` (Lightroom / Camera Raw wrote it for the raw: its rating, its `crs:` edits); it
+/// reads its own `<file>.xmp` when there is one. A file without a raw sibling still reads the
+/// stem sidecar.
+#[test]
+fn raw_jpeg_pairs_import_their_own_sidecars() {
+    let xmp = |rating: u8| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="{rating}"/>
+</rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    let src = temp_dir("split");
+    write_png(&src.join("IMG_1.png"), 1);
+    std::fs::write(src.join("IMG_1.CR3"), b"a raw this test doesn't import").unwrap();
+    std::fs::write(src.join("IMG_1.xmp"), xmp(5)).unwrap();
+    write_png(&src.join("IMG_2.png"), 2);
+    std::fs::write(src.join("IMG_2.xmp"), xmp(4)).unwrap();
+    assert!(crate::sidecar::has_raw_sibling(&src.join("IMG_1.png").to_string_lossy()));
+    assert!(!crate::sidecar::has_raw_sibling(&src.join("IMG_2.png").to_string_lossy()));
+    assert!(!crate::sidecar::has_raw_sibling(&src.join("IMG_1.CR3").to_string_lossy()), "a raw owns the stem sidecar");
+    let rating_after_import = |files: &[&str]| {
+        let mut s = Session::new().with_fs();
+        let paths: Vec<String> = files.iter().map(|f| src.join(f).to_string_lossy().to_string()).collect();
+        s.execute("library.import", &json!({"paths": paths})).unwrap();
+        files.iter().map(|f| s.catalog.photos().find(|p| p.file_name == *f).map(|p| p.rating)).collect::<Vec<_>>()
+    };
+    assert_eq!(rating_after_import(&["IMG_1.png", "IMG_2.png"]), vec![Some(0), Some(4)], "the raw's rating isn't the JPEG's");
+    std::fs::write(src.join("IMG_1.png.xmp"), xmp(3)).unwrap();
+    assert_eq!(rating_after_import(&["IMG_1.png"]), vec![Some(3)], "its own sidecar");
+    // and it saves into its own, leaving the raw's alone
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.join("IMG_1.png").to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    assert_eq!(s.sidecar_naming(id), crate::sidecar::SidecarNaming::Full);
+    s.execute("photo.rate", &json!({"ids": [id.0], "rating": 1})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(std::fs::read_to_string(src.join("IMG_1.xmp")).unwrap().contains(r#"xmp:Rating="5""#), "the raw's sidecar is untouched");
+    let _ = std::fs::remove_dir_all(&src);
+}

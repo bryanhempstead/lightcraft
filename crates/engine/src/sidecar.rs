@@ -76,6 +76,41 @@ pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// Raw extensions (lower case) whose stem sidecar a same-named JPEG / HEIC / TIFF must not take.
+const RAW_EXTENSIONS: &[&str] = &[
+    "dng", "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "rwl", "raw", "pef", "srw", "mrw", "3fr", "fff", "iiq",
+    "mos", "erf", "dcr", "kdc", "x3f",
+];
+
+/// A raw file with the same stem sits next to `original` (a raw + JPEG pair, LR-IMP-SIDECAR-SPLIT).
+pub fn has_raw_sibling(original: &str) -> bool {
+    let p = Path::new(original);
+    let (Some(dir), Some(stem)) = (p.parent(), p.file_stem()) else { return false };
+    let stem = stem.to_string_lossy().to_lowercase();
+    let own = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if RAW_EXTENSIONS.contains(&own.as_str()) {
+        return false;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return false };
+    rd.flatten().take(100_000).any(|e| {
+        let n = e.path();
+        n.file_stem().is_some_and(|s| s.to_string_lossy().to_lowercase() == stem)
+            && n.extension().is_some_and(|x| RAW_EXTENSIONS.contains(&x.to_string_lossy().to_lowercase().as_str()))
+    })
+}
+
+/// The sidecar an import reads for `original` (LR-IMP-SIDECAR-SPLIT): [`find_sidecar`], except that
+/// the non-raw half of a raw + JPEG pair never takes the shared `<stem>.xmp` — that one is the
+/// raw's (Lightroom and Camera Raw write it for the raw) — and reads only its own `<file>.xmp`.
+pub fn import_sidecar(original: &str, kind: MediaKind, naming: SidecarNaming) -> Option<PathBuf> {
+    if kind != MediaKind::Raw && has_raw_sibling(original) {
+        let p = sidecar_path(original, SidecarNaming::Full);
+        let upper = p.with_extension("XMP");
+        return [p, upper].into_iter().find(|p| p.is_file());
+    }
+    find_sidecar(original, naming)
+}
+
 /// What a sidecar (or embedded XMP packet) says about a photo. `None` = not stated.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SidecarData {
@@ -510,6 +545,8 @@ impl StemOwners {
     fn naming(&self, p: &Photo, naming: SidecarNaming) -> SidecarNaming {
         match (naming, file_path(p)) {
             (SidecarNaming::Stem, Some(path)) if self.0.get(&stem_key(path)).is_some_and(|owner| *owner != p.id) => SidecarNaming::Full,
+            // a raw next to it on disk owns the stem sidecar even when it isn't catalogued
+            (SidecarNaming::Stem, Some(path)) if p.kind != MediaKind::Raw && has_raw_sibling(path) => SidecarNaming::Full,
             _ => naming,
         }
     }

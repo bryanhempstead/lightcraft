@@ -2979,6 +2979,7 @@ dependencies = [
  "lightcraft-develop",
  "lightcraft-dng-sdk-sys",
  "lightcraft-enhance",
+ "lightcraft-fetch",
  "lightcraft-geom",
  "lightcraft-gpu",
  "lightcraft-merge",

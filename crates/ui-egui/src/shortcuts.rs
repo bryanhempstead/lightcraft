@@ -256,6 +256,13 @@ fn cull(app: &mut LightcraftApp, id: &str, mut params: serde_json::Value, advanc
 }
 
 fn run_aliased(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: serde_json::Value) {
+    // Space plays / pauses a video in the Loupe (KEY-VIDEO-PLAY)
+    if id == "view.zoomToggle" && crate::video_ui::wants_space(app) {
+        if let Err(e) = app.run("video.playPause", json!({})) {
+            app.toast(ctx, e);
+        }
+        return;
+    }
     // Space pauses / resumes a slideshow
     if id == "view.zoomToggle"
         && let Some((interval, _, paused)) = app.ui.slideshow

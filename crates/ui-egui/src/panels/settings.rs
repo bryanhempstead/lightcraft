@@ -779,7 +779,7 @@ fn cell(ui: &mut egui::Ui, w: f32, text: RichText) {
 
 fn save_keymap(app: &mut LightcraftApp, f: crate::keymap::KeymapFile) {
     if let Err(e) = app.keymap.set(f) {
-        app.ui.toast = Some((e, app.last_time + 6.0, None));
+        app.toast_soon(e, 6.0);
     }
 }
 
@@ -810,7 +810,7 @@ fn import_result(app: &mut LightcraftApp, r: Result<Value, String>) {
         ),
         Err(e) => e,
     };
-    app.ui.toast = Some((text, app.last_time + 5.0, None));
+    app.toast_soon(text, 5.0);
 }
 
 fn shortcuts_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {

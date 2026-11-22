@@ -50,6 +50,7 @@
 //! | 5 | IPTC Extension fields (fork) | `Meta.iptc_ext` |
 //! | 6 | metadata status (fork) | `Op::SetXmpSync`, `Photo.xmp_sync` |
 //! | 7 | the name a photo was imported with (fork) | `Photo.original_name` |
+//! | 8 | video trim / poster frame, library records (fork: publish services, map locations) | `Op::SetVideo`, `Photo.video`, `Op::SetRecord`, `Catalog.records` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -74,7 +75,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 8;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
