@@ -23,6 +23,10 @@ pub enum Gesture {
     Spot {
         points: Vec<Point>,
     },
+    /// Remove tool: a ⌥-drag marquee from `a` (normalized) whose spots are deleted on release.
+    SpotRect {
+        a: Point,
+    },
     /// Remove tool: dragging spot `spot`'s target (or its source).
     SpotMove {
         spot: usize,
@@ -283,6 +287,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
     if let Some(job) = app.session.loupe_job(id, rw.max(8), rh.max(8), !crop_tool) {
         let job = if interacting { job.draft() } else { job };
+        app.ui.alt_down = ui.input(|i| i.modifiers.alt);
         let job = job.with_overlay(view_overlay(app, &d)).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         app.renderer.request(Slot::Main, job, 100);
     }
@@ -826,12 +831,19 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
     }
 }
 
-/// The diagnostic overlay the loupe shows (the selected mask, Point Color's visualized range,
-/// Visualize Spots).
+/// The diagnostic overlay the loupe shows (an Alt-drag preview, the selected mask, Point Color's
+/// visualized range, Visualize Spots).
 pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcraft_pipeline::Overlay {
     use lightcraft_pipeline::{MaskView, Overlay};
     if app.ui.fullscreen {
         return Overlay::None;
+    }
+    // Alt/Option-drag on Exposure / Highlights / Whites, Shadows / Blacks, Sharpening, Noise
+    // Reduction: Lightroom's temporary preview while the slider moves
+    if app.ui.alt_down
+        && let Some(o) = app.ui.dragging_control.as_deref().and_then(Overlay::for_control)
+    {
+        return o;
     }
     if app.ui.right == RightPanel::Masking
         && app.ui.mask_overlay
@@ -1524,6 +1536,28 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         }
     }
     let press = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
+    // ⌥-drag: a marquee that deletes the spots inside it (Lightroom)
+    if resp.drag_started()
+        && ui.input(|i| i.modifiers.alt)
+        && let Some(q) = press
+    {
+        app.gesture = Some(Gesture::SpotRect { a: map.norm(q) });
+    }
+    if let Some(Gesture::SpotRect { a }) = app.gesture.clone() {
+        if let Some(q) = resp.interact_pointer_pos() {
+            let b = map.norm(q);
+            let rect = Rect::from_two_pos(map.screen(a), map.screen(b));
+            p.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(220, 60, 60, 40));
+            p.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::from_rgb(230, 80, 80)), egui::StrokeKind::Inside);
+            if resp.drag_stopped() {
+                app.gesture = None;
+                let _ = app.run("spot.deleteInRect", json!({"rect": [a.x, a.y, b.x, b.y]}));
+            }
+        } else if resp.drag_stopped() {
+            app.gesture = None;
+        }
+        return;
+    }
     if resp.drag_started()
         && let Some((spot, source, ..)) = press.and_then(hit)
     {
@@ -1575,6 +1609,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         let mode = match app.ui.tool.as_str() {
             "heal" => "heal",
             "clone" => "clone",
+            "fill" => "fill",
             _ => "remove",
         };
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();

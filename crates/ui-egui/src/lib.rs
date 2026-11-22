@@ -8,6 +8,7 @@
 
 pub mod control;
 pub mod credits;
+pub mod display_p3;
 pub mod export_task;
 pub mod headless;
 pub mod i18n;
@@ -32,6 +33,8 @@ pub mod tasks;
 pub mod theme;
 pub mod widgets;
 
+#[cfg(test)]
+mod tests_alt_preview;
 #[cfg(test)]
 mod tests_backup_delete;
 #[cfg(test)]
@@ -770,6 +773,13 @@ impl LightcraftApp {
 
     /// Apply settings that act outside the UI state: GPU rendering and window full screen.
     fn apply_settings(&mut self, ctx: &egui::Context) {
+        // photos in the display's colour space (P3 on a Mac): re-upload when it changes; the
+        // headless host keeps sRGB (its screenshots are sRGB files)
+        let p3 = self.ui.settings.view_space.is_p3() && !self.headless_host;
+        if self.renderer.display_p3 != p3 {
+            self.renderer.display_p3 = p3;
+            self.renderer.forget_all();
+        }
         if self.gpu_applied != Some(self.ui.settings.gpu) {
             self.gpu_applied = Some(self.ui.settings.gpu);
             let _ = self.session.execute("app.gpu", &serde_json::json!({"enabled": self.ui.settings.gpu}));

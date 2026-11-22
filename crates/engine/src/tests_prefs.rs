@@ -318,3 +318,163 @@ fn reopening_a_library_retires_the_old_cache_so_its_jobs_cannot_write_after_a_cl
     drop(s);
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+/// U01: Lightroom's per-setting copy checklist: copy just Exposure (not Contrast), sync just
+/// Sharpening (not noise reduction), the Modified subset, choose masks, saved subsets persist.
+#[test]
+fn per_setting_copy_sync_modified_and_saved_subsets() {
+    let lib = temp_dir("subsets");
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, true).unwrap();
+        let ids: Vec<_> = s.visible().iter().copied().take(3).collect();
+        s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
+        let v = json!({"light.exposure": 1.0, "light.contrast": 30, "detail.sharpenAmount": 90, "detail.nrLuminance": 40});
+        s.execute("develop.set", &json!({"values": v})).unwrap();
+        let groups = s.execute("develop.modifiedGroups", &json!({})).unwrap()["groups"].clone();
+        for g in ["exposure", "contrast", "sharpening", "luminanceNoise"] {
+            assert!(groups.as_array().unwrap().iter().any(|x| x == g), "{g} modified: {groups}");
+        }
+        assert!(!groups.as_array().unwrap().iter().any(|x| x == "highlights"), "{groups}");
+        // copy only Exposure
+        s.execute("develop.copy", &json!({"groups": ["exposure"]})).unwrap();
+        s.execute("develop.paste", &json!({"ids": [ids[1].0]})).unwrap();
+        let d = s.develop_of(ids[1]).unwrap();
+        assert_eq!((d.light.exposure, d.light.contrast), (1.0, 0.0));
+        // sync only Sharpening, from the active photo to the selection
+        s.execute("library.select", &json!({"ids": [ids[0].0, ids[2].0]})).unwrap();
+        s.execute("develop.sync", &json!({"groups": ["sharpening"]})).unwrap();
+        let d = s.develop_of(ids[2]).unwrap();
+        assert_eq!((d.detail.sharpen_amount, d.detail.nr_luminance, d.light.exposure), (90.0, 0.0, 0.0));
+        // a heading id still works, unknown ids are an error, not a silent default
+        s.execute("develop.copy", &json!({"groups": ["light"]})).unwrap();
+        assert!(s.copy_groups.contains(&lightcraft_develop::SettingsGroup::Blacks));
+        assert!(s.execute("develop.copy", &json!({"groups": ["exposur"]})).unwrap_err().to_string().contains("exposur"));
+        // subsets: modified (on the active photo), saved ones by name
+        let r = s.execute("develop.copy", &json!({"subset": "modified"})).unwrap();
+        assert_eq!(r["groups"], groups);
+        assert!(s.execute("develop.saveSubset", &json!({"name": "Default", "groups": ["grain"]})).is_err(), "built-in name");
+        s.execute("develop.saveSubset", &json!({"name": "Tone only", "groups": ["light", "toneCurve"]})).unwrap();
+        s.execute("develop.renameSubset", &json!({"name": "tone only", "to": "Tone"})).unwrap();
+        let r = s.execute("develop.copy", &json!({"subset": "tone"})).unwrap();
+        assert_eq!(r["groups"].as_array().unwrap().len(), 8, "{r}");
+        assert!(s.execute("develop.copy", &json!({"subset": "nope"})).is_err());
+        // masks: only the chosen one goes along
+        s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
+        s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
+        s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+        let masks: Vec<u32> = s.develop_of(ids[0]).unwrap().masks.iter().map(|m| m.id).collect();
+        assert_eq!(masks.len(), 2);
+        s.execute("develop.copy", &json!({"groups": ["masks"], "masks": [masks[1]]})).unwrap();
+        s.execute("develop.paste", &json!({"ids": [ids[1].0]})).unwrap();
+        assert_eq!(s.develop_of(ids[1]).unwrap().masks.len(), 1);
+        let list = s.execute("develop.settingsGroups", &json!({})).unwrap();
+        assert!(list["headings"].as_array().unwrap().len() >= 12, "{list}");
+        s.close_library().unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let r = s.execute("develop.subsets", &json!({})).unwrap();
+    assert_eq!(r["subsets"][0]["name"], "Tone", "saved with the library preferences: {r}");
+    s.execute("develop.deleteSubset", &json!({"name": "tone"})).unwrap();
+    assert!(s.copy_subsets.is_empty());
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// U02: relative paste (the changes since the first / a chosen history state move each photo's
+/// own values) and merge-or-replace masks on paste.
+#[test]
+fn relative_paste_and_merge_or_replace_masks() {
+    let mut s = Session::with_demo();
+    let ids: Vec<_> = s.visible().iter().copied().take(3).collect();
+    s.execute("library.select", &json!({"ids": [ids[1].0]})).unwrap();
+    s.execute("develop.set", &json!({"values": {"light.exposure": 1.0, "light.contrast": 10}})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
+    s.execute("develop.set", &json!({"values": {"light.exposure": 0.5}})).unwrap();
+    s.execute("develop.set", &json!({"values": {"light.exposure": 0.75, "light.contrast": 20}})).unwrap();
+    // since the first history state: +0.75 EV, +20 contrast on top of photo 1's own
+    let r = s.execute("develop.copy", &json!({"groups": ["light"], "mode": "sinceFirst"})).unwrap();
+    assert_eq!(r["mode"], "sinceFirst");
+    let r = s.execute("develop.paste", &json!({"ids": [ids[1].0]})).unwrap();
+    assert_eq!(r["relative"], true);
+    let d = s.develop_of(ids[1]).unwrap();
+    assert!((d.light.exposure - 1.75).abs() < 1e-9 && (d.light.contrast - 30.0).abs() < 1e-9, "{} {}", d.light.exposure, d.light.contrast);
+    assert_eq!(d.light.highlights, 0.0, "unchanged sliders stay the photo's own");
+    // since a chosen step (the one after the first edit): +0.25 EV
+    let n = s.catalog.photo(ids[0]).unwrap().history.len();
+    assert!(n >= 2, "history: {n}");
+    s.execute("develop.copy", &json!({"groups": ["exposure"], "mode": "sinceStep", "step": n - 2})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [ids[2].0]})).unwrap();
+    assert!((s.develop_of(ids[2]).unwrap().light.exposure - 0.25).abs() < 1e-9);
+    assert!(s.execute("develop.copy", &json!({"mode": "sinceStep", "step": 999})).is_err());
+    assert!(s.execute("develop.copy", &json!({"mode": "nope"})).is_err());
+    // masks: merge adds the copied mask, replace swaps the photo's own for it
+    s.execute("mask.add", &json!({"kind": "linear", "name": "Sky"})).unwrap();
+    s.execute("develop.copy", &json!({"groups": ["masks"]})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[1].0]})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial", "name": "Face"})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [ids[1].0], "maskMode": "merge"})).unwrap();
+    let names: Vec<String> = s.develop_of(ids[1]).unwrap().masks.iter().map(|m| m.name.clone()).collect();
+    assert_eq!(names, ["Face", "Sky"]);
+    s.execute("develop.paste", &json!({"ids": [ids[1].0], "maskMode": "merge"})).unwrap();
+    assert_eq!(s.develop_of(ids[1]).unwrap().masks.len(), 2, "the same mask isn't added twice");
+    s.execute("develop.paste", &json!({"ids": [ids[1].0], "maskMode": "replace"})).unwrap();
+    let names: Vec<String> = s.develop_of(ids[1]).unwrap().masks.iter().map(|m| m.name.clone()).collect();
+    assert_eq!(names, ["Sky"]);
+    assert!(s.execute("develop.paste", &json!({"maskMode": "blend"})).is_err());
+}
+
+/// U04: local adjustment ("Effect") presets: a Lightroom local preset folder imports in place
+/// (titles delocalised, values scaled), applying sets the mask's sliders, new masks of that kind
+/// start with it, saved / deleted effects persist with the library.
+#[test]
+fn mask_effects_import_lightroom_presets_apply_and_persist() {
+    let lib = temp_dir("effects");
+    let presets = lib.join("lr").join("Local Adjustment Presets");
+    std::fs::create_dir_all(&presets).unwrap();
+    // synthetic presets in the shape Lightroom writes (our own values)
+    std::fs::write(
+        presets.join("Burn.lrtemplate"),
+        "s = {\n\tid = \"1\",\n\tinternalName = \"Burn\",\n\ttitle = ZSTR \"$$$/AgDevelop/Localized/Preset/Burn=Burn (Darken)\",\n\ttype = \"LocalizedAdjustmentPreset\",\n\tvalue = {\n\t\texposure2012 = -0.075,\n\t\tsaturation = 0,\n\t\ttoningHue = 240,\n\t},\n\tversion = 1,\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        presets.join("Teeth.lrtemplate"),
+        "s = { title = \"Teeth Whitening\", type = \"LocalizedAdjustmentPreset\", value = { exposure2012 = 0.1, saturation = -0.6 } }",
+    )
+    .unwrap();
+    std::fs::write(presets.join("Develop.lrtemplate"), "s = { title = \"X\", type = \"Develop\", value = { settings = { Exposure2012 = 1 } } }")
+        .unwrap();
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, true).unwrap();
+        let r = s.execute("mask.importEffects", &json!({"path": presets.to_string_lossy()})).unwrap();
+        let names: Vec<&str> = r["imported"].as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();
+        assert_eq!(names, ["Burn (Darken)", "Teeth Whitening"], "{r}");
+        assert!(r["failed"].as_array().unwrap().is_empty(), "a develop preset is skipped, not failed: {r}");
+        let burn = s.mask_effects.iter().find(|e| e.name == "Burn (Darken)").unwrap();
+        assert!((burn.adjust.exposure + 0.3).abs() < 1e-9, "exposure2012 is a quarter of the stops: {}", burn.adjust.exposure);
+        // apply to a mask: its sliders
+        s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
+        s.execute("mask.applyEffect", &json!({"name": "teeth whitening"})).unwrap();
+        let id = s.active().unwrap();
+        let m = s.develop_of(id).unwrap().masks[0].clone();
+        assert!((m.adjust.exposure - 0.4).abs() < 1e-9 && (m.adjust.saturation + 60.0).abs() < 1e-9, "{:?}", m.adjust);
+        assert_eq!(s.execute("mask.effects", &json!({})).unwrap()["current"], "Teeth Whitening");
+        // the next brush mask starts with it (as Lightroom carries the effect over)
+        s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
+        assert!((s.develop_of(id).unwrap().masks[1].adjust.saturation + 60.0).abs() < 1e-9);
+        // save one of our own, delete an imported one
+        s.execute("mask.adjust", &json!({"values": {"clarity": 30}})).unwrap();
+        s.execute("mask.saveEffect", &json!({"name": "Crisp", "fields": "changed"})).unwrap();
+        s.execute("mask.deleteEffect", &json!({"name": "Burn (Darken)"})).unwrap();
+        assert!(s.execute("mask.applyEffect", &json!({"name": "nope"})).is_err());
+        s.close_library().unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let names: Vec<String> = s.mask_effects.iter().map(|e| e.name.clone()).collect();
+    assert_eq!(names, ["Teeth Whitening", "Crisp"], "saved with the library preferences");
+    assert_eq!(s.mask_tool_effects.get("brush").map(String::as_str), Some("Teeth Whitening"));
+    let _ = std::fs::remove_dir_all(&lib);
+}

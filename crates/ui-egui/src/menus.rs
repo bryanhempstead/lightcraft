@@ -94,6 +94,13 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.visualizeSpots", "Visualize Spots", Some("A"), "View"),
     ("view.cropOverlay", "Cycle Crop Overlay", Some("Shift+O"), "View"),
     ("view.cropOverlayOrientation", "Cycle Crop Overlay Orientation", None, "View"),
+    ("view.cropOverlaysToCycle", "Choose Crop Overlays to Cycle", None, ""),
+    ("view.beforeAfterCycle", "Cycle Before/After Layouts", None, "View"),
+    ("app.viewSpace", "Photo Color Space", None, ""),
+    ("curve.snapToGrid", "Snap to Grid", None, ""),
+    ("curve.showAll", "Show All Curves", None, ""),
+    ("curve.copyChannel", "Copy Point Curve Channel", None, ""),
+    ("curve.pasteChannel", "Paste Point Curve Channel", None, ""),
     ("view.back", "Back to Grid", Some("Escape"), ""),
     ("tool.done", "Done", Some("Enter"), ""),
     ("view.filterBar", "Filter Bar", Some("Shift+F"), "View"),
@@ -364,6 +371,12 @@ pub fn parse_rgb(v: &Value) -> Option<[u8; 3]> {
 }
 
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
+/// Does a paste carry masks onto a photo that has masks of its own?
+pub fn paste_meets_masks(app: &LightcraftApp, p: &Value) -> bool {
+    let copied = app.session.clipboard.as_ref().and_then(|c| c.get("masks")).and_then(Value::as_array).is_some_and(|m| !m.is_empty());
+    copied && app.session.targets(p).iter().any(|id| app.session.develop_of(*id).is_some_and(|d| !d.masks.is_empty()))
+}
+
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
@@ -377,6 +390,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     }
     let ctx = egui::Context::default();
     let r: Result<Value, String> = match id {
+        // Lightroom asks whether copied masks merge with the photos' own or replace them
+        "develop.paste" if p.get("maskMode").is_none() && paste_meets_masks(app, p) => {
+            app.ui.dialog = Some(Dialog::PasteMasks { params: p.clone(), merge: true });
+            Ok(json!({"asked": "maskMode"}))
+        }
         "view.develop" => {
             // Lightroom Classic's Develop module (D): the loupe with the develop panels, never a toggle
             enter_develop(app);
@@ -943,17 +961,88 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "view.cropOverlay" => {
-            use crate::state::CropOverlay::*;
-            app.ui.crop_overlay = match app.ui.crop_overlay {
-                Thirds => Grid,
-                Grid => Golden,
-                Golden => Diagonal,
-                Diagonal => Triangle,
-                Triangle => Spiral,
-                Spiral => None,
-                None => Thirds,
+            // {overlay?: thirds|grid|golden|diagonal|triangle|spiral|aspectRatios|center|fifths|none}:
+            // that one, else the next of the overlays chosen to cycle
+            match p.get("overlay") {
+                Some(v) => match serde_json::from_value::<crate::state::CropOverlay>(v.clone()) {
+                    Ok(o) => {
+                        app.ui.crop_overlay = o;
+                        Ok(json!({"overlay": app.ui.crop_overlay}))
+                    }
+                    Err(e) => Err(format!("view.cropOverlay: `overlay`: {e}")),
+                },
+                None => {
+                    app.ui.crop_overlay = app.ui.crop_overlay.next_in(&app.ui.crop_overlay_cycle);
+                    Ok(json!({"overlay": app.ui.crop_overlay}))
+                }
+            }
+        }
+        "view.cropOverlaysToCycle" => {
+            // {overlays: [id]} — Lightroom's Choose Overlays to Cycle (empty: all)
+            match p.get("overlays").map(|v| serde_json::from_value::<Vec<crate::state::CropOverlay>>(v.clone())) {
+                Some(Ok(list)) => {
+                    app.ui.crop_overlay_cycle = crate::state::CropOverlay::ALL.into_iter().filter(|o| list.contains(o)).collect();
+                    Ok(json!({"overlays": app.ui.crop_overlay_cycle}))
+                }
+                Some(Err(e)) => Err(format!("view.cropOverlaysToCycle: `overlays`: {e}")),
+                None => Ok(json!({"overlays": app.ui.crop_overlay_cycle})),
+            }
+        }
+        "curve.snapToGrid" => {
+            app.ui.curve_snap = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.curve_snap);
+            Ok(json!({"snap": app.ui.curve_snap}))
+        }
+        "curve.showAll" => {
+            app.ui.curve_show_all = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.curve_show_all);
+            Ok(json!({"showAll": app.ui.curve_show_all}))
+        }
+        "curve.copyChannel" | "curve.pasteChannel" => {
+            // {channel?: master|red|green|blue (default: the one shown)}
+            let ch = p.get("channel").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| app.ui.curve_channel.clone());
+            if !["master", "red", "green", "blue"].contains(&ch.as_str()) {
+                return Some(Err(format!("{id}: `channel` is master, red, green or blue")));
+            }
+            if id == "curve.copyChannel" {
+                let d = app.session.active().and_then(|x| app.session.develop_of(x)).unwrap_or_default();
+                let pts = match ch.as_str() {
+                    "red" => &d.curve.red,
+                    "green" => &d.curve.green,
+                    "blue" => &d.curve.blue,
+                    _ => &d.curve.master,
+                };
+                let pts: Vec<[f64; 2]> = pts.iter().map(|q| [q.x, q.y]).collect();
+                app.ui.curve_clipboard = Some(pts.clone());
+                Ok(json!({"channel": ch, "points": pts}))
+            } else {
+                match app.ui.curve_clipboard.clone() {
+                    Some(pts) => app.run("develop.curve", json!({"channel": ch, "points": pts})),
+                    None => Err("curve.pasteChannel: no point curve copied".into()),
+                }
+            }
+        }
+        "app.viewSpace" => {
+            // {space?: auto|displayP3|srgb} — the colour space photos are shown in
+            match p.get("space") {
+                Some(v) => match serde_json::from_value::<crate::display_p3::ViewSpace>(v.clone()) {
+                    Ok(space) => {
+                        app.ui.settings.view_space = space;
+                        Ok(json!({"space": space.id(), "displayP3": space.is_p3()}))
+                    }
+                    Err(e) => Err(format!("app.viewSpace: `space`: {e}")),
+                },
+                None => Ok(json!({"space": app.ui.settings.view_space.id(), "displayP3": app.ui.settings.view_space.is_p3()})),
+            }
+        }
+        "view.beforeAfterCycle" => {
+            // the toolbar's Before & After button: the next layout (Left / Right → Top / Bottom →
+            // Left / Right Split → Top / Bottom Split → …), as Lightroom's button cycles them
+            app.ui.before_after = match app.ui.before_after {
+                BeforeAfter::SideBySide => BeforeAfter::TopBottom,
+                BeforeAfter::TopBottom => BeforeAfter::Split,
+                BeforeAfter::Split => BeforeAfter::SplitTopBottom,
+                _ => BeforeAfter::SideBySide,
             };
-            Ok(json!({"overlay": app.ui.crop_overlay}))
+            Ok(json!({"layout": app.ui.before_after}))
         }
         "view.cropOverlayOrientation" => {
             app.ui.crop_overlay_orient = (app.ui.crop_overlay_orient + 1) % 4;
@@ -1193,9 +1282,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "dialog.pasteSettings" => {
-            let groups =
-                app.session.copy_groups.iter().filter_map(|g| serde_json::to_value(g).ok().and_then(|v| v.as_str().map(str::to_string))).collect();
-            app.ui.dialog = Some(Dialog::PasteSettings { groups });
+            let groups = crate::state::group_ids(&app.session.copy_groups);
+            app.ui.dialog = Some(Dialog::PasteSettings { groups, merge_masks: false });
             Ok(Value::Null)
         }
         "view.focusSearch" => {
@@ -1207,19 +1295,19 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let groups = crate::state::default_preset_groups();
             // what was checked last time (Match exposure / Auto align / Match camera & lens color start off)
             let prefs = app.ui.sync_prefs.clone();
-            let groups = prefs.groups.unwrap_or(groups);
+            let groups = prefs.groups.map(|g| crate::state::normalize_groups(&g)).unwrap_or(groups);
             app.ui.dialog = Some(Dialog::SyncSettings {
                 groups,
                 match_exposure: prefs.match_exposure,
                 auto_align: prefs.auto_align,
                 match_color: prefs.match_color,
+                masks: None,
             });
             Ok(Value::Null)
         }
         "dialog.copySettings" => {
-            let groups =
-                app.session.copy_groups.iter().filter_map(|g| serde_json::to_value(g).ok().and_then(|v| v.as_str().map(str::to_string))).collect();
-            app.ui.dialog = Some(Dialog::CopySettings { groups });
+            let groups = crate::state::group_ids(&app.session.copy_groups);
+            app.ui.dialog = Some(Dialog::CopySettings { groups, masks: None, mode: "exact".into(), step: 0 });
             Ok(Value::Null)
         }
         // File ▸ Sync from Lightroom Classic…: the catalog is read in the background (lr_sync.rs)

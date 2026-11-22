@@ -34,7 +34,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | K. Masking (MASK) | 14 | 4 | 5 | 0 | 8/8 (100%) | 5/5 (100%) |
 | L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
-| N. Copy / paste / sync (SYNC) | 5 | 0 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
+| N. Copy / paste / sync (SYNC) | 6 | 0 | 0 | 0 | 3/3 (100%) | 2/2 (100%) |
 | O. Merge (MERGE) | 4 | 0 | 0 | 0 | — | — |
 | P. Enhance (ENH) | 0 | 0 | 2 | 0 | — | — |
 | Q. HDR (HDR) | 0 | 0 | 5 | 0 | — | — |
@@ -194,6 +194,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-VIEW-SECONDWINDOW | Second display window [Classic] | P2 | ✅ | `cmd:view.secondWindow`, `crates/ui-egui/src/panels/second.rs` | Window ▸ Second Window (⌘F11): the active photo fitted in its own native window with its own render (a floating panel where there are no native windows); loupe view only (no grid / compare / survey there) |
 | LR-VIEW-CLIPPING | Clipping indicators | P0 | ✅ | `cmd:view.clipping` | |
 | LR-VIEW-HISTOGRAM | Histogram | P0 | ✅ | `cmd:view.histogram`, `crates/ui-egui/src/panels/edit.rs` | no drag-to-adjust on the histogram |
+| LR-VIEW-COLORMANAGED | Colour-managed photo view (wide-gamut display) | P0 | 🟡 | `cmd:app.viewSpace`, `crates/ui-egui/src/display_p3.rs`, `crates/ui-egui/src/render.rs` | macOS shows the window untagged (in the display's own space), so sRGB photos looked more saturated than their export on a P3 screen (Studio Display): photo textures are now converted sRGB → Display P3 before upload (Settings ▸ Interface ▸ Photo colours: Auto = P3 on a Mac / Display P3 / sRGB); screenshots and pixel probes stay sRGB. Not yet: reading the monitor's ICC profile (calibrated or non-P3 wide-gamut screens), a tagged surface for the whole UI |
 | LR-VIEW-HDR-DISPLAY | HDR display output | P2 | ⬜ | | |
 
 ## D. Search & filter (FILT)
@@ -240,6 +241,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-EDIT-LIGHT-BLACKS | Blacks | P0 | ✅ | `ctl:light.blacks` | |
 | LR-EDIT-LIGHT-CURVE-PARAM | Parametric curve | P0 | ✅ | `ctl:curve.highlights`, `ctl:curve.lights`, `ctl:curve.darks`, `ctl:curve.shadows`, `ctl:curve.split*` | preview-fitted (~10 levels off Camera Raw over the sweep); Camera Raw's measured table is in the code (`finish::parametric_adobe_lut`) but off until Basic tone is refitted on top of it (`docs/lr-match.md` → R08) |
 | LR-EDIT-LIGHT-CURVE-POINT | Point curve | P0 | ✅ | `cmd:develop.curve`, `cmd:curve.reset`, `cmd:curve.presets`, `cmd:curve.applyPreset`, `cmd:curve.savePreset`, `cmd:curve.deletePreset`, `cmd:curve.importPresets`, `cmd:curve.exportPresets`, `cmd:file.importCurvePresets`, `cmd:file.exportCurvePresets`, `crates/engine/src/cmd/curves.rs`, `crates/ui-egui/src/panels/edit.rs` | click to add a point; drag a point in both axes (between its neighbours, input / output readout, one undo step per drag); drag empty space to add and drag; double-click removes; reset: double-click a channel selector (that channel), the Reset button under the graph (every curve incl. parametric) or right-click the graph (channel / all); Point Curve preset dropdown: own Linear / Medium Contrast / Strong Contrast, user presets (save the current point curves, delete by right-click; saved with the library), import / export as `.lccurve` JSON. Rendered as Lightroom does (Camera Raw oracle): natural cubic spline clamped to 0..1, master curve hue-preserving on ProPhoto/sRGB-curve values, R/G/B per channel (`finish::Curves`, `spline::NaturalCurve`) |
+| LR-EDIT-CURVE-EXTRAS | Point curve: Snap to Grid, copy / paste a channel, show all curves | P2 | ✅ | `cmd:curve.snapToGrid`, `cmd:curve.copyChannel`, `cmd:curve.pasteChannel`, `cmd:curve.showAll`, `crates/ui-egui/src/panels/edit.rs` (`curve_reset_menu`) | right-click the graph: points snap to the eighths (drawn while on), Copy / Paste to a channel, the other channels drawn faintly behind the one being edited |
 | LR-EDIT-LIGHT-CURVE-RGB | Per-channel curves | P0 | ✅ | `cmd:develop.curve` (`channel`) | |
 | LR-EDIT-LIGHT-CURVE-REFINESAT | Curve saturation compensation | P1 | ✅ | `ctl:curve.refineSaturation` | |
 | LR-EDIT-LIGHT-CURVE-TAT | Drag-on-image curve adjust | P1 | ✅ | `cmd:develop.targeted` (`target: curve`) | |
@@ -259,6 +261,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-EDIT-EFFECTS-VIGNETTE | Post-crop vignette | P0 | ✅ | `ctl:vignette.*`, `crates/pipeline/src/finish.rs`, `crates/ui-egui/src/panels/edit.rs` | style picker (Highlight / Color / Paint) in the Effects section |
 | LR-EDIT-EFFECTS-GRAIN | Grain | P1 | ✅ | `ctl:grain.*` | strength, cell size and tone response measured against Camera Raw (`docs/lr-match.md` → Round 9): within ~5 % at 6,000 px |
 | LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | ✅ | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking` | amount / radius / detail / edge masking refitted to Camera Raw at 1:1 (`docs/lr-match.md` → Round 9); no Alt-drag mask preview |
+| LR-EDIT-ALTDRAG | Alt/Option-drag previews | P1 | ✅ | `crates/pipeline/src/visualize.rs` (`Overlay::for_control`), `crates/ui-egui/src/panels/detail.rs` (`view_overlay`) | held while dragging: Exposure / Highlights / Whites → highlight clipping, Shadows / Blacks → shadow clipping, Sharpening Amount and Luminance NR → greyscale, Radius / Detail → the detail band, Masking → the sharpening mask (ported from upstream; the sharpening views are measured on the finished image with the render's kernel) |
 | LR-EDIT-DETAIL-NR | Luminance noise reduction | P0 | ✅ | `ctl:detail.nrLuminance`, `ctl:detail.nrDetail`, `ctl:detail.nrContrast` | strength refitted to Camera Raw on ISO 6400 raws (`docs/lr-match.md` → Round 9) |
 | LR-EDIT-DETAIL-CNR | Colour noise reduction | P0 | ✅ | `ctl:detail.nrColor`, `ctl:detail.nrColorDetail`, `ctl:detail.nrColorSmoothness` | strength refitted to Camera Raw at 1:1; dark high-ISO files keep more fine chroma than Camera Raw (demosaic) |
 | LR-EDIT-DETAIL-DENOISE | AI denoise | P2 | ⬜ | | settings field reserved, not rendered |
@@ -300,13 +303,13 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-CROP-RECT | Crop rectangle | P0 | ✅ | `cmd:crop.set`, `cmd:crop.drag`, `crates/geom/src/crop_drag.rs`, `crates/ui-egui/src/panels/detail.rs` | double-click inside the box applies the crop (like Return) |
-| LR-CROP-ASPECT | Aspect ratios | P0 | ✅ | `cmd:crop.aspect`, `cmd:crop.rotateAspect`, `crates/ui-egui/src/panels/right.rs` | menu with presets + custom W × H, visible Lock toggle (also A), button names the active ratio; every handle honours the lock and the drag stops at the image edge instead of shifting the frame (issue #295); "Original" is the photo's own shape (no separate As Shot) |
+| LR-CROP-ASPECT | Aspect ratios | P0 | ✅ | `cmd:crop.aspect`, `cmd:crop.rotateAspect`, `crates/ui-egui/src/panels/right.rs` | menu with presets + custom W × H, visible Lock toggle (also A), button names the active ratio; every handle honours the lock and the drag stops at the image edge instead of shifting the frame (issue #295); "Original" is the photo's own shape; As Shot (the camera's framing: raws decode inside the in-camera crop, so it equals Original) |
 | LR-CROP-STRAIGHTEN | Straighten tool | P0 | ✅ | `cmd:crop.straighten`, `cmd:crop.autoStraighten` | Straighten Tool button: drag along a horizon/vertical; double-click or Auto levels automatically |
 | LR-CROP-AUTO | Auto straighten | P1 | ✅ | `cmd:crop.autoStraighten` | crop-angle leveling from detected horizon/plumb lines (consensus required) |
 | LR-CROP-ANGLE | Angle slider | P0 | ✅ | `ctl:crop.angle` | |
 | LR-CROP-ROTATE90 | Rotate 90° | P0 | ✅ | `cmd:photo.rotateLeft`, `cmd:photo.rotateRight` | |
 | LR-CROP-FLIP | Flip | P0 | ✅ | `cmd:photo.flipHorizontal`, `cmd:photo.flipVertical` | |
-| LR-CROP-OVERLAY | Crop overlays | P1 | ✅ | `cmd:view.cropOverlay`, `cmd:view.cropOverlayOrientation`, `crates/ui-egui/src/panels/crop_overlay.rs` | thirds, grid, golden ratio, diagonal, triangle, golden spiral (mirrored with ⇧O while cropping); no aspect-ratio overlays |
+| LR-CROP-OVERLAY | Crop overlays | P1 | ✅ | `cmd:view.cropOverlay`, `cmd:view.cropOverlayOrientation`, `cmd:view.cropOverlaysToCycle`, `crates/ui-egui/src/panels/crop_overlay.rs` | thirds, grid, golden ratio, diagonal, triangle, golden spiral (mirrored with ⇧O), Aspect Ratios (1:1, 4:5, 2:3, 16:9 outlines), Center, Fifths; Choose Overlays to Cycle (cycle. in the Crop panel) |
 | LR-CROP-ZOOM | Zoom while cropping | P1 | ✅ | `cmd:view.zoom100`, `cmd:view.zoomIn`, `crates/ui-egui/src/panels/detail.rs` | zoom levels apply with the crop tool open (verified: 100% shows the photo at native size with the crop frame) |
 | LR-CROP-GENEXPAND | Generative expand | OOS | 🚫 | | |
 
@@ -314,13 +317,14 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-REM-CONTENTAWARE | Content-aware remove | P1 | 🟡 | `cmd:spot.add` (`mode: remove`), `crates/pipeline/src/spots.rs` | heal with automatic source; no patch synthesis (M8.4) |
+| LR-REM-CONTENTAWARE | Content-aware remove | P1 | ✅ | `cmd:spot.add` (`mode: fill`), `crates/pipeline/src/spots.rs` (`fill_box`), `crates/inpaint/src/lib.rs`, `crates/engine/src/crs_spots.rs` | Remove panel ▸ Fill: the spot is rebuilt from patches of its surroundings (PatchMatch completion, `crates/inpaint` ported from upstream / PhotoCraft; membrane fill when no whole patch fits); Lightroom's content-aware `heal_patchmatch` spots import as Fill; Remove stays heal with an automatic source |
 | LR-REM-HEAL | Heal | P0 | ✅ | `cmd:spot.add` (`mode: heal`) | |
 | LR-REM-CLONE | Clone | P0 | ✅ | `cmd:spot.add` (`mode: clone`) | |
 | LR-REM-GEN | Generative remove | OOS | 🚫 | | |
 | LR-REM-DETECT | Object detection for remove | P2 | ⬜ | | |
 | LR-REM-BRUSH-PARAMS | Brush size / feather / opacity | P0 | ✅ | `cmd:spot.add` (`size`, `feather`, `opacity`), `cmd:brush.smaller`, `cmd:brush.larger`, `cmd:brush.featherLess`, `cmd:brush.featherMore`, `crates/ui-egui/src/panels/right.rs` | Size / Feather / Opacity sliders (for new spots and the selected one); `[` `]` size, ⇧`[` ⇧`]` feather (also the Masking brush) |
 | LR-REM-SPOT-EDIT | Edit existing spots | P0 | ✅ | `cmd:spot.select`, `cmd:spot.update`, `cmd:spot.refreshSource`, `cmd:spot.delete` | click a pin to select, drag target or source, ⌫ deletes the selected spot, `/` picks another source; automatic sources are resolved when the spot is added |
+| LR-REM-MARQUEE | Delete spots by rectangle | P2 | ✅ | `cmd:spot.deleteInRect`, `crates/ui-egui/src/panels/detail.rs` (`remove_overlay`) | ⌥-drag a marquee in the Remove tool: the spots whose targets lie inside go, one undo step |
 | LR-REM-VISUALIZE | Visualize spots | P1 | ✅ | `cmd:view.visualizeSpots` | |
 | LR-REM-PEOPLE | Remove people (generative) | OOS | 🚫 | | |
 | LR-REM-REFLECT | Remove reflections | P2 | ⬜ | | |
@@ -356,6 +360,7 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | LR-MASK-AMOUNT | Mask amount | P1 | ✅ | `cmd:mask.adjust` (`amount`), `crates/ui-egui/src/panels/masking.rs` | |
 | LR-MASK-FEATHER-EDGE | Refine mask edges | P2 | ✅ | `cmd:mask.refine`, `crates/pipeline/src/masks.rs` (`evaluate_one`) | Refine Edges slider per mask: guided filter on the photo's luminance snaps soft mask edges to the photo's edges (rendered on the CPU) |
 | LR-MASK-SLIDERS | Local adjustment sliders | P0 | ✅ | `cmd:mask.adjust`, `crates/pipeline/src/finish.rs` | every slider renders (CPU + GPU), incl. Noise, Moiré, Defringe (negative Defringe has no effect); no local curve or effect presets |
+| LR-MASK-EFFECTS | Local adjustment ("Effect") presets | P1 | ✅ | `cmd:mask.effects`, `cmd:mask.applyEffect`, `cmd:mask.saveEffect`, `cmd:mask.deleteEffect`, `cmd:mask.importEffects`, `cmd:mask.exportEffects`, `crates/ui-egui/src/panels/mask_effects.rs` | Masking ▸ Effect menu (groups, natural order), save. / del. / import.; `mask.importEffects {lightroom: true}` reads the `.lrtemplate` / Camera Raw local presets Lightroom keeps on this Mac in place (Burn, Dodge, Soften Skin…; never copied into the repo); a new mask starts with the effect last applied to one of its kind. Ported from upstream (no rename / group / favourite UI yet: commands only) |
 | LR-MASK-OVERLAY | Mask overlay | P0 | ✅ | `cmd:view.maskOverlay`, `cmd:view.maskOverlayMode`, `cmd:view.maskOverlayColor`, `crates/pipeline/src/visualize.rs` | rendered alpha of the selected mask (CPU + GPU): colour, colour on B&W, image on black/white, white on black; ⇧O cycles while masking; no auto-show on hover |
 | LR-MASK-PINS | Pins | P1 | ✅ | `cmd:view.maskPins`, `crates/ui-egui/src/panels/detail.rs` | a pin per radial/linear/brush component: click selects its mask, drag moves it; no pins for range/AI components, no Auto mode |
 | LR-MASK-UPDATE | Recompute AI masks | P2 | ⬜ | | |
@@ -390,8 +395,11 @@ M / ⇧M gradients, B quick collection, mouse back/forward = previous/next; `CLA
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-SYNC-COPY | Copy edit settings | P0 | ✅ | `cmd:develop.copy` | |
-| LR-SYNC-CHOOSE | Choose settings to copy | P0 | ✅ | `cmd:dialog.copySettings` | groups are coarser than per-slider |
-| LR-SYNC-PASTE | Paste to selection | P0 | ✅ | `cmd:develop.paste` | no separate "paste selected" (choose at copy time instead) |
+| LR-SYNC-CHOOSE | Choose settings to copy | P0 | ✅ | `cmd:dialog.copySettings`, `cmd:develop.settingsGroups`, `crates/develop/src/presets.rs` (`HEADINGS`) | Lightroom's per-setting checklist (43 checkboxes under 14 headings: Exposure … Black Clipping, Texture … Saturation, Parametric / Point Curve, HSL Hue / Sat / Lum, Sharpening, Luminance / Color Noise, Lens Profile, CA, Upright Mode / Transforms, Straighten Angle, Aspect Ratio …) in Copy, Sync, Paste Selected and New Preset; tri-state headings; Masking lists the photo's masks (`masks`). No Process Version / HDR / Output checkboxes (not modelled) |
+| LR-SYNC-SUBSETS | Check All / None / Default / Modified, saved subsets | P1 | ✅ | `cmd:develop.modifiedGroups`, `cmd:develop.subsets`, `cmd:develop.saveSubset`, `cmd:develop.renameSubset`, `cmd:develop.deleteSubset` | all. / none. / def. / mod. under every checklist; saved subsets (prefs.json) by name in the dialogs and as `subset` on develop.copy / sync / paste / preset.create |
+| LR-SYNC-PASTE | Paste to selection | P0 | ✅ | `cmd:develop.paste`, `cmd:dialog.pasteSettings` | ⇧⌘V Paste Selected Settings picks among the copied settings |
+| LR-SYNC-PASTEMODE | Paste modes: relative changes since the first / a chosen history state | P1 | ✅ | `cmd:develop.copy` (`mode`), `crates/develop/src/presets.rs` (`relative_patch`) | Copy Settings ▸ Paste: exact settings, or the changes since the first history state (how the photo came in) / history step N moved onto each photo's own values; soft-proofing mode not modelled |
+| LR-SYNC-MASKMERGE | Merge or replace masks on paste | P1 | ✅ | `cmd:develop.paste` (`maskMode`) | ⌘V onto a photo with masks of its own asks Merge / Replace (as Lightroom); Paste Selected shows the choice; identical masks aren't added twice |
 | LR-SYNC-SYNCBTN | Sync active → selected | P1 | ✅ | `cmd:develop.sync` | |
 | LR-SYNC-PREVIOUS | Paste from previous / auto sync [Classic] | P2 | ✅ | `cmd:develop.pastePrevious`, `cmd:develop.autoSync` | ⌥⌘V pastes the previously active photo's settings (copy groups); Auto Sync (⌥⇧⌘A) |
 
@@ -696,7 +704,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-RATEADVANCE | Rate and advance — ⇧0…5 | P1 | ✅ | `crates/ui-egui/src/shortcuts.rs` → `cmd:photo.rate` (`advance`) | |
 | KEY-FLAGADVANCE | Flag and advance — ⇧Z / ⇧X / ⇧U | P1 | ✅ | `cmd:photo.flag` (`advance`), `crates/ui-egui/src/shortcuts.rs` | Shift+Z pick, Shift+X reject, Shift+U clear; Shift+P also picks and advances in the library grids; exactly one step with Auto Advance enabled |
 | KEY-NEXTPREV | Next / previous — → / ← | P0 | ✅ | `cmd:library.next`, `cmd:library.previous` | |
-| KEY-BA-CYCLE | Before/after — Y | P0 | ✅ | `cmd:view.beforeAfter` | toggles side by side (no cycling) |
+| KEY-BA-CYCLE | Before/after — Y | P0 | ✅ | `cmd:view.beforeAfter`, `cmd:view.beforeAfterCycle` | Y toggles Left / Right as in Lightroom; the toolbar's Before & After button cycles the layouts (Left / Right → Top / Bottom → Left / Right Split → Top / Bottom Split) |
 | KEY-BA-TOPBOTTOM | Before/after top/bottom — ⌥Y | P1 | ✅ | `cmd:view.beforeAfterTopBottom`, `cmd:view.beforeAfterSplitTopBottom` | ⌥Y, ⇧⌥Y |
 | KEY-BA-SPLIT | Split before/after — ⇧Y | P0 | ✅ | `cmd:view.beforeAfterSplit` | |
 | KEY-CHOOSECOPY | Choose settings to copy — ⇧⌘C | P0 | ✅ | `cmd:dialog.copySettings` | |

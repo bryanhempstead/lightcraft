@@ -3001,6 +3001,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-inpaint"
+version = "0.4.0"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "lightcraft-libraw-sys"
 version = "0.4.0"
 dependencies = [
@@ -3054,6 +3061,7 @@ dependencies = [
  "lightcraft-color",
  "lightcraft-develop",
  "lightcraft-geom",
+ "lightcraft-inpaint",
  "lightcraft-raster",
  "lightcraft-raw",
  "lightcraft-scenes",

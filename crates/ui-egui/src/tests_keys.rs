@@ -372,7 +372,7 @@ fn sync_dialog_remembers_its_checkboxes() {
     let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
     exec(&mut h, "library.select", json!({"ids": ids}));
     exec(&mut h, "dialog.syncSettings", json!({}));
-    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align, match_color }) = h.app.ui.dialog.clone() else {
+    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align, match_color, .. }) = h.app.ui.dialog.clone() else {
         panic!("no sync dialog")
     };
     assert!(!match_exposure && !auto_align && !match_color, "match exposure / auto align / match colour start off");
@@ -389,11 +389,124 @@ fn sync_dialog_remembers_its_checkboxes() {
     let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&h.app.ui).unwrap()).unwrap();
     h.app.ui.sync_prefs = back.sync_prefs;
     exec(&mut h, "dialog.syncSettings", json!({}));
-    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align, match_color }) = h.app.ui.dialog.clone() else {
+    let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align, match_color, .. }) = h.app.ui.dialog.clone() else {
         panic!("no sync dialog")
     };
     assert!(match_exposure && !auto_align && match_color);
     assert!(!groups.contains(&first), "{first} stays unchecked");
+}
+
+/// U01: the Sync dialog's per-setting checklist (Lightroom's): none., tick one slider, the Basic
+/// Tone heading ticks its six, mod. picks what was changed, a typed name saves a subset; only the
+/// ticked sliders go to the other photos.
+#[test]
+fn sync_dialog_per_setting_checklist_and_subsets() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
+    exec(&mut h, "library.select", json!({"ids": [ids[0]]}));
+    exec(
+        &mut h,
+        "develop.set",
+        json!({"values": {"light.exposure": 1.0, "light.contrast": 30, "detail.sharpenAmount": 90, "detail.nrLuminance": 40}}),
+    );
+    exec(&mut h, "library.select", json!({"ids": ids, "active": ids[0]}));
+    exec(&mut h, "dialog.syncSettings", json!({}));
+    // the (centred) window takes a few frames to find its size
+    for _ in 0..8 {
+        h.step();
+    }
+    let click = |h: &mut Headless, w: &str| {
+        let r = h.request("ui.clickWidget", json!({"id": w}), T);
+        assert_eq!(r["ok"], true, "{w}: {r}");
+        h.step();
+    };
+    let groups = |h: &Headless| match &h.app.ui.dialog {
+        Some(crate::state::Dialog::SyncSettings { groups, .. }) => groups.clone(),
+        d => panic!("dialog: {d:?}"),
+    };
+    click(&mut h, "syncGroup:none");
+    assert!(groups(&h).is_empty());
+    click(&mut h, "syncGroup:light");
+    assert_eq!(groups(&h).len(), 6, "the heading ticks its six sliders");
+    click(&mut h, "syncGroup:contrast");
+    assert_eq!(groups(&h).len(), 5);
+    click(&mut h, "syncGroup:modified");
+    let modified = groups(&h);
+    for g in ["exposure", "contrast", "sharpening", "luminanceNoise"] {
+        assert!(modified.iter().any(|x| x == g), "{g}: {modified:?}");
+    }
+    click(&mut h, "syncGroup:none");
+    click(&mut h, "syncGroup:sharpening");
+    click(&mut h, "syncGroup:exposure");
+    // save the two as a subset
+    click(&mut h, "field:syncGroupSubset");
+    h.request("ui.text", json!({"text": "Sharp + exp"}), T);
+    h.step();
+    click(&mut h, "syncGroup:saveSubset");
+    assert_eq!(h.app.session.copy_subsets.len(), 1, "saved");
+    assert_eq!(h.app.session.copy_subsets[0].groups, ["exposure", "sharpening"]);
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let d = h.app.session.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
+    assert_eq!((d.light.exposure, d.light.contrast, d.detail.sharpen_amount, d.detail.nr_luminance), (1.0, 0.0, 90.0, 0.0));
+    // remembered per setting
+    assert_eq!(h.app.ui.sync_prefs.groups.as_deref(), Some(&["exposure".to_string(), "sharpening".to_string()][..]));
+}
+
+/// U02: Copy Settings' paste mode (relative changes since the first history state) and ⌘V asking
+/// to merge or replace masks when the photo has its own.
+#[test]
+fn copy_relative_and_paste_asks_merge_or_replace_masks() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
+    exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
+    exec(&mut h, "develop.set", json!({"values": {"light.exposure": 1.0}}));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "name": "Face"}));
+    exec(&mut h, "library.select", json!({"ids": [ids[0]]}));
+    exec(&mut h, "develop.set", json!({"values": {"light.exposure": 0.5}}));
+    exec(&mut h, "mask.add", json!({"kind": "linear", "name": "Sky"}));
+    exec(&mut h, "dialog.copySettings", json!({}));
+    for _ in 0..8 {
+        h.step();
+    }
+    let click = |h: &mut Headless, w: &str| {
+        let r = h.request("ui.clickWidget", json!({"id": w}), T);
+        assert_eq!(r["ok"], true, "{w}: {r}");
+        h.step();
+    };
+    click(&mut h, "copyGroup:none");
+    click(&mut h, "copyGroup:exposure");
+    click(&mut h, "copyGroup:masks");
+    click(&mut h, "combo:copyPasteMode");
+    click(&mut h, "copyPasteMode:sinceFirst");
+    assert_eq!(h.request("ui.dialog.confirm", json!({}), T)["ok"], true);
+    assert!(h.app.session.clipboard_base.is_some(), "relative");
+    // ⌘V onto a photo with a mask of its own: asked, merge is the default
+    exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
+    key(&mut h, "V", json!({"cmd": true}));
+    h.step();
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::PasteMasks { merge: true, .. })), "{:?}", h.app.ui.dialog);
+    for _ in 0..8 {
+        h.step();
+    }
+    click(&mut h, "pasteMasks:replaceMasks");
+    assert_eq!(h.request("ui.dialog.confirm", json!({}), T)["ok"], true);
+    let d = h.app.session.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
+    assert!((d.light.exposure - 1.5).abs() < 1e-9, "+0.5 EV on its own 1.0: {}", d.light.exposure);
+    assert_eq!(d.masks.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Sky"], "replaced");
+}
+
+/// Sync prefs saved by older versions (coarse groups) open as their per-setting checkboxes.
+#[test]
+fn old_coarse_sync_prefs_open_as_per_setting_checkboxes() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
+    exec(&mut h, "library.select", json!({"ids": ids}));
+    h.app.ui.sync_prefs.groups = Some(vec!["light".into(), "detail".into(), "gone".into()]);
+    exec(&mut h, "dialog.syncSettings", json!({}));
+    let Some(crate::state::Dialog::SyncSettings { groups, .. }) = h.app.ui.dialog.clone() else { panic!("no sync dialog") };
+    assert_eq!(groups.len(), 10, "{groups:?}");
+    assert!(groups.contains(&"blacks".to_string()) && groups.contains(&"colorNoise".to_string()));
 }
 
 #[test]
@@ -416,4 +529,139 @@ fn selection_actions_show_for_two_or_more_photos() {
     assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Merge { .. })));
     // the module tabs are there and the active one is known
     assert!(has(&h, "module:library") && has(&h, "module:develop"));
+}
+
+/// U05: crop extras — the overlays to cycle (Choose Overlays to Cycle), the Aspect Ratios / Center
+/// / Fifths overlays, As Shot aspect, and the Before & After button cycling the layouts.
+#[test]
+fn crop_overlays_cycle_the_chosen_ones_and_before_after_cycles_layouts() {
+    use crate::state::{BeforeAfter, CropOverlay};
+    let mut h = demo();
+    let first = h.app.session.catalog.photos().next().unwrap().id.0;
+    exec(&mut h, "library.select", json!({"ids": [first]}));
+    let r = h.request("ui.set", json!({"view": "detail", "right": "crop"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(Duration::from_secs(60));
+    exec(&mut h, "view.cropOverlaysToCycle", json!({"overlays": ["thirds", "aspectRatios", "fifths"]}));
+    h.app.ui.crop_overlay = CropOverlay::Thirds;
+    for want in [CropOverlay::AspectRatios, CropOverlay::Fifths, CropOverlay::Thirds] {
+        exec(&mut h, "view.cropOverlay", json!({}));
+        assert_eq!(h.app.ui.crop_overlay, want);
+    }
+    exec(&mut h, "view.cropOverlay", json!({"overlay": "center"}));
+    assert_eq!(h.app.ui.crop_overlay, CropOverlay::Center);
+    let r = h.request("engine.execute", json!({"command": "view.cropOverlay", "params": {"overlay": "nope"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    // the panel's cycle. menu ticks one off
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "button:cropOverlayCycle"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let r = h.request("ui.clickWidget", json!({"id": "cropOverlayCycle:fifths"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.ui.crop_overlay_cycle, [CropOverlay::Thirds, CropOverlay::AspectRatios]);
+    // As Shot locks the photo's own shape
+    exec(&mut h, "crop.aspect", json!({"aspect": "asShot"}));
+    let id = h.app.session.active().unwrap();
+    assert!(h.app.session.develop_of(id).unwrap().crop.aspect.is_some());
+    // Before & After: the button steps through the layouts
+    for want in [BeforeAfter::SideBySide, BeforeAfter::TopBottom, BeforeAfter::Split, BeforeAfter::SplitTopBottom, BeforeAfter::SideBySide] {
+        exec(&mut h, "view.beforeAfterCycle", json!({}));
+        assert_eq!(h.app.ui.before_after, want);
+    }
+}
+
+/// R29: photos are shown in Display P3 values on a Mac window (Auto), sRGB when asked; the
+/// headless host (screenshots) stays sRGB; switching re-renders.
+#[test]
+fn view_space_follows_the_setting_and_skips_the_headless_host() {
+    let mut h = demo();
+    let r = exec(&mut h, "app.viewSpace", json!({}));
+    assert_eq!(r["space"], "auto");
+    assert_eq!(r["displayP3"], cfg!(target_os = "macos"));
+    h.step();
+    assert!(!h.app.renderer.display_p3, "the headless host keeps sRGB");
+    // as the desktop app (not headless)
+    h.app.headless_host = false;
+    exec(&mut h, "app.viewSpace", json!({"space": "displayP3"}));
+    h.step();
+    assert!(h.app.renderer.display_p3);
+    exec(&mut h, "app.viewSpace", json!({"space": "srgb"}));
+    h.step();
+    assert!(!h.app.renderer.display_p3);
+    let r = h.request("engine.execute", json!({"command": "app.viewSpace", "params": {"space": "adobeRgb"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    // remembered with the UI state
+    let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&h.app.ui).unwrap()).unwrap();
+    assert_eq!(back.settings.view_space, crate::display_p3::ViewSpace::Srgb);
+}
+
+/// U10: point curve extras — Snap to Grid (points land on the eighths), Copy / Paste a channel,
+/// Show All Curves (a view option, remembered).
+#[test]
+fn point_curve_snap_copy_paste_and_show_all() {
+    let mut h = demo();
+    let first = h.app.session.catalog.photos().next().unwrap().id.0;
+    exec(&mut h, "library.select", json!({"ids": [first]}));
+    let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["toneCurve"]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.app.ui.curve_channel = "red".into();
+    exec(&mut h, "curve.snapToGrid", json!({"on": true}));
+    h.settle(Duration::from_secs(60));
+    // a press a little off the 3/8 × 5/8 grid crossing adds a point on it (a tiny drag keeps it there)
+    let r = h.request("ui.dragWidget", json!({"id": "curve", "fx": 0.39, "fy": 0.39, "dx": 1.0, "dy": 0.0, "steps": 2}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let id = h.app.session.active().unwrap();
+    let red = h.app.session.develop_of(id).unwrap().curve.red.clone();
+    assert!(red.iter().any(|p| (p.x - 0.375).abs() < 1e-9 && (p.y - 0.625).abs() < 1e-9), "snapped: {red:?}");
+    // copy red, paste onto blue
+    exec(&mut h, "curve.copyChannel", json!({}));
+    exec(&mut h, "curve.pasteChannel", json!({"channel": "blue"}));
+    assert_eq!(h.app.session.develop_of(id).unwrap().curve.blue, red);
+    let r = h.request("engine.execute", json!({"command": "curve.pasteChannel", "params": {"channel": "purple"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    // show all curves: a remembered view option
+    exec(&mut h, "curve.showAll", json!({}));
+    assert!(h.app.ui.curve_show_all);
+    h.step();
+    let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&h.app.ui).unwrap()).unwrap();
+    assert!(back.curve_show_all && back.curve_snap);
+}
+
+/// U11: ⌥-drag a marquee in the Remove tool deletes the spots inside it (one undo step); a Fill
+/// brush adds a content-aware Fill spot (R17).
+#[test]
+fn remove_tool_marquee_deletes_spots_and_fill_mode_adds_fill_spots() {
+    let mut h = demo();
+    let first = h.app.session.catalog.photos().next().unwrap().id.0;
+    exec(&mut h, "library.select", json!({"ids": [first]}));
+    let r = h.request("ui.set", json!({"view": "detail", "right": "remove"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for (x, y) in [(0.2, 0.2), (0.3, 0.25), (0.8, 0.8)] {
+        exec(&mut h, "spot.add", json!({"mode": "heal", "points": [[x, y]], "size": 0.02}));
+    }
+    let id = h.app.session.active().unwrap();
+    // engine: rejects junk, deletes what's inside (corners in any order)
+    let r = h.request("engine.execute", json!({"command": "spot.deleteInRect", "params": {"rect": [0, 0, 1]}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    let undo = h.app.session.undo.len();
+    let r = exec(&mut h, "spot.deleteInRect", json!({"rect": [0.35, 0.3, 0.1, 0.1]}));
+    assert_eq!(r["deleted"], 2);
+    assert_eq!(h.app.session.develop_of(id).unwrap().spots.len(), 1);
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    // ⌥-drag on the photo across the last spot
+    h.settle(Duration::from_secs(60));
+    let r = h.request("ui.pointer", json!({"alt": true, "events": [{"kind": "down", "x": 0.7, "y": 0.7}, {"x": 0.75, "y": 0.75}, {"x": 0.9, "y": 0.9}, {"kind": "up", "x": 0.9, "y": 0.9}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(Duration::from_secs(60));
+    assert!(h.app.session.develop_of(id).unwrap().spots.is_empty(), "the marquee deleted it");
+    // Fill: a click with the Fill tool adds a Fill spot
+    h.app.ui.tool = "fill".into();
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.5, "y": 0.5}, {"kind": "up", "x": 0.5, "y": 0.5}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(Duration::from_secs(60));
+    let spots = h.app.session.develop_of(id).unwrap().spots.clone();
+    assert_eq!(spots.len(), 1, "{spots:?}");
+    assert_eq!(spots[0].mode, lightcraft_develop::SpotMode::Fill);
 }

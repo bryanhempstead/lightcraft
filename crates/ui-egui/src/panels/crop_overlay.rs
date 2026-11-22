@@ -1,7 +1,8 @@
 //! Crop guide overlays as polylines in crop-relative coordinates (`(u, v)` in `0..=1`, `u` across
 //! the crop's width, `v` down its height). The crop tool maps them onto the (rotated) frame.
 //! Composition guides are classic geometry: thirds, a grid, golden-section lines, 45° diagonals
-//! from the corners, the harmonic triangle and the golden spiral.
+//! from the corners, the harmonic triangle, the golden spiral, fifths, the centre and the outlines
+//! of common aspect ratios.
 
 use crate::state::CropOverlay;
 
@@ -36,6 +37,24 @@ pub fn paths(kind: CropOverlay, orient: u8, w: f32, h: f32) -> Vec<Vec<(f32, f32
             vec![vec![(0.0, 0.0), (1.0, 1.0)], vec![(1.0, 0.0), foot(w, 0.0)], vec![(0.0, 1.0), foot(0.0, h)]]
         }
         CropOverlay::Spiral => spiral(w, h),
+        CropOverlay::Fifths => lines(&[0.2, 0.4, 0.6, 0.8]),
+        // the centre lines, and a small square at the middle (a twentieth of the short side)
+        CropOverlay::Center => {
+            let (du, dv) = (0.05 * w.min(h) / w, 0.05 * w.min(h) / h);
+            let (a, b) = (0.5 - du, 0.5 + du);
+            let (c, d) = (0.5 - dv, 0.5 + dv);
+            vec![vec![(0.5, 0.0), (0.5, 1.0)], vec![(0.0, 0.5), (1.0, 0.5)], vec![(a, c), (b, c), (b, d), (a, d), (a, c)]]
+        }
+        // 1:1, 4:5, 2:3 and 16:9 in the crop's orientation, each as large as fits, centred
+        CropOverlay::AspectRatios => [1.0f32, 5.0 / 4.0, 3.0 / 2.0, 16.0 / 9.0]
+            .iter()
+            .map(|&long| {
+                let r = if w >= h { long } else { 1.0 / long };
+                let (rw, rh) = if r <= w / h { (h * r / w, 1.0) } else { (1.0, w / r / h) };
+                let (u0, v0) = ((1.0 - rw) / 2.0, (1.0 - rh) / 2.0);
+                vec![(u0, v0), (u0 + rw, v0), (u0 + rw, v0 + rh), (u0, v0 + rh), (u0, v0)]
+            })
+            .collect(),
     };
     let (fu, fv) = (orient & 1 == 1, orient & 2 == 2);
     let flip = |(u, v): (f32, f32)| (if fu { 1.0 - u } else { u }, if fv { 1.0 - v } else { v });
@@ -99,7 +118,7 @@ mod tests {
 
     #[test]
     fn every_overlay_stays_inside_the_crop() {
-        for kind in [CropOverlay::Thirds, CropOverlay::Grid, CropOverlay::Golden, CropOverlay::Diagonal, CropOverlay::Triangle, CropOverlay::Spiral] {
+        for kind in CropOverlay::ALL.into_iter().filter(|k| *k != CropOverlay::None) {
             for (w, h) in [(3.0, 2.0), (2.0, 3.0), (1.0, 1.0), (16.0, 9.0)] {
                 for o in 0..4 {
                     let p = paths(kind, o, w, h);
@@ -126,6 +145,33 @@ mod tests {
         }
         // orientation mirrors the triangle
         assert_eq!(paths(CropOverlay::Triangle, 1, w, h)[0], vec![(1.0, 0.0), (0.0, 1.0)]);
+    }
+
+    #[test]
+    fn aspect_ratio_outlines_have_their_shapes() {
+        let (w, h) = (3.0, 2.0);
+        let p = paths(CropOverlay::AspectRatios, 0, w, h);
+        assert_eq!(p.len(), 4);
+        for (l, want) in p.iter().zip([1.0f32, 1.25, 1.5, 16.0 / 9.0]) {
+            let (rw, rh) = ((l[1].0 - l[0].0) * w, (l[2].1 - l[1].1) * h);
+            assert!((rw / rh - want).abs() < 1e-3, "{rw}×{rh} vs {want}");
+        }
+        // portrait crops get portrait outlines
+        let p = paths(CropOverlay::AspectRatios, 0, 2.0, 3.0);
+        assert!(p.iter().all(|l| (l[1].0 - l[0].0) * 2.0 <= (l[2].1 - l[1].1) * 3.0 + 1e-4));
+        assert_eq!(paths(CropOverlay::Fifths, 0, w, h).len(), 8);
+    }
+
+    #[test]
+    fn overlays_cycle_through_the_chosen_ones() {
+        use CropOverlay as O;
+        assert_eq!(O::Thirds.next_in(&[]), O::Grid);
+        assert_eq!(O::None.next_in(&[]), O::Thirds);
+        let cycle = [O::Thirds, O::Fifths, O::None];
+        assert_eq!(O::Thirds.next_in(&cycle), O::Fifths);
+        assert_eq!(O::Fifths.next_in(&cycle), O::None);
+        assert_eq!(O::None.next_in(&cycle), O::Thirds);
+        assert_eq!(O::Grid.next_in(&cycle), O::Fifths, "from one not in the cycle: the next chosen one");
     }
 
     #[test]

@@ -168,6 +168,9 @@ pub struct Session {
     pub(crate) skip_auto_write: bool,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
+    /// The copied photo's settings at the history state a relative paste counts from (same
+    /// groups as [`Session::clipboard`]); `None` = paste exact settings.
+    pub clipboard_base: Option<Value>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
     pub browse: Option<Browse>,
     /// The folder the [`LibrarySource::LibraryFolder`] view shows: the library's photos imported
@@ -209,6 +212,12 @@ pub struct Session {
     pub previous_active: Option<PhotoId>,
     /// Groups last used for Copy (Lightroom remembers them).
     pub copy_groups: Vec<lightcraft_develop::SettingsGroup>,
+    /// Saved Copy / Sync / Paste checklists (`develop.saveSubset`), persisted in prefs.json.
+    pub copy_subsets: Vec<cmd::copy_subsets::CopySubset>,
+    /// Mask effect presets (Lightroom's local adjustment presets), persisted in prefs.json.
+    pub mask_effects: Vec<cmd::mask_effects::MaskEffect>,
+    /// Mask kind (`brush`, `linear`, …) → the effect a new mask of that kind starts with.
+    pub mask_tool_effects: std::collections::BTreeMap<String, String>,
     pub presets: Vec<lightcraft_develop::Preset>,
     /// Favourite profile ids (persisted with the library, like preset favourites).
     pub profile_favorites: Vec<String>,
@@ -301,6 +310,7 @@ impl Session {
             interaction: None,
             skip_auto_write: false,
             clipboard: None,
+            clipboard_base: None,
             meta_clipboard: None,
             browse: None,
             library_folder: None,
@@ -318,6 +328,9 @@ impl Session {
             trash_dir: None,
             previous_active: None,
             copy_groups: lightcraft_develop::SettingsGroup::default_copy(),
+            copy_subsets: Vec::new(),
+            mask_effects: Vec::new(),
+            mask_tool_effects: Default::default(),
             presets: presets::builtin(),
             profile_favorites: Vec::new(),
             profile_recent: Vec::new(),

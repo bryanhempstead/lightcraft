@@ -475,14 +475,17 @@ mod tests {
         h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.5}}), t);
         h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "effects.clarity", "value": 25}}), t);
         h.app.ui.dialog = Some(crate::state::Dialog::create_preset());
-        h.step();
-        h.step();
+        // the (centred) window takes a few frames to find its size
+        for _ in 0..8 {
+            h.step();
+        }
         let r = h.request("ui.clickWidget", json!({"id": "presetInclude:light"}), t);
         assert_eq!(r["ok"], true, "{r}");
         match &h.app.ui.dialog {
             Some(crate::state::Dialog::CreatePreset { groups, .. }) => {
-                assert!(!groups.iter().any(|g| g == "light") && groups.iter().any(|g| g == "effects"), "{groups:?}");
-                assert!(!groups.iter().any(|g| g == "crop" || g == "masks"), "crop and masks off by default");
+                // the Basic Tone heading unticks all six of its sliders
+                assert!(!groups.iter().any(|g| g == "exposure" || g == "blacks") && groups.iter().any(|g| g == "clarity"), "{groups:?}");
+                assert!(!groups.iter().any(|g| g == "cropRect" || g == "masks"), "crop and masks off by default");
             }
             d => panic!("dialog: {d:?}"),
         }
@@ -1316,9 +1319,9 @@ mod tests {
         exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
         h.request("ui.key", json!({"key": "V", "cmd": true, "shift": true}), t);
         h.settle(SETTLE);
-        let Some(crate::state::Dialog::PasteSettings { groups }) = &h.app.ui.dialog else { panic!("dialog not open: {:?}", h.app.ui.dialog) };
-        assert_eq!(groups, &["light", "color"]);
-        let r = h.request("ui.clickWidget", json!({"id": "pasteGroup:color"}), t);
+        let Some(crate::state::Dialog::PasteSettings { groups, .. }) = &h.app.ui.dialog else { panic!("dialog not open: {:?}", h.app.ui.dialog) };
+        assert_eq!(groups, &["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "vibrance", "saturation"]);
+        let r = h.request("ui.clickWidget", json!({"id": "pasteGroup:vibrance"}), t);
         assert_eq!(r["ok"], true, "{r}");
         h.settle(SETTLE);
         assert_eq!(h.request("ui.dialog.confirm", json!({}), t)["ok"], true);

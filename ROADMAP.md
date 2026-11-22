@@ -238,6 +238,22 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   watermark text, several presets per export; collection extras, import presets, Eject after import, Quick Develop
   crop / treatment, more sort orders, Painter modes, Text filter targets and rules, Auto-Stack by similarity, Find
   Duplicates, Import from another library, Grid View Options (⌘J).
+- 2026-11-21 (fork): Copy / Sync / Paste Selected / New Preset use Lightroom's per-setting checklist (43 settings
+  under 14 headings, choose masks) with all. / none. / def. / mod. and saved subsets; older coarse group ids still work.
+- 2026-11-21 (fork): relative paste (changes since the first / a chosen history state) and Merge / Replace masks
+  on paste, as Lightroom asks.
+- 2026-11-21 (fork): Alt/Option-drag previews (clipping on the Light sliders, greyscale / detail band / sharpening
+  mask on Detail), ported from upstream.
+- 2026-11-21 (fork): local adjustment ("Effect") presets ported from upstream; his Lightroom local presets import in
+  place (Masking ▸ Effect ▸ import.).
+- 2026-11-21 (fork): crop extras: As Shot aspect, Aspect Ratios / Center / Fifths overlays, Choose Overlays to Cycle;
+  the Before & After button cycles the layouts.
+- 2026-11-21 (fork): content-aware Fill spots (PatchMatch, `crates/inpaint` from upstream); Lightroom's content-aware
+  remove spots map to it.
+- 2026-11-21 (fork): photos on a P3 display (Studio Display) are shown in Display P3 values, so the loupe matches the
+  export instead of looking more saturated (Settings ▸ Interface ▸ Photo colours).
+- 2026-11-21 (fork): point curve Snap to Grid, copy / paste a channel, Show All Curves.
+- 2026-11-21 (fork): Remove tool ⌥-drag marquee deletes the spots inside it.
 
 ## Chinese and Japanese interfaces, and text watermarks
 

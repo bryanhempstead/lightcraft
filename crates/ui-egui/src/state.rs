@@ -129,7 +129,65 @@ pub enum CropOverlay {
     Diagonal,
     Triangle,
     Spiral,
+    /// Common print / screen shapes (1:1, 4:5, 2:3, 16:9) centred in the crop.
+    AspectRatios,
+    /// The centre lines and a mark at the middle.
+    Center,
+    /// Fifths across and down.
+    Fifths,
     None,
+}
+
+impl CropOverlay {
+    /// Every overlay in menu order (None last).
+    pub const ALL: [CropOverlay; 10] = [
+        CropOverlay::Thirds,
+        CropOverlay::Grid,
+        CropOverlay::Golden,
+        CropOverlay::Diagonal,
+        CropOverlay::Triangle,
+        CropOverlay::Spiral,
+        CropOverlay::AspectRatios,
+        CropOverlay::Center,
+        CropOverlay::Fifths,
+        CropOverlay::None,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CropOverlay::Thirds => "Thirds",
+            CropOverlay::Grid => "Grid",
+            CropOverlay::Golden => "Golden",
+            CropOverlay::Diagonal => "Diagonal",
+            CropOverlay::Triangle => "Triangle",
+            CropOverlay::Spiral => "Spiral",
+            CropOverlay::AspectRatios => "Aspect Ratios",
+            CropOverlay::Center => "Center",
+            CropOverlay::Fifths => "Fifths",
+            CropOverlay::None => "None",
+        }
+    }
+
+    /// The id used in commands (`thirds`, `aspectRatios`, …).
+    pub fn id(self) -> String {
+        serde_json::to_value(self).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+    }
+
+    /// The overlay after `self` among `cycle` (Lightroom's "Choose Overlays to Cycle"; empty or
+    /// none of them current: every overlay).
+    pub fn next_in(self, cycle: &[CropOverlay]) -> CropOverlay {
+        let list: Vec<CropOverlay> =
+            if cycle.is_empty() { CropOverlay::ALL.to_vec() } else { CropOverlay::ALL.into_iter().filter(|o| cycle.contains(o)).collect() };
+        match list.iter().position(|o| *o == self) {
+            Some(i) => list.get((i + 1) % list.len()).copied().unwrap_or(self),
+            None => list
+                .iter()
+                .copied()
+                .find(|o| CropOverlay::ALL.iter().position(|x| x == o) > CropOverlay::ALL.iter().position(|x| *x == self))
+                .or_else(|| list.first().copied())
+                .unwrap_or(self),
+        }
+    }
 }
 
 /// Which view the app opens in.
@@ -206,6 +264,9 @@ pub struct AppSettings {
     pub grid_badges: GridBadges,
     /// Square Grid: each cell's index number in front of its caption (Lightroom's Index Number).
     pub grid_index: bool,
+    /// The colour space photos are shown in (`app.viewSpace`): Display P3 on a Mac so the loupe
+    /// matches the export, or sRGB for an sRGB monitor.
+    pub view_space: crate::display_p3::ViewSpace,
 }
 
 impl Default for AppSettings {
@@ -223,6 +284,7 @@ impl Default for AppSettings {
             film_badges: true,
             grid_badges: GridBadges::Auto,
             grid_index: false,
+            view_space: crate::display_p3::ViewSpace::Auto,
         }
     }
 }
@@ -357,6 +419,15 @@ pub struct UiState {
     /// Mirroring of the triangle / spiral crop guides (0..4).
     pub crop_overlay_orient: u8,
     pub crop_overlay: CropOverlay,
+    /// The overlays O cycles through (empty: all of them).
+    pub crop_overlay_cycle: Vec<CropOverlay>,
+    /// Point curve: points snap to the graph's eighths (Lightroom's Snap to Grid).
+    pub curve_snap: bool,
+    /// Point curve: the other channels' curves drawn faintly behind the one being edited.
+    pub curve_show_all: bool,
+    /// A point curve copied from a channel (Copy Channel / Paste Channel).
+    #[serde(skip)]
+    pub curve_clipboard: Option<Vec<[f64; 2]>>,
     pub show_filenames: bool,
     /// What the square grid's caption shows: `filename`, `exposure` (shutter · aperture · ISO ·
     /// focal length) or `date`.
@@ -385,6 +456,10 @@ pub struct UiState {
     /// The develop control whose slider is being dragged (geometry sliders show a grid).
     #[serde(skip)]
     pub dragging_control: Option<String>,
+    /// Alt (Option) is held this frame: dragging a Light / Detail slider then shows its preview
+    /// (clipping, greyscale, sharpening detail or mask).
+    #[serde(skip)]
+    pub alt_down: bool,
     pub search: String,
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
@@ -506,13 +581,27 @@ pub struct UiState {
 /// Settings group ids (`SettingsGroup` serde names) a new preset includes by default: everything
 /// but crop, masks, spots and red eye.
 pub fn default_preset_groups() -> Vec<String> {
-    lightcraft_develop::SettingsGroup::default_copy().iter().filter_map(|g| serde_json::to_value(g).ok()?.as_str().map(str::to_string)).collect()
+    group_ids(&lightcraft_develop::SettingsGroup::default_copy())
+}
+
+fn exact_mode() -> String {
+    "exact".into()
+}
+
+/// Per-setting group ids for the checklists.
+pub fn group_ids(groups: &[lightcraft_develop::SettingsGroup]) -> Vec<String> {
+    groups.iter().map(|g| g.id()).collect()
+}
+
+/// Remembered group ids (maybe the coarse ones of older versions) as per-setting ids.
+pub fn normalize_groups(ids: &[String]) -> Vec<String> {
+    group_ids(&lightcraft_develop::SettingsGroup::parse_ids_lenient(ids))
 }
 
 impl Dialog {
     /// A fresh Create Preset dialog.
     pub fn create_preset() -> Dialog {
-        Dialog::CreatePreset { name: String::new(), group: "User Presets".into(), groups: default_preset_groups() }
+        Dialog::CreatePreset { name: String::new(), group: "User Presets".into(), groups: default_preset_groups(), masks: None }
     }
 }
 
@@ -612,9 +701,19 @@ pub enum Dialog {
         group: String,
         #[serde(default = "default_preset_groups")]
         groups: Vec<String>,
+        /// The masks that go along (`None`: all of them).
+        #[serde(default)]
+        masks: Option<Vec<u32>>,
     },
     CopySettings {
         groups: Vec<String>,
+        #[serde(default)]
+        masks: Option<Vec<u32>>,
+        /// How Paste applies them: `exact`, `sinceFirst` or `sinceStep` (history index `step`).
+        #[serde(default = "exact_mode")]
+        mode: String,
+        #[serde(default)]
+        step: usize,
     },
     /// Synchronize Settings (Classic's Sync…): which groups of the active photo's settings go to
     /// the other selected photos.
@@ -626,10 +725,22 @@ pub enum Dialog {
         auto_align: bool,
         /// First match each photo's colour to the active one across cameras, lenses and phones.
         match_color: bool,
+        /// The masks that go along (`None`: all of them).
+        #[serde(default)]
+        masks: Option<Vec<u32>>,
     },
     /// Paste Selected Settings: which of the copied groups to paste.
     PasteSettings {
         groups: Vec<String>,
+        /// Copied masks are added to the photos' own (`true`) or replace them.
+        #[serde(default)]
+        merge_masks: bool,
+    },
+    /// Paste onto photos that have masks of their own, with masks copied: merge or replace them
+    /// (Lightroom asks). `params`: the develop.paste call.
+    PasteMasks {
+        params: serde_json::Value,
+        merge: bool,
     },
     /// `resize` is used unless `full_size`; `limit_kb` 0 = no limit; `dir` empty = default export folder.
     Export {
@@ -747,6 +858,10 @@ impl Default for UiState {
             mask_overlay_opacity: 50.0,
             mask_pins: true,
             crop_overlay: CropOverlay::Thirds,
+            crop_overlay_cycle: Vec::new(),
+            curve_snap: false,
+            curve_show_all: false,
+            curve_clipboard: None,
             crop_overlay_orient: 0,
             show_filenames: true,
             grid_info: "filename".into(),
@@ -756,6 +871,7 @@ impl Default for UiState {
             folders_open: Default::default(),
             hidden_locations: Vec::new(),
             dragging_control: None,
+            alt_down: false,
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,

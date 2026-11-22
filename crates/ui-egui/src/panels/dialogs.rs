@@ -1,6 +1,6 @@
 //! Modal dialogs (new album, rename, create preset, choose settings to copy, export, about, shortcuts).
 
-use lightcraft_develop::{ControlSpec, Section, SettingsGroup, Track};
+use lightcraft_develop::{ControlSpec, Section, Track};
 use serde_json::json;
 
 use crate::LightcraftApp;
@@ -190,6 +190,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::CopySettings { .. } => "Choose Edit Settings to Copy",
         Dialog::SyncSettings { .. } => "Synchronize Settings",
         Dialog::PasteSettings { .. } => "Paste Selected Settings",
+        Dialog::PasteMasks { .. } => "Paste Masks",
         Dialog::Export { .. } => "Export",
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
@@ -223,6 +224,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
             Dialog::SmartRules { .. } => 680.0,
             Dialog::AllMetadata { .. } => 620.0,
+            Dialog::CreatePreset { .. } | Dialog::CopySettings { .. } | Dialog::SyncSettings { .. } | Dialog::PasteSettings { .. } => 640.0,
             _ => 380.0,
         })
         .show(ctx, |ui| {
@@ -560,17 +562,20 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         confirm = true;
                     }
                 }
-                Dialog::CreatePreset { name, group, groups } => {
+                Dialog::CreatePreset { name, group, groups, masks } => {
                     ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Preset name")).desired_width(f32::INFINITY));
                     ui.add(egui::TextEdit::singleline(group).hint_text(crate::i18n::tr("Group")).desired_width(f32::INFINITY));
                     ui.label(egui::RichText::new(crate::i18n::tr("Settings to include")).color(t.text_dim));
-                    group_checklist(ui, "presetInclude", groups);
+                    group_checklist(app, ui, "presetInclude", groups, Some(masks));
                 }
-                Dialog::CopySettings { groups } => group_checklist(ui, "copyGroup", groups),
-                Dialog::SyncSettings { groups, match_exposure, auto_align, match_color } => {
+                Dialog::CopySettings { groups, masks, mode, step } => {
+                    group_checklist(app, ui, "copyGroup", groups, Some(masks));
+                    paste_mode_row(app, ui, mode, step);
+                }
+                Dialog::SyncSettings { groups, match_exposure, auto_align, match_color, masks } => {
                     let n = app.session.selection.ids.len().saturating_sub(1);
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Copy to {n} other selected photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
-                    group_checklist(ui, "syncGroup", groups);
+                    group_checklist(app, ui, "syncGroup", groups, Some(masks));
                     ui.add_space(12.0);
                     ui.label(egui::RichText::new(crate::i18n::tr("Then, on each photo")).color(t.text_dim));
                     let r = ui.checkbox(match_color, crate::i18n::tr("Match camera & lens color")).on_hover_text(crate::i18n::tr(
@@ -591,13 +596,24 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         app.ui.sync_prefs = now;
                     }
                 }
-                Dialog::PasteSettings { groups } => {
+                Dialog::PasteMasks { merge, .. } => {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr("The copied settings have masks, and photos you're pasting onto have masks of their own."))
+                            .color(t.text_label),
+                    );
+                    mask_choice(ui, "pasteMasks", merge);
+                }
+                Dialog::PasteSettings { groups, merge_masks } => {
                     let n = app.session.targets(&json!({})).len();
                     ui.label(
                         egui::RichText::new(crate::i18n::tr_format!("Paste into {n} photo{} — only settings that were copied are pasted", if n == 1 { "" } else { "s" }, n = n))
                             .color(t.text_dim),
                     );
-                    group_checklist(ui, "pasteGroup", groups);
+                    group_checklist(app, ui, "pasteGroup", groups, None);
+                    if groups.iter().any(|g| g == "masks") && crate::menus::paste_meets_masks(app, &json!({})) {
+                        ui.add_space(4.0);
+                        mask_choice(ui, "pasteGroup", merge_masks);
+                    }
                 }
                 Dialog::Export { opts, full_size, resize, preset_name, limit_kb, dir } => {
                     use lightcraft_engine::export::{Anchor as P, ExportFormat as F, MetadataPolicy as M, SharpenAmount as A, SharpenFor as S};
@@ -1340,20 +1356,30 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
         }
         Dialog::NewSmartAlbum { name } => app.run("album.createSmart", json!({"name": if name.trim().is_empty() { "Smart Album" } else { name }})),
-        Dialog::CreatePreset { name, group, groups } => app.run(
+        Dialog::CreatePreset { name, group, groups, masks } => app.run(
             "preset.create",
             json!({
                 "name": if name.trim().is_empty() { "My Preset" } else { name },
                 "group": if group.trim().is_empty() { "User Presets" } else { group },
                 "groups": groups,
+                "masks": masks,
             }),
         ),
-        Dialog::CopySettings { groups } => app.run("develop.copy", json!({"groups": groups})),
-        Dialog::SyncSettings { groups, match_exposure, auto_align, match_color } => app.run(
+        Dialog::CopySettings { groups, masks, mode, step } => {
+            app.run("develop.copy", json!({"groups": groups, "masks": masks, "mode": mode, "step": step}))
+        }
+        Dialog::SyncSettings { groups, match_exposure, auto_align, match_color, masks } => app.run(
             "develop.sync",
-            json!({"groups": groups, "matchExposure": match_exposure, "autoAlign": auto_align, "matchCameraColor": match_color}),
+            json!({"groups": groups, "masks": masks, "matchExposure": match_exposure, "autoAlign": auto_align, "matchCameraColor": match_color}),
         ),
-        Dialog::PasteSettings { groups } => app.run("develop.paste", json!({"groups": groups})),
+        Dialog::PasteSettings { groups, merge_masks } => {
+            app.run("develop.paste", json!({"groups": groups, "maskMode": if *merge_masks { "merge" } else { "replace" }}))
+        }
+        Dialog::PasteMasks { params, merge } => {
+            let mut p = params.clone();
+            p["maskMode"] = json!(if *merge { "merge" } else { "replace" });
+            app.run("develop.paste", p)
+        }
         Dialog::Export { opts, full_size, resize, limit_kb, dir, .. } => {
             let mut p = export_dialog_params(opts, *full_size, resize, *limit_kb);
             p["dir"] = json!(dir);
@@ -1455,35 +1481,242 @@ fn export_dialog_params(
 
 // ------------------------------------------------------------------------------------------ dialog widgets
 
-/// Two columns of settings-group checkboxes (Copy Settings, Create Preset) plus All / None.
-fn group_checklist(ui: &mut egui::Ui, tag: &str, groups: &mut Vec<String>) {
-    let key_of = |g: &SettingsGroup| serde_json::to_value(g).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-    ui.columns(2, |cols| {
-        for (i, g) in SettingsGroup::ALL.iter().enumerate() {
-            let key = key_of(g);
-            let mut on = groups.contains(&key);
-            let r = cols[i % 2].checkbox(&mut on, crate::i18n::tr(g.label()));
-            crate::widgets::register(&r.ctx, format!("{tag}:{key}"), r.rect);
-            if r.changed() {
-                if on {
-                    groups.push(key);
-                } else {
-                    groups.retain(|x| *x != key);
+/// Merge or replace the photos' masks with the copied ones.
+fn mask_choice(ui: &mut egui::Ui, tag: &str, merge: &mut bool) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 16.0;
+        let r =
+            ui.radio_value(merge, true, crate::i18n::tr("Merge masks")).on_hover_text(crate::i18n::tr("Add the copied masks to each photo's own"));
+        crate::widgets::register(ui.ctx(), format!("{tag}:mergeMasks"), r.rect);
+        let r = ui.radio_value(merge, false, crate::i18n::tr("Replace masks")).on_hover_text(crate::i18n::tr("Remove each photo's masks first"));
+        crate::widgets::register(ui.ctx(), format!("{tag}:replaceMasks"), r.rect);
+    });
+}
+
+/// Copy Settings ▸ how Paste applies them: the exact settings, or (Lightroom's relative paste) the
+/// changes made since the first or a chosen history state, moved onto each photo's own values.
+fn paste_mode_row(app: &LightcraftApp, ui: &mut egui::Ui, mode: &mut String, step: &mut usize) {
+    let t = Tokens::get(ui.ctx());
+    let history: Vec<String> = app
+        .session
+        .active()
+        .and_then(|id| app.session.catalog.photo(id))
+        .map(|p| p.history.iter().map(|h| h.label.clone()).collect())
+        .unwrap_or_default();
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.label(egui::RichText::new(crate::i18n::tr("Paste")).color(t.text_dim));
+        let label = |m: &str| match m {
+            "sinceFirst" => "Relative changes since the first history state",
+            "sinceStep" => "Relative changes since a history state",
+            _ => "Exact settings",
+        };
+        let c = egui::ComboBox::from_id_salt("copyPasteMode").width(300.0).selected_text(crate::i18n::tr(label(mode))).show_ui(ui, |ui| {
+            for m in ["exact", "sinceFirst", "sinceStep"] {
+                let r = ui.selectable_label(mode == m, crate::i18n::tr(label(m)));
+                crate::widgets::register(ui.ctx(), format!("copyPasteMode:{m}"), r.rect);
+                if r.clicked() {
+                    *mode = m.to_string();
                 }
             }
-        }
+        });
+        crate::widgets::register(ui.ctx(), "combo:copyPasteMode", c.response.rect);
     });
-    ui.horizontal(|ui| {
-        let all = ui.small_button(crate::i18n::tr("All"));
-        crate::widgets::register(ui.ctx(), format!("{tag}:all"), all.rect);
-        if all.clicked() {
-            *groups = SettingsGroup::ALL.iter().map(key_of).collect();
+    if mode == "sinceStep" {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let last = history.len().max(1);
+            let mut n = (*step + 1).min(last);
+            let r = ui.add(egui::DragValue::new(&mut n).range(1..=last).prefix(crate::i18n::tr("step ")));
+            crate::widgets::register(ui.ctx(), "field:copyPasteStep", r.rect);
+            *step = n.saturating_sub(1);
+            let name = history.get(*step).cloned().unwrap_or_else(|| crate::i18n::tr("no history yet").into());
+            ui.label(egui::RichText::new(name).color(t.text_label));
+        });
+    }
+}
+
+/// The checklist's three columns (heading ids), in Lightroom's order.
+const CHECKLIST_COLUMNS: [&[&str]; 3] = [
+    &["basic", "light", "presence", "toneCurve"],
+    &["colorPanel", "detail", "optics"],
+    &["geometry", "effectsPanel", "calibration", "lensBlur", "masks", "remove", "crop"],
+];
+
+/// Lightroom's per-setting checklist (Copy Settings, Synchronize, Paste Selected, New Preset):
+/// headings with a tri-state checkbox over their settings in three columns, the photo's masks
+/// under Masking (`masks`: `None` = all of them), then all. / none. / def. / mod. and the saved
+/// subsets (pick one, or type a name to save. / ren. / del.).
+fn group_checklist(app: &mut LightcraftApp, ui: &mut egui::Ui, tag: &str, groups: &mut Vec<String>, mut masks: Option<&mut Option<Vec<u32>>>) {
+    let t = Tokens::get(ui.ctx());
+    let photo_masks: Vec<(u32, String)> = app
+        .session
+        .active()
+        .and_then(|id| app.session.develop_of(id))
+        .map(|d| d.masks.iter().map(|m| (m.id, m.name.clone())).collect())
+        .unwrap_or_default();
+    let set_on = |groups: &mut Vec<String>, id: String, on: bool| {
+        groups.retain(|x| *x != id);
+        if on {
+            groups.push(id);
         }
-        let none = ui.small_button(crate::i18n::tr("None"));
-        crate::widgets::register(ui.ctx(), format!("{tag}:none"), none.rect);
-        if none.clicked() {
-            groups.clear();
+    };
+    ui.set_min_width(600.0);
+    // checklist order (clicks, older remembered ids)
+    let tidy = crate::state::normalize_groups(groups);
+    if tidy != *groups {
+        *groups = tidy;
+    }
+    // the checklist scrolls in a short window rather than pushing OK off the screen
+    let max_h = (ui.ctx().content_rect().height() - 380.0).max(240.0);
+    egui::ScrollArea::vertical().id_salt(("checklist", tag)).max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
+        ui.columns(3, |cols| {
+            for (col, ids) in cols.iter_mut().zip(CHECKLIST_COLUMNS) {
+                col.spacing_mut().item_spacing.y = 4.0;
+                for (n, h) in ids.iter().filter_map(|id| lightcraft_develop::HEADINGS.iter().find(|h| h.id == *id)).enumerate() {
+                    if n > 0 {
+                        col.add_space(10.0);
+                    }
+                    let on_count = h.items.iter().filter(|g| groups.contains(&g.id())).count();
+                    if let [only] = h.items {
+                        let key = only.id();
+                        let mut on = on_count == 1;
+                        let r = col.checkbox(&mut on, egui::RichText::new(crate::i18n::tr(only.label())).font(t.semibold(12.5)));
+                        crate::widgets::register(&r.ctx, format!("{tag}:{key}"), r.rect);
+                        if r.changed() {
+                            set_on(groups, key, on);
+                        }
+                    } else {
+                        let mut all = on_count == h.items.len();
+                        let r = col.add(
+                            egui::Checkbox::new(&mut all, egui::RichText::new(crate::i18n::tr(h.label)).font(t.semibold(12.5)))
+                                .indeterminate(on_count > 0 && on_count < h.items.len()),
+                        );
+                        crate::widgets::register(&r.ctx, format!("{tag}:{}", h.id), r.rect);
+                        if r.changed() {
+                            for g in h.items {
+                                set_on(groups, g.id(), all);
+                            }
+                        }
+                        col.indent(("checklist", h.id), |col| {
+                            for g in h.items {
+                                let key = g.id();
+                                let mut on = groups.contains(&key);
+                                let r = col.checkbox(&mut on, crate::i18n::tr(g.label()));
+                                crate::widgets::register(&r.ctx, format!("{tag}:{key}"), r.rect);
+                                if r.changed() {
+                                    set_on(groups, key, on);
+                                }
+                            }
+                        });
+                    }
+                    // Masking: which of this photo's masks go along
+                    if h.id == "masks"
+                        && groups.iter().any(|g| g == "masks")
+                        && !photo_masks.is_empty()
+                        && let Some(chosen) = masks.as_deref_mut()
+                    {
+                        col.indent("checklist-masks", |col| {
+                            for (id, name) in &photo_masks {
+                                let mut on = chosen.as_ref().is_none_or(|c| c.contains(id));
+                                let label = if name.trim().is_empty() { format!("Mask {id}") } else { name.clone() };
+                                let r = col.checkbox(&mut on, label);
+                                crate::widgets::register(&r.ctx, format!("{tag}:mask:{id}"), r.rect);
+                                if r.changed() {
+                                    let mut list: Vec<u32> = chosen.clone().unwrap_or_else(|| photo_masks.iter().map(|(i, _)| *i).collect());
+                                    list.retain(|x| x != id);
+                                    if on {
+                                        list.push(*id);
+                                    }
+                                    *chosen = (list.len() < photo_masks.len()).then_some(list);
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        });
+    });
+    ui.add_space(4.0);
+    let ids_of = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default()
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+        for (label, subset) in [("all.", "all"), ("none.", "none"), ("def.", "default"), ("mod.", "modified")] {
+            let r = ui.button(label).on_hover_text(crate::i18n::tr(match subset {
+                "all" => "Check all",
+                "none" => "Check none",
+                "default" => "Lightroom's default: everything but crop, masking, remove and red eye",
+                _ => "Only what was changed on this photo",
+            }));
+            crate::widgets::register(ui.ctx(), format!("{tag}:{subset}"), r.rect);
+            if r.clicked() {
+                *groups = match subset {
+                    "all" => lightcraft_develop::SettingsGroup::ALL.iter().map(|g| g.id()).collect(),
+                    "none" => Vec::new(),
+                    "default" => crate::state::default_preset_groups(),
+                    _ => app.session.execute("develop.modifiedGroups", &json!({})).map(|v| ids_of(&v["groups"])).unwrap_or_default(),
+                };
+            }
         }
+        ui.separator();
+        // saved subsets
+        let saved = app.session.execute("develop.subsets", &json!({})).unwrap_or_default();
+        let names: Vec<String> =
+            saved["subsets"].as_array().map(|a| a.iter().filter_map(|x| x["name"].as_str().map(str::to_string)).collect()).unwrap_or_default();
+        let name_id = egui::Id::new(("checklist-subset-name", tag));
+        let mut name: String = ui.data(|d| d.get_temp(name_id)).unwrap_or_default();
+        let current = names
+            .iter()
+            .find(|n| saved["subsets"].as_array().into_iter().flatten().any(|x| x["name"] == n.as_str() && ids_of(&x["groups"]) == *groups));
+        let c = egui::ComboBox::from_id_salt(("checklist-subsets", tag))
+            .width(120.0)
+            .selected_text(current.cloned().unwrap_or_else(|| "subset.".into()))
+            .show_ui(ui, |ui| {
+                if names.is_empty() {
+                    ui.label(egui::RichText::new(crate::i18n::tr("No saved subsets: type a name, then save.")).color(t.text_dim));
+                }
+                for (i, n) in names.iter().enumerate() {
+                    let r = ui.selectable_label(Some(n) == current, n);
+                    crate::widgets::register(ui.ctx(), format!("{tag}:subset:{i}"), r.rect);
+                    if r.clicked() {
+                        if let Some(x) = saved["subsets"].as_array().into_iter().flatten().find(|x| x["name"] == n.as_str()) {
+                            *groups = ids_of(&x["groups"]);
+                        }
+                        name = n.clone();
+                    }
+                }
+            });
+        crate::widgets::register(ui.ctx(), format!("combo:{tag}Subset"), c.response.rect);
+        let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("Subset name")).desired_width(110.0));
+        crate::widgets::register(ui.ctx(), format!("field:{tag}Subset"), r.rect);
+        let ctx = ui.ctx().clone();
+        let run = |app: &mut LightcraftApp, cmd: &str, p: serde_json::Value| {
+            if let Err(e) = app.run(cmd, p) {
+                app.toast_error(&ctx, e);
+            }
+        };
+        let save = ui.button("save.").on_hover_text(crate::i18n::tr("Save the checked settings as a subset with this name"));
+        crate::widgets::register(ui.ctx(), format!("{tag}:saveSubset"), save.rect);
+        if save.clicked() {
+            run(app, "develop.saveSubset", json!({"name": name, "groups": groups}));
+        }
+        let ren = ui.button("ren.").on_hover_text(crate::i18n::tr("Rename the subset picked above to this name"));
+        crate::widgets::register(ui.ctx(), format!("{tag}:renameSubset"), ren.rect);
+        if ren.clicked() {
+            match current {
+                Some(from) => run(app, "develop.renameSubset", json!({"name": from, "to": name})),
+                None => app.toast(&ctx, crate::i18n::tr("Pick a saved subset first")),
+            }
+        }
+        let del = ui.button("del.").on_hover_text(crate::i18n::tr("Delete the saved subset with this name"));
+        crate::widgets::register(ui.ctx(), format!("{tag}:deleteSubset"), del.rect);
+        if del.clicked() {
+            run(app, "develop.deleteSubset", json!({"name": name}));
+        }
+        ui.data_mut(|d| d.insert_temp(name_id, name));
     });
 }
 

@@ -883,6 +883,9 @@ pub enum SpotMode {
     Remove,
     Heal,
     Clone,
+    /// Content-aware: the spot is rebuilt from patches of its surroundings (PatchMatch), no
+    /// source (Lightroom's content-aware Remove, `heal_patchmatch`).
+    Fill,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

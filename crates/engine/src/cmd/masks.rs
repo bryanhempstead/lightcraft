@@ -143,7 +143,7 @@ fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mas
     Ok(json!({"activeMask": active}))
 }
 
-fn mask_id(p: &Value, active: Option<u32>, c: &str) -> Result<u32> {
+pub(crate) fn mask_id(p: &Value, active: Option<u32>, c: &str) -> Result<u32> {
     p.get("id").and_then(Value::as_u64).map(|v| v as u32).or(active).ok_or_else(|| bad(c, "no mask selected (give `id`)"))
 }
 
@@ -171,11 +171,16 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Ok(json!({"pending": true}));
                 }
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
+                // a new mask of a kind starts with the effect last applied to one (as in Lightroom)
+                let tool =
+                    serde_json::to_value(&shape).ok().and_then(|v| v.get("kind").and_then(Value::as_str).map(str::to_string)).unwrap_or_default();
+                let adjust = super::mask_effects::new_mask_adjust(s, &tool);
                 let out = masks_edit(s, "mask.add", "Add Mask", |masks, active| {
                     masks.push(Mask {
                         id: next,
                         name: name.unwrap_or_else(|| format!("Mask {next}")),
                         components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
+                        adjust,
                         ..Default::default()
                     });
                     *active = Some(next);
@@ -694,7 +699,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Remove Spot",
             [],
             None,
-            "{mode?: remove|heal|clone, points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby)} — selects the new spot; returns {index}",
+            "{mode?: remove|heal|clone|fill (content-aware, no source), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby)} — selects the new spot; returns {index}",
             has_active,
             |s, p| {
                 let mode: SpotMode =
@@ -817,6 +822,34 @@ pub fn specs() -> Vec<CommandSpec> {
             };
             ok()
         }),
+        cmd!(
+            "spot.deleteInRect",
+            "Delete Spots in Rectangle",
+            [],
+            None,
+            "{rect: [x0, y0, x1, y1] normalized (any corner order)} — deletes every spot whose target lies inside (Lightroom's ⌥-drag marquee in the Remove tool); one undo step → {deleted}",
+            has_active,
+            |s, p| {
+                let c = "spot.deleteInRect";
+                let r: Vec<f64> = p.get("rect").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+                let &[ax, ay, bx, by] = r.as_slice() else { return Err(bad(c, "`rect` is [x0, y0, x1, y1]")) };
+                if !r.iter().all(|v| v.is_finite()) {
+                    return Err(bad(c, "`rect` must be finite numbers"));
+                }
+                let (x0, x1, y0, y1) = (ax.min(bx), ax.max(bx), ay.min(by), ay.max(by));
+                let inside = |sp: &Spot| sp.points.first().is_some_and(|q| (x0..=x1).contains(&q.x) && (y0..=y1).contains(&q.y));
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let n = s.develop_of(id).map_or(0, |d| d.spots.iter().filter(|sp| inside(sp)).count());
+                if n > 0 {
+                    spots_edit(s, c, "Delete Spots", |spots| {
+                        spots.retain(|sp| !inside(sp));
+                        Ok(())
+                    })?;
+                    s.active_spot = None;
+                }
+                Ok(json!({"deleted": n}))
+            }
+        ),
         // ---- Red eye / pet eye
         cmd!(
             "redeye.add",
@@ -913,7 +946,7 @@ fn pick_source(s: &mut Session, id: crate::PhotoId, d: &lightcraft_develop::Deve
     lightcraft_pipeline::spots::pick_source(&src, &info, d, spot, avoid)
 }
 
-fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
+pub(crate) fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
     let c = |v: &mut f64, lo: f64, hi: f64| *v = if v.is_finite() { v.clamp(lo, hi) } else { 0.0 };
     c(&mut a.exposure, -4.0, 4.0);
     for v in [
