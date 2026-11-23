@@ -106,11 +106,16 @@ pub(crate) fn nav_more_zooms(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect
     };
     ui.painter().galley(pos2(r.right() - g.size().x - 2.0, r.center().y - g.size().y / 2.0), g, c);
     egui::Popup::menu(&resp).show(|ui| {
+        let mut out = false;
         for z in NAV_MORE_ZOOMS {
-            if z == 66.67 {
+            let label = crate::state::zoom_pct_label(z);
+            if !app.ui.settings.zoom_shown(&label) {
+                continue;
+            }
+            if z < 100.0 && !std::mem::replace(&mut out, true) {
                 ui.separator();
             }
-            if ui.button(crate::state::zoom_pct_label(z)).clicked() {
+            if ui.button(label).clicked() {
                 let _ = app.run("view.navigate", json!({"zoom": {"percent": z}, "remember": true}));
                 ui.close();
             }
@@ -153,6 +158,14 @@ fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let mut x = row.right() - 12.0;
     let cur = nav_zoom_index(app.ui.zoom);
     for (i, (label, z)) in NAV_ZOOMS.iter().enumerate().rev() {
+        let key = match *z {
+            "fit" => "Fit".to_string(),
+            "fill" => "Fill".to_string(),
+            pct => format!("{pct}%"),
+        };
+        if !app.ui.settings.zoom_shown(&key) {
+            continue;
+        }
         let g = ui.painter().layout_no_wrap(label.to_string(), t.semibold(11.0), t.text);
         let r = Rect::from_min_max(pos2(x - g.size().x - 6.0, row.top() + 3.0), pos2(x, row.bottom() - 3.0));
         let resp = ui.interact(r, egui::Id::new(("nav-zoom", i)), Sense::click());

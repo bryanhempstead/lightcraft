@@ -520,6 +520,7 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
         "Zoom Behavior" => {
             let mut v: Vec<MenuNode> = crate::state::CLICK_ZOOMS
                 .into_iter()
+                .filter(|&pct| app.ui.settings.zoom_shown(&crate::state::click_zoom_label(pct)))
                 .map(|pct| {
                     let ratio = if pct == 0 { json!("fill") } else { json!(pct as f64 / 100.0) };
                     let label = if pct == 0 {

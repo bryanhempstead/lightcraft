@@ -54,7 +54,15 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         "import" => import_tab(app, ui, &t),
         "performance" => performance_tab(app, ui, &t),
         "backup" => backup_tab(app, ui, &t),
-        "interface" => interface_tab(app, ui, &t),
+        "interface" => {
+            // scrolls inside instead of growing past the window (the dialog sizes to its content)
+            let h = (ui.ctx().content_rect().height() - 260.0).clamp(240.0, 640.0);
+            egui::ScrollArea::vertical()
+                .id_salt("settingsInterface")
+                .max_height(h)
+                .auto_shrink([false, true])
+                .show(ui, |ui| interface_tab(app, ui, &t));
+        }
         "identity" => identity_tab(app, ui, &t),
         "develop" => develop_tab(app, ui, &t),
         "shortcuts" => shortcuts_tab(app, ui, &t),
@@ -715,6 +723,30 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     check(ui, "settings.gridTooltips", &mut app.ui.settings.grid_tooltips, "Show image info tooltips");
     heading(ui, t, crate::i18n::tr("Detail"));
     check(ui, "settings.navigator", &mut app.ui.navigator, "Show the Navigator while zoomed in");
+    // which zoom levels the zoom menus and the Navigator offer (ticked = shown); a fixed grid, so it
+    // can't widen the dialog (a wrapping row did, and the tabs moved)
+    row(ui, t, crate::i18n::tr("Zoom levels"), |ui| {
+        ui.label(RichText::new(crate::i18n::tr("ticked = in the zoom menus and the Navigator")).color(t.text_dim));
+    });
+    ui.horizontal(|ui| {
+        ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
+        egui::Grid::new("settingsZoomLevels").num_columns(6).spacing(egui::vec2(12.0, 10.0)).show(ui, |ui| {
+            let levels = super::develop_left::NAV_MORE_ZOOMS.iter().map(|&z| crate::state::zoom_pct_label(z));
+            for (i, label) in levels.chain(["Fill".to_string(), "Fit".to_string()]).enumerate() {
+                let mut on = app.ui.settings.zoom_shown(&label);
+                if check(ui, &format!("settings.zoom-{label}"), &mut on, &label) {
+                    let hidden = &mut app.ui.settings.hidden_zooms;
+                    hidden.retain(|h| h != &label);
+                    if !on {
+                        hidden.push(label);
+                    }
+                }
+                if i % 6 == 5 {
+                    ui.end_row();
+                }
+            }
+        });
+    });
     row(ui, t, crate::i18n::tr("Info overlay"), |ui| {
         use crate::state::InfoOverlay as I;
         choices(ui, "settingsInfo", &[(I::Off, "off."), (I::Basic, "info.1."), (I::Exposure, "info.2.")], &mut app.ui.info_overlay);

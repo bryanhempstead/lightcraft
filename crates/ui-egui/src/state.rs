@@ -419,6 +419,9 @@ pub struct AppSettings {
     /// Library View Options ▸ Show message when loading or rendering photos (the loupe's
     /// "Loading…" note while a sharper render is on its way).
     pub loading_message: bool,
+    /// Zoom levels left out of the zoom menus and the Navigator, by label (`Fill`, `Fit`, `50%`,
+    /// `66.7%`); Settings ▸ interface ▸ Zoom levels. Empty = every level (Bryan, 2026-11-23).
+    pub hidden_zooms: Vec<String>,
     /// LRC-DEV-VIEWOPTIONS: Develop's own View Options (⌘J in Develop).
     pub develop_view: DevelopView,
     /// LRC-UI-IDENTITYPLATE: the identity plate (Settings ▸ identity., `app.identityPlate`).
@@ -486,6 +489,7 @@ impl Default for AppSettings {
             grid_rotate: true,
             grid_tooltips: false,
             loading_message: true,
+            hidden_zooms: Vec::new(),
             develop_view: DevelopView::default(),
             identity_plate: crate::identity::IdentityPlate::default(),
         }
@@ -508,6 +512,13 @@ pub fn click_zoom_target(pct: u32) -> Zoom {
 /// How a click level reads: `Fill`, else the percent (`100%`, `50%`).
 pub fn click_zoom_label(pct: u32) -> String {
     if pct == 0 { "Fill".into() } else { format!("{pct}%") }
+}
+
+impl AppSettings {
+    /// Whether the zoom level labelled `label` (`Fill`, `Fit`, `50%`) is offered in the menus.
+    pub fn zoom_shown(&self, label: &str) -> bool {
+        !self.hidden_zooms.iter().any(|h| h == label)
+    }
 }
 
 /// A zoom percent as a menu reads it: `100%`, `12.5%`, `33.3%`.

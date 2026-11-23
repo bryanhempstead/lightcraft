@@ -214,19 +214,28 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
         egui::Popup::menu(&zr).show(|ui| {
             // a level picked here is also what a click zooms to from now on (as Lightroom's
             // Navigator), until another is picked
-            // zoom-in levels first, the zoom-out ones (and Fill, Fit) at the bottom
+            // zoom-in levels first, the zoom-out ones (and Fill, Fit) at the bottom; only the levels
+            // ticked in Settings ▸ interface ▸ Zoom levels
+            let mut out = false;
             for pct in crate::state::CLICK_ZOOMS {
-                if pct == 50 {
+                let key = crate::state::click_zoom_label(pct);
+                if !app.ui.settings.zoom_shown(&key) {
+                    continue;
+                }
+                if pct < 100 && !std::mem::replace(&mut out, true) {
                     ui.separator();
                 }
                 let z = crate::state::click_zoom_target(pct);
-                let label = crate::i18n::tr(&crate::state::click_zoom_label(pct)).to_string();
+                let label = crate::i18n::tr(&key).to_string();
                 if ui.selectable_label(app.ui.zoom == z, label).clicked() {
                     let _ = app.run("view.navigate", json!({"zoom": z, "pan": [0.5, 0.5], "remember": true}));
                 }
             }
-            let fit = ui.selectable_label(app.ui.zoom == Zoom::Fit, crate::i18n::tr("Fit"));
-            if fit.clicked() {
+            if !out && app.ui.settings.zoom_shown("Fit") {
+                ui.separator();
+            }
+            let fit = app.ui.settings.zoom_shown("Fit") && ui.selectable_label(app.ui.zoom == Zoom::Fit, crate::i18n::tr("Fit")).clicked();
+            if fit {
                 let _ = app.run("view.navigate", json!({"zoom": "fit", "pan": [0.5, 0.5]}));
             }
         });
@@ -269,11 +278,16 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
 pub fn zoom_behavior_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.set_min_width(230.0);
     ui.label(egui::RichText::new(crate::i18n::tr("A click zooms to")).weak());
+    let mut out = false;
     for pct in crate::state::CLICK_ZOOMS {
-        if pct == 50 {
+        let key = crate::state::click_zoom_label(pct);
+        if !app.ui.settings.zoom_shown(&key) {
+            continue;
+        }
+        if pct < 100 && !std::mem::replace(&mut out, true) {
             ui.separator();
         }
-        let label = crate::i18n::tr(&crate::state::click_zoom_label(pct)).to_string();
+        let label = crate::i18n::tr(&key).to_string();
         let r = ui.selectable_label(app.ui.click_zoom == pct, label);
         if r.clicked() {
             let ratio = if pct == 0 { json!("fill") } else { json!(pct as f64 / 100.0) };

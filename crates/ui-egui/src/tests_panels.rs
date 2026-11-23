@@ -35,9 +35,10 @@ fn layout_faults(h: &Headless, area: egui::Rect) -> Vec<String> {
             out.push(format!("clipped: {s:?} {r:?} in {bound:?}"));
         }
     }
-    for (i, (a, ra, _)) in texts.iter().enumerate() {
-        for (b, rb, _) in texts.iter().skip(i + 1) {
-            let o = ra.intersect(*rb);
+    // only what is visible of each: a scroll area clips what is scrolled out of view
+    for (i, (a, ra, ca)) in texts.iter().enumerate() {
+        for (b, rb, cb) in texts.iter().skip(i + 1) {
+            let o = ra.intersect(*ca).intersect(rb.intersect(*cb));
             if o.width() > 2.0 && o.height() > 2.0 {
                 out.push(format!("overlap: {a:?} {ra:?} / {b:?} {rb:?}"));
             }
