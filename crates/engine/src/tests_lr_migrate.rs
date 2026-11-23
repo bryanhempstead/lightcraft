@@ -44,7 +44,9 @@ fn develop_text_maps_like_a_preset() {
     assert_eq!(p["wb"]["mode"], json!("custom"));
     assert_eq!(p["wb"]["temp"], json!(5200.0));
     // the catalog has crop edges without HasCrop
-    assert_eq!(p["crop"]["geometry"]["rect"]["x0"], json!(0.1));
+    // (the edges are the straightened crop's corners: `crs::crop_from_lr`)
+    let want = crate::crs::crop_from_lr([0.1, 0.05, 0.95, 0.9], 1.5, 1.5).unwrap();
+    assert_eq!(p["crop"]["geometry"]["rect"]["x0"], json!(want.rect.x0));
     assert_eq!(p["crop"]["geometry"]["angle"], json!(-1.5));
     // a base look maps to our profile with its amount
     assert_eq!(p["profile"]["id"], json!("adobe:Adobe Monochrome"));

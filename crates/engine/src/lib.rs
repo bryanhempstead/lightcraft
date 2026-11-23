@@ -46,6 +46,7 @@ pub mod logging;
 pub mod lr_dust;
 pub mod lr_history;
 pub mod lr_migrate;
+pub mod lr_repair;
 pub mod lr_sync;
 pub mod map;
 pub mod media;

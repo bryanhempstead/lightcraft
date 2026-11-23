@@ -259,6 +259,7 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
             let mut v = v.clone();
             if p.width > 0 && p.height > 0 {
                 crate::crs_masks::refit_radials(&mut v, crate::crs_masks::DEFAULT_ASPECT, p.width as f64 / p.height as f64);
+                crate::crs::refit_crop(&mut v, crate::crs_masks::DEFAULT_ASPECT, p.width as f64 / p.height as f64);
             }
             lightcraft_develop::apply_partial(&p.develop, &v, 1.0)
         }
@@ -307,8 +308,40 @@ impl SidecarData {
 }
 
 /// The sidecar packet for a photo; the colour label is written by its name in `cat` (custom
-/// label names included, as other editors do).
+/// label names included, as other editors do). What is compared to tell whether the catalog
+/// changed since the last write; the file gets [`sidecar_packet_for_file`].
 pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
+    packet_with(p, cat, Vec::new())
+}
+
+/// [`sidecar_packet`] as it is written into a file (a sidecar, an exported original): plus the
+/// crop as Camera Raw's fields ([`lightroom_crop_props`]), so Lightroom shows LightCraft's crop.
+/// Reads the photo's own EXIF orientation from `original` (only for a cropped photo).
+pub fn sidecar_packet_for_file(p: &Photo, cat: &lightcraft_catalog::Catalog, original: &str) -> String {
+    let crop =
+        if p.develop.crop.geometry.is_identity() { Vec::new() } else { lightroom_crop_props(p, crate::lr_migrate::file_orientation(original)) };
+    packet_with(p, cat, crop)
+}
+
+/// The photo's crop as Camera Raw's `crs:Crop…` fields ([`crate::crs::crop_props`]). Ours is in
+/// the frame as shown (the file's EXIF orientation `file`, then the photo's Rotate / Flip);
+/// Lightroom's in the file's stored frame, so it is turned back first. Empty for no crop.
+pub fn lightroom_crop_props(p: &Photo, file: lightcraft_geom::Orientation) -> Vec<(&'static str, String)> {
+    let g = p.develop.crop.geometry;
+    if g.is_identity() || p.width == 0 || p.height == 0 {
+        return Vec::new();
+    }
+    let user = p.develop.orientation;
+    let rect = file.inverse().map_norm_rect(user.inverse().map_norm_rect(g.rect));
+    // a mirror turns the straighten the other way
+    let angle = if user.to_parts().0 != file.to_parts().0 { -g.angle } else { g.angle };
+    // `p.width × p.height` is the EXIF-oriented size
+    let (w, h) = (f64::from(p.width), f64::from(p.height));
+    let aspect = if file.swaps_axes() { h / w } else { w / h };
+    crate::crs::crop_props(&lightcraft_geom::CropGeometry { rect, angle }, aspect)
+}
+
+fn packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, crop: Vec<(&'static str, String)>) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     let meta = lightcraft_meta::Metadata {
         software: Some("LightCraft".into()),
@@ -345,8 +378,11 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
     if !p.meta.location.trim().is_empty() {
         lc.push(("location", p.meta.location.as_str()));
     }
-    // the HDR edit, also as Camera Raw's fields: Lightroom reads it back (`crs::hdr_props`)
-    lightcraft_meta::write_xmp_lc_crs(&meta, &lc, &crate::crs::hdr_props(&p.develop.hdr))
+    // the HDR edit (and in files the crop), also as Camera Raw's fields: Lightroom reads them back
+    // (`crs::hdr_props`, `crs::crop_props`)
+    let mut crs = crate::crs::hdr_props(&p.develop.hdr);
+    crs.extend(crop);
+    lightcraft_meta::write_xmp_lc_crs(&meta, &lc, &crs)
 }
 
 /// The properties LightCraft writes and owns in a sidecar: replaced on every save (removed when
@@ -391,7 +427,8 @@ pub const OWNED: &[&str] = &[
 /// doesn't read from sidecars): otherwise the sidecar's own value stays. Anything else LightCraft
 /// writes (`xmp:CreatorTool`) goes only into new sidecars.
 /// The HDR edit's `crs:` fields ([`crate::crs::hdr_props`]) are written only for an HDR edit, and
-/// then replace another application's.
+/// then replace another application's; the crop's ([`crate::crs::CROP_CRS`]) likewise only for a
+/// cropped photo.
 pub const OWNED_IF_STATED: &[&str] = &[
     "exif:DateTimeOriginal",
     "photoshop:DateCreated",
@@ -406,6 +443,12 @@ pub const OWNED_IF_STATED: &[&str] = &[
     "crs:SDRShadows",
     "crs:SDRWhites",
     "crs:SDRBlend",
+    "crs:HasCrop",
+    "crs:CropTop",
+    "crs:CropLeft",
+    "crs:CropBottom",
+    "crs:CropRight",
+    "crs:CropAngle",
 ];
 
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
@@ -608,8 +651,9 @@ impl Session {
         let orig = file_path(p).ok_or_else(|| EngineError::Other(format!("{} is not a file on disk", p.file_name)))?;
         let path = sidecar_path(orig, owners.naming(p, self.xmp.naming));
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let packet = sidecar_packet(p, &self.catalog);
-        let sync = lightcraft_catalog::XmpSync { packet: lightcraft_catalog::fnv64(packet.as_bytes()), file: 0 };
+        // (the catalog side of the sync record is the plain packet, as `current_sync` compares it)
+        let sync = lightcraft_catalog::XmpSync { packet: lightcraft_catalog::fnv64(sidecar_packet(p, &self.catalog).as_bytes()), file: 0 };
+        let packet = sidecar_packet_for_file(p, &self.catalog, orig);
         let (data, merged, backup) = sidecar_contents(&path, packet, &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         let sync = lightcraft_catalog::XmpSync { file: lightcraft_catalog::fnv64(data.as_bytes()), ..sync };
@@ -803,5 +847,48 @@ mod tests {
             &mut v,
         );
         assert_eq!(v, vec![PhotoId(1), PhotoId(3)]);
+    }
+
+    /// LR-EDIT-CROP: the crop written for Lightroom is Lightroom's own (its two corners in the file's
+    /// stored frame + CropAngle), whatever the file's EXIF orientation and the photo's Rotate / Flip.
+    #[test]
+    fn crop_is_written_in_lightrooms_frame() {
+        use lightcraft_geom::Orientation as O;
+        let (lr, lr_angle) = ([0.12, 0.1, 0.9, 0.85], 2.5);
+        let stored = crate::crs::crop_from_lr(lr, lr_angle, 1.5).unwrap();
+        for (file, user) in [
+            (O::Normal, O::Normal),
+            (O::Rotate90, O::Normal),
+            (O::Normal, O::Rotate270),
+            (O::Rotate90, O::Rotate90),
+            (O::Normal, O::FlipH),
+            (O::Rotate270, O::FlipH),
+        ] {
+            let (w, h) = if file.swaps_axes() { (40, 60) } else { (60, 40) };
+            let mut p = Photo::new(PhotoId(1), Source::File { path: "/x/a.cr3".into() }, "a.cr3", "RAW", w, h, "2026-01-01T00:00:00");
+            let mirrored = file.to_parts().0 != user.to_parts().0;
+            let mut d = DevelopSettings { orientation: user, ..Default::default() };
+            d.crop.geometry = lightcraft_geom::CropGeometry {
+                rect: user.map_norm_rect(file.map_norm_rect(stored.rect)),
+                angle: if mirrored { -stored.angle } else { stored.angle },
+            };
+            p.develop = Arc::new(d);
+            let fields = lightroom_crop_props(&p, file);
+            let get = |k: &str| fields.iter().find(|f| f.0 == k).and_then(|f| f.1.parse::<f64>().ok()).unwrap();
+            let got = [get("crs:CropLeft"), get("crs:CropTop"), get("crs:CropRight"), get("crs:CropBottom")];
+            for (g, want) in got.iter().zip(lr) {
+                assert!((g - want).abs() < 1e-6, "{file:?} {user:?}: {got:?}");
+            }
+            assert!((get("crs:CropAngle") - lr_angle).abs() < 1e-6, "{file:?} {user:?}");
+        }
+        // and into the sidecar, not into the packet the sync record compares
+        let mut p = photo();
+        Arc::make_mut(&mut p.develop).crop.geometry = stored;
+        let cat = lightcraft_catalog::Catalog::new();
+        assert!(!sidecar_packet(&p, &cat).contains("crs:CropLeft"));
+        let x = sidecar_packet_for_file(&p, &cat, "/nonexistent/IMG_1.jpg");
+        let props = lightcraft_meta::parse_xmp(&x).unwrap().properties;
+        assert_eq!(props["crs:HasCrop"], vec!["True".to_string()]);
+        assert_eq!(props["crs:CropAngle"], vec!["2.5".to_string()]);
     }
 }

@@ -48,6 +48,7 @@ None of them were used to fit the camera profiles.
 | Where the look table sits | after the tone curves: ΔE 7.0 vs right after the base tone map: 7.8 | tables apply to the finished colour, after the curves |
 | Saturation / mixer saturation too weak, parametric curve too strong | small (−0.25 ΔE) | `SATURATION_GAIN` 1.25, parametric amount 0.22 → 0.11, wider regions |
 | `crs:CropAngle` read with the wrong sign | straightened crops 2× their angle off | negated; `library.repairLightroomMigration` fixes migrated libraries |
+| `CropLeft / Top / Right / Bottom` read as a rectangle (they are two corners of the rotated crop) | 71 straightened crops' aspect 5.9 % off, ΔE 5.98 | `crs::crop_from_lr` → 3.92 (all 206: 4.65 → 3.94); `library.repairLightroomImport` fixes migrated libraries |
 | Stale XMP sidecars overriding photos Lightroom shows unedited | two default iPhone JPEGs ΔE 11.4 / 6.0 → 1.0 / 1.4 | the catalog wins on migration; repair command for migrated libraries |
 
 Before → after (mean CIEDE2000 per photo at 512 px; `dE128` in brackets):
@@ -1528,4 +1529,32 @@ radians, r the crop's aspect): Lightroom's `CropLeft / Top / Right / Bottom` are
 crop* in the unrotated image's normalized coordinates, while `crs.rs` reads them as an axis-aligned rectangle in the
 rotated frame. The fix belongs to `crates/engine` (`crs::to_partial`, needs the image's aspect) and a repair of
 migrated libraries; not done this round. Until then those photos compare after the gate's alignment search, which
-absorbs part of it.
+absorbs part of it. (Fixed right after: below.)
+
+### Fixed: straightened crops (LR-EDIT-CROP, 2026-11-22)
+
+`crs::crop_from_lr` reads the edges as Lightroom means them: the straightened crop's top-left and bottom-right
+corners in the unrotated image, both turned about the image centre by our angle (−`CropAngle`) in pixels of the
+stored frame (so the image's aspect matters: the catalog's stored size; a sidecar's crop is re-fitted to the photo),
+which gives our axis-aligned rectangle in the straightened frame (darktable's `lightroom.c` reads them the same way).
+Checked first without rendering: on the 71 photos the crop's predicted aspect is 0.025 % (max 0.06 %) off Camera
+Raw's renders, against 5.9 % read as a rectangle and 12 % with the angle's sign flipped; every crop's other two
+corners land inside the image, as Constrain to Image keeps them. `crs::crop_to_lr` / `crop_props` are the exact
+inverse: sidecars and exported originals of a cropped photo now carry `crs:HasCrop` + the five crop fields in the
+file's stored frame (EXIF turn and Rotate / Flip undone); on four of the set's photos (two of them turned, `DA` /
+`BC`) the written fields equal the catalog's to all six decimals.
+
+Rendered from a copy of round 13's library repaired by `library.repairLightroomImport`, against the same Camera Raw
+renders (mean CIEDE2000):
+
+| | photos | before | after |
+|---|---:|---:|---:|
+| straightened crops | 71 | 5.98 | 3.92 |
+| the 13 most straightened (2.1°–4.6°) | 13 | 8.24 | 4.66 |
+| all other photos | 135 | 3.94 | 3.94 (unchanged) |
+| **all** | 206 | **4.65** | **3.94** |
+
+Photos within ΔE 2 / p95 5: 34 → 42; `geom`-flagged comparisons 90 → 43 (the rest are lens-geometry ones); rendered
+aspects within 0.04 % of Camera Raw's. The repair's dry run on round 12's library copy (migrated before round 13)
+finds 71 crops and 10 grouped radials (78 photos) still as migrated; on round 13's, the 71 crops and the 10 radials
+already right. Neither library had changes of its own, so nothing was skipped.

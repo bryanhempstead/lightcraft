@@ -141,7 +141,7 @@ names are read (e.g. `Exposure2012`, not the older `Exposure`).
 | `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 full, 3 level, 4 vertical, 5 guided |
 | `UprightTransform_<mode>` | `geometry.upright_transform` | the matrix Lightroom stored for that mode (output → lens-corrected, 0..1 per axis of the stored frame, incl. its shrink-to-fit), inverted into ours; not re-detected |
 | `CropConstrainToWarp` | `geometry.constrain_crop` | |
-| `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
+| `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | the edges are two corners of the straightened crop in the unrotated image (`crs::crop_from_lr`; see *Lightroom Classic catalogs*), turned into our straightened frame; angle negated; `HasCrop="False"` → no crop; written back to sidecars for a cropped photo (`crs::crop_props`) |
 | `LensProfileDistortionScale`, `LensProfileVignettingScale` | `optics.profile_distortion`, `optics.profile_vignetting` | |
 | `ChromaticAberrationR`, `ChromaticAberrationB` | `optics.ca_red`, `optics.ca_blue` | |
 | `Look` (`Name`, `Amount`), `CameraProfile` | `profile.id`, `profile.amount` | base profiles by name: Adobe/Camera Color, Standard, Faithful → Color; Neutral, Flat → Neutral; Vivid, Landscape, Portrait, Monochrome → ours; "Embedded" / Apple ProRAW → Color. Creative looks (their own colour tables) are reported as `Look` |
@@ -193,6 +193,23 @@ Photos Lightroom shows unedited keep Lightroom's settings even when an XMP sidec
 `crs:CropAngle` turns the other way round from our straighten angle (measured: `docs/lr-match.md`).
 `library.repairLightroomMigration {catalog? | records?, crops?, unedited?, dryRun?}` fixes a library
 migrated before either was handled; photos changed here since the migration are left alone.
+
+`library.repairLightroomImport {catalog? | records?, dryRun?, limit?}` re-derives from the catalog (a copy; by
+default the one the migration recorded) only the two things earlier migrations read wrong — straightened crops'
+shape (below) and radial gradients inside grouped masks, whose `crs:Flipped` Camera Raw ignores — and fixes each
+where it is still exactly as a migration left it. A crop or radial that matches neither the old reading nor the right
+one was changed here since and is listed as skipped. The dry run lists every change with its before / after; the
+fix is one undo step and leaves everything else (and the edit time) alone.
+
+**Crop edges.** `CropLeft / Top / Right / Bottom` are the straightened crop's top-left and bottom-right corners
+in the *unrotated* image's normalized coordinates (`crs::crop_from_lr`), not a rectangle: both corners turn about the
+image centre by our angle (−`CropAngle`) into our straightened frame, so the image's aspect is needed (the file's
+stored size; sidecars are re-fitted to the photo's). Written back (sidecars and exported originals carry
+`crs:HasCrop` + the five crop fields for a cropped photo, `crs::crop_props`), the crop is turned back into the file's
+stored frame first (its EXIF orientation, then Rotate / Flip; a mirror reverses the angle), so Lightroom reads the
+same crop; the packet the sync record compares leaves them out, so existing sidecars don't show as changed. Not
+handled: a Lightroom sidecar on a file with an EXIF turn is read in the shown frame (sidecar reads don't turn crops,
+masks or spots yet; catalogs do).
 
 ## Local corrections (masks)
 
