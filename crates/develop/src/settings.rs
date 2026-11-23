@@ -1190,6 +1190,11 @@ pub struct Hdr {
     /// `sdr_blend` the renderer applies. Never saved; values set while HDR is off render nothing.
     #[serde(skip)]
     pub rendition_blend: f64,
+    /// Set only for an HDR display's view of the edit: the display's headroom in stops when it is
+    /// less than the HDR Limit (0 = not set). The render then shows the edit as a gain map
+    /// would on that display ([`Hdr::view_peak`]). Never saved.
+    #[serde(skip)]
+    pub view_ev: f64,
 }
 
 impl Default for Hdr {
@@ -1205,6 +1210,7 @@ impl Default for Hdr {
             sdr_clarity: 0.0,
             sdr_blend: 0.0,
             rendition_blend: 0.0,
+            view_ev: 0.0,
         }
     }
 }
@@ -1240,6 +1246,13 @@ impl Hdr {
             return 1.0;
         }
         (self.headroom_ev() as f32).exp2()
+    }
+
+    /// The peak an HDR display's view of the edit reaches: [`Hdr::peak`], or less when
+    /// [`Hdr::view_ev`] says the display has less headroom (always finite and at least 1).
+    pub fn view_peak(&self) -> f32 {
+        let p = self.peak();
+        if self.view_ev.is_finite() && self.view_ev > 0.0 { p.min((self.view_ev.min(Hdr::MAX_EV_LIMIT) as f32).exp2()) } else { p }
     }
 }
 

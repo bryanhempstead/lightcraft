@@ -44,3 +44,14 @@ setting's effect against its reference), `r12sum.py SET LCDIR…` (runs side by 
 (full-frame gratings: mean and contrast change). Measurement switches: `LIGHTCRAFT_BLACK_CR=0|shift|photo`,
 `LIGHTCRAFT_HS_CR=0|1`, `LIGHTCRAFT_HS_SUP`, `LIGHTCRAFT_HS_PRE`, `LIGHTCRAFT_HUE_SAT_FINISH=0|1`,
 `LIGHTCRAFT_TEX_CHROMA=gain,scale|0`, `LIGHTCRAFT_CLA_LEVEL`; `lcrun.sh` takes another build in `ORACLE_BIN`.
+
+HDR tone (`docs/lr-match.md` → HDR tone): `make_hdr_real.py SET SRC [stems]` (APFS clones of raws in SRC
+with HDR sidecars per variant) and `make_hdr_syn.py SET NAME…` (synthetic ramps / grid, names like
+`h4_w+50_e+2`; `sdr_…` = HDR off), rendered by `hdr_ps.sh SET` (`batch_hdr.jsx`: HDR edits come back as
+Rec. 2100 PQ; the shared lock `/private/tmp/lightcraft-photoshop.lock`, a 300 s no-progress watchdog,
+never quits Photoshop) and `hdr_lcrun.sh SET OUT` (LightCraft's HDR masters, scene-EV dumps and SDR
+twins). `hdr_cmp.py SET OUT` (ΔEITP overall / SDR / headroom part, log2 ratio per band, Visualize HDR
+ranges), `hdr_align.py` (curves aligned on the SDR tone's half-white point), `hdr_fit.py SET…` +
+`gen_hdr.py gtables.npz crates/pipeline/src/tone_hdr_cr.rs` (the tables). Gain maps: `hdrdecode.swift`
+(`swiftc -O hdrdecode.swift -o hdrdecode`; decodes a file to HDR with macOS ImageIO as Preview does) and
+`hdr_gm_cmp.py DECODED.f32 LC.f32 [CR.tif]`.

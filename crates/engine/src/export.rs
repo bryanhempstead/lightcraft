@@ -1940,7 +1940,7 @@ pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, met
     let trc = space.trc();
     let sdr_lin: Vec<[f32; 3]> = base.data.iter().map(|p| [0, 1, 2].map(|c| trc.decode(p[c] as f32 / 255.0))).collect();
     let hdr_lin: &[[f32; 3]] = hv.as_chunks::<3>().0;
-    let (map, gm) = gainmap::compute(&sdr_lin, hdr_lin, w, h, space.luma(), &gainmap::GainMapOptions::default()).map_err(|e| e.to_string())?;
+    let (map, gm) = gainmap::compute(&sdr_lin, hdr_lin, w, h, space.luma(), &gain_map_options(o.format)).map_err(|e| e.to_string())?;
     let profile = icc::write_named(named_space(space));
     let exif = meta.map(|m| lightcraft_meta::write_exif_with(m, Some(exif_color_space(space))));
     let xmp = meta.map(|m| lightcraft_meta::write_xmp(m, None));
@@ -1956,6 +1956,15 @@ pub fn encode_gain_map_jpeg(sdr: &Rgba8, hdr: &DeepImage, o: &ExportOptions, met
     }
     let sub = if o.limit_kb.is_some() { ChromaSubsampling::S420 } else { ChromaSubsampling::S444 };
     gainmap::encode_jpeg(&EncodeImage::rgba8(&base), &map, &gm, o.quality, sub, &em).map_err(|e| e.to_string())
+}
+
+/// How an HDR export's gain map is made. A JPEG gets a colour (R, G, B) gain map (ISO 21496-1): the
+/// SDR rendition clips and desaturates highlights the HDR one keeps, which a single luminance gain
+/// can't put back (macOS ImageIO decoding a LightCraft JPEG to HDR: headroom ΔEITP 31 with one
+/// channel, 3.5 with three; `docs/lr-match.md` → HDR tone). An AVIF keeps the single channel:
+/// ImageIO's AVIF writer drops a colour gain map (the file opens as its SDR base).
+pub fn gain_map_options(format: ExportFormat) -> lightcraft_codecs::gainmap::GainMapOptions {
+    lightcraft_codecs::gainmap::GainMapOptions { multichannel: format == ExportFormat::Jpeg, ..Default::default() }
 }
 
 /// The codecs' name of an output space (for its ICC profile).

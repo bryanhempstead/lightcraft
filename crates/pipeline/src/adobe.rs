@@ -248,7 +248,7 @@ pub fn rgb_tone(c: [f32; 3], f: impl Fn(f32) -> f32) -> [f32; 3] {
 
 /// [`rgb_tone`] with the channels clipped to `0..=top` instead of 0..=1: an HDR render
 /// (`top` > 1) keeps scene values above white for a tone function that maps them into the
-/// headroom ([`crate::tone::ToneMap::with_headroom`]).
+/// headroom ([`crate::tone::ToneMap::with_hdr`]).
 #[inline]
 pub fn rgb_tone_to(c: [f32; 3], f: impl Fn(f32) -> f32, top: f32) -> [f32; 3] {
     let [r, g, b] = c.map(|v| if v.is_finite() { v.clamp(0.0, top) } else { 0.0 });

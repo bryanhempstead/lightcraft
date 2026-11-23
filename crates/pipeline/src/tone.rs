@@ -16,9 +16,9 @@ pub const LUT_N: usize = 4096;
 /// Nodes of a camera chroma curve, evenly spaced over display luminance 0..=1.
 pub const CHROMA_N: usize = 8;
 const NO_CHROMA: [f32; CHROMA_N] = [1.0; CHROMA_N];
-/// Display level (linear, SDR white = 1) above which [`ToneMap::with_headroom`] opens the SDR
-/// shoulder into the HDR headroom; below it an HDR render is the SDR one.
-pub const HDR_KNEE: f32 = 0.45;
+/// Display level (linear, SDR white = 1) below which an HDR render ([`ToneMap::with_hdr`]) is the
+/// SDR one (Camera Raw, measured: `docs/lr-match.md` → HDR tone).
+pub const HDR_KNEE: f32 = 0.4;
 /// The brightest scene value (linear, raw white = 1) an HDR render's channel-wise tone keeps:
 /// the top of the tone table (`GREY · 2^LUT_MAX_EV`).
 pub const HDR_SCENE_TOP: f32 = 184.0;
@@ -555,23 +555,37 @@ impl ToneMap {
         ToneMap { lut, chroma: NO_CHROMA }
     }
 
-    /// This (SDR) tone map extended for an HDR render reaching `peak` (linear, SDR white = 1;
-    /// 1 or less, or not finite = this map unchanged), as Camera Raw's HDR mode renders an edit:
-    /// shadows and midtones stay the SDR curve's, and the highlights that the SDR shoulder squeezes
-    /// under white open up into the headroom instead. From the scene EV where the SDR curve reaches
-    /// [`HDR_KNEE`] the output gains up to `peak − 1` more along a smoothstep that ends
-    /// `log2(peak) + 1` stops past the SDR white point (where the curve reaches 0.98), so Whites
-    /// (which move that point) and Highlights (which move the tones) work into the headroom. The
-    /// result is monotone where the SDR curve is, never exceeds `peak` and reaches it in range.
+    /// [`Self::with_hdr`] with the Basic-tone sliders at 0.
     pub fn with_headroom(self, peak: f32) -> ToneMap {
+        self.with_hdr(peak, crate::tone_hdr::Sliders::default())
+    }
+
+    /// This (SDR) tone map extended for an HDR render reaching `peak` (linear, SDR white = 1;
+    /// 1 or less, or not finite = this map unchanged), as Camera Raw's HDR mode renders an edit
+    /// (measured, [`crate::tone_hdr`]): shadows and midtones stay the SDR curve's up to about
+    /// [`HDR_KNEE`], the highlights then open up into the headroom along Camera Raw's curve, which
+    /// the edit's Whites and Contrast (`sliders`) move, and the curve is cut at
+    /// `peak`. Monotone where the SDR curve is.
+    pub fn with_hdr(self, peak: f32, sliders: crate::tone_hdr::Sliders) -> ToneMap {
+        self.with_hdr_view(peak, peak, sliders)
+    }
+
+    /// [`Self::with_hdr`] shown on an HDR display whose headroom `view` is less than `peak`: the
+    /// SDR tone moved towards the HDR one by `log2(view) / log2(peak)` in log terms, as a gain map
+    /// of the edit is shown on that display (macOS, Chrome, Lightroom), so it reaches `view` instead
+    /// of being cut there. `view` at or above `peak` (or not finite): [`Self::with_hdr`].
+    pub fn with_hdr_view(self, peak: f32, view: f32, sliders: crate::tone_hdr::Sliders) -> ToneMap {
         if !(peak.is_finite() && peak > 1.0) {
             return self;
         }
         let ev_at = |i: usize| LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
-        let first = |level: f32| self.lut.iter().position(|v| *v >= level).map_or(LUT_MAX_EV, ev_at);
-        let from = first(HDR_KNEE);
-        let top = (first(0.98) + peak.log2() + 1.0).max(from + 0.5);
-        let lut = self.lut.iter().enumerate().map(|(i, v)| (v + (peak - 1.0) * smooth(from, top, ev_at(i))).clamp(0.0, peak)).collect();
+        let mut lut = crate::tone_hdr::extend(&self.lut, ev_at, peak, sliders);
+        if view.is_finite() && view < peak {
+            let w = (view.max(1.0).log2() / peak.log2()).clamp(0.0, 1.0);
+            for (h, s) in lut.iter_mut().zip(&self.lut) {
+                *h = if *s > 0.0 && h.is_finite() { (s * (*h / s).powf(w)).clamp(0.0, view.max(1.0)) } else { s.max(0.0) };
+            }
+        }
         ToneMap { lut, chroma: self.chroma }
     }
 
@@ -696,6 +710,27 @@ mod tests_headroom {
                 }
                 assert!(h.lut().last().copied().unwrap_or(0.0) > peak * 0.99, "{peak}");
             }
+        }
+    }
+
+    #[test]
+    fn a_display_with_less_headroom_sees_the_edit_as_a_gain_map_shows_it() {
+        let s = crate::tone_hdr::Sliders::default();
+        for sdr in maps() {
+            let full = sdr.clone().with_hdr(16.0, s);
+            assert_eq!(sdr.clone().with_hdr_view(16.0, 32.0, s).lut(), full.lut());
+            let view = sdr.clone().with_hdr_view(16.0, 4.0, s);
+            let mut prev = -1.0;
+            for ((v, f), b) in view.lut().iter().zip(full.lut()).zip(sdr.lut()) {
+                // between the SDR and the HDR tone, half way in stops (4 = half of 16's stops)
+                assert!(*v >= prev - 1e-6 && *v <= 4.0 + 1e-6 && *v >= b.min(*f) - 1e-6 && *v <= f.max(*b) + 1e-6);
+                if *b > 0.01 {
+                    assert!((v.log2() - 0.5 * (b.log2() + f.log2())).abs() < 1e-3);
+                }
+                prev = *v;
+            }
+            // reaches the display's headroom instead of being cut at it
+            assert!(view.lut().last().copied().unwrap_or(0.0) > 3.9);
         }
     }
 
