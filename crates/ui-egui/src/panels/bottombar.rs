@@ -104,7 +104,7 @@ fn develop_views(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 }
 
 /// Width of the centre group: the rating/flag pill.
-const PILL_W: f32 = 196.0;
+const PILL_W: f32 = 228.0; // stars, flags and the fav. heart
 
 /// The rating/flag pill and copy/paste settings, between `from` and `to` (the side groups): the
 /// copy buttons go first when there is no room (they are in the Edit menu too), then the pill.
@@ -148,6 +148,18 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
             crate::panels::compare::target_active(app, &mut params);
             let _ = app.run("photo.flag", params);
         }
+    }
+    // fav. — the heart, apart from the flags (tap H)
+    pill_ui.add_space(6.0);
+    let fav = active.as_ref().is_some_and(|p| p.favorite);
+    let (r, resp) = pill_ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    register(pill_ui.ctx(), "flag:fav", r);
+    let c = if fav { t.fav } else if resp.hovered() { t.text } else { t.icon };
+    paint(pill_ui.painter(), r.shrink(3.0), if fav { Icon::HeartFilled } else { Icon::Heart }, c);
+    if resp.on_hover_text(crate::i18n::tr("fav. (tap H)")).clicked() {
+        let mut params = json!({"favorite": !fav});
+        crate::panels::compare::target_active(app, &mut params);
+        let _ = app.run("photo.favorite", params);
     }
 }
 

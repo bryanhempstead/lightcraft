@@ -143,6 +143,45 @@ fn record(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     true
 }
 
+/// How long H is held before it does what H is bound to instead of toggling fav.
+pub const H_HOLD: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// H (no modifiers): a quick tap toggles fav. (the heart); held for [`H_HOLD`] it does exactly what
+/// H did before — the press is replayed through the normal shortcuts (in Masking: the pins; else
+/// the Remove tool; or the user's own binding, Bryan's Hue panel). Bryan, 2026-11-23: "a single
+/// quick click of h with a heart, but if I click and hold it does what it did before".
+fn tap_or_hold_h(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if app.h_replay {
+        // the replayed press: let the shortcuts below have it
+        app.h_replay = false;
+        return;
+    }
+    let (down, pressed) = ctx.input(|i| {
+        let fresh = i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::H, pressed: true, repeat: false, modifiers, .. } if modifiers.is_none()));
+        (i.key_down(Key::H) && i.modifiers.is_none(), fresh)
+    });
+    // every plain H press (and its key repeats) is ours: the old action must not also fire on press
+    ctx.input_mut(|i| while i.consume_key(Modifiers::NONE, Key::H) {});
+    if pressed && app.h_down.is_none() {
+        app.h_down = Some((std::time::Instant::now(), false));
+    }
+    let Some((at, fired)) = app.h_down else { return };
+    if !down {
+        app.h_down = None;
+        if !fired {
+            let _ = app.run("photo.toggleFavorite", json!({}));
+        }
+    } else if !fired && at.elapsed() >= H_HOLD {
+        app.h_down = Some((at, true));
+        app.h_replay = true;
+        app.synthetic.push(egui::Event::Key { key: Key::H, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        ctx.request_repaint();
+    } else if !fired {
+        ctx.request_repaint_after(H_HOLD.saturating_sub(at.elapsed()));
+    }
+}
+
+
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // Tab hides the panels (Classic) rather than walking the keyboard focus through buttons: a
     // focus egui gave a widget that isn't a text field is let go, so the keys keep working
@@ -167,9 +206,28 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if ctx.egui_wants_keyboard_input() || crate::widgets::slider_typing(ctx) {
         return;
     }
+    // a slider picked by its name owns the arrows (the slider reads them); Esc lets go of it
+    if crate::widgets::picked_slider(ctx).is_some() {
+        if esc {
+            ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+            crate::widgets::unpick_slider(ctx);
+            return;
+        }
+        let arrows = ctx.input(|i| {
+            !i.modifiers.command && !i.modifiers.alt && [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight].iter().any(|k| i.key_pressed(*k))
+        });
+        if arrows {
+            return;
+        }
+    }
     if record(app, ctx) {
         return;
     }
+    // an open dialog has the keyboard: nothing behind it reacts (Esc / Return are the dialog's)
+    if app.ui.dialog.is_some() {
+        return;
+    }
+    tap_or_hold_h(app, ctx);
     // the galleries. tab: ⌘A / Esc pick its photos, not the library's
     if app.ui.view == crate::state::ViewMode::Galleries && crate::panels::galleries::keys(app, ctx) {
         return;

@@ -224,6 +224,13 @@ impl Frame {
         Point::new(p.x * self.ow / l, p.y * self.oh / l)
     }
 
+    /// Whether a `w × h` output minifies the crop enough to be sampled at twice its size and
+    /// averaged 2 × 2 (see [`Frame::sample`]): more than 1.25 crop pixels per output pixel.
+    pub fn supersample(&self, w: usize, h: usize) -> bool {
+        let crop_px = self.crop.rect_px(self.ow, self.oh);
+        crop_px.width() / self.full_size(w, h).0.max(1) as f64 > 1.25 && w > 1 && h > 1
+    }
+
     /// How [`Frame::sample`] resamples a (EXIF-oriented) source of `src_w × src_h` into `w × h`.
     pub fn sample_plan(&self, src_w: usize, src_h: usize, w: usize, h: usize) -> SamplePlan {
         let (ow, oh) = if self.orient.swaps_axes() { (src_h, src_w) } else { (src_w, src_h) };
@@ -251,7 +258,22 @@ impl Frame {
 
     /// [`Frame::sample`] from the source already turned by [`Frame::orient`] (so a caller
     /// sampling many windows of one frame orients it once).
+    ///
+    /// A minified output is sampled at 2 × its size and box-averaged 2 × 2. 🚨 Bryan, 2026-11-23
+    /// ("the images look compressed … when I zoom it clears up"): one Mitchell prefilter to the
+    /// output size and then a bilinear tap between its pixels (the crop, the straighten angle, the
+    /// lens warp) blurred every view and export twice — a quarter of a plain Lanczos downscale's
+    /// fine detail. Twice the pixels through the same taps, then a 2 × 2 average, keeps the grain
+    /// and hair detail without aliasing.
     pub fn sample_oriented(&self, o: &Rgb32f, w: usize, h: usize) -> Rgb32f {
+        if self.supersample(w, h) {
+            let big = self.sample_oriented_at(o, w * 2, h * 2);
+            return resize(&big, w, h, Filter::Box);
+        }
+        self.sample_oriented_at(o, w, h)
+    }
+
+    fn sample_oriented_at(&self, o: &Rgb32f, w: usize, h: usize) -> Rgb32f {
         let (src_w, src_h) = if self.orient.swaps_axes() { (o.height, o.width) } else { (o.width, o.height) };
         let plan = self.sample_plan(src_w, src_h, w, h);
         let base = match plan.prefilter {

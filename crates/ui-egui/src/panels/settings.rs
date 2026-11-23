@@ -59,9 +59,13 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
             let h = (ui.ctx().content_rect().height() - 260.0).clamp(240.0, 640.0);
             egui::ScrollArea::vertical()
                 .id_salt("settingsInterface")
+                .scroll_source(egui::containers::scroll_area::ScrollSource { scroll_bar: true, mouse_wheel: true, ..egui::containers::scroll_area::ScrollSource::NONE })
                 .max_height(h)
                 .auto_shrink([false, true])
-                .show(ui, |ui| interface_tab(app, ui, &t));
+                .show(ui, |ui| {
+                    interface_tab(app, ui, &t);
+                    crate::widgets::reveal_in_scroll(ui);
+                });
         }
         "identity" => identity_tab(app, ui, &t),
         "develop" => develop_tab(app, ui, &t),

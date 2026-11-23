@@ -120,6 +120,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     });
     let mut close = false;
     let mut confirm = false;
+    // the OK button this frame (empty: none) and whether it only closes: Return presses it
+    let mut ok_button: (bool, bool) = (false, false);
     // "Export One File" / "Export 12 Files", as Lightroom titles it
     let export_title = if matches!(dlg, Dialog::Export { .. }) { crate::export_dialog::title(app) } else { String::new() };
     let title: String = match &dlg {
@@ -544,6 +546,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 Dialog::SyncSettings { groups, match_exposure, auto_align, match_color, masks } => {
                     let n = app.session.selection.ids.len().saturating_sub(1);
                     ui.label(egui::RichText::new(crate::i18n::tr_format!("Copy to {n} other selected photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
+                    // the reference: the first photo picked (Session::sync_source)
+                    let from = app.session.sync_source().and_then(|id| app.session.catalog.photo(id)).map(|p| p.file_name.clone()).unwrap_or_default();
+                    let r = ui.label(egui::RichText::new(format!("{} {from}", crate::i18n::tr("from:"))).color(t.text));
+                    crate::widgets::register(ui.ctx(), "syncFrom", r.rect);
+                    ui.add_space(8.0);
                     group_checklist(app, ui, "syncGroup", groups, Some(masks));
                     ui.add_space(12.0);
                     ui.label(egui::RichText::new(crate::i18n::tr("Then, on each photo")).color(t.text_dim));
@@ -836,6 +843,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     _ if informational => "Close",
                     _ => "OK",
                 };
+                ok_button = (!ok.is_empty(), informational);
                 let r = (!ok.is_empty()).then(|| ui.button(crate::i18n::tr(ok)));
                 if let Some(r) = &r {
                     crate::widgets::register(ui.ctx(), "button:dialogOk", r.rect);
@@ -858,6 +866,21 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         close = true;
+    }
+    // Return presses the OK button (Bryan, 2026-11-23: "if I hit enter, then it will hit OK for me")
+    // — unless a text box still has the keyboard (a one-line field lets go of it on Return, so its
+    // Return confirms too; a multi-line note keeps it)
+    if ok_button.0
+        && !confirm
+        && !close
+        && !ctx.egui_wants_keyboard_input()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+    {
+        if ok_button.1 {
+            close = true;
+        } else {
+            confirm = true;
+        }
     }
     // a dialog the action opens (Export's Existing File question) replaces this one
     let mut follow = None;

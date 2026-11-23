@@ -271,6 +271,7 @@ impl Op {
             Op::RemovePhoto { id }
             | Op::SetRating { id, .. }
             | Op::SetFlag { id, .. }
+            | Op::SetFavorite { id, .. }
             | Op::SetLabel { id, .. }
             | Op::SetDevelop { id, .. }
             | Op::SetMeta { id, .. }

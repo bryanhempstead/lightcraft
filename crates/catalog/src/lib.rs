@@ -93,6 +93,11 @@ pub enum Op {
         id: PhotoId,
         flag: Flag,
     },
+    /// fav. on or off (`Photo.favorite`).
+    SetFavorite {
+        id: PhotoId,
+        favorite: bool,
+    },
     SetLabel {
         id: PhotoId,
         label: Option<ColorLabel>,
@@ -474,6 +479,10 @@ impl Catalog {
             Op::SetFlag { id, flag } => {
                 let p = self.photo_mut(id)?;
                 Op::SetFlag { id, flag: std::mem::replace(&mut p.flag, flag) }
+            }
+            Op::SetFavorite { id, favorite } => {
+                let p = self.photo_mut(id)?;
+                Op::SetFavorite { id, favorite: std::mem::replace(&mut p.favorite, favorite) }
             }
             Op::SetLabel { id, label } => {
                 let p = self.photo_mut(id)?;

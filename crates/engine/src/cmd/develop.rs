@@ -904,7 +904,8 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             |s, p| {
                 let c = "develop.sync";
-                let id = active(s, c)?;
+                // the first photo picked (Bryan: "the first photo that I pick is the sync reference")
+                let id = s.sync_source().ok_or_else(|| bad(c, "no active photo"))?;
                 let groups = groups_param(s, p, c)?.unwrap_or_else(SettingsGroup::default_copy);
                 let masks = masks_param(p, c)?;
                 let (match_exp, align) = (bool_or(p, "matchExposure", false), bool_or(p, "autoAlign", false));

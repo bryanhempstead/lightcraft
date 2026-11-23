@@ -6,6 +6,23 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [x] (Claude fix session, 2026-11-23 13:00) **Sharp views + exports, console as a drag, fav., picked sliders** —
+  `geometry::Frame::supersample` / `sample_oriented` + gpu `render::sample`: a minified output is sampled at 2× and
+  box-averaged (was Mitchell prefilter → bilinear tap = double blur; Laplacian sharpness of Bryan's loupe 0.13 → 0.23,
+  a Lanczos downscale 0.28; exports at reduced size 0.18 → 0.28); `panels::detail::pixel_exact` draws a render made for
+  the view pixel for pixel. Monogram/MIDI moves are one interaction (`keymap::console_begin` / `console_tick`, 350 ms
+  settle: drafts, no history/journal/XMP per tick). fav.: `Photo.favorite`, `Op::SetFavorite`, catalog VERSION 11,
+  `cmd:photo.favorite` / `photo.toggleFavorite`, `fav:yes` search, `Filter.favorite`, heart on grid / filmstrip /
+  toolbar / context menu; tap H = fav., hold H 400 ms = H's binding (`shortcuts::tap_or_hold_h`). Click a slider's
+  name = picked (`widgets::picked_slider`): ↑/↓ + wheel change it, ←/→ next slider, click elsewhere / Esc lets go.
+  `ui.key {state: down|up}`. Console driver side (~/.hammerspoon): slider rev. honoured, Shadows/Highlights reversed.
+  Sync Settings copies from the FIRST photo picked (`Session::sync_from` / `sync_source`, set in `library.select`;
+  the dialog says "from: <file>"). Every dialog: Return presses its OK (`dialogs::show`), and no shortcut fires behind
+  an open dialog (`shortcuts::handle`). Settings ▸ Interface: automation clicks wait for a still widget and scroll a
+  hidden one into view (`Headless::request`, `widgets::reveal_in_scroll` / `ask_reveal`, `control::Outcome::Retry`)
+  — the 4 Settings tests broken by this morning's scrolling Interface tab pass again.
+  Left: a filter-bar heart toggle (only `fav:yes` search for now); merges. area; wheel-over-photo = next/previous
+  photo option + menu toggles; ⌘E → PhotoCraft (Bryan asked 11-23).
 - [x] (Claude fix session, 2026-11-23 09:02) **Lightroom-import repair APPLIED to Bryan's real library** (he OK'd it in the
   coordinator session: "oka fix it now"; it never ran there because the Mac was out of processes — Hammerspoon appboost
   spawn storm, fixed in ~/.hammerspoon). Backup first: `Backups/2026-11-23 pre-lr-repair/` (full catalog.snap, cmp-checked).

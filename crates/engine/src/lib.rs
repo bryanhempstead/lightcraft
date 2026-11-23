@@ -171,6 +171,10 @@ pub struct Session {
     pub filter: Filter,
     pub sort: Sort,
     pub selection: Selection,
+    /// The photo a multi-selection was started from (the first one picked): Sync Settings copies
+    /// from it even after ⌘- / ⇧-clicks moved the active photo (Bryan, 2026-11-23). See
+    /// [`Session::sync_source`].
+    pub sync_from: Option<PhotoId>,
     /// The grid order for the current source/filter/sort (cached by catalog revision).
     /// Shared, so frontends can hold it across frames without copying ([`Session::visible_shared`]).
     visible: Arc<[PhotoId]>,
@@ -375,6 +379,7 @@ impl Session {
             filter: Filter::default(),
             sort: Sort::default(),
             selection: Selection::default(),
+            sync_from: None,
             visible: Vec::new().into(),
             visible_key: None,
             visible_gen: 0,
@@ -790,6 +795,12 @@ impl Session {
     // ---------------------------------------------------------------- develop edits
 
     /// The photo being edited (the active photo).
+    /// Where Sync Settings copies from: the first photo picked for this selection, while it is
+    /// still selected; else the active photo.
+    pub fn sync_source(&self) -> Option<PhotoId> {
+        self.sync_from.filter(|r| self.selection.contains(*r)).or_else(|| self.active())
+    }
+
     pub fn active(&self) -> Option<PhotoId> {
         self.selection.active.filter(|id| self.catalog.photo(*id).is_some())
     }

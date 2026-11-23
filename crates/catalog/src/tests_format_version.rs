@@ -184,9 +184,10 @@ fn op_variants_are_versioned() {
             Op::SetXmpSync { .. } => 6,
             Op::SetVideo { .. } | Op::SetRecord { .. } => 8,
             Op::SetRegions { .. } => 9,
+            Op::SetFavorite { .. } => 11,
         }
     }
-    let newest = since(&Op::SetRegions { id: PhotoId(1), regions: Vec::new() });
+    let newest = since(&Op::SetFavorite { id: PhotoId(1), favorite: true });
     // a format can also add a field (v5: `Meta.iptc_ext`), so the newest op may be older
     assert!(newest <= VERSION, "an op newer than the current format version");
 }

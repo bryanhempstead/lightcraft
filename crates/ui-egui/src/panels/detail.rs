@@ -185,6 +185,21 @@ pub(crate) fn fit_texture_rect(area: Rect, size: [usize; 2]) -> Rect {
     Rect::from_center_size(area.center(), vec2(w * scale, h * scale))
 }
 
+/// A render made for this view drawn pixel for pixel: when `rect` is within 2 % of the texture's own
+/// size on screen, the texture's exact size, its corner on the screen's pixel grid. 🚨 Bryan,
+/// 2026-11-23 ("the images look compressed … when I zoom it clears up"): a 2560 px render drawn
+/// into 2550.5 px starting at x = 733.8 px blended every pixel with its neighbour — half the
+/// sharpness of the same render shown 1:1.
+pub(crate) fn pixel_exact(rect: Rect, size: [usize; 2], ppp: f32) -> Rect {
+    let (w, h) = (size[0].max(1) as f32, size[1].max(1) as f32);
+    if ppp.is_nan() || ppp <= 0.0 || ((rect.width() * ppp) / w - 1.0).abs() > 0.02 || ((rect.height() * ppp) / h - 1.0).abs() > 0.02 {
+        return rect;
+    }
+    let want = vec2(w / ppp, h / ppp);
+    let min = rect.center() - want / 2.0;
+    Rect::from_min_size(pos2((min.x * ppp).round() / ppp, (min.y * ppp).round() / ppp), want)
+}
+
 /// Keep the viewport inside the photo; axes smaller than the viewport stay centred.
 fn bounded_pan(area: Rect, size: egui::Vec2, pan: (f32, f32)) -> (f32, f32) {
     let bound = |visible: f32, image: f32, centre: f32| {
@@ -442,7 +457,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         } else {
             return "none";
         };
-        let image_rect = fit_texture_rect(r, tex.size);
+        let image_rect = pixel_exact(fit_texture_rect(r, tex.size), tex.size, ppp);
         // the HDR rendition where the window can show it (`hdr_view`), else the 8-bit texture
         let id = match (&tex.hdr, hdr_shown.borrow_mut().as_mut()) {
             (Some(px), Some(view)) => view.texture(&format!("{slot:?}"), px).unwrap_or(tex.tex.id()),
@@ -470,7 +485,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     } else if let Some((_key, label)) = &hover_key
         && let Some(tex) = app.renderer.textures.get(&Slot::Hover).filter(|t| t.photo == id)
     {
-        let hover_rect = fit_texture_rect(img_rect, tex.size);
+        let hover_rect = pixel_exact(fit_texture_rect(img_rect, tex.size), tex.size, ppp);
         p.image(tex.tex.id(), hover_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         let g = p.layout_no_wrap(label.clone(), t.font(12.0), Color32::WHITE);
         let bg = Rect::from_min_size(hover_rect.left_top() + vec2(8.0, 8.0), g.size() + vec2(16.0, 8.0));
@@ -548,7 +563,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let left_right = app.ui.before_after == BeforeAfter::Split;
         let mid = if left_right { img_rect.center().x } else { img_rect.center().y };
         if let Some(tex) = app.renderer.textures.get(&Slot::Before).filter(|t| t.photo == id) {
-            let before_rect = fit_texture_rect(img_rect, tex.size);
+            let before_rect = pixel_exact(fit_texture_rect(img_rect, tex.size), tex.size, ppp);
             let (half, uv) = if left_right {
                 (Rect::from_min_max(before_rect.min, pos2(before_rect.center().x, before_rect.bottom())), pos2(0.5, 1.0))
             } else {
@@ -2301,9 +2316,22 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
 
 #[cfg(test)]
 mod preview_geometry_tests {
-    use super::{fit_rect, fit_texture_rect};
+    use super::{fit_rect, fit_texture_rect, pixel_exact};
     use crate::state::Zoom;
     use egui::{Rect, pos2, vec2};
+
+    #[test]
+    fn a_render_made_for_the_view_is_drawn_pixel_for_pixel() {
+        // Bryan's loupe on 11-23: a 2560 px render fitted into 1275.2 pt at x = 366.9 pt, 2 px per point
+        let fitted = fit_texture_rect(Rect::from_min_size(pos2(366.88, 66.0), vec2(1275.23, 850.16)), [2560, 1707]);
+        let r = pixel_exact(fitted, [2560, 1707], 2.0);
+        assert_eq!((r.width() * 2.0, r.height() * 2.0), (2560.0, 1707.0));
+        assert_eq!(((r.min.x * 2.0).fract(), (r.min.y * 2.0).fract()), (0.0, 0.0));
+        assert!((r.center() - fitted.center()).length() < 1.0);
+        // a stand-in (thumbnail) or a draft is still scaled to fit
+        let small = fit_texture_rect(Rect::from_min_size(pos2(0.0, 0.0), vec2(1275.0, 850.0)), [1024, 683]);
+        assert_eq!(pixel_exact(small, [1024, 683], 2.0), small);
+    }
 
     #[test]
     fn portrait_preview_keeps_its_ratio_inside_a_landscape_frame() {

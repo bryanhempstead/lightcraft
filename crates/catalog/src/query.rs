@@ -33,6 +33,9 @@ pub struct Filter {
     pub rating: u8,
     pub rating_op: RatingOp,
     pub flag: Option<Flag>,
+    /// Only fav. photos (the filter bar's heart).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub favorite: bool,
     pub label: Option<ColorLabel>,
     /// Only these photos (Find Similar results…); empty = no constraint.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -176,6 +179,7 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
         return match field {
             "rating" | "stars" => cmp(p.rating as f64, val),
             "flag" => Flag::parse(val) == Some(p.flag),
+            "fav" | "favorite" | "heart" => matches!(val, "yes" | "y" | "true" | "1" | "on") == p.favorite,
             "label" | "color" => p.label.is_some_and(|l| format!("{l:?}").eq_ignore_ascii_case(val)),
             "iso" => p.meta.iso.is_some_and(|i| cmp(i as f64, val)),
             "f" | "aperture" => p.meta.aperture.is_some_and(|a| cmp(a as f64, val)),
@@ -366,7 +370,7 @@ impl Filter {
                 return false;
             }
         }
-        if self.flag.is_some_and(|f| f != p.flag) || self.label.is_some_and(|l| Some(l) != p.label) || self.kind.is_some_and(|k| k != p.kind) {
+        if (self.favorite && !p.favorite) || self.flag.is_some_and(|f| f != p.flag) || self.label.is_some_and(|l| Some(l) != p.label) || self.kind.is_some_and(|k| k != p.kind) {
             return false;
         }
         if self.edited.is_some_and(|e| e != p.is_edited()) {

@@ -37,6 +37,8 @@ impl ControlRequest {
 
 pub enum Outcome {
     Done(Value),
+    /// Not yet: handle the same request again on a later frame (a widget being scrolled into view).
+    Retry,
     Screenshot { path: Option<String>, headless: bool },
 }
 
@@ -179,6 +181,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "ui.clickWidget" | "ui.dragWidget" | "ui.hoverWidget" => {
             let Some(id) = s("id") else { return err("missing `id`") };
             let Some(r) = widget_rect(app, id) else { return err(format!("no widget `{id}` on screen (see ui.widgets)")) };
+            // scrolled out of its panel's view (Settings ▸ Interface): scroll it in first, then retry
+            if crate::widgets::ask_reveal(ctx, id, r) {
+                ctx.request_repaint();
+                return Outcome::Retry;
+            }
             let m = modifiers(p);
             // optional relative position inside the widget (0..1)
             let at = egui::pos2(r.left() + r.width() * f("fx").unwrap_or(0.5) as f32, r.top() + r.height() * f("fy").unwrap_or(0.5) as f32);
@@ -256,8 +263,14 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "ui.key" => {
             let Some(k) = s("key").and_then(key_from) else { return err("unknown or missing `key`") };
             let m = modifiers(p);
-            app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: m });
-            app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: m });
+            // {state?: "down" | "up"}: only the press or only the release (a held key); both by default
+            let state = s("state");
+            if state != Some("up") {
+                app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: m });
+            }
+            if state != Some("down") {
+                app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: m });
+            }
             ctx.request_repaint();
             ok(Value::Null)
         }

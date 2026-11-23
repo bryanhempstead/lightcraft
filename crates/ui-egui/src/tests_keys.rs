@@ -52,19 +52,26 @@ fn lightroom_desktop_keys() {
     let hist = h.app.ui.histogram;
     key(&mut h, "0", json!({"cmd": true}));
     assert_eq!(h.app.ui.histogram, !hist, "⌘0 = histogram");
-    // H while masking: pins; outside it: the Remove tool
+    // H held (a tap is fav., Bryan 2026-11-23) while masking: pins; outside it: the Remove tool
+    let hold_h = |h: &mut Headless| {
+        key(h, "h", json!({"state": "down"}));
+        assert!(h.step_until(Duration::from_secs(3), |h| h.app.h_down.is_some_and(|(_, fired)| fired) && !h.app.h_replay));
+        h.step();
+        key(h, "h", json!({"state": "up"}));
+        h.step();
+    };
     exec(&mut h, "panel.masking", json!({}));
     h.step();
     assert_eq!(h.app.ui.right, RightPanel::Masking);
     assert!(h.app.ui.mask_pins);
-    key(&mut h, "h", json!({}));
+    hold_h(&mut h);
     assert!(!h.app.ui.mask_pins, "H hides the pins");
     assert_eq!(h.app.ui.right, RightPanel::Masking, "and stays in Masking");
-    key(&mut h, "h", json!({}));
+    hold_h(&mut h);
     assert!(h.app.ui.mask_pins);
     exec(&mut h, "panel.edit", json!({}));
     h.step();
-    key(&mut h, "h", json!({}));
+    hold_h(&mut h);
     assert_eq!(h.app.ui.right, RightPanel::Remove, "H = Remove outside Masking");
     // the desktop profile: Z picks, P shows / hides the photos (left) panel
     exec(&mut h, "keys.set", json!({"profile": "desktop"}));
@@ -295,6 +302,116 @@ fn lands_where_i_left_off() {
     assert_eq!(back.left_off, h.app.ui.left_off);
     // the top bar button is there
     assert!(h.app.widgets.iter().any(|(id, _)| id == "button:leftOff"));
+}
+
+/// fav.: a quick tap of H toggles the heart on the selected photos; H held does what H is bound
+/// to instead (Bryan's keymap: the Hue panel) and leaves the heart alone.
+#[test]
+fn tapping_h_toggles_fav_and_holding_h_runs_its_binding() {
+    let mut h = demo();
+    let id = h.app.session.active().unwrap();
+    let fav = |h: &Headless| h.app.session.catalog.photo(id).unwrap().favorite;
+    h.request("ui.key", json!({"key": "h"}), T);
+    h.step();
+    assert!(fav(&h), "tap: fav. on");
+    assert_eq!(h.app.session.catalog.count(&lightcraft_catalog::Filter { text: "fav:yes".into(), ..Default::default() }, |_| true), 1);
+    h.request("ui.key", json!({"key": "h"}), T);
+    h.step();
+    assert!(!fav(&h), "tap again: off");
+    // held: past H_HOLD the binding runs, the release does nothing more
+    h.request("ui.key", json!({"key": "h", "state": "down"}), T);
+    assert!(h.step_until(Duration::from_secs(3), |h| h.app.h_down.is_some_and(|(_, fired)| fired)), "the hold ran H's binding");
+    h.request("ui.key", json!({"key": "h", "state": "up"}), T);
+    h.step();
+    assert!(h.app.h_down.is_none());
+    assert!(!fav(&h), "a hold never toggles fav.");
+}
+
+/// A slider picked by its name: ↑ / ↓ and the wheel change it, → picks the next slider, a click on
+/// anything without a name lets go (and the arrows go back to stepping photos).
+#[test]
+fn a_slider_picked_by_its_name_takes_the_arrows_and_the_wheel() {
+    let mut h = demo();
+    h.request("ui.set", json!({"view": "detail", "module": "develop", "right": "edit"}), T);
+    h.step();
+    let id = h.app.session.active().unwrap();
+    let dev = |h: &Headless| h.app.session.develop_of(id).unwrap_or_default();
+    h.request("ui.clickWidget", json!({"id": "sliderLabel:light.shadows"}), T);
+    h.step();
+    assert_eq!(crate::widgets::picked_slider(&h.view.ctx).as_deref(), Some("light.shadows"));
+    let s0 = dev(&h).light.shadows;
+    h.request("ui.key", json!({"key": "up"}), T);
+    h.step();
+    assert!(dev(&h).light.shadows > s0, "↑ raises the picked slider");
+    assert_eq!(h.app.session.active(), Some(id), "the arrows don't step photos while a slider is picked");
+    // the wheel over the panel: two notches up
+    let label = h.app.widgets.iter().find(|(w, _)| w == "sliderLabel:light.shadows").map(|(_, r)| *r).unwrap();
+    h.request("ui.move", json!({"x": label.center().x, "y": label.center().y}), T);
+    let s1 = dev(&h).light.shadows;
+    h.request("ui.scroll", json!({"dy": 2.0, "unit": "line"}), T);
+    h.step();
+    assert!(dev(&h).light.shadows > s1, "the wheel raises it: {} → {}", s1, dev(&h).light.shadows);
+    // → : the next slider (Whites follows Shadows)
+    h.request("ui.key", json!({"key": "right"}), T);
+    h.step();
+    h.step();
+    assert_eq!(crate::widgets::picked_slider(&h.view.ctx).as_deref(), Some("light.whites"));
+    // a click on the photo lets go
+    let img = h.app.image_rect.unwrap();
+    h.request("ui.click", json!({"x": img.center().x, "y": img.center().y}), T);
+    h.step();
+    h.step();
+    assert_eq!(crate::widgets::picked_slider(&h.view.ctx), None);
+}
+
+/// Sync Settings copies from the FIRST photo picked, even after ⌘-clicks moved the active photo;
+/// while its box is open the keys are its own (a rating key does nothing behind it) and Return
+/// presses OK (Bryan, 2026-11-23).
+#[test]
+fn sync_copies_from_the_first_pick_and_return_presses_ok() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    let pid = |i: usize| lightcraft_catalog::PhotoId(ids[i]);
+    exec(&mut h, "library.select", json!({"ids": [ids[0]]}));
+    exec(&mut h, "develop.set", json!({"control": "light.exposure", "value": 1.25}));
+    exec(&mut h, "library.select", json!({"ids": [ids[1]], "mode": "toggle"}));
+    exec(&mut h, "library.select", json!({"ids": [ids[2]], "mode": "toggle"}));
+    assert_eq!(h.app.session.active(), Some(pid(2)), "the last ⌘-click is shown");
+    assert_eq!(h.app.session.sync_source(), Some(pid(0)), "the first pick is the reference");
+    exec(&mut h, "dialog.syncSettings", json!({}));
+    h.step();
+    let rating = h.app.session.catalog.photo(pid(2)).unwrap().rating;
+    h.request("ui.key", json!({"key": "4"}), T);
+    h.step();
+    assert_eq!(h.app.session.catalog.photo(pid(2)).unwrap().rating, rating, "keys don't reach the grid behind the box");
+    h.request("ui.key", json!({"key": "enter"}), T);
+    h.step();
+    assert!(h.app.ui.dialog.is_none(), "Return pressed OK");
+    for i in [1, 2] {
+        assert_eq!(h.app.session.develop_of(pid(i)).unwrap().light.exposure, 1.25, "photo {i} synced from the first pick");
+    }
+}
+
+/// A console slider moved through 20 positions is one drag: draft renders while it moves, then one
+/// history step once it has been still ([`crate::keymap::CONSOLE_SETTLE`]) — not 20 committed edits
+/// (Bryan, 2026-11-23: the Monogram lagged behind Lightroom).
+#[test]
+fn a_console_slider_move_is_one_drag_and_one_history_step() {
+    let mut h = demo();
+    h.request("ui.set", json!({"view": "detail"}), T);
+    let id = h.app.session.active().unwrap();
+    let steps = |h: &Headless| h.app.session.catalog.photo(id).unwrap().history.len();
+    let before = steps(&h);
+    for v in (0..=255).step_by(13) {
+        exec(&mut h, "keys.lrinput", json!({"line": format!("Shadows = {v},-100,100")}));
+    }
+    assert!(h.app.session.interaction.is_some(), "moving: an interaction, like a mouse drag");
+    assert_eq!(steps(&h), before, "no history step per tick");
+    let last = h.app.session.develop_of(id).unwrap().light.shadows;
+    assert!(last > 90.0, "the value follows the slider while it moves: {last}");
+    assert!(h.step_until(Duration::from_secs(3), |h| h.app.session.interaction.is_none()), "let go → committed");
+    assert_eq!(steps(&h), before + 1, "one history step for the whole move");
+    assert_eq!(h.app.session.develop_of(id).unwrap().light.shadows, last);
 }
 
 /// Monogram's Lightroom protocol (what its service sends the Lightroom plugin) drives LightCraft:

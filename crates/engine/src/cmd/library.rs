@@ -556,6 +556,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("library.select", format!("no such photo {}", id.0)));
                 }
                 s.end_interaction()?;
+                // the photo the selection grows from: kept while ⌘- / ⇧-clicks add to it
+                let before = s.selection.active.filter(|_| s.selection.ids.len() == 1).or(s.sync_from.filter(|r| s.selection.contains(*r)));
                 match mode {
                     "replace" => {
                         s.selection = Selection { ids: ids.clone(), active: active.or(ids.first().copied()) };
@@ -577,6 +579,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     other => return Err(bad("library.select", format!("unknown mode `{other}`"))),
                 }
+                s.sync_from = if mode == "replace" { s.selection.active } else { before.or(s.selection.active) };
                 s.active_mask = None;
                 s.active_spot = None;
                 Ok(json!({"selected": s.selection.ids.len()}))
@@ -584,6 +587,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("library.selectAll", "Select All", ["Edit"], Some("Cmd+A"), "{}", always, |s, _| {
             let vis = s.visible_cloned();
+            s.sync_from = s.sync_source().filter(|a| vis.contains(a));
             s.selection = Selection { active: s.selection.active.filter(|a| vis.contains(a)).or(vis.first().copied()), ids: vis };
             Ok(json!({"selected": s.selection.ids.len()}))
         }),
@@ -739,6 +743,28 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("photo.unflag", "Unflag", ["Photo", "Set Flag"], Some("U"), "{ids?}", has_selection, |s, p| {
             for_targets(s, p, "Unflag", |id| Some(Op::SetFlag { id, flag: Flag::None }))
         }),
+        // fav. — a heart apart from stars and flags (Bryan, 2026-11-23); the app's tap of H
+        cmd!("photo.favorite", "Set Favorite", ["Photo", "Favorite"], None, "{favorite: bool, ids?}", has_selection, |s, p| {
+            let on = bool_or(p, "favorite", true);
+            let cur: std::collections::HashMap<PhotoId, bool> = s.targets(p).iter().filter_map(|id| s.catalog.photo(*id).map(|ph| (*id, ph.favorite))).collect();
+            let v = for_targets(s, p, if on { "Favorite" } else { "Unfavorite" }, |id| (cur.get(&id).copied()? != on).then_some(Op::SetFavorite { id, favorite: on }))?;
+            Ok(json!({"changed": v["changed"], "favorite": on}))
+        }),
+        cmd!(
+            "photo.toggleFavorite",
+            "Toggle Favorite",
+            ["Photo", "Favorite"],
+            None,
+            "{ids?} — every target a fav. → all off; otherwise all on (one undo step)",
+            has_selection,
+            |s, p| {
+                let targets = s.targets(p);
+                let all = !targets.is_empty() && targets.iter().all(|id| s.catalog.photo(*id).is_some_and(|ph| ph.favorite));
+                let cur: std::collections::HashMap<PhotoId, bool> = targets.iter().filter_map(|id| s.catalog.photo(*id).map(|ph| (*id, ph.favorite))).collect();
+                let v = for_targets(s, p, if all { "Unfavorite" } else { "Favorite" }, |id| (cur.get(&id).copied()? == all).then_some(Op::SetFavorite { id, favorite: !all }))?;
+                Ok(json!({"changed": v["changed"], "favorite": !all}))
+            }
+        ),
         // Lightroom Classic: [ / ] step the rating, ` toggles the flag, Cmd+Up / Cmd+Down raise /
         // lower it — each photo from its own value
         cmd!(

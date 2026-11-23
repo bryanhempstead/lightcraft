@@ -1568,12 +1568,56 @@ fn hud(app: &mut crate::LightcraftApp, control: &str) {
 }
 
 /// Move a develop control (or the crop: `crop.x` / `crop.y` / `crop.scale`) by `delta`.
+/// How long after the console's (or a MIDI controller's) last move its slider counts as let go.
+pub const CONSOLE_SETTLE: std::time::Duration = std::time::Duration::from_millis(350);
+
+/// A console slider / dial (Monogram, MIDI) starts moving `control`: run it like a mouse drag —
+/// one interaction (draft renders, no history step / catalog write / XMP sidecar per tick), ended
+/// by [`console_tick`] once the hardware has been still for [`CONSOLE_SETTLE`]. 🚨 Bryan,
+/// 2026-11-23: "a noticeable delay with the Monogram that wasn't in Lightroom" — every tick was a
+/// committed edit: history, journal, a sidecar written to the photo's drive, a full-size render.
+pub fn console_begin(app: &mut crate::LightcraftApp, control: &str) {
+    let now = std::time::Instant::now();
+    match &app.console_drag {
+        Some((_, c)) if c == control && app.session.interaction.is_some() => {}
+        Some(_) => {
+            let _ = app.session.end_interaction();
+            app.console_drag = None;
+        }
+        None if app.session.interaction.is_some() => return, // a mouse drag owns it
+        None => {}
+    }
+    if app.console_drag.is_none() {
+        let label = lightcraft_develop::controls::find(control).map(|s| s.label.to_string()).unwrap_or_else(|| control.to_string());
+        if app.session.begin_interaction(&label).is_err() {
+            return;
+        }
+    }
+    app.console_drag = Some((now, control.to_string()));
+}
+
+/// Once a frame: the console has been still long enough — commit its move as one history step.
+pub fn console_tick(app: &mut crate::LightcraftApp, ctx: &egui::Context) {
+    let Some((at, _)) = &app.console_drag else { return };
+    let idle = at.elapsed();
+    if idle >= CONSOLE_SETTLE || app.session.interaction.is_none() {
+        let _ = app.session.end_interaction();
+        app.console_drag = None;
+        ctx.request_repaint();
+    } else {
+        ctx.request_repaint_after(CONSOLE_SETTLE - idle);
+    }
+}
+
 pub fn nudge(app: &mut crate::LightcraftApp, control: &str, delta: f64) -> Result<Value, String> {
     let r = match control {
         "crop.x" => app.run("crop.nudge", json!({"x": delta})),
         "crop.y" => app.run("crop.nudge", json!({"y": delta})),
         "crop.scale" => app.run("crop.nudge", json!({"scale": delta})),
-        _ => app.run("develop.adjust", json!({"control": control, "delta": delta})),
+        _ => {
+            console_begin(app, control);
+            app.run("develop.adjust", json!({"control": control, "delta": delta}))
+        }
     };
     if r.is_ok() {
         hud(app, control);
@@ -1611,6 +1655,7 @@ pub fn handle_midi(app: &mut crate::LightcraftApp, ctx: &egui::Context, msgs: Ve
     for a in coalesce(actions) {
         match a {
             MidiAction::Set { control, value } => {
+                console_begin(app, &control);
                 let r = app.run("develop.set", json!({"control": control, "value": value}));
                 if r.is_ok() {
                     hud(app, &control);
@@ -1850,6 +1895,7 @@ pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, Str
             let spec = lightcraft_develop::controls::find(control);
             let value = if control == "wb.temp" { spec.map(|s| crate::widgets::track_value(s, t)).unwrap_or(5500.0) } else { min + t * (max - min) };
             let value = spec.map(|s| value.clamp(s.min.min(s.max), s.max.max(s.min))).unwrap_or(value);
+            console_begin(app, control);
             let r = app.run("develop.set", json!({"control": control, "value": value}));
             if r.is_ok() {
                 hud(app, control);
@@ -1889,6 +1935,7 @@ pub fn lr_input_json(app: &mut crate::LightcraftApp, line: &str) -> Result<Value
         let control = lr_param(&name).ok_or_else(|| format!("{name}: no LightCraft slider for this Monogram input"))?;
         let spec = lightcraft_develop::controls::find(control);
         let value = spec.map(|s| val.clamp(s.min.min(s.max), s.max.max(s.min))).unwrap_or(val);
+        console_begin(app, control);
         let r = app.run("develop.set", json!({"control": control, "value": value}));
         if r.is_ok() {
             hud(app, control);

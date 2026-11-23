@@ -19,6 +19,41 @@ pub fn register(ctx: &egui::Context, id: impl Into<String>, rect: Rect) {
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Registry>(egui::Id::new("lc-registry")).0.push((id, rect)));
 }
 
+/// Memory: the visible part of a scrolling panel ([`reveal_in_scroll`]) and an automation id to
+/// scroll into it.
+const SCROLL_VIEW: &str = "lc-scroll-view";
+const REVEAL: &str = "lc-reveal";
+
+/// Call at the end of a scroll area's contents: notes its visible rect, and scrolls a widget asked
+/// for by [`ask_reveal`] into view (automation — `ui.clickWidget` on a control scrolled out of sight).
+pub fn reveal_in_scroll(ui: &Ui) {
+    let ctx = ui.ctx();
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(SCROLL_VIEW), ui.clip_rect()));
+    let Some(want) = ctx.data(|d| d.get_temp::<String>(egui::Id::new(REVEAL))) else { return };
+    let rect = ctx.data(|d| d.get_temp::<Registry>(egui::Id::new("lc-registry"))).and_then(|r| r.0.iter().rev().find(|(w, _)| *w == want).map(|(_, r)| *r));
+    if let Some(r) = rect {
+        ui.scroll_to_rect_animation(r, Some(egui::Align::Center), egui::style::ScrollAnimation::none());
+        ctx.data_mut(|d| d.remove::<String>(egui::Id::new(REVEAL)));
+    }
+}
+
+/// Stop treating the last scroll view as one (a reveal that never happened).
+pub fn forget_scroll_view(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<Rect>(egui::Id::new(SCROLL_VIEW)));
+}
+
+/// `rect` (a widget's, last frame) lies in a scrolling panel but out of its view: ask the panel to
+/// scroll widget `id` into view. Returns whether it asked.
+pub fn ask_reveal(ctx: &egui::Context, id: &str, rect: Rect) -> bool {
+    let Some(view) = ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(SCROLL_VIEW))) else { return false };
+    let inside_column = rect.center().x >= view.left() && rect.center().x <= view.right();
+    if !inside_column || view.contains_rect(rect) {
+        return false;
+    }
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(REVEAL), id.to_string()));
+    true
+}
+
 pub fn take_registry(ctx: &egui::Context) -> Vec<(String, Rect)> {
     ctx.data_mut(|d| std::mem::take(&mut d.get_temp_mut_or_default::<Registry>(egui::Id::new("lc-registry")).0))
 }
@@ -196,6 +231,50 @@ fn shown_value(spec: &ControlSpec, v: f64) -> String {
 /// A Lightroom slider row (label + value above a track with a hollow ring thumb).
 /// Double-click the label or thumb to reset. Shift-drag = fine adjustment. Click the value to
 /// type one: Return or clicking away applies it, Esc keeps the old one.
+/// The slider picked by clicking its name (Bryan, 2026-11-23): ↑ / ↓ and the scroll wheel change
+/// it, ← / → step to the previous / next slider, a click on anything that isn't a slider's name
+/// (or Esc) lets go. Memory: (control id, the pass it was last drawn in).
+const PICKED: &str = "slider-picked";
+/// The sliders drawn this pass and the last one, in order (for ← / →).
+const ORDER: &str = "slider-order";
+/// The picked slider's wheel move in progress: when the wheel last turned it.
+const WHEEL_AT: &str = "slider-wheel-at";
+
+/// The picked slider's control id, while it is on screen (drawn in this pass or the last).
+pub fn picked_slider(ctx: &egui::Context) -> Option<String> {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|m| m.get_temp::<(String, u64)>(egui::Id::new(PICKED))).filter(|(_, drawn)| drawn + 1 >= pass).map(|(id, _)| id)
+}
+
+/// Let go of the picked slider (Esc, a click elsewhere).
+pub fn unpick_slider(ctx: &egui::Context) {
+    ctx.data_mut(|m| m.remove::<(String, u64)>(egui::Id::new(PICKED)));
+}
+
+fn pick_slider(ctx: &egui::Context, id: &str) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|m| m.insert_temp(egui::Id::new(PICKED), (id.to_string(), pass)));
+}
+
+/// Note `id` as drawn this pass; returns the previous pass's order (complete).
+fn note_order(ctx: &egui::Context, id: &str) -> Vec<String> {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|m| {
+        let (p, mut cur, prev) = m.get_temp::<(u64, Vec<String>, Vec<String>)>(egui::Id::new(ORDER)).unwrap_or_default();
+        let (cur, prev) = if p == pass {
+            (cur, prev)
+        } else {
+            (Vec::new(), std::mem::take(&mut cur))
+        };
+        let mut cur = cur;
+        if !cur.iter().any(|c| c == id) {
+            cur.push(id.to_string());
+        }
+        m.insert_temp(egui::Id::new(ORDER), (pass, cur, prev.clone()));
+        prev
+    })
+}
+
 pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>) -> SliderOut {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
@@ -227,6 +306,20 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     resp.widget_info(|| egui::WidgetInfo::slider(enabled, value, label_text.clone()));
     let label_resp = ui.interact(label_rect, id.with("label"), Sense::click());
     register(ui.ctx(), format!("slider:{}", spec.id), track_rect);
+    register(ui.ctx(), format!("sliderLabel:{}", spec.id), label_rect);
+    let order = note_order(ui.ctx(), spec.id);
+    if enabled && label_resp.clicked() {
+        pick_slider(ui.ctx(), spec.id);
+    }
+    let picked = enabled && picked_slider(ui.ctx()).is_some_and(|p| p == spec.id);
+    if picked {
+        // still on screen: keep it picked; a click on anything but a slider name lets go (a click on
+        // another name picks that one instead — it sets the pick itself)
+        pick_slider(ui.ctx(), spec.id);
+        if ui.input(|i| i.pointer.any_click()) && !label_resp.clicked() {
+            unpick_slider(ui.ctx());
+        }
+    }
     // the value: click it to type an exact one (over the label, so it takes the click)
     let value_resp = ui.interact(value_rect, id.with("value"), if enabled { Sense::click() } else { Sense::hover() });
     register(ui.ctx(), format!("sliderValue:{}", spec.id), value_rect);
@@ -320,6 +413,84 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         if resp.drag_stopped() {
             out.drag_stopped = true;
         }
+        // the picked slider: ↑ / ↓ and the wheel change it, ← / → move the pick along the sliders
+        if picked && out.value.is_none() && typing.is_none() && picked_slider(ui.ctx()).is_some() {
+            let (up, down, left, right, shift, wheel) = ui.input_mut(|i| {
+                let shift = i.modifiers.shift;
+                let m = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+                let keys = (
+                    i.consume_key(m, egui::Key::ArrowUp),
+                    i.consume_key(m, egui::Key::ArrowDown),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
+                );
+                // only over the picked slider's own row: over the photo the wheel zooms, over the
+                // rest of the panel it scrolls (Bryan, 2026-11-23)
+                let over = i.pointer.hover_pos().is_some_and(|p| row.contains(p) && ui.clip_rect().contains(p));
+                // the wheel's own events (a notch = one line = 24 px; trackpads report points)
+                let wheel = if over {
+                    i.events
+                        .iter()
+                        .map(|e| match e {
+                            egui::Event::MouseWheel { unit, delta, .. } => match unit {
+                                egui::MouseWheelUnit::Line => delta.y * 24.0,
+                                egui::MouseWheelUnit::Page => delta.y * 240.0,
+                                egui::MouseWheelUnit::Point => delta.y,
+                            },
+                            _ => 0.0,
+                        })
+                        .sum()
+                } else {
+                    0.0
+                };
+                if over {
+                    i.smooth_scroll_delta = egui::Vec2::ZERO;
+                }
+                (keys.0, keys.1, keys.2, keys.3, shift, wheel)
+            });
+            if left || right {
+                if let Some(i) = order.iter().position(|o| o == spec.id) {
+                    let n = order.len();
+                    let next = if right { (i + 1) % n } else { (i + n - 1) % n };
+                    pick_slider(ui.ctx(), &order[next]);
+                }
+            } else if up || down {
+                let nv = nudged(spec, value, if up { 1.0 } else { -1.0 } * if shift { 5.0 } else { 1.0 });
+                if (nv - value).abs() > 1e-12 {
+                    out.value = Some(nv);
+                    out.drag_started = true;
+                    out.drag_stopped = true;
+                    v = nv;
+                }
+            }
+            // the wheel: one step a notch (a mouse sends ~±50 px, a trackpad a stream of small ones),
+            // run as a drag that ends 350 ms after the last turn — one history step
+            let wheel_id = egui::Id::new(WHEEL_AT);
+            let now = ui.input(|i| i.time);
+            let acc_id = wheel_id.with("acc");
+            let mut acc = ui.data(|m| m.get_temp::<f32>(acc_id)).unwrap_or(0.0) + wheel;
+            let notches = (acc / 24.0).trunc();
+            let began = ui.data(|m| m.get_temp::<f64>(wheel_id));
+            if notches != 0.0 {
+                acc -= notches * 24.0;
+                let nv = nudged(spec, v, notches as f64 * if shift { 5.0 } else { 1.0 });
+                if (nv - v).abs() > 1e-12 {
+                    out.value = Some(nv);
+                    out.drag_started |= began.is_none();
+                    v = nv;
+                }
+                ui.data_mut(|m| m.insert_temp(wheel_id, now));
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(360));
+            } else if let Some(at) = began
+                && now - at > 0.35
+            {
+                out.drag_stopped = true;
+                ui.data_mut(|m| m.remove::<f64>(wheel_id));
+            } else if began.is_some() {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+            }
+            ui.data_mut(|m| m.insert_temp(acc_id, acc));
+        }
         // ↑ / ↓ while the pointer rests on the row nudge the value (⇧: five times as much)
         if enabled && out.value.is_none() && typing.is_none() && ui.rect_contains_pointer(row) {
             let (up, down, shift) = ui.input_mut(|i| {
@@ -340,8 +511,19 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     }
     // paint
     let hovered = resp.hovered() || resp.dragged();
-    let text_c = if enabled { t.text_label } else { t.text_disabled };
+    let picked = enabled && picked_slider(ui.ctx()).is_some_and(|p| p == spec.id);
+    let text_c = if picked {
+        t.text
+    } else if enabled {
+        t.text_label
+    } else {
+        t.text_disabled
+    };
     let p = ui.painter();
+    if picked {
+        // the picked slider: its row tinted and outlined in the accent (inside the row, 2 px clear)
+        p.rect(row.shrink2(vec2(4.0, 1.0)), 4.0, t.accent.gamma_multiply(0.14), Stroke::new(1.0, t.accent.gamma_multiply(0.7)), egui::StrokeKind::Inside);
+    }
     let label = crate::i18n::tr(label_override.unwrap_or(spec.label));
     if classic {
         p.text(label_rect.right_center(), Align2::RIGHT_CENTER, label, t.font(12.0), text_c);

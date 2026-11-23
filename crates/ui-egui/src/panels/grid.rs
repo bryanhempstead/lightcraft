@@ -636,7 +636,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         }
     }
     let show_badges = match app.ui.settings.grid_badges {
-        crate::state::GridBadges::Auto => resp.hovered() || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
+        crate::state::GridBadges::Auto => resp.hovered() || selected || photo.rating > 0 || photo.flag != Flag::None || photo.favorite || photo.label.is_some(),
         crate::state::GridBadges::Always => true,
         crate::state::GridBadges::Never => false,
     };
@@ -667,6 +667,11 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
             Flag::Pick => paint(p, Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::FlagPick, t.pick),
             Flag::Reject => paint(p, Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::FlagReject, t.reject),
             Flag::None => {}
+        }
+        if photo.favorite {
+            // fav.: a heart after the flag (or where the flag would be), 10 px clear of it
+            let hx = if app.ui.settings.grid_flags && photo.flag != Flag::None { x + 24.0 } else { x };
+            paint(p, Rect::from_min_size(pos2(hx, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::HeartFilled, t.fav);
         }
         let mut right = bar.right();
         if photo.is_edited() && app.ui.settings.grid_edit_badge {
@@ -973,6 +978,10 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
     });
+    let fav = app.session.catalog.photo(id).is_some_and(|p| p.favorite);
+    if ui.button(crate::i18n::tr(if fav { "Remove fav." } else { "Add fav." })).clicked() {
+        let _ = app.run("photo.toggleFavorite", json!({}));
+    }
     ui.menu_button(crate::i18n::tr("Set Color Label"), |ui| label_menu(app, ui));
     ui.menu_button(crate::i18n::tr("Add to Album"), |ui| {
         let albums: Vec<_> = app.session.catalog.albums().filter(|a| !a.folder && !a.is_smart()).map(|a| (a.id.0, a.name.clone())).collect();

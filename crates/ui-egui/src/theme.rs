@@ -61,6 +61,8 @@ pub struct Tokens {
     pub thumb_hover: Color32,
     pub accent: Color32,
     pub star: Color32,
+    /// fav.'s heart
+    pub fav: Color32,
     pub pick: Color32,
     pub reject: Color32,
     /// Cautionary notices (e.g. a raw shown from its embedded preview): a muted amber.
@@ -104,6 +106,7 @@ impl Default for Tokens {
             thumb_hover: Color32::from_rgb(0xe0, 0xe0, 0xe0),
             accent: Color32::from_rgb(0x01, 0x65, 0xdd),
             star: Color32::from_rgb(0xd8, 0xd8, 0xd8),
+            fav: Color32::from_rgb(0xe8, 0x5a, 0x74),
             pick: Color32::from_rgb(0xf0, 0xf0, 0xf0),
             reject: Color32::from_rgb(0xe0, 0x4a, 0x4a),
             caution: Color32::from_rgb(0xe3, 0xa8, 0x3c),

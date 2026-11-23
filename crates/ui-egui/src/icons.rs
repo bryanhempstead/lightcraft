@@ -3,6 +3,9 @@
 
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
+/// The heart's outline (fav.), in the 20 × 20 icon box.
+const HEART: [(f32, f32); 8] = [(10.0, 16.5), (3.5, 9.5), (4.0, 5.5), (7.5, 4.0), (10.0, 6.5), (12.5, 4.0), (16.0, 5.5), (16.5, 9.5)];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
     Sidebar,
@@ -78,6 +81,8 @@ pub enum Icon {
     Dots,
     Video,
     Heart,
+    /// fav. on (a filled heart)
+    HeartFilled,
     Edited,
     /// Targeted adjustment: a ring with a centre dot and up/down arrows (drag vertically).
     Target,
@@ -488,7 +493,14 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.rect(2.5, 5.0, 13.0, 15.0, 1.5);
             pen.closed(&[(13.0, 8.5), (17.5, 6.0), (17.5, 14.0), (13.0, 11.5)]);
         }
-        Heart => pen.closed(&[(10.0, 16.5), (3.5, 9.5), (4.0, 5.5), (7.5, 4.0), (10.0, 6.5), (12.5, 4.0), (16.0, 5.5), (16.5, 9.5)]),
+        Heart => pen.closed(&HEART),
+        HeartFilled => {
+            // star-shaped about (10, 10): a fan of triangles from there, then the outline
+            for i in 0..HEART.len() {
+                pen.fill(&[(10.0, 10.0), HEART[i], HEART[(i + 1) % HEART.len()]], color);
+            }
+            pen.closed(&HEART);
+        }
         Edited => {
             pen.circle(10.0, 10.0, 7.0);
             pen.line(&[(7.0, 13.0), (13.0, 7.0)]);

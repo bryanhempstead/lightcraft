@@ -315,7 +315,7 @@ fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog:
     use crate::icons::{Icon, paint};
     use lightcraft_catalog::Flag;
     let edited = ph.is_edited();
-    if ph.rating == 0 && ph.flag == Flag::None && !edited {
+    if ph.rating == 0 && ph.flag == Flag::None && !ph.favorite && !edited {
         return;
     }
     let bar = Rect::from_min_max(pos2(fr.left(), fr.bottom() - 15.0), fr.right_bottom());
@@ -330,6 +330,10 @@ fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog:
         Flag::Pick => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagPick, t.pick),
         Flag::Reject => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagReject, t.reject),
         Flag::None => {}
+    }
+    if ph.favorite {
+        let hx = if ph.flag == Flag::None { x } else { x + 18.0 };
+        paint(p, Rect::from_min_size(pos2(hx, y - 5.0), vec2(10.0, 10.0)), Icon::HeartFilled, t.fav);
     }
     if edited {
         paint(p, Rect::from_min_size(pos2(bar.right() - 13.0, y - 5.0), vec2(10.0, 10.0)), Icon::Sliders, t.text_label);

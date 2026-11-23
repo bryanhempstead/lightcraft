@@ -275,6 +275,23 @@ impl Headless {
     /// Send a control-protocol request (see [`crate::control`]) and run frames until it is
     /// answered, then until its input has been consumed. Returns `{"ok": …, "result"|"error": …}`.
     pub fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Value {
+        // a widget click / hover / drag: wait (a few frames at most) until the widget stops moving —
+        // a dialog that just opened sizes and centres itself over its first frames (Settings'
+        // scrolling Interface tab), and a click at last frame's spot would miss
+        if matches!(method, "ui.clickWidget" | "ui.hoverWidget" | "ui.dragWidget")
+            && let Some(id) = params.get("id").and_then(Value::as_str).map(str::to_string)
+        {
+            let at = |h: &Self| h.app.widgets.iter().rev().find(|(w, _)| *w == id).map(|(_, r)| *r);
+            let mut last = at(self);
+            for _ in 0..20 {
+                self.step();
+                let now = at(self);
+                if now.is_some() && now == last {
+                    break;
+                }
+                last = now;
+            }
+        }
         let (req, rx) = ControlRequest::new(method, params);
         if self.control.send(req).is_err() {
             return json!({"ok": false, "error": "control channel closed"});

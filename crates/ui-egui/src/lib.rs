@@ -337,6 +337,14 @@ pub struct LightcraftApp {
     pub keymap: keymap::Keymap,
     /// Raw MIDI messages from the host's MIDI input (desktop; Settings ▸ ctrl. ▸ midi in).
     pub midi_rx: Option<Receiver<Vec<u8>>>,
+    /// A console / MIDI slider move in progress: its last tick and control ([`keymap::console_begin`]).
+    pub console_drag: Option<(std::time::Instant, String)>,
+    /// H held down since, and whether the hold already ran H's binding ([`shortcuts`]' tap-or-hold).
+    pub h_down: Option<(std::time::Instant, bool)>,
+    /// The next H press is the hold's replay: the shortcuts get it ([`shortcuts`]' tap-or-hold).
+    pub h_replay: bool,
+    /// Control requests to handle again next frame (`control::Outcome::Retry`) and how often they were.
+    pub control_retry: Vec<(ControlRequest, u8)>,
     /// The host's MIDI input status for the ctrl. page ("2 inputs: Monogram…", an error).
     pub midi_status: String,
     /// "Where I left off" tracking for this session ([`leftoff`]).
@@ -409,6 +417,10 @@ impl LightcraftApp {
             library_problem: None,
             keymap: keymap::Keymap::default(),
             midi_rx: None,
+            console_drag: None,
+            h_down: None,
+            h_replay: false,
+            control_retry: Vec::new(),
             midi_status: String::new(),
             left_off: leftoff::Tracker::default(),
             fix_notes: fixnotes::FixNotes::default(),
@@ -695,12 +707,19 @@ impl LightcraftApp {
 
     fn drain_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control_rx.take() else { return };
-        while let Ok(req) = rx.try_recv() {
+        // requests that asked to be handled again (a widget scrolling into view), then new ones
+        let retry = std::mem::take(&mut self.control_retry);
+        for (req, tries) in retry.into_iter().chain(rx.try_iter().map(|r| (r, 0u8))) {
+            if tries >= 6 {
+                // never scrolled into view: click where it is
+                crate::widgets::forget_scroll_view(ctx);
+            }
             let reply = req.reply.clone();
             match control::handle(self, ctx, &req) {
                 control::Outcome::Done(v) => {
                     let _ = reply.send(v);
                 }
+                control::Outcome::Retry => self.control_retry.push((req, tries.saturating_add(1))),
                 control::Outcome::Screenshot { path, headless } => self.push_screenshot(path, headless, reply),
             }
         }
@@ -960,6 +979,7 @@ impl LightcraftApp {
             }
         }
         keymap::poll_midi(self, ctx);
+        keymap::console_tick(self, ctx);
         leftoff::tick(self);
         if self.fonts_ready {
             shortcuts::handle(self, ctx);

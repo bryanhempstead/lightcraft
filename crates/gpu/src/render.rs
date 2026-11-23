@@ -463,8 +463,16 @@ fn coverage_mask(wp: &lightcraft_pipeline::optics::Warp, o2t: &lightcraft_geom::
 /// Resample the source into the output frame (`Frame::sample`). May return the source buffer
 /// itself when the frame is the identity.
 fn sample(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, plan: &Plan<'_>) -> Arc<Buf> {
-    let (w, h) = (plan.w, plan.h);
     let fr = &plan.frame;
+    // a minified output: sampled at 2 × and box-averaged, as `Frame::sample_oriented` does
+    if fr.supersample(plan.w, plan.h) {
+        let big = sample_at(cx, src, src_buf, fr, plan.w * 2, plan.h * 2);
+        return Arc::new(resize(cx, &big, (plan.w * 2, plan.h * 2), (plan.w, plan.h), 3, Filter::Box));
+    }
+    sample_at(cx, src, src_buf, fr, plan.w, plan.h)
+}
+
+fn sample_at(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, fr: &lightcraft_pipeline::geometry::Frame, w: usize, h: usize) -> Arc<Buf> {
     let sp = fr.sample_plan(src.width, src.height, w, h);
     let oriented = if fr.orient == Orientation::Normal {
         src_buf

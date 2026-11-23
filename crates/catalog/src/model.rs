@@ -231,6 +231,9 @@ pub struct Photo {
     pub rating: u8,
     #[serde(default)]
     pub flag: Flag,
+    /// fav. — Bryan's heart, apart from stars and flags (tap H). Catalog only: no XMP field.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub favorite: bool,
     #[serde(default)]
     pub label: Option<ColorLabel>,
     pub develop: Arc<DevelopSettings>,
@@ -423,6 +426,7 @@ impl Photo {
             meta: Meta::default(),
             rating: 0,
             flag: Flag::None,
+            favorite: false,
             label: None,
             develop: Arc::new(DevelopSettings::default()),
             edited: None,
