@@ -44,11 +44,16 @@ pub mod dsrnet;
 #[cfg(feature = "models")]
 pub mod esrgan;
 #[cfg(feature = "models")]
+pub mod genfill;
+#[cfg(feature = "models")]
 pub mod job;
 #[cfg(feature = "models")]
 pub mod lama;
 #[cfg(feature = "models")]
 pub mod netrun;
+#[cfg(feature = "models")]
+#[allow(clippy::all, dead_code)]
+pub mod sd;
 
 pub use lightcraft_denoise_core as denoise;
 pub use options::Options;

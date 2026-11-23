@@ -111,9 +111,59 @@ fn generated_pixels_in_the_cache_replace_the_stand_in_at_every_size() {
     assert!(!red(c), "geometry changed: {c:?}");
 }
 
-/// Opt-in, with the real model: `LC_GEN_MODELS=<a models folder with inpaint/big-lama.safetensors>
-/// LC_GEN_PHOTO=<a JPEG> [LC_OUT=<folder>] cargo test -p lightcraft-engine --features enhance --release -- --ignored
-/// generative_remove_with_lama --nocapture`
+#[test]
+fn engines_have_their_own_keys_and_lama_stand_ins_are_remade() {
+    let mut s = Session::with_demo();
+    no_models(&mut s, "e");
+    s.execute("spot.add", &json!({"generative": true, "points": [[0.55, 0.45]], "size": 0.05})).unwrap();
+    let g = spots(&s)[0].generative.clone().unwrap();
+    assert!(!g.quick, "gen.ai. is the diffusion model by default");
+    let st = s.execute("remove.status", &json!({})).unwrap();
+    assert_eq!((st["spots"][0]["engine"].as_str(), st["diffusion"].as_bool(), st["lama"].as_bool()), (Some("diffusion"), Some(false), Some(false)));
+    // quick. (LaMa) has its own key, so switching back finds the diffusion fills again
+    s.execute("spot.update", &json!({"quick": true})).unwrap();
+    let q = spots(&s)[0].generative.clone().unwrap();
+    assert!(q.quick && q.key != g.key && q.key.len() == 16);
+    assert_eq!(s.execute("remove.status", &json!({})).unwrap()["spots"][0]["engine"], "quick");
+    s.execute("spot.update", &json!({"quick": false})).unwrap();
+    assert_eq!(spots(&s)[0].generative.clone().unwrap().key, g.key);
+    let r = s.execute("spot.add", &json!({"generative": true, "quick": true, "points": [[0.2, 0.2]], "size": 0.03})).unwrap();
+    assert_eq!(r["status"]["spots"][1]["engine"], "quick");
+    // LaMa stood in for the missing diffusion model: reported, and forgotten (remade) on request
+    let sp = spots(&s)[0].clone();
+    let image = lightcraft_raster::Rgb32f::from_fn(32, 32, |_, _| [0.5; 3]);
+    let fill = lightcraft_pipeline::spots::GenFill { geometry: lightcraft_pipeline::spots::gen_geometry(&sp), rect: [0.45, 0.35, 0.65, 0.55], image };
+    let dir = crate::genremove::cache_dir();
+    for v in 0..2 {
+        let name = format!("{}-{v}", g.key);
+        crate::genremove::save(&dir, &name, &fill).unwrap();
+    }
+    crate::genremove::set_fallback(&dir, &format!("{}-0", g.key), Some(crate::genremove::Fallback::Missing));
+    let st = s.execute("remove.status", &json!({})).unwrap();
+    assert_eq!(st["spots"][0]["made"], json!([true, true, false]), "{st}");
+    assert_eq!(st["spots"][0]["fallback"], json!(["missing", null, null]), "{st}");
+    let r = s.execute("remove.generate", &json!({"remake": "fallbacks"})).unwrap();
+    assert_eq!(r["forgotten"], 1, "{r}");
+    assert_eq!(s.execute("remove.status", &json!({})).unwrap()["spots"][0]["made"], json!([false, true, false]));
+    let r = s.execute("remove.generate", &json!({"remake": true})).unwrap();
+    assert_eq!(r["forgotten"], 1, "{r}");
+    assert!(s.execute("remove.generate", &json!({"remake": 3})).is_err());
+    // nothing running: nothing to stop
+    assert_eq!(s.execute("remove.cancel", &json!({})).unwrap()["stopped"], 0);
+    // seeds: the same for a key and variation everywhere, different between them
+    assert_eq!(crate::genremove::seed_of(&g.key, 1), crate::genremove::seed_of(&g.key, 1));
+    assert_ne!(crate::genremove::seed_of(&g.key, 1), crate::genremove::seed_of(&g.key, 2));
+    // old catalogs (no `quick`) read as the diffusion engine; quick spots write it
+    let back: lightcraft_develop::Generative = serde_json::from_value(json!({"variation": 1, "count": 3, "key": "00000000000000ab"})).unwrap();
+    assert!(!back.quick);
+    assert!(serde_json::to_string(&q).unwrap().contains("\"quick\":true"));
+    assert!(!serde_json::to_string(&g).unwrap().contains("quick"));
+}
+
+/// Opt-in, with the real models: `LC_GEN_MODELS=<a models folder with inpaint/big-lama.safetensors and, for
+/// gen.ai., gen-fill/{unet,vae,text_encoder}.safetensors> LC_GEN_PHOTO=<a JPEG> [LC_GEN_QUICK=1: LaMa alone]
+/// [LC_OUT=<folder>] cargo test -p lightcraft-engine --features enhance --release -- --ignored generative_remove_with
+/// --nocapture`
 #[test]
 #[ignore]
 fn generative_remove_with_lama() {
@@ -134,7 +184,8 @@ fn generative_remove_with_lama() {
     let t = std::time::Instant::now();
     let points: serde_json::Value =
         std::env::var("LC_GEN_POINTS").ok().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_else(|| json!([[x, y], [x + size, y]]));
-    let r = s.execute("spot.add", &json!({"generative": true, "points": points, "size": size})).unwrap();
+    let quick = std::env::var_os("LC_GEN_QUICK").is_some();
+    let r = s.execute("spot.add", &json!({"generative": true, "quick": quick, "points": points, "size": size})).unwrap();
     eprintln!("3 variations in {:.1} s: {r}", t.elapsed().as_secs_f64());
     assert!(r.get("notice").is_none(), "{r}");
     assert_eq!(r["status"]["spots"][0]["made"], json!([true, true, true]), "{r}");

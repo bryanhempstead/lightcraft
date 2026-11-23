@@ -21,6 +21,16 @@ pub enum ModelId {
     Reflection,
     /// VGG-19's ImageNet weights: the features DSRNet is built on.
     Vgg19,
+    /// Stable Diffusion 1.5 Inpainting: Generative Remove's diffusion fill (`gen.ai.`; LaMa stays the quick one).
+    GenFill,
+}
+
+/// Another file a model needs beside its main one (downloaded with it, into the same folder).
+pub struct Part {
+    pub url: &'static str,
+    pub file: &'static str,
+    pub size: u64,
+    pub sha256: &'static str,
 }
 
 pub struct ModelInfo {
@@ -42,9 +52,18 @@ pub struct ModelInfo {
     pub weights: &'static str,
     /// The archive entry to extract into `weights` (`None`: the download is the weights).
     pub entry: Option<&'static str>,
+    /// More files the model needs (each pinned like the main one).
+    pub parts: &'static [Part],
 }
 
-pub const MODELS: [ModelInfo; 6] = [
+impl ModelInfo {
+    /// Bytes to download, all files.
+    pub fn bytes(&self) -> u64 {
+        self.parts.iter().fold(self.size, |a, p| a.saturating_add(p.size))
+    }
+}
+
+pub const MODELS: [ModelInfo; 7] = [
     ModelInfo {
         id: ModelId::RawDenoise,
         key: "raw-denoise",
@@ -58,6 +77,7 @@ pub const MODELS: [ModelInfo; 6] = [
         sha256: "d71b5f1e727c85a359e6f74dca9e2016c9d8fc3e2f7ac3e9b347d80ceca969af",
         weights: "model_bayer.onnx",
         entry: Some("model_bayer.onnx"),
+        parts: &[],
     },
     ModelInfo {
         id: ModelId::SuperResolution,
@@ -72,6 +92,7 @@ pub const MODELS: [ModelInfo; 6] = [
         sha256: "8dc7edb9ac80ccdc30c3a5dca6616509367f05fbc184ad95b731f05bece96292",
         weights: "realesr-general-x4v3.pth",
         entry: None,
+        parts: &[],
     },
     ModelInfo {
         id: ModelId::Depth,
@@ -86,6 +107,7 @@ pub const MODELS: [ModelInfo; 6] = [
         sha256: "07635472183d063a80e6b2d78645ab944a9210fd973b1c88e4b7e3ba23981f75",
         weights: "depth_anything_v2_vits.safetensors",
         entry: None,
+        parts: &[],
     },
     ModelInfo {
         id: ModelId::Inpaint,
@@ -101,6 +123,7 @@ pub const MODELS: [ModelInfo; 6] = [
         sha256: "12cb5eb5d515400f262b48d4e7c1994183e170aedb4b86699d9a55b770038e16",
         weights: "big-lama.safetensors",
         entry: None,
+        parts: &[],
     },
     ModelInfo {
         id: ModelId::Reflection,
@@ -116,6 +139,7 @@ pub const MODELS: [ModelInfo; 6] = [
         sha256: "09a7acdb3efef6ad7065164e205bf5173a016ce8b24fc56d9751c8791cf65cff",
         weights: "dsrnet_l_4000_epoch33.pt",
         entry: None,
+        parts: &[],
     },
     ModelInfo {
         id: ModelId::Vgg19,
@@ -130,6 +154,37 @@ pub const MODELS: [ModelInfo; 6] = [
         sha256: "11aea017b543ff59233749d8f1cf544cda749378f5790d2fedab841fb86b7669",
         weights: "model.safetensors",
         entry: None,
+        parts: &[],
+    },
+    ModelInfo {
+        id: ModelId::GenFill,
+        key: "gen-fill",
+        name: "Stable Diffusion 1.5 Inpainting (Generative Remove, gen.ai.)",
+        licence: "CreativeML OpenRAIL-M",
+        licence_url: "https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-inpainting/blob/main/LICENSE.md",
+        source: "https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-inpainting",
+        // RunwayML's weights as re-uploaded by the stable-diffusion-v1-5 organisation, half precision, pinned
+        // commit: the UNet (the main file), the VAE and the CLIP text encoder
+        url: "https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-inpainting/resolve/8a4288a76071f7280aedbdb3253bdb9e9d5d84bb/unet/diffusion_pytorch_model.fp16.safetensors",
+        file: "unet.safetensors",
+        size: 1_719_154_104,
+        sha256: "24b788b4a777748377cc20364eea4ae113c8c42f4468c16bc8c02fdae5492af9",
+        weights: "unet.safetensors",
+        entry: None,
+        parts: &[
+            Part {
+                url: "https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-inpainting/resolve/8a4288a76071f7280aedbdb3253bdb9e9d5d84bb/vae/diffusion_pytorch_model.fp16.safetensors",
+                file: "vae.safetensors",
+                size: 167_335_342,
+                sha256: "4fbcf0ebe55a0984f5a5e00d8c4521d52359af7229bb4d81890039d2aa16dd7c",
+            },
+            Part {
+                url: "https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-inpainting/resolve/8a4288a76071f7280aedbdb3253bdb9e9d5d84bb/text_encoder/model.fp16.safetensors",
+                file: "text_encoder.safetensors",
+                size: 246_144_864,
+                sha256: "77795e2023adcf39bc29a884661950380bd093cf0750a966d473d1718dc9ef4e",
+            },
+        ],
     },
 ];
 
@@ -141,6 +196,7 @@ pub fn info(id: ModelId) -> &'static ModelInfo {
         ModelId::Inpaint => &MODELS[3],
         ModelId::Reflection => &MODELS[4],
         ModelId::Vgg19 => &MODELS[5],
+        ModelId::GenFill => &MODELS[6],
     }
 }
 
@@ -153,10 +209,11 @@ pub fn dir(root: &Path, id: ModelId) -> PathBuf {
     root.join(info(id).key)
 }
 
-/// The installed weights of `id` under `root`, when present.
+/// The installed weights of `id` under `root`, when present (with every other file it needs).
 pub fn installed(root: &Path, id: ModelId) -> Option<PathBuf> {
-    let p = dir(root, id).join(info(id).weights);
-    p.is_file().then_some(p)
+    let d = dir(root, id);
+    let p = d.join(info(id).weights);
+    (p.is_file() && info(id).parts.iter().all(|part| d.join(part.file).is_file())).then_some(p)
 }
 
 /// What to tell the user when `id` is missing.
@@ -165,7 +222,7 @@ pub fn missing_message(root: &Path, id: ModelId) -> String {
     format!(
         "the {} model is not installed. Download it ({:.0} MB, {}) when LightCraft offers it, or run `enhance.model.download {{\"model\": \"{}\", \"acknowledged\": true}}`, or put {} in {}",
         m.name,
-        m.size as f64 / 1e6,
+        m.bytes() as f64 / 1e6,
         m.licence,
         m.key,
         m.weights,
@@ -183,8 +240,18 @@ pub fn download(
 ) -> Result<PathBuf, String> {
     let m = info(id);
     let d = dir(root, id);
-    let spec = lightcraft_fetch::FileSpec { name: m.file, size: Some(m.size), sha256: Some(m.sha256), max: m.size };
-    lightcraft_fetch::download_url(&spec, m.url, &d, &lightcraft_fetch::Options::default(), cancel, progress).map_err(|e| e.to_string())?;
+    // the other files first (small), the main one last: `installed` then means all are there
+    let mut before = 0u64;
+    let total = m.bytes();
+    for (url, file, size, sha256) in m.parts.iter().map(|p| (p.url, p.file, p.size, p.sha256)).chain([(m.url, m.file, m.size, m.sha256)]) {
+        let spec = lightcraft_fetch::FileSpec { name: file, size: Some(size), sha256: Some(sha256), max: size };
+        let mut each = |p: &lightcraft_fetch::Progress| {
+            let q = lightcraft_fetch::Progress { file: p.file.clone(), done: before.saturating_add(p.done), total, mirror: p.mirror.clone() };
+            progress(&q);
+        };
+        lightcraft_fetch::download_url(&spec, url, &d, &lightcraft_fetch::Options::default(), cancel, &mut each).map_err(|e| e.to_string())?;
+        before = before.saturating_add(size);
+    }
     let weights = d.join(m.weights);
     if let Some(entry) = m.entry {
         if !weights.is_file() {
@@ -209,7 +276,11 @@ mod tests {
             assert!(m.url.starts_with("https://"));
             assert_eq!(by_key(m.key), Some(m.id));
             assert_eq!(info(m.id).key, m.key);
+            for p in m.parts {
+                assert!(p.sha256.len() == 64 && p.url.starts_with("https://") && p.file != m.file);
+            }
         }
+        assert!(info(ModelId::GenFill).bytes() > info(ModelId::GenFill).size);
         let root = std::env::temp_dir().join(format!("lc-enhance-models-{}", std::process::id()));
         assert!(installed(&root, ModelId::Depth).is_none());
         assert!(missing_message(&root, ModelId::Depth).contains("enhance.model.download"));

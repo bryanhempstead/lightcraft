@@ -169,7 +169,7 @@ impl Session {
             }
         }
         for i in gen_spots {
-            self.gen_make(id, &mut d, i);
+            self.gen_make(id, &mut d, i, false);
         }
         self.set_develop(id, d, "Remove Detected").map_err(|e| e.to_string())?;
         for &i in picked.iter().rev() {

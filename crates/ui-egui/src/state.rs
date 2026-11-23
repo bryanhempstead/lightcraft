@@ -940,6 +940,9 @@ pub struct UiState {
     pub remove_opacity: f32,
     /// Remove tool ▸ Use Generative AI: new Remove / Fill spots are filled by the inpainting model.
     pub remove_generative: bool,
+    /// Remove tool ▸ gen.ai. ▸ quick.: new generative spots are filled by LaMa alone (fast) instead of the diffusion
+    /// model.
+    pub remove_quick: bool,
     /// Remove ▸ Detect: the picked candidates, the last one clicked (⇧-click runs from it) and the one whose
     /// chip the pointer is over (highlighted on the photo).
     pub remove_picked: Vec<usize>,
@@ -1449,6 +1452,7 @@ impl Default for UiState {
             remove_feather: 50.0,
             remove_opacity: 100.0,
             remove_generative: false,
+            remove_quick: false,
             remove_picked: Vec::new(),
             remove_pick_anchor: None,
             remove_hover_chip: None,
