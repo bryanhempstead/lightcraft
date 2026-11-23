@@ -44,13 +44,13 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | U. Map & location (MAP) | 1 | 1 | 0 | 0 | — | 0/1 (0%) |
 | V. Preferences (PREF) | 6 | 0 | 0 | 5 | 1/1 (100%) | 4/4 (100%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 2 | 0 | 0 | 2 | — | — |
-| X. Cross-cutting behaviours (BEHAV) | 17 | 4 | 0 | 2 | 8/8 (100%) | 6/8 (75%) |
+| X. Cross-cutting behaviours (BEHAV) | 16 | 3 | 0 | 4 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 83 | 1 | 1 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 82 | 0 | 0 | 0 | 52/52 (100%) | 24/24 (100%) |
 | Lightroom Classic extras | 81 | 18 | 30 | 9 | — | 38/39 (97%) |
-| **Total** | 496 | 41 | 32 | 36 | 194/201 (97%) | 168/174 (97%) |
+| **Total** | 495 | 40 | 32 | 38 | 194/201 (97%) | 168/174 (97%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.8%** of 569 in-scope rows — P0 98.3% of 201 · P1 98.3% of 174 · P2 76.4% of 193.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.8%** of 567 in-scope rows — P0 98.3% of 201 · P1 98.3% of 174 · P2 76.4% of 191.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -545,8 +545,8 @@ mouse back/forward = previous/next; `CLASSIC` in `crates/ui-egui/src/keymap.rs`)
 | LR-BEHAV-EMPTY-STATES | Empty states | P1 | ✅ | `crates/ui-egui/src/panels/mod.rs` (`empty_message`) | |
 | LR-BEHAV-TOOLTIPS | Tooltips with shortcuts | P0 | ✅ | `crates/ui-egui/src/panels/bottombar.rs` | |
 | LR-BEHAV-ACCESS | Accessibility | P2 | 🟡 | `crates/ui-egui/src/widgets.rs`, `crates/ui-egui/src/panels/grid.rs` | AccessKit (VoiceOver / Narrator / AT-SPI): sliders announce control and value, buttons / icon buttons / dropdowns / section headers / sources their labels and state, grid thumbnails file name, rating, flag and label; the canvas tools (crop, masks) are pointer-only; not audited with a screen reader |
-| LR-BEHAV-LOCALE | Language options | P2 | ✅ | `cmd:app.language.english`, `cmd:app.language.simplifiedChinese`, `cmd:app.language.traditionalChinese`, `cmd:app.language.japanese`, `cmd:app.language.portuguese`, `cmd:app.language.german`, `cmd:app.language.russian` | Edit > Language lists every language in the table and the active one is checked; shared with Settings > General (docs/localization.md) |
-| LR-BEHAV-LOCALIZE | Localisation | P2 | 🟡 | `crates/ui-egui/src/i18n.rs`, `crates/ui-egui/locales/`, `docs/localization.md`, `docs/localization-zh-hans.md`, `docs/localization-zh-hant.md`, `docs/localization-ja.md`, `docs/localization-pt-br.md`, `docs/localization-de.md`, `docs/localization-ru.md` | One table entry per language (code, endonym, ISO 15924 script, catalog): English, Simplified Chinese, Traditional Chinese (Taiwan), Japanese, Brazilian Portuguese, German and Russian UI with a persisted language preference and craft-fonts regular/bold faces per script; menus, edit, crop/masks, settings, import/export and primary progress messages. Adding a language is a table entry plus two catalogs. Stock presets/profiles, history steps, library headings, date headings and capture times are localised (user-named items stay verbatim); the German catalog covers every existing catalog key, command/control label and rule-editor label; the other catalogs fall back to English for messages they lack. The 2026-11-22 features (Export dialog, Adjust Time, notes., identity., Delete key, collection parts, zoom / overlay menus, People, HDR, Enhance) are in all six catalogs, their counted messages through `tr_format!`. Technical errors remain English; release notes are translated in German; Traditional Chinese borrows the Simplified Chinese face (no TC face in craft-fonts yet), and the web build embeds only the Japanese face. |
+| LR-BEHAV-LOCALE | Language options | P2 | 🚫 | | removed: LightCraft is English only (Bryan, 2026-11-23); old `app.language.*` ids answer with an error |
+| LR-BEHAV-LOCALIZE | Localisation | P2 | 🚫 | | removed: LightCraft is English only (Bryan, 2026-11-23) |
 | LR-BEHAV-LEARN | Tutorials | OOS | 🚫 | | |
 | LR-BEHAV-WHATSNEW | What's new | P2 | ✅ | `cmd:app.whatsNew`, `docs/whats-new.md` | Help ▸ What's New: release highlights |
 | LR-BEHAV-AI-EA | Early-access badges | P2 | 🚫 | | not applicable: no early-access features to badge; the AI tools show their own model status (download, running, missing) instead |

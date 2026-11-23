@@ -780,7 +780,7 @@ fn albums_tree_view(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &[Album], p
                 folder_menu(app, &tri, a);
             }
             if let Some(rules) = &a.smart {
-                resp = resp.on_hover_text(crate::i18n::tr_format!("Smart album: {}", crate::i18n::filter_label(rules, &app.session.catalog)));
+                resp = resp.on_hover_text(crate::i18n::tr_format!("Smart album: {}", rules.describe()));
             }
             if resp.clicked() && !toggled {
                 let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));

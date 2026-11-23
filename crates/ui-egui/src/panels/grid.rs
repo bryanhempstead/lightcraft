@@ -502,7 +502,7 @@ pub const BACKGROUND_THUMB_PRIORITY: u32 = 3;
 pub(crate) fn cell_tooltip(photo: &lightcraft_catalog::Photo) -> String {
     let mut lines = vec![photo.file_name.clone(), format!("{} × {}", photo.width, photo.height)];
     if let Some(c) = photo.captured.as_deref() {
-        lines.push(crate::i18n::display_time(c));
+        lines.push(lightcraft_catalog::dates::display_time(c));
     }
     if let Some(e) = super::detail::info_line(crate::state::LoupeInfoField::Exposure, photo).filter(|e| !e.starts_with("No exposure")) {
         lines.push(e);
@@ -601,7 +601,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
                 .collect();
                 if parts.is_empty() { "—".to_string() } else { parts.join(" · ") }
             }
-            "date" => photo.captured.as_deref().map(crate::i18n::display_time).unwrap_or_else(|| crate::i18n::tr("No date").into()),
+            "date" => photo.captured.as_deref().map(lightcraft_catalog::dates::display_time).unwrap_or_else(|| crate::i18n::tr("No date").into()),
             _ => photo.file_name.rsplit_once('.').map(|(n, _)| n.to_string()).unwrap_or(photo.file_name.clone()),
         };
         let name = if app.ui.settings.grid_index { format!("{}  {name}", index + 1) } else { name };
@@ -614,7 +614,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     }
     if square && app.ui.settings.grid_expanded {
         // second header line: dimensions and capture date
-        let date = photo.captured.as_deref().map(crate::i18n::display_time).unwrap_or_default();
+        let date = photo.captured.as_deref().map(lightcraft_catalog::dates::display_time).unwrap_or_default();
         let line =
             if date.is_empty() { format!("{} × {}", photo.width, photo.height) } else { format!("{} × {}  ·  {date}", photo.width, photo.height) };
         let g = p.layout_no_wrap(line, t.font(9.5), Color32::PLACEHOLDER);

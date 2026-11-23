@@ -299,6 +299,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             ctx.request_repaint();
             ok(Value::Null)
         }
+        "ui.set" if p.get("language").is_some() => err(crate::menus::ENGLISH_ONLY),
         "ui.set" => {
             let mut v = serde_json::to_value(&app.ui).unwrap_or_default();
             lightcraft_develop::presets::deep_merge(&mut v, p);
@@ -317,7 +318,6 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                         u.sync_module();
                     }
                     app.ui = u;
-                    crate::i18n::set_language(app.ui.language);
                     ctx.request_repaint();
                     ok(serde_json::to_value(&app.ui).unwrap_or_default())
                 }

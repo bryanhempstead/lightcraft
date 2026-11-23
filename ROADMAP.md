@@ -29,7 +29,7 @@ duplicate Local entries #22, black GPU exports on an Intel iGPU #78).
 | **Workflow & library** | ~85% (single machine) | Robust catalog (journal + snapshots, background compaction, crash-tested), 85k-photo libraries stay responsive, Local browsing with automatic cleanup, XMP interop, keywords, smart albums, Move import; Settings ▸ cams. (fork) shows per camera the decoder, the profile that colours it, lens profiles and the last Lightroom ΔE, and an import recognises a camera it hasn't seen | Opening an 85k library takes 1.7–4.7 s (catalog backups, Trash deletes and Lightroom naming landed 2026-11-21); no cloud sync (out of scope), no tablet companion (#74, roadmap), shared albums, online publish services (Hard Drive / Apple Photos publishing landed 2026-11-22), tethering |
 | **Classic modules** | ~30% | Geotagging from GPX track logs, the Map module (OpenStreetMap, drag to geotag, saved locations, the location filter bar), video Capture Frame, DNG export with embedded previews and lossy DNG (Adobe's DNG SDK), soft proofing (partial), slideshow (basic) | **Book, Print, Slideshow module, Web, online publish services**: ~40 tracker rows ⬜ |
 | **HDR & video** | HDR ~90%, video ~55% | HDR editing (Lightroom's HDR button, HDR Limit, SDR rendition with SDRBlend, Visualize HDR with beyond-the-display marks, Lightroom's split HDR histogram, `crs:` round trip), HDR tone measured against Camera Raw (night / backlit R6 and M262 raws), HDR export (colour gain map JPEG, gain map AVIF on macOS, PQ / HLG AVIF, PNG, JPEG XL, float TIFF; open as HDR in macOS), EDR loupe / Compare / Survey / Second Window on macOS, HDR renders on the GPU (draft drag ~13 ms at 2.5 MP); video (fork, 2026-11-22): import, Loupe playback with sound, trim, poster frame, Capture Frame, the whole Edit panel on frames (one GPU render for playback and export), trimmed and edited H.264 export (ffmpeg when installed, else macOS AVFoundation / avconvert) | the SDR rendition of an HDR edit (Lightroom's is a local tone map, ours the HDR-off render; Camera Raw's can't be scripted out of Photoshop), Whites / Highlights in HDR (the HDR tone itself is measured against Camera Raw: ΔEITP 9.2 → 6.9, headroom 38 → 16, `docs/lr-match.md` → HDR tone), Windows / Linux HDR display; pure-Rust video decoding |
-| **Platform & robustness** | ~70% | macOS native; Windows/Linux builds; web via WASM; no-panic lints workspace-wide, `unsafe` confined to `crates/sysmem`; failed saves are reported; GPU errors fall back to CPU | Windows installer UI unverified on Windows (PR #79); GPU path proven only on Apple + user reports; English, Simplified/Traditional Chinese, Japanese, Brazilian Portuguese and German UI (see docs/localization.md); remaining technical errors; Traditional Chinese uses the Simplified Chinese font until craft-fonts has a TC face; accessibility partial; headless UI tests time out under machine load |
+| **Platform & robustness** | ~70% | macOS native; Windows/Linux builds; web via WASM; no-panic lints workspace-wide, `unsafe` confined to `crates/sysmem`; failed saves are reported; GPU errors fall back to CPU | Windows installer UI unverified on Windows (PR #79); GPU path proven only on Apple + user reports; English-only UI (by choice); accessibility partial; headless UI tests time out under machine load |
 
 ### By kind of user
 
@@ -75,7 +75,7 @@ Priorities, in order. Each points at tracker rows in [`docs/parity.md`](docs/par
    OpenCV Zoo's expression networks on our own ONNX interpreter; `docs/people.md`): faces are found by themselves,
    culling runs at import, smiles count.
 7. **Then:** the HDR SDR rendition and Whites / Highlights in HDR (the HDR tone is measured against Camera Raw), the Classic output modules (Print first, then Book,
-   Slideshow; Map, Hard Drive publishing and video are in), localisation and accessibility.
+   Slideshow; Map, Hard Drive publishing and video are in) and accessibility.
 
 Already closed in the week of 2026-10-03: compressed NEF (#10), Move import (#29), per-library smart-preview folder,
 Local roots / cleanup, grid and catalog performance at 85k photos (#35, #37), failed-save reporting, GPU export
@@ -108,7 +108,7 @@ window is colour-managed by the system (LR-VIEW-COLORMANAGED), so photos look as
 | M13 | Merge | HDR merge (deghost), panorama (projections, boundary warp, fill edges), HDR panorama | 10–15 | ✅ |
 | M14 | Video | import/playback/trim via FilmCraft crates, global edits + presets on video, video export | 6–10 | 🟡 (fork: ffmpeg / AVFoundation, the whole Edit panel on video; pure-Rust decode open) |
 | M15 | Classic modules | Map, Book, Slideshow, Print, Web; smart collections, stacks, virtual copies, publish services, tethering | 25–40 | 🚧 (smart albums, stacks, virtual copies, compare/survey ✅; Map ✅; Book/Slideshow/Print/Web ⬜) |
-| M16 | 1.0 polish | preferences, shortcut editor, accessibility, localization, packaging (dmg/msi/AppImage/web), hardening | 10–20 | 🚧 (settings, keyboard shortcuts sheet, packaging basics ✅; English/Chinese (Simplified, Traditional)/Japanese/Brazilian Portuguese/German localisation 🟡; accessibility and further locales ⬜) |
+| M16 | 1.0 polish | preferences, shortcut editor, accessibility, localization, packaging (dmg/msi/AppImage/web), hardening | 10–20 | 🚧 (settings, keyboard shortcuts sheet, packaging basics ✅; English only by choice; accessibility ⬜) |
 
 ## Parity estimate (feature count updated 2026-10-08; effort estimate from 2026-10-02)
 
@@ -143,7 +143,7 @@ trip, slideshow, auto import…) in ≈ 12 h on 2026-10-02; four to six parallel
 | AI: subject / sky / background / people / object masks, object-aware remove, AI denoise, super resolution, lens blur, people & faces, natural-language search, culling | ≈ 30 | 80–150 | **high** — permissively licensed weights, pure-Rust inference, maybe training |
 | HDR leftovers: Windows / Linux HDR display, the SDR rendition's local tone map, Whites / Highlights in HDR (the HDR tone itself is measured against Camera Raw) | Q. HDR, LR-VIEW-HDR-DISPLAY | 4–8 | medium |
 | Classic modules: Map, Book, Slideshow module, Print, publish services, tethering, soft proofing | ≈ 50 | 60–100 | medium (large, well-understood) |
-| Smaller P2 items: Enhance dialog, export to Photos, help / what's new, accessibility, localisation, sidecar variants | ≈ 15 | 12–25 | low |
+| Smaller P2 items: Enhance dialog, export to Photos, help / what's new, accessibility, sidecar variants | ≈ 15 | 12–25 | low |
 | Look tuning, performance budgets (colour NR at half resolution on CPU + GPU, 100k-photo library), packaging, hardening | — | 25–45 | medium |
 | **Total remaining** | | **≈ 270–505** | |
 
@@ -298,13 +298,10 @@ own chart-based calibration (M11.4). Adobe matrices are never used.
   guides, layout image), every crop composition overlay and aspect-ratio frames on the normal loupe (ovl., O / ⇧O,
   ⌘⌥O); a banner over a photo whose original is missing with loc. / fldr.
 
-## Chinese and Japanese interfaces, and text watermarks
+## Chinese and Japanese text, and text watermarks
 
-English, Simplified Chinese, Traditional Chinese (Taiwan) and Japanese interface languages are persisted in UI state, and the
-language table (`crates/ui-egui/src/i18n.rs`) drives the menus, settings and fonts, so another
-language is a table entry plus two catalogs (docs/localization.md). Core menus and panels are
-translated; untranslated text retains English. CJK glyphs (Chinese: Noto Sans CJK SC; Japanese UI:
-BIZ UDPGothic; watermarks: BIZ UDMincho) come from storytold/craft-fonts, embedded by builds made
+The interface is English only (Bryan, 2026-11-23: the translations and the language menu were removed).
+CJK glyphs in user text (Chinese: Noto Sans CJK SC; Japanese: BIZ UDPGothic; watermarks: BIZ UDMincho) come from storytold/craft-fonts, embedded by builds made
 with the optional `CRAFT_FONTS_DIR` input (all releases), so no system fonts are needed. Text watermarks now accept
 `vertical: true` in export JSON/presets and expose an orientation selector. Japanese
 characters stay upright in top-to-bottom columns, with newlines starting columns to the
