@@ -6,6 +6,19 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (Claude fix session, 2026-11-23 14:50) **Bryan's 11-23 list — in flight** (check each off when merged + verified):
+  - [x] sharp loupe/exports, console = one drag, fav. (tap/hold H), picked sliders, sync from first pick + Return = OK,
+    Edit In ⌘E → PhotoCraft (PSD, grain held back), wheel steps photos, merges. (merged from `merges-area`), Leica M
+    apertures (library repaired: 6,154), presets' Look → profile (`preset.linkLooks`: 29 linked), Set Lens + lens list,
+    center./dust. quick tools after a `|` in the tool strip (Settings ▸ Interface ▸ Quick tools), WB pick., file-type
+    tags, delete → next photo, crop grid while adjusting, no stale 1:1 tiles, every action bindable + searchable.
+  - [ ] English only (agent, branches `english-only` in ~/crafts/lightcraft-english and ~/crafts/photocraft-english)
+  - [ ] crop X dial also moves Y; lens profile corrections per lens; console preview speed (agent, `agent-crop-lens`)
+  - [ ] drag to reorder side panels + default-open; Enhance previews pan/zoom + accent `ok.`; left off restored on
+    launch (agent, `agent-panels-dialogs`)
+  - [ ] Second Brain's console editor and dev. share one set of files (agent)
+  - [ ] waiting on Bryan: one photo that looks "flat" (raw render matches macOS's raw engine in contrast on
+    L1001008.DNG); thumbnails vs loupe checked on one photo only — check a whole folder
 - [ ] (merges agent, 2026-11-23, branch `merges-area`, not merged) **LC-MERGE-FIND: merges. — found photo merges in
   the sidebar** (Bryan: "recognize possible photo merges and put those in a separate area … on the side bar").
   Engine `crates/engine/src/merge_find.rs`: per folder, capture-time runs (body / lens / focal, a few s apart) →
