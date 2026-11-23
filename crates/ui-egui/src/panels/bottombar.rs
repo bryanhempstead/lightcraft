@@ -214,19 +214,20 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
         egui::Popup::menu(&zr).show(|ui| {
             // a level picked here is also what a click zooms to from now on (as Lightroom's
             // Navigator), until another is picked
-            let fit = ui.selectable_label(app.ui.zoom == Zoom::Fit, crate::i18n::tr("Fit"));
-            if fit.clicked() {
-                let _ = app.run("view.navigate", json!({"zoom": "fit", "pan": [0.5, 0.5]}));
-            }
+            // zoom-in levels first, the zoom-out ones (and Fill, Fit) at the bottom
             for pct in crate::state::CLICK_ZOOMS {
+                if pct == 50 {
+                    ui.separator();
+                }
                 let z = crate::state::click_zoom_target(pct);
-                let label = match pct {
-                    0 => crate::i18n::tr("Fill").to_string(),
-                    p => format!("{} ({p}%)", crate::state::click_zoom_label(p)),
-                };
+                let label = crate::i18n::tr(&crate::state::click_zoom_label(pct)).to_string();
                 if ui.selectable_label(app.ui.zoom == z, label).clicked() {
                     let _ = app.run("view.navigate", json!({"zoom": z, "pan": [0.5, 0.5], "remember": true}));
                 }
+            }
+            let fit = ui.selectable_label(app.ui.zoom == Zoom::Fit, crate::i18n::tr("Fit"));
+            if fit.clicked() {
+                let _ = app.run("view.navigate", json!({"zoom": "fit", "pan": [0.5, 0.5]}));
             }
         });
         child.add_space(6.0);
@@ -269,10 +270,10 @@ pub fn zoom_behavior_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.set_min_width(230.0);
     ui.label(egui::RichText::new(crate::i18n::tr("A click zooms to")).weak());
     for pct in crate::state::CLICK_ZOOMS {
-        let label = match pct {
-            0 => crate::i18n::tr("Fill").to_string(),
-            p => format!("{} ({p}%)", crate::state::click_zoom_label(p)),
-        };
+        if pct == 50 {
+            ui.separator();
+        }
+        let label = crate::i18n::tr(&crate::state::click_zoom_label(pct)).to_string();
         let r = ui.selectable_label(app.ui.click_zoom == pct, label);
         if r.clicked() {
             let ratio = if pct == 0 { json!("fill") } else { json!(pct as f64 / 100.0) };

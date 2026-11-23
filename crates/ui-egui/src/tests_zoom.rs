@@ -257,7 +257,7 @@ fn click_zoom_level_and_wheel_settings_are_remembered_across_restart() {
     assert_eq!(h.app.ui.click_zoom, 200, "Fit leaves the click level alone");
     assert_eq!(exec(&mut h, "view.clickZoom", json!({"ratio": "fill"}))["ratio"], "fill");
     assert_eq!(h.app.ui.click_zoom, 0);
-    assert_eq!(exec(&mut h, "view.clickZoom", json!({"ratio": 0.5}))["label"], "1:2");
+    assert_eq!(exec(&mut h, "view.clickZoom", json!({"ratio": 0.5}))["label"], "50%");
     let r = h.request("engine.execute", json!({"command": "view.clickZoom", "params": {"ratio": 7}}), T);
     assert_ne!(r["ok"], true, "7:1 isn't offered: {r}");
     exec(&mut h, "view.clickZoom", json!({"ratio": 4}));

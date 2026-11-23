@@ -495,23 +495,24 @@ impl Default for AppSettings {
 /// Preview sizes offered in Settings → Performance.
 pub const PREVIEW_EDGES: [u32; 4] = [1600, 2560, 3840, 5120];
 
-/// Click-zoom levels offered (percent; 0 = Fill): Fill, 1:4, 1:2, 1:1, 2:1, 3:1, 4:1, 8:1, 11:1, 16:1.
-/// Any whole percent 1–1600 is accepted too (a Navigator level remembered as the click level).
-pub const CLICK_ZOOMS: [u32; 10] = [0, 25, 50, 100, 200, 300, 400, 800, 1100, 1600];
+/// Click-zoom levels offered (percent; 0 = Fill), in menu order: zoom-in levels first, the zoom-out
+/// ones (50 %, 25 %, Fill) at the bottom (Bryan, 2026-11-23). Any whole percent 1–1600 is accepted
+/// too (a Navigator level remembered as the click level).
+pub const CLICK_ZOOMS: [u32; 10] = [100, 200, 300, 400, 800, 1100, 1600, 50, 25, 0];
 
 /// The zoom a click (and Z / Space) goes to for the click level `pct` (0 = Fill).
 pub fn click_zoom_target(pct: u32) -> Zoom {
     if pct == 0 { Zoom::Fill } else { Zoom::Percent(pct.min(1600) as f32) }
 }
 
-/// How a click level reads: `Fill`, `1:2`, `1:1`, `3:1`, else `33%`.
+/// How a click level reads: `Fill`, else the percent (`100%`, `50%`).
 pub fn click_zoom_label(pct: u32) -> String {
-    match pct {
-        0 => "Fill".into(),
-        p if p >= 100 && p.is_multiple_of(100) => format!("{}:1", p / 100),
-        p if p > 0 && p < 100 && 100u32.is_multiple_of(p) => format!("1:{}", 100 / p),
-        p => format!("{p}%"),
-    }
+    if pct == 0 { "Fill".into() } else { format!("{pct}%") }
+}
+
+/// A zoom percent as a menu reads it: `100%`, `12.5%`, `33.3%`.
+pub fn zoom_pct_label(p: f32) -> String {
+    if (p - p.round()).abs() < 0.01 { format!("{p:.0}%") } else { format!("{p:.1}%") }
 }
 
 /// What the plain scroll wheel / two-finger scroll does over the photo (LR-VIEW-ZOOM).

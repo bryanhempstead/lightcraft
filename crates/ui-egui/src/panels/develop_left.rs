@@ -79,10 +79,12 @@ fn note(ui: &mut egui::Ui, text: &str) {
 }
 
 /// The zoom presets of the Navigator header: (label, `view.navigate` zoom).
-pub const NAV_ZOOMS: [(&str, &str); 4] = [("FIT", "fit"), ("FILL", "fill"), ("1:1", "100"), ("2:1", "200")];
+/// Zoom-in levels first, the zoom-out ones last (Bryan, 2026-11-23).
+pub const NAV_ZOOMS: [(&str, &str); 4] = [("100%", "100"), ("200%", "200"), ("FILL", "fill"), ("FIT", "fit")];
 
-/// L26: the Navigator's other zoom levels (Lightroom's 1:16 … 11:1 popup), percent.
-pub const NAV_MORE_ZOOMS: [f32; 15] = [6.25, 8.33, 12.5, 16.67, 25.0, 33.33, 50.0, 66.67, 100.0, 200.0, 300.0, 400.0, 800.0, 1100.0, 1600.0];
+/// L26: the Navigator's other zoom levels (Lightroom's 1:16 … 16:1 popup), percent, in menu
+/// order: zoom-in first, then zoom-out from the closest to the farthest.
+pub const NAV_MORE_ZOOMS: [f32; 15] = [100.0, 200.0, 300.0, 400.0, 800.0, 1100.0, 1600.0, 66.67, 50.0, 33.33, 25.0, 16.67, 12.5, 8.33, 6.25];
 
 /// The navigator's ▾ popup with [`NAV_MORE_ZOOMS`], at `r`.
 pub(crate) fn nav_more_zooms(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
@@ -105,8 +107,10 @@ pub(crate) fn nav_more_zooms(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect
     ui.painter().galley(pos2(r.right() - g.size().x - 2.0, r.center().y - g.size().y / 2.0), g, c);
     egui::Popup::menu(&resp).show(|ui| {
         for z in NAV_MORE_ZOOMS {
-            let label = if z < 100.0 { format!("1:{:.0}  ({z:.0}%)", 100.0 / z) } else { format!("{:.0}:1", z / 100.0) };
-            if ui.button(label).clicked() {
+            if z == 66.67 {
+                ui.separator();
+            }
+            if ui.button(crate::state::zoom_pct_label(z)).clicked() {
                 let _ = app.run("view.navigate", json!({"zoom": {"percent": z}, "remember": true}));
                 ui.close();
             }
@@ -117,10 +121,10 @@ pub(crate) fn nav_more_zooms(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect
 /// Which navigator zoom preset `z` is (index into [`NAV_ZOOMS`]).
 pub fn nav_zoom_index(z: Zoom) -> Option<usize> {
     match z {
-        Zoom::Fit => Some(0),
-        Zoom::Fill => Some(1),
-        Zoom::Percent(p) if (p - 100.0).abs() < 0.5 => Some(2),
-        Zoom::Percent(p) if (p - 200.0).abs() < 0.5 => Some(3),
+        Zoom::Percent(p) if (p - 100.0).abs() < 0.5 => Some(0),
+        Zoom::Percent(p) if (p - 200.0).abs() < 0.5 => Some(1),
+        Zoom::Fill => Some(2),
+        Zoom::Fit => Some(3),
         Zoom::Percent(_) => None,
     }
 }
@@ -244,10 +248,10 @@ mod tests {
 
     #[test]
     fn navigator_zoom_presets_name_the_zoom() {
-        assert_eq!(nav_zoom_index(Zoom::Fit), Some(0));
-        assert_eq!(nav_zoom_index(Zoom::Fill), Some(1));
-        assert_eq!(nav_zoom_index(Zoom::Percent(100.0)), Some(2));
-        assert_eq!(nav_zoom_index(Zoom::Percent(200.0)), Some(3));
+        assert_eq!(nav_zoom_index(Zoom::Percent(100.0)), Some(0));
+        assert_eq!(nav_zoom_index(Zoom::Percent(200.0)), Some(1));
+        assert_eq!(nav_zoom_index(Zoom::Fill), Some(2));
+        assert_eq!(nav_zoom_index(Zoom::Fit), Some(3));
         assert_eq!(nav_zoom_index(Zoom::Percent(300.0)), None);
     }
 
