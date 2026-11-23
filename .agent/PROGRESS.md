@@ -26,6 +26,10 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   `cmd:app.externalEditor {app}`; Settings ▸ General quick picks photocraft. / photoshop. / default.). PhotoCraft
   (~/crafts/photocraft, Bryan's fork) packaged with `packaging/macos/package.sh --arch aarch64` (his Apple Development
   identity) and installed to /Applications/PhotoCraft.app; opening a TIFF with `open -a PhotoCraft` verified.
+  Edit In round trip: the copy is a 16-bit PSD by default (`format: psd|tiff`; PhotoCraft's ⌘S writes PSD in place,
+  verified with photocraft-cli layer.duplicate → LightCraft reads it, corr 0.997), rendered WITHOUT grain
+  (`ExportOptions.without_grain`) and the original's grain is set on the copy (`holdGrain`, default on; Settings ▸
+  External Editor + Photo ▸ Edit In toggles). Crop dials (CropPositionX/Y, scale) now run as one interaction too.
   Left: a filter-bar heart toggle (only `fav:yes` search for now); merges. area (agent branch `merges-area`,
   worktree ~/crafts/lightcraft-merges).
 - [x] (Claude fix session, 2026-11-23 09:02) **Lightroom-import repair APPLIED to Bryan's real library** (he OK'd it in the

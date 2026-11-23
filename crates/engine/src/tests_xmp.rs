@@ -549,7 +549,7 @@ fn external_edit_copy_is_stacked() {
     s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
     let orig = s.active().unwrap();
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
-    let r = s.execute("photo.editExternal", &json!({})).unwrap();
+    let r = s.execute("photo.editExternal", &json!({"format": "tiff"})).unwrap();
     let path = r["path"].as_str().unwrap().to_string();
     assert!(path.ends_with("beach-Edit.tif"), "{path}");
     let bytes = std::fs::read(&path).unwrap();
@@ -559,8 +559,49 @@ fn external_edit_copy_is_stacked() {
     assert_eq!(s.active(), Some(new));
     let st = s.catalog.stack_of(new).expect("stacked");
     assert_eq!((st.top(), st.photos.contains(&orig)), (new, true));
-    let r2 = s.execute("photo.editExternal", &json!({"colorSpace": "proPhoto"})).unwrap();
+    let r2 = s.execute("photo.editExternal", &json!({"colorSpace": "proPhoto", "format": "tiff"})).unwrap();
     assert!(r2["path"].as_str().unwrap().ends_with("beach-Edit-Edit.tif") || r2["path"].as_str().unwrap().contains("-2"), "{r2}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Edit In with grain (Bryan, 2026-11-23): the copy is a 16-bit PSD (PhotoCraft's ⌘S writes it
+/// back in place) rendered WITHOUT the grain, and the grain goes back on the copy — same amount,
+/// size, roughness and seed — so the file saved from the editor shows it again.
+#[test]
+fn external_edit_holds_grain_back_and_puts_it_on_the_copy() {
+    let dir = temp_dir("extgrain");
+    let src = dir.join("film.png");
+    write_png(&src, 120);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let orig = s.active().unwrap();
+    s.execute("develop.set", &json!({"control": "grain.amount", "value": 60.0})).unwrap();
+    let grain = s.develop_of(orig).unwrap().grain;
+    let r = s.execute("photo.editExternal", &json!({})).unwrap();
+    assert_eq!(r["grainHeld"], true, "{r}");
+    let path = r["path"].as_str().unwrap().to_string();
+    assert!(path.ends_with("film-Edit.psd"), "{path}");
+    let d = lightcraft_codecs::decode(&std::fs::read(&path).unwrap(), Default::default()).unwrap();
+    assert_eq!(d.bit_depth, 16);
+    // grain makes neighbouring pixels jump: second differences along each row
+    let rough = |img: &lightcraft_raster::Rgb32f| -> f64 {
+        let w = img.width;
+        (0..img.height)
+            .flat_map(|y| (1..w - 1).map(move |x| (y, x)))
+            .map(|(y, x)| (img.data[y * w + x + 1][2] - 2.0 * img.data[y * w + x][2] + img.data[y * w + x - 1][2]).abs() as f64)
+            .sum()
+    };
+    let held = rough(&d.image);
+    let new = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    assert_eq!(s.develop_of(new).unwrap().grain, grain, "the same grain on the copy");
+    assert_eq!(s.develop_of(orig).unwrap().grain, grain, "the original keeps its grain");
+    // holdGrain off: grain baked into the copy, none added on top
+    let r = s.execute("library.select", &json!({"ids": [orig.0]})).and_then(|_| s.execute("photo.editExternal", &json!({"holdGrain": false}))).unwrap();
+    assert_eq!(r["grainHeld"], false);
+    let new2 = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+    assert_eq!(s.develop_of(new2).unwrap().grain.amount, 0.0);
+    let baked = lightcraft_codecs::decode(&std::fs::read(r["path"].as_str().unwrap()).unwrap(), Default::default()).unwrap();
+    assert!(held * 2.0 < rough(&baked.image), "the held copy has no grain: {held} vs baked {}", rough(&baked.image));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

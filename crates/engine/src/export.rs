@@ -863,6 +863,9 @@ pub struct ExportOptions {
     /// not applied), AVIF as 10-bit Rec. 2020 PQ, 32-bit float TIFF with the highlights above SDR
     /// white kept. Other formats, and photos without an HDR edit, are SDR.
     pub hdr: bool,
+    /// Render without the photo's grain (Edit In: grain goes back on the saved copy afterwards).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub without_grain: bool,
     /// The curve of an HDR AVIF, PNG or JPEG XL: PQ (default) or HLG.
     pub hdr_transfer: HdrCurve,
     /// Lightroom's "Maximize Compatibility" for HDR output: an SDR base image plus a gain map
@@ -1170,6 +1173,7 @@ impl Default for ExportOptions {
             icc_profile: None,
             bit_depth: None,
             hdr: false,
+            without_grain: false,
             hdr_transfer: HdrCurve::Pq,
             hdr_compat: true,
             video: crate::video::VideoExport::default(),
@@ -1555,6 +1559,7 @@ impl ExportOptions {
             },
             bit_depth: u("bitDepth").filter(|b| matches!(b, 8 | 10 | 16 | 32)).map(|b| b as u8),
             hdr: p.get("hdr").and_then(Value::as_bool).unwrap_or(d.hdr),
+            without_grain: p.get("withoutGrain").and_then(Value::as_bool).unwrap_or(d.without_grain),
             hdr_transfer: s("hdrTransfer").and_then(HdrCurve::parse).unwrap_or(d.hdr_transfer),
             hdr_compat: p.get("hdrCompat").and_then(Value::as_bool).unwrap_or(d.hdr_compat),
             video: p.get("video").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or(d.video),
@@ -2565,8 +2570,21 @@ fn prepare_guarded(
             opts.watermark = None;
         }
         let gain_map = o.gain_map_output();
-        let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
-        let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
+        // Edit In with grain held back: the same render with Grain off (its own cache key)
+        let no_grain = |mut j: crate::RenderJob| {
+            if o.without_grain && j.settings.grain.amount > 0.0 {
+                let mut s = (*j.settings).clone();
+                s.grain.amount = 0.0;
+                j.settings = std::sync::Arc::new(s);
+                j.cache = None;
+                j.view_cache = None;
+                j.stages = None;
+                j.key ^= 0x6772_6169_6e5f_6f66;
+            }
+            j
+        };
+        let job = no_grain(session.export_job(id, w, h, o.effective_space(), o.effective_depth())?);
+        let hdr_job = if gain_map { Some(no_grain(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?)) } else { None };
         Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts }))
     } else {
         let dng = if o.format == ExportFormat::Dng { Some(Box::new(DngWork::prepare(session, id, o)?)) } else { None };

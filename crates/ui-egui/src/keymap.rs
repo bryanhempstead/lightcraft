@@ -1610,14 +1610,13 @@ pub fn console_tick(app: &mut crate::LightcraftApp, ctx: &egui::Context) {
 }
 
 pub fn nudge(app: &mut crate::LightcraftApp, control: &str, delta: f64) -> Result<Value, String> {
+    // every dial turn (the crop's move / scale too: Bryan, 2026-11-23 "super laggy") is one drag
+    console_begin(app, control);
     let r = match control {
         "crop.x" => app.run("crop.nudge", json!({"x": delta})),
         "crop.y" => app.run("crop.nudge", json!({"y": delta})),
         "crop.scale" => app.run("crop.nudge", json!({"scale": delta})),
-        _ => {
-            console_begin(app, control);
-            app.run("develop.adjust", json!({"control": control, "delta": delta}))
-        }
+        _ => app.run("develop.adjust", json!({"control": control, "delta": delta})),
     };
     if r.is_ok() {
         hud(app, control);

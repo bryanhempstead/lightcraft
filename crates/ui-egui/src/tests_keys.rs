@@ -304,6 +304,27 @@ fn lands_where_i_left_off() {
     assert!(h.app.widgets.iter().any(|(id, _)| id == "button:leftOff"));
 }
 
+/// The crop dials (press-and-turn: move / scale the photo in the crop) are one drag too: no
+/// history step per detent while they turn, one after (Bryan, 2026-11-23: "super laggy").
+#[test]
+fn crop_dial_turns_are_one_drag() {
+    let mut h = demo();
+    h.request("ui.set", json!({"view": "detail"}), T);
+    exec(&mut h, "panel.crop", json!({}));
+    exec(&mut h, "crop.set", json!({"rect": [0.1, 0.1, 0.9, 0.9]}));
+    h.step();
+    let id = h.app.session.active().unwrap();
+    let steps = |h: &Headless| h.app.session.catalog.photo(id).unwrap().history.len();
+    let before = steps(&h);
+    for _ in 0..12 {
+        exec(&mut h, "keys.lrinput", json!({"line": "CropPositionX = ^0.5,-100,100"}));
+    }
+    assert!(h.app.session.interaction.is_some(), "turning: one interaction");
+    assert_eq!(steps(&h), before, "no history step per detent");
+    assert!(h.step_until(Duration::from_secs(3), |h| h.app.session.interaction.is_none()));
+    assert_eq!(steps(&h), before + 1);
+}
+
 /// fav.: a quick tap of H toggles the heart on the selected photos; H held does what H is bound
 /// to instead (Bryan's keymap: the Hue panel) and leaves the heart alone.
 #[test]

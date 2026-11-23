@@ -224,6 +224,24 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             app.ui.settings.external_editor.clear();
         }
     });
+    row(ui, t, crate::i18n::tr("Copy"), |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let psd = app.ui.settings.external_format != "tiff";
+        if crate::widgets::text_button(ui, "editorFormat-psd", "psd.", psd).clicked() {
+            app.ui.settings.external_format = "psd".into();
+        }
+        if crate::widgets::text_button(ui, "editorFormat-tiff", "tif.", !psd).clicked() {
+            app.ui.settings.external_format = "tiff".into();
+        }
+    });
+    row(ui, t, "", |ui| {
+        check(
+            ui,
+            "settings.externalHoldGrain",
+            &mut app.ui.settings.external_hold_grain,
+            "Leave grain off the copy, put it back on after saving",
+        );
+    });
     hint(
         ui,
         t,

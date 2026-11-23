@@ -1564,16 +1564,34 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         "app.externalEditor" => {
             // {app: "PhotoCraft" | "Adobe Photoshop 2026" | any app name | "" (the system default)}
+            // {app?, format?: psd|tiff, holdGrain?: bool}
             if let Some(a) = p.get("app").and_then(Value::as_str) {
                 app.ui.settings.external_editor = a.trim().to_string();
             }
-            Ok(json!({"app": app.ui.settings.external_editor}))
+            if let Some(f) = p.get("format").and_then(Value::as_str) {
+                if !matches!(f, "psd" | "tiff") {
+                    return Some(Err(format!("app.externalEditor: format {f} (psd or tiff)")));
+                }
+                app.ui.settings.external_format = f.into();
+            }
+            if let Some(g) = p.get("holdGrain").and_then(Value::as_bool) {
+                app.ui.settings.external_hold_grain = g;
+            }
+            let s = &app.ui.settings;
+            Ok(json!({"app": s.external_editor, "format": s.external_format, "holdGrain": s.external_hold_grain}))
         }
         "photo.editInExternal" => {
             // render an edit copy (stacked on the original), then open it in the editor
             let mut params = p.clone();
             if !params.is_object() {
                 params = json!({});
+            }
+            // the copy's format and the grain rule from Settings, unless the call says otherwise
+            if params.get("format").is_none() {
+                params["format"] = json!(app.ui.settings.external_format);
+            }
+            if params.get("holdGrain").is_none() {
+                params["holdGrain"] = json!(app.ui.settings.external_hold_grain);
             }
             let r = match app.session.execute("photo.editExternal", &params) {
                 Ok(r) => r,

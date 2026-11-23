@@ -464,7 +464,7 @@ fn edit_in_external_editor_opens_the_copy() {
     assert_eq!(r["ok"], true, "{r}");
     let calls = opened.lock().unwrap().clone();
     assert_eq!(calls.len(), 1);
-    assert!(calls[0].0.ends_with("-Edit.tif") && std::path::Path::new(&calls[0].0).exists(), "{calls:?}");
+    assert!(calls[0].0.ends_with("-Edit.psd") && std::path::Path::new(&calls[0].0).exists(), "{calls:?}");
     assert_eq!(calls[0].1, "PhotoCraft");
     let _ = std::fs::remove_dir_all(&dir);
     h.settle(SETTLE);

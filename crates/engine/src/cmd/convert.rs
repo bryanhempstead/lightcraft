@@ -139,8 +139,15 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
         "prophoto" | "proPhoto" => lightcraft_pipeline::OutputSpace::ProPhoto,
         _ => lightcraft_pipeline::OutputSpace::AdobeRgb,
     };
+    // holdGrain (default on): grain stays off the copy the editor gets and goes back on that copy
+    // here, so retouching never smears it and the saved file shows it again (Bryan, 2026-11-23)
+    let hold_grain = super::bool_or(p, "holdGrain", true) && ph.develop.grain.amount > 0.0;
+    // psd (default): PhotoCraft's ⌘S writes a PSD back in place, so the edit comes straight back;
+    // tiff: Lightroom's default copy format
+    let tiff = super::str_param(p, "format") == Some("tiff");
     let opts = crate::export::ExportOptions {
-        format: crate::export::ExportFormat::Tiff,
+        without_grain: hold_grain,
+        format: if tiff { crate::export::ExportFormat::Tiff } else { crate::export::ExportFormat::Psd },
         bit_depth: Some(16),
         color_space: space,
         naming: "{name}-Edit".into(),
@@ -156,13 +163,22 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let to = crate::export::Destination { dir, exact: None };
     crate::export::export_batch(s, &[id], &opts, &to, &mut write, &|path| Path::new(path).exists()).map_err(|e| bad(C, e))?;
-    let out = written.into_iter().find(|w| w.ends_with(".tif")).ok_or_else(|| bad(C, "nothing was written"))?;
+    let ext = if tiff { ".tif" } else { ".psd" };
+    let out = written.into_iter().find(|w| w.to_lowercase().ends_with(ext) || w.to_lowercase().ends_with(".psb")).ok_or_else(|| bad(C, "nothing was written"))?;
     let r = s.execute("library.import", &json!({"paths": [out]}))?;
     let new = r["imported"].get(0).and_then(Value::as_u64).ok_or_else(|| bad(C, "the edit copy could not be added"))?;
     // stack: the edit on top of the original, expanded so both show
     let _ = s.execute("stack.group", &json!({"ids": [new, id.0], "top": new, "collapsed": false}));
-    s.selection = crate::Selection::single(lightcraft_catalog::PhotoId(new));
-    Ok(json!({"path": out, "id": new, "original": id.0}))
+    let new_id = lightcraft_catalog::PhotoId(new);
+    if hold_grain && let Some(d) = s.develop_of(new_id) {
+        let mut d = (*d).clone();
+        // the original's grain (same seed, so the same pattern) on the copy, kept through every
+        // save from the editor (a reload keeps develop settings)
+        d.grain = ph.develop.grain;
+        s.set_develop(new_id, d, "Grain (from the original)")?;
+    }
+    s.selection = crate::Selection::single(new_id);
+    Ok(json!({"path": out, "id": new, "original": id.0, "grainHeld": hold_grain}))
 }
 
 /// The op that brings a photo up to date with what its file is now (`info`, a fresh probe), or

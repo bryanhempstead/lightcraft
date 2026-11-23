@@ -389,6 +389,10 @@ pub struct AppSettings {
     pub preview_edge: u32,
     /// Edit in External Editor: the application ("" = the system's default for TIFF files).
     pub external_editor: String,
+    /// Edit In (⌘E): the copy's format, "psd" (default: PhotoCraft's ⌘S saves it back in place) or "tiff".
+    pub external_format: String,
+    /// Edit In: leave Grain off the copy the editor gets and put it back on that copy (default on).
+    pub external_hold_grain: bool,
     /// Memory the caches may hold together, in MB (0 = automatic; `app.memoryBudget`).
     pub memory_mb: u32,
     /// Filmstrip: file names above the thumbnails.
@@ -475,6 +479,8 @@ impl Default for AppSettings {
             gpu: true,
             preview_edge: 2560,
             external_editor: String::new(),
+            external_format: "psd".into(),
+            external_hold_grain: true,
             memory_mb: 0,
             film_names: true,
             film_badges: true,
