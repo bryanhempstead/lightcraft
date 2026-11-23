@@ -69,8 +69,10 @@ noisy; the UI-thread profiles (`sample <pid>`) say where the time goes regardles
 - **Every GPU readback waited for all GPU work in the process** (`crates/gpu/src/ctx.rs`
   `finish_and_read`): `device.poll(Wait)` without a submission index waited for whatever any other
   thread had queued too, so a thumbnail or the loupe sat behind an export's (or another view's)
-  GPU work, and in the 12-thread UI test run the grid's thumbnails got no result for 120 s
-  (`0 done, 10 in flight`). It now waits for its own submission.
+  GPU work. It now waits for its own submission.
+- **Demo photos painted again by every session** (`crates/engine/src/media.rs` `demo_render`): the
+  procedural scenes are now painted once per size for the process (384 MB LRU). Test:
+  `demo_paintings_are_shared_between_sessions`.
 - **The grid's source total sorted the whole catalog** after every change just to count it
   (`Catalog::count`).
 - `ui.inspect` → `perf.window` / `resetPerf` (above), so the next measurement is one call.
@@ -84,14 +86,17 @@ noisy; the UI-thread profiles (`sample <pid>`) say where the time goes regardles
 `headless::tests::demo_grid_snapshot_has_ui_pixels`, `tests_alt_preview::alt_during_a_blacks_drag…` and
 `tests_identity::text_plate_and_modules` failed in full `cargo test` runs on a loaded machine. With a
 renderer diagnosis in the message (`Renderer::diagnose`), the grid test showed `0 done, 10 in
-flight` after 120 s: no render finished at all, because every GPU readback waited for all GPU work
-of the 12 tests running in the process (fixed above). The tests now also wait for what they check:
-the grid until every on-screen cell has its thumbnail, the Alt preview until it (and then the photo)
-is on screen, the identity plate until it is drawn — instead of a `settle()` that needs every render
-in the app to finish. A 91-test subset at load ~600: before 1 failure (the grid test, `0 done`);
-after, the grid and Alt tests pass. At load 700 some other render-heavy tests
-(`snapshots_are_deterministic…`, `tests_hdr::compare_survey…`, `browse_a_local_folder`) still time out
-after 120–300 s: that is CPU starvation, not a hang.
+flight` after 120 s — every run, the same photos. A `sample` of the test process showed why: 68 of
+the 90 render workers of the 12 tests running at once sat in rayon waiting on
+`lightcraft_scenes::paint::render`. Every test's demo session painted every demo photo itself, at
+every size, on the one shared rayon pool, so the grid's 512 px thumbnails queued behind minutes of
+other tests' full-size paintings. Demo paintings are now shared by the process (fixed above), and
+the tests wait for what they check — the grid until every on-screen cell has its thumbnail, the Alt
+preview until it (and then the photo) is on screen, the identity plate until it is drawn — instead of
+a `settle()` that needs every render in the app to finish. Before: the grid test failed in 2 of 2
+full `ui-egui` runs and 2 of 3 runs of the `headless::` subset (load 250–700); the full runs took
+527 s (7 failures) and 1,351 s (10 failures). After: 381 passed, 0 failed, in 69 s (load 590) and
+97 s (load 240).
 
 ## Still slow (ordered by how much it hurts culling and editing)
 

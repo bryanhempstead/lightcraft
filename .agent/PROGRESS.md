@@ -12,7 +12,7 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   on the UI thread (`FsStore` fsyncs on a worker), render results converted to egui images on the UI thread
   (`render::Prepared` / `Pixels`, made on the render worker; 1:1 pan stalls up to 1.5 s), 60 fps polling while
   renders run (`JobPool::set_on_done` wakes the UI), GPU readback waiting for all GPU work in the process
-  (`finish_and_read` waits for its own submission — the cause of the "0 thumbnails after 120 s" UI-test flake),
+  (`finish_and_read` waits for its own submission), every demo session repainting every demo photo on the shared rayon pool (the "0 thumbnails after 120 s" UI-test flake; `media::demo_render` shares them),
   `source_total` sorting the catalog to count it (`Catalog::count`), `LibraryLock::acquire` refusing a reopen while
   a forked child still held the lock (retries 2 s when no owner note); `ui.inspect` → `perf.window` + `resetPerf`;
   `Renderer::diagnose` in test failure messages; the grid / Alt-preview / identity-plate tests wait for what they
