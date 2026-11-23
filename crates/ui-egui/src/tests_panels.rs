@@ -24,7 +24,7 @@ fn demo(size: [f32; 2], ui: serde_json::Value) -> Headless {
 
 /// DESIGN.md §15 in `area`: no text drawn past its clip rect or the area's edge (clipped), and no
 /// two texts on top of each other. Returns what is wrong, empty when nothing is.
-fn layout_faults(h: &Headless, area: egui::Rect) -> Vec<String> {
+pub(crate) fn layout_faults(h: &Headless, area: egui::Rect) -> Vec<String> {
     // the area's own texts: drawn clipped to it (what lies behind a window is clipped to its panel)
     let texts: Vec<(String, egui::Rect, egui::Rect)> =
         h.view.texts().into_iter().filter(|(_, r, clip)| area.contains(r.center()) && area.expand(2.0).contains_rect(*clip)).collect();

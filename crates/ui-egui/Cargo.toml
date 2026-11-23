@@ -29,6 +29,7 @@ log = { workspace = true }
 
 [dev-dependencies]
 lightcraft-vision = { workspace = true }
+lightcraft-merge = { workspace = true }
 png = { workspace = true }
 
 [build-dependencies]

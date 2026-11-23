@@ -191,7 +191,11 @@ impl Scope {
                 if root.is_empty() || g.folder.is_empty() {
                     return false;
                 }
-                if *deep { lightcraft_catalog::query::folder_within(&g.folder, &root) } else { g.folder.trim_end_matches('/') == root.trim_end_matches('/') }
+                if *deep {
+                    lightcraft_catalog::query::folder_within(&g.folder, &root)
+                } else {
+                    g.folder.trim_end_matches('/') == root.trim_end_matches('/')
+                }
             }
             Scope::Album { id } => {
                 let members = || g.photos.iter().copied().chain(g.result);
@@ -261,7 +265,13 @@ pub fn view(cat: &Catalog, scope: &Scope) -> Vec<ViewRun> {
                 let first = ids.first().copied().map(date).unwrap_or_default();
                 open.push((
                     first,
-                    ViewRun { key: format!("merges:group:{}", g.id), label: g.kind.tag().to_string(), group: Some(g.id.clone()), kind: Some(g.kind), ids },
+                    ViewRun {
+                        key: format!("merges:group:{}", g.id),
+                        label: g.kind.tag().to_string(),
+                        group: Some(g.id.clone()),
+                        kind: Some(g.kind),
+                        ids,
+                    },
                 ));
             }
             GroupState::Merged => {
@@ -817,7 +827,8 @@ fn scanned(cat: &Catalog) -> BTreeMap<String, u64> {
 /// A finder run on a worker thread (the app): thumbnails are loaded and compared off the UI
 /// thread as background work; [`Session::merge_find_poll`] stores the groups when it is done.
 pub struct FindJob {
-    rx: std::sync::mpsc::Receiver<Vec<Candidate>>,
+    /// What it found, and whether it read any thumbnail (worth not reading again).
+    rx: std::sync::mpsc::Receiver<(Vec<Candidate>, bool)>,
     cancel: Arc<AtomicBool>,
     generation: u64,
     /// Folders looked at → their fingerprints, written when the run lands.
@@ -855,7 +866,7 @@ impl Session {
             for l in &plan.looks {
                 found.extend(decide(l, &thumbs));
             }
-            return self.merge_found(found, scanned);
+            return self.merge_found(found, scanned, !thumbs.is_empty());
         }
         // a new run replaces one still looking
         self.merge_find_job = None;
@@ -888,7 +899,7 @@ impl Session {
                     for l in &looks {
                         found.extend(decide(l, &thumbs));
                     }
-                    Some(found)
+                    Some((found, !thumbs.is_empty()))
                 }));
                 if let Ok(Some(found)) = r {
                     let _ = tx.send(found);
@@ -909,7 +920,7 @@ impl Session {
     /// nothing runs). A run started for another library is dropped.
     pub fn merge_find_poll(&mut self) -> Option<Result<Value>> {
         let job = self.merge_find_job.as_ref()?;
-        let found = match job.rx.try_recv() {
+        let (found, persist) = match job.rx.try_recv() {
             Ok(f) => f,
             Err(std::sync::mpsc::TryRecvError::Empty) => return None,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -921,7 +932,7 @@ impl Session {
         if job.generation != self.library_generation() {
             return None;
         }
-        Some(self.merge_found(found, job.scanned.clone()))
+        Some(self.merge_found(found, job.scanned.clone(), persist))
     }
 
     /// The automatic finder (Settings ▸ find merges: auto.): start a background run over the
@@ -932,7 +943,8 @@ impl Session {
             return None;
         }
         let now = fingerprints(&self.catalog);
-        let seen = scanned(&self.catalog);
+        let mut seen = scanned(&self.catalog);
+        seen.extend(self.merge_scanned.iter().map(|(k, v)| (k.clone(), *v)));
         let changed: BTreeMap<String, u64> = now.into_iter().filter(|(f, fp)| seen.get(f) != Some(fp)).collect();
         if changed.is_empty() {
             return None;
@@ -947,8 +959,11 @@ impl Session {
     }
 
     /// Store found merges as open groups (bookkeeping: not an undo step), leaving out any that
-    /// shares a frame with a group already there; note the folders looked at.
-    pub fn merge_found(&mut self, found: Vec<Candidate>, looked: BTreeMap<String, u64>) -> Result<Value> {
+    /// shares a frame with a group already there; note the folders looked at — in the library
+    /// when something was found or thumbnails were read (`persist`: worth not redoing), else
+    /// for this session only (metadata alone is cheap to read again, and a library that changes
+    /// nothing gets no write).
+    pub fn merge_found(&mut self, found: Vec<Candidate>, looked: BTreeMap<String, u64>, persist: bool) -> Result<Value> {
         let mut taken: HashSet<PhotoId> = groups(&self.catalog).iter().flat_map(|g| g.photos.iter().copied().chain(g.result)).collect();
         let now = (self.clock)();
         let mut ops = Vec::new();
@@ -958,11 +973,20 @@ impl Session {
                 continue;
             }
             taken.extend(c.photos.iter().copied());
-            let g = MergeGroup { id: group_id(&c.photos), kind: c.kind, photos: c.photos, state: GroupState::Open, result: None, folder: c.folder, found: now.clone() };
+            let g = MergeGroup {
+                id: group_id(&c.photos),
+                kind: c.kind,
+                photos: c.photos,
+                state: GroupState::Open,
+                result: None,
+                folder: c.folder,
+                found: now.clone(),
+            };
             ops.push(g.op());
             out.push(g.to_json());
         }
-        if !looked.is_empty() {
+        self.merge_scanned.extend(looked.iter().map(|(k, v)| (k.clone(), *v)));
+        if !looked.is_empty() && (persist || !ops.is_empty()) {
             let mut seen = scanned(&self.catalog);
             seen.extend(looked);
             ops.push(Op::SetRecord { key: SCANNED.into(), value: serde_json::to_value(seen).ok() });
@@ -1030,15 +1054,13 @@ impl Session {
             let frames = self.merge_group_frames(&g, only);
             let k = kind.unwrap_or(g.kind);
             let params = json!({"autoSettings": auto_settings, "stack": false, "autoCrop": true});
-            let r = crate::merge::parse(k.command(), &params)
-                .and_then(|(mk, finish)| self.merge_now(mk, finish, &frames))
-                .and_then(|info| {
-                    let rid = info.get("id").and_then(Value::as_u64).map(PhotoId).ok_or_else(|| EngineError::Other("the merge made no photo".into()))?;
-                    if k != g.kind {
-                        self.set_group_kind(&g.id, k)?;
-                    }
-                    self.merge_group_done(&g.id, rid, &frames)
-                });
+            let r = crate::merge::parse(k.command(), &params).and_then(|(mk, finish)| self.merge_now(mk, finish, &frames)).and_then(|info| {
+                let rid = info.get("id").and_then(Value::as_u64).map(PhotoId).ok_or_else(|| EngineError::Other("the merge made no photo".into()))?;
+                if k != g.kind {
+                    self.set_group_kind(&g.id, k)?;
+                }
+                self.merge_group_done(&g.id, rid, &frames)
+            });
             match r {
                 Ok(v) => merged.push(v),
                 Err(e) => failed.push(json!({"group": id, "error": e.to_string()})),

@@ -789,6 +789,11 @@ fn albums_tree_view(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &[Album], p
             if toggled {
                 set_parts_open(app, &owner.open_key(), !parts_open);
             }
+            // merges.: the merges found among its photos
+            let found = crate::merges::counts(app, ui.ctx()).album(a.id);
+            if found > 0 {
+                merges_row(app, ui, lightcraft_engine::merge_find::Scope::Album { id: a.id }, found, indent + 16.0);
+            }
             if parts_open && n > 0 {
                 part_rows(app, ui, owner, indent + 16.0);
             }
@@ -2236,9 +2241,39 @@ fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, tree: &[FolderNode], 
             app.ui.folders_open.insert(key, open);
         }
         row_menu(app, &resp, n, gone);
+        if !n.volume {
+            // merges.: the merges found in it (an open folder: its own; a closed one: with the folders inside it)
+            let deep = !(open && !children.is_empty());
+            let found = crate::merges::counts(app, ui.ctx()).folder(&last.path, deep);
+            if found > 0 {
+                merges_row(app, ui, lightcraft_engine::merge_find::Scope::Folder { path: last.path.clone(), deep }, found, indent + 16.0);
+            }
+        }
         if open && !children.is_empty() {
             folder_rows(app, ui, tree, children, indent + 16.0, gone);
         }
+    }
+}
+
+/// merges.: a row under a folder or collection with merges found in it (brackets, panoramas,
+/// focus stacks to review, and the merged photos); a click shows them (`library.source {kind:
+/// merges}`).
+fn merges_row(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: lightcraft_engine::merge_find::Scope, count: usize, indent: f32) {
+    use lightcraft_engine::merge_find::Scope;
+    let sel = app.session.source == LibrarySource::Merges && app.session.merges_scope.as_ref() == Some(&scope);
+    let (id, params) = match &scope {
+        Scope::Folder { path, deep } => (format!("merges:folder:{path}"), json!({"kind": "merges", "path": path, "deep": deep})),
+        Scope::Album { id } => (format!("merges:album:{}", id.0), json!({"kind": "merges", "id": id.0})),
+        Scope::All => ("merges:all".to_string(), json!({"kind": "merges"})),
+    };
+    let resp = row_ex(app, ui, &id, Icon::Stack, "merges.", Some("merges."), Some(count), sel, indent, &RowExtra::default());
+    let resp = resp.on_hover_text(crate::i18n::tr(
+        "Photo merges found here — brackets (hdr.), panoramas (pano.), focus stacks (stack.) — to review and merge, and the merged photos",
+    ));
+    if resp.clicked()
+        && let Err(e) = app.run("library.source", params)
+    {
+        app.toast(ui.ctx(), e);
     }
 }
 

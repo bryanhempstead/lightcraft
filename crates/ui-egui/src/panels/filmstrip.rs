@@ -277,6 +277,11 @@ fn cells(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 {
                     film_badges(p, &t, fr, ph);
                 }
+                // merges.: what made a merged photo, at the top right
+                if let Some(kind) = app.session.catalog.photo(*id).and_then(|ph| ph.merge_type()) {
+                    let br = crate::merges::tag(p, &t, fr.right_top() + vec2(-3.0, 3.0), kind, true, true);
+                    crate::widgets::register(ui.ctx(), format!("film:merge:{}", id.0), br);
+                }
                 if let Some(st) = app.session.catalog.stack_of(*id) {
                     let text =
                         if st.collapsed { st.photos.len().to_string() } else { format!("{}/{}", st.position(*id).unwrap_or(0) + 1, st.photos.len()) };

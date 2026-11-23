@@ -367,6 +367,8 @@ pub struct Session {
     pub merges_scope: Option<merge_find::Scope>,
     /// merges.: the finder looking on a worker thread ([`Session::merge_find_poll`]).
     pub merge_find_job: Option<merge_find::FindJob>,
+    /// merges.: folders the automatic finder read this session (folder → fingerprint).
+    pub merge_scanned: std::collections::BTreeMap<String, u64>,
 }
 
 impl Default for Session {
@@ -474,6 +476,7 @@ impl Session {
             tether: None,
             merges_scope: None,
             merge_find_job: None,
+            merge_scanned: Default::default(),
         }
     }
 

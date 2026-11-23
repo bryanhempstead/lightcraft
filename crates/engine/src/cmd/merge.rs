@@ -114,7 +114,8 @@ fn merges_specs() -> Vec<CommandSpec> {
             |s, p| {
                 let ids = group_ids("merge.mergeGroups", p)?;
                 let kind = kind_param("merge.mergeGroups", p, "kind")?;
-                let only: Vec<PhotoId> = p.get("frames").and_then(Value::as_array).map(|v| v.iter().filter_map(Value::as_u64).map(PhotoId).collect()).unwrap_or_default();
+                let only: Vec<PhotoId> =
+                    p.get("frames").and_then(Value::as_array).map(|v| v.iter().filter_map(Value::as_u64).map(PhotoId).collect()).unwrap_or_default();
                 s.merge_groups_now(&ids, kind, &only, bool_or(p, "autoSettings", true))
             }
         ),

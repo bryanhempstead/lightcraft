@@ -90,6 +90,8 @@ mod tests_masking;
 #[cfg(test)]
 mod tests_media;
 #[cfg(test)]
+mod tests_merges;
+#[cfg(test)]
 mod tests_metadata_views;
 #[cfg(test)]
 mod tests_offline;

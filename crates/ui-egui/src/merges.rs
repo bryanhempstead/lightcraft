@@ -63,9 +63,11 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     if app.ui.settings.merge_find == FindMode::Auto && app.session.vision.background && !app.session.merge_find_running() && app.import.is_none() {
         let now = ctx.input(|i| i.time);
         let key = egui::Id::new("merges-auto-at");
-        let last: f64 = ctx.data(|d| d.get_temp(key)).unwrap_or(f64::MIN);
-        if now - last >= AUTO_EVERY {
-            ctx.data_mut(|d| d.insert_temp(key, now));
+        // (time of the last look, the catalog it looked at): nothing changed, nothing to look at
+        let last: Option<(f64, u64)> = ctx.data(|d| d.get_temp(key));
+        let rev = app.session.catalog.revision;
+        if last.is_none_or(|(t, r)| now - t >= AUTO_EVERY && r != rev) {
+            ctx.data_mut(|d| d.insert_temp(key, (now, rev)));
             if let Some(r) = app.session.merge_find_auto() {
                 landed(app, ctx, r);
             }
@@ -135,11 +137,14 @@ fn queue(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         Some(k) => Some(MergeType::parse(k).ok_or_else(|| format!("merge.mergeGroups: kind `{k}` is hdr, pano, stack or hdrPano"))?),
         None => None,
     };
-    let only: Vec<PhotoId> = p.get("frames").and_then(Value::as_array).map(|v| v.iter().filter_map(Value::as_u64).map(PhotoId).collect()).unwrap_or_default();
+    let only: Vec<PhotoId> =
+        p.get("frames").and_then(Value::as_array).map(|v| v.iter().filter_map(Value::as_u64).map(PhotoId).collect()).unwrap_or_default();
     let mut queued = 0;
     for id in &ids {
         let Some(g) = merge_find::group(&app.session.catalog, id).filter(|g| g.state == GroupState::Open) else { continue };
-        if app.merge.group_queue.iter().any(|q| q.group == g.id) || app.merge.final_task.as_ref().and_then(|t| t.group.as_ref()).is_some_and(|(q, _)| *q == g.id) {
+        if app.merge.group_queue.iter().any(|q| q.group == g.id)
+            || app.merge.final_task.as_ref().and_then(|t| t.group.as_ref()).is_some_and(|(q, _)| *q == g.id)
+        {
             continue;
         }
         let k = kind.unwrap_or(g.kind);
@@ -174,7 +179,8 @@ fn picked_groups(app: &LightcraftApp) -> (Vec<MergeGroup>, Vec<PhotoId>) {
 
 /// The merged photos picked.
 fn picked_results(app: &LightcraftApp) -> Vec<u64> {
-    let merged: Vec<PhotoId> = merge_find::groups(&app.session.catalog).into_iter().filter(|g| g.state == GroupState::Merged).filter_map(|g| g.result).collect();
+    let merged: Vec<PhotoId> =
+        merge_find::groups(&app.session.catalog).into_iter().filter(|g| g.state == GroupState::Merged).filter_map(|g| g.result).collect();
     app.session.selection.ids.iter().filter(|i| merged.contains(i)).map(|i| i.0).collect()
 }
 
@@ -229,7 +235,10 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     gap(&mut row);
-    if crate::widgets::text_button(&mut row, "mergesAll", "all.", false).on_hover_text(crate::i18n::tr("Pick every group and merged photo (⌘A)")).clicked() {
+    if crate::widgets::text_button(&mut row, "mergesAll", "all.", false)
+        .on_hover_text(crate::i18n::tr("Pick every group and merged photo (⌘A)"))
+        .clicked()
+    {
         let ids: Vec<u64> = app.session.visible_cloned().iter().map(|p| p.0).collect();
         let _ = app.run("library.select", json!({"ids": ids}));
     }
@@ -261,8 +270,20 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let results = picked_results(app);
     for (id, label, tip, cmd, params) in [
         ("mergesBoth", "both.", "Show the picked merged photos here and in their folder and collections", "merge.showIn", json!({"where": "both"})),
-        ("mergesOnly", "merges.only.", "Show the picked merged photos only here, not in their folder or collections", "merge.showIn", json!({"where": "merges"})),
-        ("mergesUnmerge", "unmerge.", "Bring the picked merged photos' originals back where they were (the merged photo stays)", "merge.unmerge", json!({})),
+        (
+            "mergesOnly",
+            "merges.only.",
+            "Show the picked merged photos only here, not in their folder or collections",
+            "merge.showIn",
+            json!({"where": "merges"}),
+        ),
+        (
+            "mergesUnmerge",
+            "unmerge.",
+            "Bring the picked merged photos' originals back where they were (the merged photo stays)",
+            "merge.unmerge",
+            json!({}),
+        ),
     ] {
         if crate::widgets::text_button(&mut row, id, label, false).on_hover_text(crate::i18n::tr(tip)).clicked() {
             if results.is_empty() {
@@ -323,7 +344,9 @@ pub fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, count
         }
     }
     let n = count;
-    row.label(egui::RichText::new(crate::i18n::tr_format!("· {n} photo{}", if n == 1 { "" } else { "s" }, n = n)).font(t.font(12.5)).color(t.text_dim));
+    row.label(
+        egui::RichText::new(crate::i18n::tr_format!("· {n} photo{}", if n == 1 { "" } else { "s" }, n = n)).font(t.font(12.5)).color(t.text_dim),
+    );
     if let Some(g) = &g {
         let mut right = row.new_child(egui::UiBuilder::new().max_rect(row.max_rect()).layout(egui::Layout::right_to_left(egui::Align::Center)));
         right.spacing_mut().item_spacing.x = 8.0;
@@ -337,7 +360,13 @@ pub fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, count
         }
         let queued = app.merge.group_queue.iter().any(|q| q.group == g.id);
         let running = app.merge.final_task.as_ref().and_then(|t| t.group.as_ref()).is_some_and(|(q, _)| *q == g.id);
-        let label = if running { "merging…" } else if queued { "waiting…" } else { "merge." };
+        let label = if running {
+            "merging…"
+        } else if queued {
+            "waiting…"
+        } else {
+            "merge."
+        };
         if crate::widgets::text_button(&mut right, &format!("mergesGroupMerge{salt}-{}", g.id), label, running || queued)
             .on_hover_text(crate::i18n::tr("Merge this group (only its picked photos when two or more are picked)"))
             .clicked()
@@ -353,12 +382,14 @@ pub fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, count
     let _ = (p, Align2::LEFT_CENTER, Stroke::NONE);
 }
 
-/// The kind tag on a merged photo's thumbnail (`pano.`) with its top-left at `at`; `small` for the
-/// filmstrip. Returns where it was drawn.
-pub fn tag(p: &egui::Painter, t: &Tokens, at: egui::Pos2, kind: MergeType, small: bool) -> Rect {
+/// The kind tag on a merged photo's thumbnail (`pano.`) with its top-left (`from_right`: its
+/// top-right) at `at`; `small` for the filmstrip. Returns where it was drawn.
+pub fn tag(p: &egui::Painter, t: &Tokens, at: egui::Pos2, kind: MergeType, small: bool, from_right: bool) -> Rect {
     let (size, h) = if small { (9.0, 15.0) } else { (10.5, 20.0) };
     let g = p.layout_no_wrap(kind.tag().into(), t.semibold(size), Color32::WHITE);
-    let br = Rect::from_min_size(at, vec2(g.size().x + if small { 10.0 } else { 14.0 }, h));
+    let w = g.size().x + if small { 10.0 } else { 14.0 };
+    let at = if from_right { at - vec2(w, 0.0) } else { at };
+    let br = Rect::from_min_size(at, vec2(w, h));
     p.rect_filled(br, h / 2.0, Color32::from_black_alpha(170));
     p.galley(pos2(br.center().x - g.size().x / 2.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
     br
