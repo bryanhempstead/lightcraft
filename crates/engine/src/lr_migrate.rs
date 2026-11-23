@@ -1234,7 +1234,7 @@ pub(crate) fn label_of(s: &Session, text: &str) -> Option<ColorLabel> {
 }
 
 /// A file's own EXIF orientation (read from its first bytes).
-fn file_orientation(path: &str) -> lightcraft_geom::Orientation {
+pub(crate) fn file_orientation(path: &str) -> lightcraft_geom::Orientation {
     use std::io::Read;
     let mut buf = Vec::new();
     if let Ok(f) = std::fs::File::open(path) {

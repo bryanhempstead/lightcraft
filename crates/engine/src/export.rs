@@ -2577,7 +2577,7 @@ fn prepare_guarded(
         Work::File {
             path: path.clone(),
             read: session.media.file_bytes.clone(),
-            packet: crate::sidecar::sidecar_packet(p, &session.catalog),
+            packet: crate::sidecar::sidecar_packet_for_file(p, &session.catalog, path),
             dng,
             label: p.file_name.clone(),
             size: (p.width as usize, p.height as usize),

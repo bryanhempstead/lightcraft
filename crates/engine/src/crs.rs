@@ -217,6 +217,12 @@ pub fn camera_profile_id(name: &str) -> Option<String> {
 /// relative `Incremental*` white balance used for rendered files, `None` (presets) takes whichever
 /// is present, absolute first.
 pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
+    to_partial_for(props, raw, crate::crs_masks::DEFAULT_ASPECT)
+}
+
+/// [`to_partial`] for an image of `aspect` (width / height of the frame Lightroom's crop edges
+/// are fractions of): a straightened crop's shape depends on it ([`crop_from_lr`]).
+fn to_partial_for(props: &Props, raw: Option<bool>, aspect: f64) -> Value {
     let mut out = Value::Object(Map::new());
     let o = &mut out;
     let n = |o: &mut Value, crs: &str, path: &str| {
@@ -528,25 +534,110 @@ pub fn to_partial(props: &Props, raw: Option<bool>) -> Value {
         note("crs:CameraProfile");
     }
 
-    // ---- Crop (normalized edges of the unrotated image + straighten angle). `crs:CropAngle`
-    // turns the other way round from ours (measured against Lightroom's renders: a 1.35°
-    // straighten came out 2.7° off with the sign kept).
+    // ---- Crop: two opposite corners of the straightened crop in the unrotated image's normalized
+    // coordinates + the straighten angle ([`crop_from_lr`]). `crs:CropAngle` turns the other way
+    // round from ours (measured against Lightroom's renders: a 1.35° straighten came out 2.7° off
+    // with the sign kept).
     match boolean(props, "crs:HasCrop") {
         Some(true) => {
             let e = |k: &str, d: f64| num(props, &format!("crs:Crop{k}")).unwrap_or(d).clamp(0.0, 1.0);
             let (l, t, r, b) = (e("Left", 0.0), e("Top", 0.0), e("Right", 1.0), e("Bottom", 1.0));
-            if r > l && b > t {
-                put(
-                    o,
-                    "crop.geometry",
-                    json!({"rect": {"x0": l, "y0": t, "x1": r, "y1": b}, "angle": -num(props, "crs:CropAngle").unwrap_or(0.0).clamp(-45.0, 45.0)}),
-                );
+            if let Some(g) = crop_from_lr([l, t, r, b], num(props, "crs:CropAngle").unwrap_or(0.0), aspect) {
+                put(o, "crop.geometry", crop_json(&g));
             }
         }
         Some(false) => put(o, "crop.geometry", json!({"rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}, "angle": 0.0})),
         None => {}
     }
     out
+}
+
+/// Lightroom's crop → ours, in the same frame (Lightroom's stored, unrotated one) of `aspect` =
+/// width / height. `corners` = `crs:CropLeft, CropTop, CropRight, CropBottom`: the straightened
+/// crop's top-left and bottom-right corners as fractions of the *unrotated* image (darktable's
+/// `src/develop/lightroom.c` reads them the same way); `crop_angle` = `crs:CropAngle` in degrees.
+/// Ours is an axis-aligned rectangle in the image turned by our angle (−`CropAngle`) about its
+/// centre, so both corners turn with the image; the crop's shape then depends on `aspect`.
+/// (Read as an axis-aligned rectangle, a crop's aspect r came out θ·(r + 1/r) off: 5.9 % on
+/// average on 71 of Bryan's straightened photos; this reading is 0.03 % off Camera Raw's renders.)
+/// `None` when the corners don't make a crop.
+pub fn crop_from_lr(corners: [f64; 4], crop_angle: f64, aspect: f64) -> Option<lightcraft_geom::CropGeometry> {
+    let [l, t, r, b] = corners;
+    let angle = if crop_angle.is_finite() { -crop_angle.clamp(-45.0, 45.0) } else { 0.0 };
+    let rect = if angle == 0.0 {
+        lightcraft_geom::Rect { x0: l, y0: t, x1: r, y1: b }
+    } else {
+        let a = if aspect.is_finite() && aspect > 0.0 { aspect } else { crate::crs_masks::DEFAULT_ASPECT };
+        // in pixels of an `a × 1` image, turned about its centre into our (straightened) frame
+        let turn = lightcraft_geom::Affine::rotate_about(angle.to_radians(), lightcraft_geom::Point::new(a / 2.0, 0.5));
+        let p = turn.apply(lightcraft_geom::Point::new(l * a, t));
+        let q = turn.apply(lightcraft_geom::Point::new(r * a, b));
+        lightcraft_geom::Rect { x0: p.x / a, y0: p.y, x1: q.x / a, y1: q.y }
+    };
+    let ok = [rect.x0, rect.y0, rect.x1, rect.y1].iter().all(|v| v.is_finite()) && rect.x1 > rect.x0 && rect.y1 > rect.y0;
+    ok.then_some(lightcraft_geom::CropGeometry { rect, angle: if angle == 0.0 { 0.0 } else { angle } })
+}
+
+/// Our crop (in Lightroom's stored frame of `aspect` = width / height) → Lightroom's
+/// `[CropLeft, CropTop, CropRight, CropBottom]` and `CropAngle`: the inverse of [`crop_from_lr`].
+pub fn crop_to_lr(g: &lightcraft_geom::CropGeometry, aspect: f64) -> ([f64; 4], f64) {
+    let angle = if g.angle.is_finite() { g.angle.clamp(-45.0, 45.0) } else { 0.0 };
+    let c = |v: f64| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+    if angle == 0.0 {
+        return ([c(g.rect.x0), c(g.rect.y0), c(g.rect.x1), c(g.rect.y1)], 0.0);
+    }
+    let a = if aspect.is_finite() && aspect > 0.0 { aspect } else { crate::crs_masks::DEFAULT_ASPECT };
+    let back = lightcraft_geom::Affine::rotate_about(-angle.to_radians(), lightcraft_geom::Point::new(a / 2.0, 0.5));
+    let p = back.apply(lightcraft_geom::Point::new(g.rect.x0 * a, g.rect.y0));
+    let q = back.apply(lightcraft_geom::Point::new(g.rect.x1 * a, g.rect.y1));
+    ([c(p.x / a), c(p.y), c(q.x / a), c(q.y)], -angle)
+}
+
+/// A crop as the partial-settings JSON `crop.geometry` takes.
+pub fn crop_json(g: &lightcraft_geom::CropGeometry) -> Value {
+    json!({"rect": {"x0": g.rect.x0, "y0": g.rect.y0, "x1": g.rect.x1, "y1": g.rect.y1}, "angle": g.angle})
+}
+
+/// The `crs:` crop fields [`crop_props`] writes (a sidecar owns them when it states them).
+pub const CROP_CRS: [&str; 6] = ["crs:HasCrop", "crs:CropTop", "crs:CropLeft", "crs:CropBottom", "crs:CropRight", "crs:CropAngle"];
+
+/// Camera Raw's crop fields for our crop `g` (given in Lightroom's stored frame of `aspect`), as
+/// Lightroom writes them, for a sidecar: Lightroom reads LightCraft's crop back as it is here.
+/// Empty for no crop (another application's crop then stays as it left it).
+pub fn crop_props(g: &lightcraft_geom::CropGeometry, aspect: f64) -> Vec<(&'static str, String)> {
+    if g.is_identity() {
+        return Vec::new();
+    }
+    let ([l, t, r, b], angle) = crop_to_lr(g, aspect);
+    // Lightroom writes up to six decimals
+    let f = |v: f64| {
+        let s = format!("{v:.6}");
+        let s = s.trim_end_matches('0').trim_end_matches('.');
+        if s == "-0" || s.is_empty() { "0".to_string() } else { s.to_string() }
+    };
+    vec![
+        ("crs:HasCrop", "True".to_string()),
+        ("crs:CropTop", f(t)),
+        ("crs:CropLeft", f(l)),
+        ("crs:CropBottom", f(b)),
+        ("crs:CropRight", f(r)),
+        ("crs:CropAngle", f(angle)),
+    ]
+}
+
+/// Re-fit a crop read for a frame of aspect `from` ([`crop_from_lr`]) to one of aspect `to` (a
+/// sidecar is read before the photo's shape is known).
+pub fn refit_crop(partial: &mut Value, from: f64, to: f64) {
+    let Some(g) = partial.pointer("/crop/geometry").cloned().and_then(|g| serde_json::from_value::<lightcraft_geom::CropGeometry>(g).ok()) else {
+        return;
+    };
+    if g.angle == 0.0 || !(from.is_finite() && to.is_finite() && from > 0.0 && to > 0.0) {
+        return;
+    }
+    let (corners, angle) = crop_to_lr(&g, from);
+    if let (Some(n), Some(slot)) = (crop_from_lr(corners, angle, to), partial.pointer_mut("/crop/geometry")) {
+        *slot = crop_json(&n);
+    }
 }
 
 /// `crs:PerspectiveUpright` → our Upright mode. Lightroom's values: 0 Off, 1 Auto, 2 Full, 3 Level,
@@ -607,7 +698,7 @@ pub fn upright_transform(props: &Props, aspect: f64) -> Option<lightcraft_geom::
 /// transform ([`upright_transform`], in the stored frame of that `aspect`).
 pub fn to_partial_report(props: &Props, values: Option<&crate::crs_masks::Values>, raw: Option<bool>, aspect: f64) -> (Value, Vec<String>) {
     READ.with(|r| *r.borrow_mut() = Some(Default::default()));
-    let mut out = to_partial(props, raw);
+    let mut out = to_partial_for(props, raw, aspect);
     if let Some(h) = upright_transform(props, aspect) {
         put(&mut out, "geometry.upright_transform", json!(h.0));
     }
@@ -813,7 +904,125 @@ mod tests {
             (-7.0, 12.0, 20.0, -5.0, 3.0, -15.0, 25.0)
         );
         let c = s.crop.geometry;
-        assert_eq!((c.rect.x0, c.rect.y0, c.rect.x1, c.rect.y1, c.angle), (0.05, 0.1, 0.8, 0.9, -1.5), "crs:CropAngle turns the other way");
+        assert_eq!(c.angle, -1.5, "crs:CropAngle turns the other way");
+        // the edges are the straightened crop's corners in the unrotated image (3:2 assumed here)
+        assert_eq!(Some(c), crop_from_lr([0.05, 0.1, 0.8, 0.9], 1.5, crate::crs_masks::DEFAULT_ASPECT));
+        assert!((c.rect.x0 - 0.05).abs() > 1e-3, "not read as a rectangle");
+    }
+
+    /// Lightroom's corners of a crop given in our frame (centre, size in pixels of an `a × 1` image,
+    /// our angle), worked out by hand: the straightened crop's top-left and bottom-right corners
+    /// turned back into the unrotated image.
+    fn lr_corners(a: f64, (cx, cy): (f64, f64), (cw, ch): (f64, f64), ours: f64) -> [f64; 4] {
+        let (s, c) = (-ours.to_radians()).sin_cos();
+        let back = |x: f64, y: f64| {
+            let (dx, dy) = (x - a / 2.0, y - 0.5);
+            ((c * dx - s * dy + a / 2.0) / a, s * dx + c * dy + 0.5)
+        };
+        let (l, t) = back(cx - cw / 2.0, cy - ch / 2.0);
+        let (r, b) = back(cx + cw / 2.0, cy + ch / 2.0);
+        [l, t, r, b]
+    }
+
+    fn crop_packet(e: [f64; 4], angle: f64) -> Props {
+        props(&format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""
+            xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:HasCrop="True" crs:CropLeft="{:.12}" crs:CropTop="{:.12}"
+            crs:CropRight="{:.12}" crs:CropBottom="{:.12}" crs:CropAngle="{angle}"/></rdf:RDF></x:xmpmeta>"#,
+            e[0], e[1], e[2], e[3]
+        ))
+    }
+
+    /// LR-EDIT-CROP: a straightened crop keeps its shape and place at any angle, image aspect and crop
+    /// aspect (read as a rectangle it came out θ·(r + 1/r) the wrong shape).
+    #[test]
+    fn straightened_crops_keep_their_shape() {
+        for a in [1.5, 2.0 / 3.0, 1.0, 16.0 / 9.0] {
+            for ours in [0.5, -1.4, 3.05, -10.0, 25.0, -44.0] {
+                for r in [0.8, 1.0, 1.5, 16.0 / 9.0] {
+                    // a crop of aspect r well inside the straightened image, off centre
+                    let fit = lightcraft_geom::crop_fit_angle(a, 1.0, ours, Some(r));
+                    let (cw, ch) = (fit.rect.width() * a * 0.8, fit.rect.height() * 0.8);
+                    let centre = (a / 2.0 + fit.rect.width() * a * 0.05, 0.5 - fit.rect.height() * 0.05);
+                    let e = lr_corners(a, centre, (cw, ch), ours);
+                    let (partial, _) = to_partial_report(&crop_packet(e, -ours), None, Some(true), a);
+                    let g: lightcraft_geom::CropGeometry = serde_json::from_value(partial["crop"]["geometry"].clone()).unwrap();
+                    let want = lightcraft_geom::Rect::from_center(lightcraft_geom::Point::new(centre.0 / a, centre.1), cw / a, ch);
+                    let at = format!("image {a:.3}, angle {ours}, crop {r:.3}");
+                    assert!((g.angle - ours).abs() < 1e-12, "{at}");
+                    for (got, w) in [(g.rect.x0, want.x0), (g.rect.y0, want.y0), (g.rect.x1, want.x1), (g.rect.y1, want.y1)] {
+                        assert!((got - w).abs() < 1e-9, "{at}: {:?} vs {want:?}", g.rect);
+                    }
+                    let shape = g.rect.width() * a / g.rect.height();
+                    assert!((shape / r - 1.0).abs() < 1e-9, "{at}: aspect {shape}");
+                    assert!(g.is_within_image(a, 1.0), "{at}");
+                }
+            }
+        }
+    }
+
+    /// The bug's signature: read as an axis-aligned rectangle, a 4:5 crop straightened 1.4° came out
+    /// 0.841 instead of 0.800, an error of θ·(r + 1/r); the corner reading gives 0.800.
+    #[test]
+    fn rectangle_reading_was_off_by_theta_r_plus_one_over_r() {
+        let a = 1.5;
+        for (ours, r) in [(1.4, 0.8), (-0.9, 1.5), (2.4, 1.0), (-3.05, 0.667)] {
+            let fit = lightcraft_geom::crop_fit_angle(a, 1.0, ours, Some(r));
+            let (cw, ch) = (fit.rect.width() * a * 0.9, fit.rect.height() * 0.9);
+            let e = lr_corners(a, (a / 2.0, 0.5), (cw, ch), ours);
+            let as_rectangle = (e[2] - e[0]) * a / (e[3] - e[1]);
+            let theta = f64::to_radians(ours).abs();
+            let err = as_rectangle / r - 1.0;
+            assert!((err.abs() / (theta * (r + 1.0 / r)) - 1.0).abs() < 0.05, "{ours} {r}: {err}");
+            let g = crop_from_lr(e, -ours, a).unwrap();
+            assert!((g.rect.width() * a / g.rect.height() / r - 1.0).abs() < 1e-9);
+        }
+        let fit = lightcraft_geom::crop_fit_angle(a, 1.0, 1.4, Some(0.8));
+        let e = lr_corners(a, (a / 2.0, 0.5), (fit.rect.width() * a * 0.9, fit.rect.height() * 0.9), 1.4);
+        assert!(((e[2] - e[0]) * a / (e[3] - e[1]) - 0.841).abs() < 0.002);
+    }
+
+    /// Our crop → Camera Raw's fields → our crop again is the same crop (both directions are exact
+    /// inverses; the fields carry six decimals), and Lightroom's maximal straightened crop has all
+    /// four corners inside the image.
+    #[test]
+    fn crops_round_trip_through_camera_raw_fields() {
+        for a in [1.5, 0.75] {
+            for ours in [0.0, 0.7, -2.5, 12.0, -45.0] {
+                let g = lightcraft_geom::crop_fit_angle(a, 1.0, ours, Some(1.25));
+                let fields = crop_props(&g, a);
+                assert_eq!(fields.len(), 6);
+                let x = lightcraft_meta::write_xmp_lc_crs(&lightcraft_meta::Metadata::default(), &[], &fields);
+                let (partial, unmapped) = to_partial_report(&props(&x), None, Some(true), a);
+                assert!(unmapped.is_empty(), "{unmapped:?}");
+                let back: lightcraft_geom::CropGeometry = serde_json::from_value(partial["crop"]["geometry"].clone()).unwrap();
+                assert!((back.angle - ours).abs() < 1e-6);
+                for (p, q) in [(back.rect.x0, g.rect.x0), (back.rect.y0, g.rect.y0), (back.rect.x1, g.rect.x1), (back.rect.y1, g.rect.y1)] {
+                    assert!((p - q).abs() < 5e-6, "{a} {ours}: {:?} vs {:?}", back.rect, g.rect);
+                }
+                // exact without the decimals
+                let (e, la) = crop_to_lr(&g, a);
+                let again = crop_from_lr(e, la, a).unwrap();
+                assert!((again.rect.x0 - g.rect.x0).abs() < 1e-12 && (again.rect.y1 - g.rect.y1).abs() < 1e-12);
+                // the other two corners of the rotated crop are in the image too
+                let back_px = lightcraft_geom::Affine::rotate_about(-ours.to_radians(), lightcraft_geom::Point::new(a / 2.0, 0.5));
+                for p in [lightcraft_geom::Point::new(g.rect.x1 * a, g.rect.y0), lightcraft_geom::Point::new(g.rect.x0 * a, g.rect.y1)] {
+                    let q = back_px.apply(p);
+                    assert!(q.x >= -1e-9 && q.x <= a + 1e-9 && q.y >= -1e-9 && q.y <= 1.0 + 1e-9, "{a} {ours}: {q:?}");
+                }
+            }
+        }
+        assert!(crop_props(&lightcraft_geom::CropGeometry::default(), 1.5).is_empty(), "no crop: nothing written");
+        // a crop read before the photo's shape is known is re-fitted to it
+        let e = lr_corners(0.75, (0.375, 0.5), (0.5, 0.6), 4.0);
+        let mut v = json!({"crop": {"geometry": crop_json(&crop_from_lr(e, -4.0, crate::crs_masks::DEFAULT_ASPECT).unwrap())}});
+        refit_crop(&mut v, crate::crs_masks::DEFAULT_ASPECT, 0.75);
+        let g: lightcraft_geom::CropGeometry = serde_json::from_value(v["crop"]["geometry"].clone()).unwrap();
+        let want = crop_from_lr(e, -4.0, 0.75).unwrap();
+        assert!((g.rect.x0 - want.rect.x0).abs() < 1e-12 && (g.rect.y1 - want.rect.y1).abs() < 1e-12);
+        // hostile values don't make a crop
+        assert!(crop_from_lr([0.9, 0.9, 0.1, 0.1], 3.0, 1.5).is_none());
+        assert!(crop_from_lr([0.1, 0.1, 0.9, 0.9], f64::NAN, f64::INFINITY).is_some());
     }
 
     /// R20: Split Toning without Color Grading's `ColorGradeBlending` renders as legacy split

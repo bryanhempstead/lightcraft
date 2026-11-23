@@ -320,6 +320,25 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "library.repairLightroomImport",
+            "Repair Lightroom Import",
+            [],
+            None,
+            "{catalog?: path.lrcat (default: the catalog the migration recorded, else the newest in ~/Pictures/Lightroom; read from a copy) | records?: path, dryRun?: bool, limit?: n (photos listed, default 500)} — re-derive from Lightroom only what earlier migrations read wrong: straightened crops (Lightroom's crop edges are two corners of the rotated crop, not a rectangle: the crop came out the wrong shape) and radial gradients inside grouped masks (Camera Raw ignores their Flipped); fixes them where they are still as migrated, leaves a crop / radial changed here since alone (listed as skipped); one undo step → {photosChanged, crops: {fixed, alreadyRight, skippedChangedHere}, radials: {fixed, photos, alreadyRight, skippedChangedHere}, changes: [{photo, file, lightroomId, crop?: {before, after}, radials?: [{mask, component, before, after}]}], skipped: [{photo, file, what, why}]}",
+            always,
+            |s, p| {
+                const R: &str = "library.repairLightroomImport";
+                let mut p = p.clone();
+                let named = ["records", "catalog"].iter().any(|k| str_param(&p, k).is_some_and(|v| !v.trim().is_empty()));
+                if !named && let Some(c) = crate::lr_repair::recorded_catalog(s) {
+                    p["catalog"] = Value::String(c);
+                }
+                let rec = load_records(&p).map_err(|e| bad(R, e))?;
+                let limit = p.get("limit").and_then(Value::as_u64).map_or(500, |n| n.min(1 << 20) as usize);
+                crate::lr_repair::repair_import(s, &rec, bool_or(&p, "dryRun", false), limit)
+            }
+        ),
+        cmd!(
             "library.flattenLightroomCollections",
             "Flatten Lightroom Collections",
             [],

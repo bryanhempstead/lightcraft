@@ -245,6 +245,16 @@ fn component(m: &XmpValue, aspect: f64, group: bool) -> Result<Value, String> {
 /// Masks in `values` (JSON for `DevelopSettings::masks`), plus the kinds of component that
 /// couldn't be carried over. `aspect` = width / height of the target (presets: assume 3:2).
 pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
+    masks_with(values, aspect, false)
+}
+
+/// [`masks`] as versions before 2026-11-22 read them: a grouped radial's `crs:Flipped` inverted it
+/// (`library.repairLightroomImport` tells those migrated values from ones changed here since).
+pub(crate) fn masks_legacy_flipped(values: &Values, aspect: f64) -> Vec<Value> {
+    masks_with(values, aspect, true).0
+}
+
+fn masks_with(values: &Values, aspect: f64, legacy_flipped: bool) -> (Vec<Value>, Vec<String>) {
     let mut out = Vec::new();
     let mut skipped = Vec::new();
     for container in CONTAINERS {
@@ -256,7 +266,7 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             let comps = c.field("crs:CorrectionMasks").map(XmpValue::items).unwrap_or_default();
             let mut parts = Vec::new();
             for m in comps {
-                match component(m, aspect, container == "crs:MaskGroupBasedCorrections") {
+                match component(m, aspect, !legacy_flipped && container == "crs:MaskGroupBasedCorrections") {
                     Ok(v) => parts.push(v),
                     Err(kind) => skipped.push(kind),
                 }

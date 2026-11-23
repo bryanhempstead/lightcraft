@@ -6,6 +6,16 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (cropfix agent, 2026-11-22, branch worktree-agent-a146fa0dc5606b7bd, not merged) **LR-EDIT-CROP: straightened
+  crops from Lightroom** — `crs::crop_from_lr` / `crop_to_lr` / `crop_props` (Lightroom's crop edges = two corners of
+  the rotated crop in the unrotated image; needs the stored aspect: `to_partial_report`'s, sidecars re-fitted by
+  `crs::refit_crop`); sidecars and exported originals carry `crs:HasCrop` + crop fields in the stored frame
+  (`sidecar::sidecar_packet_for_file`, `lightroom_crop_props`; the sync hash packet stays without them);
+  `cmd:library.repairLightroomImport` (`lr_repair.rs`: crops + grouped radials still as migrated, skips ones changed
+  here, before/after dry run, one undo step; `crs_masks::masks_legacy_flipped` = the old reading). Acceptance 206:
+  4.65 → 3.94 ΔE, passing 34 → 42. NOT run on Bryan's library: dry run first
+  (`lightcraft-cli run --library <lib> library.repairLightroomImport dryRun=true`). Left: Lightroom snapshots / history
+  versions keep the old crop; Lightroom sidecars on EXIF-turned files are read in the shown frame.
 - [ ] (polish agent, 2026-11-22, branch worktree-agent-a07ce8bef78df8a0c, not merged) **LC-POLISH: loose ends of
   2026-11-22** — Before half of side-by-side / split Before/After at 1:1 gets its own native tiles (`detail.rs`
   `detail_layer`, view 3); Develop's Collections = the Library rows with parts triangles (`left::develop_collections`);
