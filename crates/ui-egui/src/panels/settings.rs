@@ -770,6 +770,28 @@ fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     check(ui, "settings.gridRotate", &mut app.ui.settings.grid_rotate, "Expanded cells: include rotation buttons");
     check(ui, "settings.gridTooltips", &mut app.ui.settings.grid_tooltips, "Show image info tooltips");
     heading(ui, t, crate::i18n::tr("Detail"));
+    // the tool strip's quick tools (after its |): ticked = shown, in this order
+    row(ui, t, crate::i18n::tr("Quick tools"), |ui| {
+        ui.label(RichText::new(crate::i18n::tr("ticked = an icon after the tool strip's |")).color(t.text_dim));
+    });
+    ui.horizontal(|ui| {
+        ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
+        egui::Grid::new("settingsQuickTools").num_columns(6).spacing(egui::vec2(12.0, 10.0)).show(ui, |ui| {
+            for q in super::right::QUICK_TOOLS {
+                let mut on = app.ui.settings.quick_tools.iter().any(|x| x == q.id);
+                if check(ui, &format!("settings.{}", q.id), &mut on, q.label) {
+                    let order: Vec<&str> = super::right::QUICK_TOOLS.iter().map(|x| x.id).collect();
+                    let set = &mut app.ui.settings.quick_tools;
+                    if on {
+                        set.push(q.id.to_string());
+                        set.sort_by_key(|x| order.iter().position(|o| o == x).unwrap_or(usize::MAX));
+                    } else {
+                        set.retain(|x| x != q.id);
+                    }
+                }
+            }
+        });
+    });
     check(ui, "settings.navigator", &mut app.ui.navigator, "Show the Navigator while zoomed in");
     // which zoom levels the zoom menus and the Navigator offer (ticked = shown); a fixed grid, so it
     // can't widen the dialog (a wrapping row did, and the tabs moved)

@@ -401,6 +401,8 @@ pub struct AppSettings {
     pub center_mask: Option<serde_json::Value>,
     /// The owner's lenses for right-click ▸ Set Lens (manual lenses the camera can't name).
     pub lenses: Vec<LensPreset>,
+    /// The tool strip's quick tools, by id (`panels::right::QUICK_TOOLS`), in order.
+    pub quick_tools: Vec<String>,
     /// Memory the caches may hold together, in MB (0 = automatic; `app.memoryBudget`).
     pub memory_mb: u32,
     /// Filmstrip: file names above the thumbnails.
@@ -492,6 +494,7 @@ impl Default for AppSettings {
             external_hold_grain: true,
             center_mask: None,
             lenses: Vec::new(),
+            quick_tools: vec!["quick.center".into(), "quick.dust".into()],
             memory_mb: 0,
             film_names: true,
             film_badges: true,

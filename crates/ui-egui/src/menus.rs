@@ -197,6 +197,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("photo.editInExternal", "Edit in External Editor", Some("Cmd+Shift+E"), "Photo"),
     ("app.externalEditor", "Choose External Editor", None, ""),
     ("mask.center", "Center Mask", None, ""),
+    ("remove.dust", "Find Dust Spots", None, ""),
     ("app.lenses", "My Lenses", None, ""),
     ("mask.centerDefault", "Set Center Mask as Default", None, ""),
     ("dialog.enhance", "Enhance…", Some("Ctrl+Alt+I"), "Photo"),
@@ -1564,6 +1565,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.about" => {
             app.ui.dialog = Some(Dialog::About);
             Ok(Value::Null)
+        }
+        "remove.dust" => {
+            // dust.: the Remove tool, with the sensor dust it finds listed to apply (all. / one by one)
+            let _ = app.run("panel.remove", json!({}));
+            app.run("remove.detect", json!({"people": false, "wires": false, "dust": true}))
         }
         "app.lenses" => {
             // {lenses?: [{name, focal}]} → the list Set Lens offers

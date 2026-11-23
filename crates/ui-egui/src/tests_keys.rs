@@ -360,7 +360,7 @@ fn center_mask_and_its_default() {
     h.request("ui.set", json!({"view": "detail", "module": "develop", "right": "edit"}), T);
     h.step();
     let id = h.app.session.active().unwrap();
-    h.request("ui.clickWidget", json!({"id": "button:centerMask"}), T);
+    h.request("ui.clickWidget", json!({"id": "icon:quick.center"}), T);
     let d = h.app.session.develop_of(id).unwrap();
     let m = d.masks.iter().find(|m| m.name == crate::menus::CENTER_MASK).expect("a Center mask");
     assert!(m.adjust.exposure > 0.0, "the built-in effect");

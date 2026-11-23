@@ -83,6 +83,8 @@ pub enum Icon {
     Heart,
     /// fav. on (a filled heart)
     HeartFilled,
+    /// Dust spots: a sensor frame with specks.
+    Dust,
     Edited,
     /// Targeted adjustment: a ring with a centre dot and up/down arrows (drag vertically).
     Target,
@@ -426,6 +428,12 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             for (i, x) in [4.0, 7.5, 11.0, 14.5].iter().enumerate() {
                 let a = 1.0 - i as f32 * 0.22;
                 pen.p.line_segment([pen.pt(*x, 3.0), pen.pt(*x, 17.0)], Stroke::new(pen.s.width, color.gamma_multiply(a)));
+            }
+        }
+        Dust => {
+            pen.rect(3.0, 4.5, 17.0, 15.5, 2.5);
+            for (x, y, r) in [(7.0, 8.0, 1.1), (12.5, 7.5, 0.8), (9.5, 12.0, 1.3), (14.0, 12.5, 0.9), (6.5, 13.0, 0.7)] {
+                pen.dot(x, y, r);
             }
         }
         Radial => {

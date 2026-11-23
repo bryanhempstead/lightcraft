@@ -95,7 +95,8 @@ pub(crate) fn histogram_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
 }
 
 /// Classic's tool strip under the histogram: Crop & Straighten (R), Spot Removal (Q), Red Eye,
-/// Masking (⇧W).
+/// Masking (⇧W); then `|` and the quick actions picked in Settings ▸ Interface ▸ quick tools
+/// (Bryan, 2026-11-23: the centre vignette mask and dust spots by default).
 fn tool_strip(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
@@ -106,8 +107,14 @@ fn tool_strip(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye Correction"),
         ("masking", Icon::Mask, RightPanel::Masking, "Masking (⇧W)"),
     ];
-    let w = 40.0;
-    let x0 = r.center().x - w * tools.len() as f32 / 2.0;
+    let quick: Vec<&QuickTool> = app.ui.settings.quick_tools.iter().filter_map(|id| QUICK_TOOLS.iter().find(|q| q.id == id)).collect();
+    // all of it centred: tools, a divider (when there are quick tools), the quick tools — narrower
+    // slots when the panel is narrow, never past its edges (16 px clear each side)
+    let n = tools.len() + quick.len();
+    let divider = if quick.is_empty() { 0.0 } else { 17.0 };
+    let w = ((r.width() - 32.0 - divider) / n as f32).clamp(26.0, 40.0);
+    let width = w * n as f32 + divider;
+    let x0 = (r.center().x - width / 2.0).max(r.left() + 8.0);
     let mut row = ui.new_child(
         egui::UiBuilder::new().max_rect(Rect::from_min_max(pos2(x0, r.top()), r.max)).layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
@@ -117,35 +124,51 @@ fn tool_strip(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run(&format!("panel.{id}"), json!({}));
         }
     }
-    // center.: a quick centre mask (the saved default's); default.: this photo's Center mask becomes it
-    let mut left = ui.new_child(
-        egui::UiBuilder::new().max_rect(Rect::from_min_max(r.min + vec2(12.0, 0.0), pos2(x0 - 8.0, r.bottom()))).layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    if crate::widgets::text_button(&mut left, "centerMask", "center.", false)
-        .on_hover_text(crate::i18n::tr("A soft mask on the centre of the photo — move, size and adjust it in Masking"))
-        .clicked()
-        && let Err(e) = app.run("mask.center", json!({}))
-    {
-        app.toast(ui.ctx(), e);
+    if !quick.is_empty() {
+        let (d, _) = row.allocate_exact_size(vec2(17.0, 22.0), Sense::hover());
+        row.painter().rect_filled(Rect::from_center_size(d.center(), vec2(1.0, 20.0)), 0.0, t.divider);
     }
-    let has_center =
-        app.session.active().and_then(|id| app.session.develop_of(id)).is_some_and(|d| d.masks.iter().any(|m| m.name == crate::menus::CENTER_MASK));
-    if has_center {
-        let mut right = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(Rect::from_min_max(pos2(x0 + w * tools.len() as f32 + 8.0, r.top()), r.max - vec2(12.0, 0.0)))
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
-        );
-        if crate::widgets::text_button(&mut right, "centerMaskDefault", "default.", false)
-            .on_hover_text(crate::i18n::tr("Make this photo's Center mask what center. makes from now on"))
-            .clicked()
-            && let Err(e) = app.run("mask.centerDefault", json!({}))
+    for q in quick {
+        let resp = crate::widgets::icon_button(&mut row, q.id, q.icon, vec2(w, 34.0), false, true, q.tip);
+        if resp.clicked()
+            && let Err(e) = app.run(q.command, serde_json::from_str(q.params).unwrap_or(json!({})))
         {
             app.toast(ui.ctx(), e);
+        }
+        // the centre mask: right-click saves this photo's as the one it makes
+        if q.id == "quick.center" {
+            resp.context_menu(|ui| {
+                if ui.button(crate::i18n::tr("Set this Center mask as the default")).clicked()
+                    && let Err(e) = app.run("mask.centerDefault", json!({}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
+            });
         }
     }
     ui.painter().rect_filled(Rect::from_min_size(r.left_bottom() - vec2(0.0, 1.0), vec2(r.width(), 1.0)), 0.0, t.divider);
 }
+
+/// A one-click action for the tool strip.
+pub struct QuickTool {
+    pub id: &'static str,
+    pub icon: Icon,
+    pub tip: &'static str,
+    pub command: &'static str,
+    pub params: &'static str,
+    /// Its name in Settings ▸ Interface ▸ quick tools.
+    pub label: &'static str,
+}
+
+/// What the tool strip's quick slots can hold (Settings ▸ Interface ▸ quick tools).
+pub const QUICK_TOOLS: &[QuickTool] = &[
+    QuickTool { id: "quick.center", icon: Icon::Radial, tip: "Center mask — a soft vignette mask on the middle (right-click: make this one the default)", command: "mask.center", params: "{}", label: "center." },
+    QuickTool { id: "quick.dust", icon: Icon::Dust, tip: "Find dust spots — review them in Remove and apply", command: "remove.dust", params: "{}", label: "dust." },
+    QuickTool { id: "quick.wb", icon: Icon::Picker, tip: "White Balance Selector (W)", command: "tool.wbPicker", params: "{}", label: "wb." },
+    QuickTool { id: "quick.auto", icon: Icon::Sliders, tip: "Auto settings", command: "develop.auto", params: "{}", label: "auto." },
+    QuickTool { id: "quick.subject", icon: Icon::Subject, tip: "Select Subject mask", command: "mask.add", params: r#"{"kind": "subject"}"#, label: "subject." },
+    QuickTool { id: "quick.sky", icon: Icon::Sky, tip: "Select Sky mask", command: "mask.add", params: r#"{"kind": "sky"}"#, label: "sky." },
+];
 
 /// "Previous" (paste the settings of the photo selected before; "Sync…" with several photos
 /// selected) and "Reset" at the bottom of the Develop right panel.

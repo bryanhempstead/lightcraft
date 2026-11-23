@@ -740,6 +740,15 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
             p.circle(pos2(right - 12.0, bar.center().y), 5.0, label_color(l), Stroke::new(1.0, Color32::from_black_alpha(120)));
         }
     }
+    // not a raw: its file type at the top left (JPG, PNG, TIF, HEIC, PSD…), so rendered files stand
+    // apart from raws at a glance (Bryan, 2026-11-23)
+    if photo.kind == lightcraft_catalog::MediaKind::Image && !photo.format.trim().is_empty() && matches!(photo.source, lightcraft_catalog::Source::File { .. }) {
+        let g = p.layout_no_wrap(photo.format.trim().to_uppercase(), t.semibold(9.5), Color32::WHITE);
+        let at = img_rect.left_top() + vec2(6.0, 6.0);
+        let tag = Rect::from_min_size(at, g.size() + vec2(12.0, 6.0));
+        p.rect_filled(tag, 4.0, Color32::from_black_alpha(165));
+        p.galley(tag.center() - g.size() / 2.0, g, Color32::WHITE);
+    }
     if let Some(name) = &photo.copy_name {
         // virtual copy: a folded-corner tag at the top right
         let g = p.layout_no_wrap(name.clone(), t.semibold(10.5), Color32::WHITE);
