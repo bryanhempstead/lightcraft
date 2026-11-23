@@ -6,6 +6,13 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [x] (Claude fix session, 2026-11-23 09:02) **Lightroom-import repair APPLIED to Bryan's real library** (he OK'd it in the
+  coordinator session: "oka fix it now"; it never ran there because the Mac was out of processes — Hammerspoon appboost
+  spawn storm, fixed in ~/.hammerspoon). Backup first: `Backups/2026-11-23 pre-lr-repair/` (full catalog.snap, cmp-checked).
+  Dry run = real run: crops fixed 2,395, radials fixed 82 on 80 photos, 2,452 photos, 0 skipped. Re-check dry run after:
+  all `alreadyRight`. LightCraft.app relaunched (`open -a … --no-demo --control 7980`), the live app reports the same.
+- NOTE: **every agent branch below marked "not merged" IS merged into main** (checked 11-23: only
+  worktree-agent-a1ec001e5eb225c2e has a commit not on main, and it went in as 447dd5e39). Their "Left:" lines still stand.
 - [ ] (cropfix agent, 2026-11-22, branch worktree-agent-a146fa0dc5606b7bd, not merged) **LR-EDIT-CROP: straightened
   crops from Lightroom** — `crs::crop_from_lr` / `crop_to_lr` / `crop_props` (Lightroom's crop edges = two corners of
   the rotated crop in the unrotated image; needs the stored aspect: `to_partial_report`'s, sidecars re-fitted by
