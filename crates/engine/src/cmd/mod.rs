@@ -21,6 +21,7 @@ mod enhance;
 mod export;
 pub mod filters;
 pub mod folders;
+mod galleries;
 pub mod keywords;
 pub mod library;
 pub mod lightroom;
@@ -175,6 +176,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(cameras::specs());
         v.extend(tether::specs());
         v.extend(map::specs());
+        v.extend(galleries::specs());
         v.extend(publish::specs());
         v.extend(video::specs());
         v.extend(people::specs());
