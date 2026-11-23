@@ -102,7 +102,45 @@ pub fn sb_dir(dir: Option<&Path>) -> Option<PathBuf> {
     Some(PathBuf::from(home).join("Library").join("Application Support").join("second-brain"))
 }
 
+/// [`read_capped_now`] on a helper thread, given up after [`READ_WAIT`]: Second Brain's `client`
+/// folder can be a link onto a network share (LOT48), and a share that stopped answering parks the
+/// reader in the kernel — that must never be the UI thread (it froze the app, 2026-11-22). A read
+/// still stuck from before isn't started again: the answer is the same error until it returns.
 fn read_capped(path: &Path) -> Result<Vec<u8>, String> {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, PoisonError};
+    // the files whose read is still in flight (per file: other files read on)
+    static IN_FLIGHT: Mutex<Option<HashSet<std::path::PathBuf>>> = Mutex::new(None);
+    let slow = || format!("{}: the drive it's on isn't answering (a network share that dropped?)", path.display());
+    let owned = path.to_path_buf();
+    {
+        let mut g = IN_FLIGHT.lock().unwrap_or_else(PoisonError::into_inner);
+        if !g.get_or_insert_with(HashSet::new).insert(owned.clone()) {
+            return Err(slow());
+        }
+    }
+    let done = |p: &Path| {
+        if let Some(set) = IN_FLIGHT.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
+            set.remove(p);
+        }
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("gallery-read".into()).spawn(move || {
+        let r = read_capped_now(&owned);
+        done(&owned);
+        let _ = tx.send(r);
+    });
+    if let Err(e) = spawned {
+        done(path);
+        return Err(format!("{}: {e}", path.display()));
+    }
+    rx.recv_timeout(READ_WAIT).unwrap_or_else(|_| Err(slow()))
+}
+
+/// How long a read of Second Brain's files may take before the drive counts as not answering.
+const READ_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn read_capped_now(path: &Path) -> Result<Vec<u8>, String> {
     let f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut buf = Vec::new();
     f.take(MAX_FILE + 1).read_to_end(&mut buf).map_err(|e| format!("{}: {e}", path.display()))?;
