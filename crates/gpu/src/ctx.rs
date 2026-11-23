@@ -438,10 +438,12 @@ impl Gpu {
     }
 
     /// Submit command buffers, then make the buffers this thread dropped before reusable.
-    pub fn submit(&self, cmds: impl IntoIterator<Item = wgpu::CommandBuffer>) {
-        self.queue.submit(cmds);
+    /// Returns the submission (to wait for this work only).
+    pub fn submit(&self, cmds: impl IntoIterator<Item = wgpu::CommandBuffer>) -> wgpu::SubmissionIndex {
+        let index = self.queue.submit(cmds);
         let retired = take_retired();
         self.pool(retired);
+        index
     }
 
     /// Put reusable buffers into the free pool (trimmed to its limit).
@@ -577,7 +579,7 @@ impl Gpu {
             mapped_at_creation: false,
         });
         enc.copy_buffer_to_buffer(src.raw(), 0, &staging, 0, size);
-        self.submit([enc.finish()]);
+        let index = self.submit([enc.finish()]);
         let slice = staging.slice(..size);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| {
@@ -588,8 +590,10 @@ impl Gpu {
             zeros()
         };
         // A lost device makes the wait fail and the map callback never run: checking both keeps
-        // this from blocking forever (or handing back an unwritten buffer as the image).
-        if let Err(e) = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(READBACK_TIMEOUT) }) {
+        // this from blocking forever (or handing back an unwritten buffer as the image). Wait for
+        // this render's submission only, not for everything other threads queued since (the
+        // loupe behind an export's or another view's GPU work, QA-PERF).
+        if let Err(e) = self.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(READBACK_TIMEOUT) }) {
             return failed(format!("{e}"));
         }
         // another thread's poll may be the one that runs the callback: allow it a moment

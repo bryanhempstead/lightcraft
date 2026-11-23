@@ -122,7 +122,7 @@ mouse back/forward = previous/next; `CLASSIC` in `crates/ui-egui/src/keymap.rs`)
 | Create Version | ⌘⇧S (+ ⇧M) | ⇧M (Windows: Ctrl+⇧S) | — |
 | Select None | ⌘⇧A (+ ⌘D) | ⌘D | — |
 
-**Library culling (KEYC-RATING):** `0–5`, `6–9` and `P/X/U` reach egui on macOS even when displayed in the native menu (adapted from PR #261; issue #283). `Shift+0–9` applies and advances once; `Shift+P` picks and advances in Photo Grid / Square Grid and retains Presets elsewhere. See [library shortcuts](library-shortcuts.md) for the verified Classic mapping and regression coverage. Remaining Classic gaps: rating `[` / `]`, flag cycling and filter-bar keys.
+**Library culling (KEYC-RATING):** `0–5`, `6–9` and `P/X/U` reach egui on macOS even when displayed in the native menu (adapted from PR #261; issue #283). `Shift+0–9` applies and advances once; `Shift+P` picks and advances in Photo Grid / Square Grid and retains Presets elsewhere. See [library shortcuts](library-shortcuts.md) for the verified Classic mapping and regression coverage. Remaining Classic gaps: rating `[` / `]`, flag cycling and filter-bar keys. Speed on Bryan's 15,865-photo library ([perf](perf.md)): a flag or star costs 28–47 ms of the UI thread at load average 380–530 (65–132 ms before QA-PERF: smart-album recounts and an fsync per keystroke); the Shoots list, folder tree and visible-list sort still rebuild on every change.
 
 **Still missing / broken:**
 - No command yet: F1 help (verify the rest of the old list: full screen, settings, stacks,

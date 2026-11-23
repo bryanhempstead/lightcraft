@@ -189,6 +189,32 @@ fn pool_priorities_dedupe_and_drop() {
     assert_eq!(order, vec![(999, 0, 999), (3, 1, 3), (2, 2, 22), (1, 1, 1)]);
 }
 
+/// The waker runs once per finished job, after its result can be received (a UI woken by it
+/// never polls an empty channel and then sleeps).
+#[test]
+fn pool_wakes_after_each_result_is_ready() {
+    let mut p: JobPool<u32, u32> = JobPool::new(2);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let tx = std::sync::Mutex::new(tx);
+    p.set_on_done(Some(Arc::new(move || {
+        let _ = tx.lock().unwrap().send(());
+    })));
+    assert!(p.wakes());
+    for i in 0..5 {
+        p.submit(i, 0, 1, Box::new(move || i * 10));
+    }
+    let mut got = Vec::new();
+    for _ in 0..5 {
+        rx.recv_timeout(std::time::Duration::from_secs(60)).expect("woken");
+        // everything that woke us is already in the channel
+        while let Some(d) = p.try_recv() {
+            got.push(d.result);
+        }
+    }
+    got.sort_unstable();
+    assert_eq!(got, vec![0, 10, 20, 30, 40]);
+}
+
 #[test]
 fn pool_runs_inline() {
     // No workers: run_inline drains the queue on the caller's thread (the wasm path).

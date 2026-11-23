@@ -463,6 +463,13 @@ impl Filter {
 
 impl Catalog {
     /// Photos matching `filter`, in `sort` order (ties broken by id for stability).
+    /// How many photos [`Catalog::query`] would return, plus `keep` on each: no list, no sort (a
+    /// sort of 15,865 photos was ~5 ms of the frame after every flag, QA-PERF).
+    pub fn count(&self, filter: &Filter, keep: impl Fn(&Photo) -> bool) -> usize {
+        let root = filter.library_root();
+        self.photos().filter(|p| filter.matches_in(p, self, root.as_deref()) && keep(p)).count()
+    }
+
     pub fn query(&self, filter: &Filter, sort: &Sort) -> Vec<PhotoId> {
         let root = filter.library_root();
         let mut v: Vec<&Photo> = self.photos().map(|p| p.as_ref()).filter(|p| filter.matches_in(p, self, root.as_deref())).collect();

@@ -302,8 +302,14 @@ mod tests {
     fn demo_grid_snapshot_has_ui_pixels() {
         let t0 = Instant::now();
         let mut h = demo([1200.0, 760.0]);
-        // settle() can see a quiet spell before the first thumbnails land on a loaded machine
-        h.step_until(SETTLE, |h| h.app.renderer.thumb_textures() > 0);
+        // settle() can see a quiet spell before the first thumbnails land on a loaded machine:
+        // wait until every grid cell on screen has its thumbnail
+        let all_drawn = |h: &Headless| {
+            let cells: Vec<lightcraft_catalog::PhotoId> =
+                h.app.widgets.iter().filter_map(|(w, _)| w.strip_prefix("thumb:")?.parse().ok().map(lightcraft_catalog::PhotoId)).collect();
+            !cells.is_empty() && cells.iter().all(|id| h.app.renderer.thumb(*id).is_some())
+        };
+        assert!(h.step_until(SETTLE, all_drawn), "grid thumbnails after {:?}: {}", t0.elapsed(), h.app.renderer.diagnose());
         let img = h.snapshot(SETTLE);
         eprintln!("headless snapshot: {:?} in {:?} ({} frames)", img.size, t0.elapsed(), h.frames());
         assert_eq!(img.size, [1200, 760]);

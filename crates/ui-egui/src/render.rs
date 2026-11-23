@@ -76,6 +76,48 @@ pub struct Tex {
 /// Runs render jobs outside this thread's job pool (the browser build: Web Workers, each with its
 /// own wasm instance). The [`Renderer`] keeps the queue (priorities, per-slot de-duplication) and
 /// hands jobs over one at a time.
+/// A finished render's pixels as textures take them: sRGB (screenshots, pixel probes) and what
+/// the screen shows (the same, or converted to Display P3).
+pub struct Pixels {
+    pub srgb: Arc<egui::ColorImage>,
+    pub shown: Arc<egui::ColorImage>,
+}
+
+impl Pixels {
+    pub fn of(rgba: &[u8], size: [usize; 2], p3: bool) -> Pixels {
+        let srgb = Arc::new(egui::ColorImage::from_rgba_unmultiplied(size, rgba));
+        let shown = if p3 {
+            let mut bytes = rgba.to_vec();
+            crate::display_p3::srgb_to_p3(&mut bytes);
+            Arc::new(egui::ColorImage::from_rgba_unmultiplied(size, &bytes))
+        } else {
+            srgb.clone()
+        };
+        Pixels { srgb, shown }
+    }
+}
+
+/// [`Pixels`] made on the render worker, so the UI thread only uploads them: converting a
+/// 2560 px render, or a 1:1 region's pieces, to egui images took 20–600 ms of a frame (QA-PERF).
+/// One entry for a whole render, one per [`crate::tiles::PIECE`] piece (row by row) for a region.
+pub struct Prepared {
+    pub p3: bool,
+    pub pixels: Vec<Pixels>,
+}
+
+impl Prepared {
+    fn of(slot: Slot, r: &RenderResult, p3: bool) -> Option<Prepared> {
+        let x = r.rendered.as_ref().ok()?;
+        let img = &x.image;
+        let pixels = match (slot, x.region) {
+            (Slot::Detail(_), Some(px)) => crate::tiles::piece_pixels(img, px, p3),
+            (Slot::Detail(_) | Slot::Prefetch(_) | Slot::HdrMaster, _) => return None,
+            _ => vec![Pixels::of(&img.as_bytes(), [img.width, img.height], p3)],
+        };
+        Some(Prepared { p3, pixels })
+    }
+}
+
 pub trait RenderOffload {
     /// Start `job` if an executor is free; otherwise give it back (`Some`: it stays queued).
     fn try_start(&mut self, slot: Slot, job: RenderJob) -> Option<RenderJob>;
@@ -109,7 +151,7 @@ pub struct Renderer {
     /// Last thumbnail inputs; weak identities do not retain photo histories or force deep clones.
     /// (photo, size bucket, job key, whether the request went through an embedded stand-in)
     thumb_inputs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64, bool)>,
-    pool: JobPool<Slot, RenderResult>,
+    pool: JobPool<Slot, (RenderResult, Option<Prepared>)>,
     /// Jobs run elsewhere (see [`RenderOffload`]); `queue` holds the ones not started yet.
     offload: Option<Box<dyn RenderOffload>>,
     queue: Vec<Queued>,
@@ -155,7 +197,7 @@ const IDLE_TRIM: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl Default for Renderer {
     fn default() -> Self {
-        let threads = if cfg!(target_arch = "wasm32") { 0 } else { JobPool::<Slot, RenderResult>::default_threads().min(6) };
+        let threads = if cfg!(target_arch = "wasm32") { 0 } else { JobPool::<Slot, (RenderResult, Option<Prepared>)>::default_threads().min(6) };
         Self::with_worker_threads(threads)
     }
 }
@@ -281,11 +323,16 @@ impl Renderer {
         }
         let key = job.key;
         let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
+        let p3 = self.display_p3;
         self.pool.submit(
             slot,
             key,
             priority,
-            Box::new(move || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() }),
+            Box::new(move || {
+                let r = if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
+                let prepared = Prepared::of(slot, &r, p3);
+                (r, prepared)
+            }),
         );
     }
 
@@ -299,7 +346,17 @@ impl Renderer {
         job.request_id = lightcraft_preview::next_tick();
         self.request_ids.insert(slot, job.request_id);
         let key = job.key;
-        self.pool.submit(slot, key, priority, Box::new(move || job.run()));
+        let p3 = self.display_p3;
+        self.pool.submit(
+            slot,
+            key,
+            priority,
+            Box::new(move || {
+                let r = job.run();
+                let prepared = Prepared::of(slot, &r, p3);
+                (r, prepared)
+            }),
+        );
     }
 
     /// Prepare a photo in the background (a [`Slot::Prefetch`] job runs once per key; a newer one
@@ -313,7 +370,8 @@ impl Renderer {
         job.request_id = lightcraft_preview::next_tick();
         self.request_ids.insert(slot, job.request_id);
         let key = job.key;
-        self.pool.submit(slot, key, priority, Box::new(move || lightcraft_engine::memory::in_background(|| job.run())));
+        // a prefetch's pixels are never shown: nothing to prepare
+        self.pool.submit(slot, key, priority, Box::new(move || (lightcraft_engine::memory::in_background(|| job.run()), None)));
     }
 
     /// Is a request for `slot` queued or running?
@@ -373,6 +431,24 @@ impl Renderer {
     /// The slots with a render pending (diagnostics: `ui.inspect`).
     pub fn pending_slots(&self) -> Vec<String> {
         self.pending.keys().map(|s| format!("{s:?}")).collect()
+    }
+
+    /// One line on where the renderer stands (test failure messages: what a timed-out wait was
+    /// still waiting for).
+    pub fn diagnose(&self) -> String {
+        let mut pending = self.pending_slots();
+        pending.sort();
+        pending.truncate(8);
+        let failed: Vec<String> = self.failed.iter().take(4).map(|(s, f)| format!("{s:?}: {}", f.1)).collect();
+        format!(
+            "{} textures ({} thumbnails), {} done, {} queued, {} in flight {pending:?}, failed {failed:?}, gpu {:?}",
+            self.textures.len(),
+            self.thumb_textures(),
+            self.completed,
+            self.queued(),
+            self.in_flight(),
+            lightcraft_engine::gpu::unavailable_reason(),
+        )
     }
 
     /// Thumbnail textures currently loaded.
@@ -452,6 +528,11 @@ impl Renderer {
         }
         self.preview_generation = Some((Arc::downgrade(cache), generation));
         self.catalog_rev = session.catalog.revision;
+        if !self.pool.wakes() {
+            // a finished job wakes the UI: no 60 fps polling while slow renders run (QA-PERF)
+            let c = ctx.clone();
+            self.pool.set_on_done(Some(Arc::new(move || c.request_repaint())));
+        }
         self.frame += 1;
         // wasm: run one job per frame on this thread, timed with the host clock
         #[cfg(target_arch = "wasm32")]
@@ -464,14 +545,17 @@ impl Renderer {
         let inline_ms = 0.0;
         let mut finished = Vec::new();
         while let Some(done) = self.pool.try_recv() {
-            finished.push((done.slot, done.result, if done.ms > 0.0 { done.ms } else { inline_ms }));
+            let (r, prepared) = done.result;
+            finished.push((done.slot, r, if done.ms > 0.0 { done.ms } else { inline_ms }, prepared));
         }
         if let Some(off) = self.offload.as_mut() {
-            finished.extend(off.finished());
+            finished.extend(off.finished().into_iter().map(|(s, r, ms)| (s, r, ms, None)));
         }
         self.dispatch();
         let mut changed = false;
-        for (mut slot, r, ms) in finished {
+        for (mut slot, r, ms, prepared) in finished {
+            // pixels converted on the render worker, unless the display changed since
+            let prepared = prepared.filter(|p| p.p3 == self.display_p3);
             self.completed += 1;
             // detail regions: every result for the photo is kept (a pan asks for new regions
             // before the older ones finish; their pixels are still right)
@@ -491,7 +575,8 @@ impl Renderer {
                     Ok(x) => {
                         if let Some(px) = x.region {
                             self.failed.remove(&slot);
-                            changed |= view.accept(ctx, &format!("{slot:?}"), r.key, &x.image, px, ms, self.keep_pixels, self.display_p3);
+                            let pieces = prepared.map(|p| p.pixels);
+                            changed |= view.accept(ctx, &format!("{slot:?}"), r.key, &x.image, px, ms, self.keep_pixels, self.display_p3, pieces);
                         }
                     }
                     Err(e) => {
@@ -552,16 +637,12 @@ impl Renderer {
                 self.textures.remove(&Slot::ThumbQuick(id));
             }
             let img = &rendered.image;
-            let srgb = std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.as_bytes()));
+            let Pixels { srgb, shown: color } = match prepared.and_then(|p| p.pixels.into_iter().next()) {
+                Some(px) if px.srgb.size == [img.width, img.height] => px,
+                _ => Pixels::of(&img.as_bytes(), [img.width, img.height], self.display_p3),
+            };
             // screenshots / pixel probes keep the sRGB values; the screen gets the display's
             let pixels = self.keep_pixels.then(|| srgb.clone());
-            let color = if self.display_p3 {
-                let mut bytes = img.as_bytes().to_vec();
-                crate::display_p3::srgb_to_p3(&mut bytes);
-                std::sync::Arc::new(egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &bytes))
-            } else {
-                srgb
-            };
             let name = format!("{slot:?}");
             // the HDR histogram's render is binned, not shown
             let (hdr, hdr_histogram) = if slot == Slot::HdrMaster {
@@ -613,7 +694,10 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         self.trim_when_idle(ctx);
         if !self.pending.is_empty() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            // results wake the UI themselves (see above); an offload's are polled. The slower
+            // poll is a safety net only.
+            let poll = if self.offload.is_some() || cfg!(target_arch = "wasm32") { 16 } else { 250 };
+            ctx.request_repaint_after(std::time::Duration::from_millis(poll));
         }
         changed
     }

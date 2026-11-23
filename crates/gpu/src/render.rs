@@ -180,7 +180,7 @@ impl<'a> Cx<'a> {
     pub fn flush(&mut self) {
         self.pending = 0;
         if let Some(enc) = self.enc.take() {
-            self.gpu.submit([enc.finish()]);
+            let _ = self.gpu.submit([enc.finish()]);
         }
     }
 
@@ -188,7 +188,7 @@ impl<'a> Cx<'a> {
     pub fn sync(&mut self) {
         self.pending = 0;
         if let Some(enc) = self.enc.take() {
-            self.gpu.submit([enc.finish()]);
+            let _ = self.gpu.submit([enc.finish()]);
         }
         let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
     }

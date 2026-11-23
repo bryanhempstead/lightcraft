@@ -196,6 +196,36 @@ pub struct Perf {
     /// The slowest whole update since start.
     pub max_update_ms: f64,
     pub fps: f64,
+    /// Frame-time counts since the last `ui.inspect {"resetPerf": true}` (stalls a sampled
+    /// `updateMs` would miss).
+    pub window: PerfWindow,
+}
+
+/// Frame-time histogram over a measuring window (`ui.inspect` → `perf.window`).
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PerfWindow {
+    pub frames: u64,
+    /// Updates (logic + layout) slower than one 60 Hz frame, 50 ms and 100 ms.
+    pub over16: u64,
+    pub over50: u64,
+    pub over100: u64,
+    /// The slowest update in the window, and the logic part of it.
+    pub max_ms: f64,
+    pub max_logic_ms: f64,
+}
+
+impl PerfWindow {
+    fn add(&mut self, update_ms: f64, logic_ms: f64) {
+        self.frames += 1;
+        self.over16 += u64::from(update_ms > 16.7);
+        self.over50 += u64::from(update_ms > 50.0);
+        self.over100 += u64::from(update_ms > 100.0);
+        if update_ms > self.max_ms {
+            self.max_ms = update_ms;
+            self.max_logic_ms = logic_ms;
+        }
+    }
 }
 
 pub struct LightcraftApp {
@@ -1030,6 +1060,7 @@ impl LightcraftApp {
         self.perf.frame_ms = now_ms() - t0;
         self.perf.update_ms = self.perf.logic_ms + self.perf.frame_ms;
         self.perf.max_update_ms = self.perf.max_update_ms.max(self.perf.update_ms);
+        self.perf.window.add(self.perf.update_ms, self.perf.logic_ms);
     }
 
     /// Lay out the whole window.
@@ -1197,6 +1228,8 @@ pub struct Caches {
     date_groups: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::DateGroup>>)>,
     filter_values: Option<(u64, std::sync::Arc<FilterValues>)>,
     album_counts: Option<(u64, std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, usize>>)>,
+    /// Which smart albums each photo matched: a recount re-tests only the photos that changed.
+    album_memo: lightcraft_catalog::AlbumCountMemo,
     /// How often the album counts were recomputed (tests check that unchanged frames don't).
     pub album_count_scans: usize,
     /// The grid's date runs, layout and indexes (by the visible list's generation).
@@ -1363,9 +1396,9 @@ impl Caches {
             }
         }
     }
-    /// Every album's photo count for the sidebar (a smart album evaluates its rules, which
-    /// scans the catalog). Recomputed when the catalog changes (photos, metadata, album rules
-    /// all bump its revision) and — only while some smart album has an "in the last…" rule —
+    /// Every album's photo count for the sidebar (a smart album evaluates its rules on the
+    /// photos that changed since the last count, see [`lightcraft_catalog::AlbumCountMemo`]).
+    /// Recomputed when the catalog changes (photos, metadata, album rules all bump its revision) and — only while some smart album has an "in the last…" rule —
     /// when `now` (the session clock, ISO) enters a new minute, so such counts follow the clock
     /// within a minute without rescanning every frame.
     pub fn album_counts(
@@ -1383,13 +1416,26 @@ impl Caches {
                     // "in the last N days" counts back from the session clock, as in the grid
                     lightcraft_catalog::rules::set_now(Some(now.to_string()));
                 }
-                let v: std::sync::Arc<std::collections::HashMap<_, _>> =
-                    std::sync::Arc::new(cat.albums().map(|a| (a.id, cat.album_count(a.id))).collect());
+                let v = std::sync::Arc::new(cat.album_counts(&mut self.album_memo, minute));
                 self.album_count_scans += 1;
                 self.album_counts = Some((k, v.clone()));
                 v
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod perf_window_tests {
+    /// The measuring window counts slow frames and keeps the slowest one's logic part.
+    #[test]
+    fn perf_window_counts_slow_frames() {
+        let mut w = super::PerfWindow::default();
+        for (ms, logic) in [(5.0, 1.0), (20.0, 2.0), (60.0, 50.0), (150.0, 3.0), (8.0, 0.5)] {
+            w.add(ms, logic);
+        }
+        assert_eq!((w.frames, w.over16, w.over50, w.over100), (5, 3, 2, 1));
+        assert_eq!((w.max_ms, w.max_logic_ms), (150.0, 3.0));
     }
 }
 

@@ -1074,12 +1074,8 @@ impl Session {
                 f.library_folder = Some(self.library_folder.clone().unwrap_or_else(|| ".".into()));
                 f.library_folder_only = !self.library_folder_subfolders.unwrap_or(self.library_subfolders);
             }
-            let mut ids = self.catalog.query(&f, &self.sort);
-            if let Some(part) = self.active_album_part() {
-                let cat = &self.catalog;
-                ids.retain(|id| cat.photo(*id).is_some_and(|p| part.matches(p)));
-            }
-            let n = ids.len();
+            let part = self.active_album_part();
+            let n = self.catalog.count(&f, |p| part.as_ref().is_none_or(|part| part.matches(p)));
             self.total = Some((key, n));
         }
         self.total.as_ref().map(|t| t.1)
