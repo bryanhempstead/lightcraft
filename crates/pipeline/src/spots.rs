@@ -490,7 +490,7 @@ mod tests {
             points: vec![Point::new(0.5, 0.5)],
             size: 0.1,
             feather: 0.0,
-            generative: Some(lightcraft_develop::Generative { variation: 0, count: 3, key: "00000000000000ab".into() }),
+            generative: Some(lightcraft_develop::Generative { variation: 0, count: 3, key: "00000000000000ab".into(), quick: false }),
             ..Default::default()
         };
         // a left-to-right ramp over the middle of the photo

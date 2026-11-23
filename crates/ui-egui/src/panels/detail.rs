@@ -2141,7 +2141,7 @@ fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respo
         let generative = app.ui.remove_generative && matches!(mode, "remove" | "fill");
         match app.run(
             "spot.add",
-            json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "generative": generative}),
+            json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "generative": generative, "quick": app.ui.remove_quick}),
         ) {
             Ok(r) => {
                 if let Some(n) = r["notice"].as_str()

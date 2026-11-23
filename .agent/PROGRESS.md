@@ -13,6 +13,15 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   gets its own window id + hints wrap to the visible dialog; dialog buttons 8 px apart; layout audit test
   (`tests_panels::settings_tabs_and_new_panels_have_nothing_clipped`, `HeadlessView::texts`); ~440 plain + 44 format
   messages in all six catalogs. Left: HDR rendition at 1:1 (region renders are SDR), pets (docs/people.md → Pets).
+- [ ] (genfill agent, 2026-11-22, branch worktree-agent-aed52566890eddbd3, not merged) **LR-REM-GEN: gen.ai. is a
+  diffusion model** — Stable Diffusion 1.5 Inpainting (CreativeML OpenRAIL-M, Enhance model `gen-fill`, 3 pinned
+  files 2.13 GB; `ModelInfo.parts`) on candle: `crates/enhance/src/sd/` (candle-transformers 0.9.2 SD code, vendored,
+  NOTICE), `crates/enhance/src/genfill.rs` (LaMa start → 12 DDIM steps at 512 px, refining tiles to 1536 px, grain,
+  pull–push seamless join, CPU-seeded noise), `netrun::conv2d_taps` (SD's convs), engine `genremove.rs` (engine per
+  spot `Generative.quick`, seeds, LaMa fallback with `.lama` markers, auto-remake when the model arrives, progress +
+  `remove.cancel`, `remove.generate {remake}`), Remove panel `quick.` / `stop.` / `remake.`. ~10 s a 512 px
+  variation, ~18 s 1024 px on an idle M3 Pro; much slower under load. needs.you #204 (download OK), #205 (real-photo
+  test). Left: VAE ~40 % of the time (TAESD?), haze/softness vs Lightroom, first fill pays kernel compile.
 - [ ] (fixnotes agent, 2026-11-22, branch worktree-agent-abcb4f6b3b76a1a30, not merged) **LC-UI-FIXNOTES: notes. →
   fix. → Claude** — `crates/ui-egui/src/fixnotes.rs` (new: top-bar `notes.` button with open-count badge, floating
   panel ⌘⌥⇧N, context capture, screenshots via `LightcraftApp::queue_screenshot` (the `ui.screenshot` path), request

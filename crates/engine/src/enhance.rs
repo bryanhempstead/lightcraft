@@ -641,7 +641,7 @@ pub fn warm_up_in_background(models_root: &Path) {
 pub struct Enhancer {
     pub models_root: PathBuf,
     #[cfg(feature = "enhance")]
-    downloads: [Arc<download::Shared>; 6],
+    downloads: [Arc<download::Shared>; 7],
 }
 
 impl Default for Enhancer {
@@ -671,7 +671,7 @@ impl Enhancer {
                 };
                 json!({
                     "model": m.key, "name": m.name, "licence": m.licence, "licenceUrl": m.licence_url, "source": m.source,
-                    "bytes": m.size, "installed": installed, "download": dl,
+                    "bytes": m.bytes(), "installed": installed, "download": dl,
                     "folder": lightcraft_enhance::models::dir(&self.models_root, m.id).to_string_lossy(),
                 })
             })
@@ -682,7 +682,7 @@ impl Enhancer {
     /// Start downloading a model (background thread). `Ok(false)` when installed or already downloading.
     pub fn start_download(&self, key: &str) -> std::result::Result<bool, String> {
         let id = lightcraft_enhance::models::by_key(key)
-            .ok_or_else(|| format!("unknown model `{key}` (raw-denoise, super-resolution, depth, inpaint, reflection, vgg19)"))?;
+            .ok_or_else(|| format!("unknown model `{key}` (raw-denoise, super-resolution, depth, inpaint, gen-fill, reflection, vgg19)"))?;
         if lightcraft_enhance::models::installed(&self.models_root, id).is_some() {
             return Ok(false);
         }
@@ -766,7 +766,7 @@ mod download {
         s.cancel.store(false, Ordering::SeqCst);
         s.finished.store(false, Ordering::SeqCst);
         s.done.store(0, Ordering::SeqCst);
-        s.total.store(lightcraft_enhance::models::info(id).size, Ordering::SeqCst);
+        s.total.store(lightcraft_enhance::models::info(id).bytes(), Ordering::SeqCst);
         *s.error.lock().unwrap_or_else(PoisonError::into_inner) = None;
         let guard = Running(s.clone());
         std::thread::Builder::new()

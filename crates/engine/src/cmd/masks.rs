@@ -1077,7 +1077,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Remove Spot",
             [],
             None,
-            "{mode?: remove|heal|clone|fill (content-aware, no source), generative?: bool (Use Generative AI: a Fill spot LaMa fills, 3 variations), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby)} — selects the new spot; returns {index} (+ {status: remove.status, notice?} for a generative spot; in the app its pixels come in the background)",
+            "{mode?: remove|heal|clone|fill (content-aware, no source), generative?: bool (Use Generative AI: a Fill spot the diffusion model fills, 3 variations), quick?: bool (generative with LaMa alone: fast, smoother), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby)} — selects the new spot; returns {index} (+ {status: remove.status, notice?} for a generative spot; in the app its pixels come in the background)",
             has_active,
             |s, p| {
                 let mode: SpotMode =
@@ -1110,7 +1110,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 dd.spots.push(spot);
                 let n = dd.spots.len();
                 if generative {
-                    s.gen_make(id, &mut dd, n - 1);
+                    s.gen_make(id, &mut dd, n - 1, bool_or(p, "quick", false));
                 }
                 s.set_develop(id, dd, if generative { "Generative Remove" } else { "Remove" })?;
                 s.active_spot = Some(n - 1);
@@ -1139,7 +1139,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Spot",
             [],
             None,
-            "{index? (the selected spot), move?: [dx,dy] (the target, normalized), source?: [dx,dy] (offset from the target), moveSource?: [dx,dy], size?, feather?, opacity?, mode?, generative?: bool (fill it with Generative Remove, or not)}",
+            "{index? (the selected spot), move?: [dx,dy] (the target, normalized), source?: [dx,dy] (offset from the target), moveSource?: [dx,dy], size?, feather?, opacity?, mode?, generative?: bool (fill it with Generative Remove, or not), quick?: bool (a generative spot: LaMa alone, or the diffusion model)}",
             has_active,
             |s, p| {
                 let c = "spot.update";
@@ -1177,11 +1177,22 @@ pub fn specs() -> Vec<CommandSpec> {
                         Some(true) if sp.generative.is_none() => {
                             sp.mode = SpotMode::Fill;
                             sp.source_offset = None;
-                            sp.generative =
-                                Some(lightcraft_develop::Generative { variation: 0, count: crate::genremove::VARIATIONS, key: String::new() });
+                            sp.generative = Some(lightcraft_develop::Generative {
+                                variation: 0,
+                                count: crate::genremove::VARIATIONS,
+                                key: String::new(),
+                                quick: bool_or(p, "quick", false),
+                            });
                         }
                         Some(false) => sp.generative = None,
                         _ => {}
+                    }
+                    if let (Some(q), Some(g)) = (p.get("quick").and_then(Value::as_bool), sp.generative.as_mut()) {
+                        // the other engine: its own key (rekeyed below), the first variation shown
+                        if g.quick != q {
+                            g.quick = q;
+                            g.variation = 0;
+                        }
                     }
                     if sp.mode != SpotMode::Fill {
                         sp.generative = None;
@@ -1279,11 +1290,17 @@ pub fn specs() -> Vec<CommandSpec> {
             "Make Generative Fills",
             [],
             None,
-            "{} — make the missing pixels of the active photo's Generative Remove spots (after cleared caches, another computer, or the model arriving; their keys follow the photo as it is now) → {spots, errors} (in the app they come in the background)",
+            "{remake?: true (make every variation again) | \"fallbacks\" (only the ones LaMa filled because the diffusion model failed or was missing)} — make the missing pixels of the active photo's Generative Remove spots (after cleared caches, another computer, or the model arriving; their keys follow the photo as it is now) → {spots, forgotten, errors} (in the app they come in the background; remove.cancel stops them)",
             has_active,
-            |s, _| {
+            |s, p| {
                 let c = "remove.generate";
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let forgotten = match p.get("remake") {
+                    Some(Value::Bool(true)) => s.gen_forget(id, false),
+                    Some(Value::String(v)) if v == "fallbacks" => s.gen_forget(id, true),
+                    None | Some(Value::Bool(false)) | Some(Value::Null) => 0,
+                    Some(_) => return Err(bad(c, "remake: true or \"fallbacks\"")),
+                };
                 if let Some(d) = s.develop_of(id) {
                     let mut next = (*d).clone();
                     s.gen_rekey(id, &mut next);
@@ -1302,8 +1319,17 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     errors.extend(s.reflection_schedule(id));
                 }
-                Ok(json!({"spots": n, "errors": errors}))
+                Ok(json!({"spots": n, "forgotten": forgotten, "errors": errors}))
             }
+        ),
+        cmd!(
+            "remove.cancel",
+            "Stop Generative Fills",
+            [],
+            None,
+            "{} — stop the Generative Remove fills being made and queued (what is made is kept; the rest stays content-aware until remove.generate) → {stopped}",
+            has_active,
+            |s, _| Ok(json!({"stopped": s.genremove.cancel()}))
         ),
         cmd!(
             query "remove.status",

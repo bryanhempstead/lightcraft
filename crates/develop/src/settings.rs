@@ -1014,6 +1014,9 @@ pub struct Generative {
     pub count: u8,
     /// Names the generated pixels (hex): what the photo looked like under the spot when they were made.
     pub key: String,
+    /// Filled by the quick model (LaMa) instead of the diffusion one (`gen.ai.`'s `quick.`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub quick: bool,
 }
 
 impl Generative {

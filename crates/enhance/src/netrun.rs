@@ -122,25 +122,35 @@ impl NetRunner {
 /// right on the CPU, where candle's tiled kernel is wrong when the channel count equals the width
 /// (`conv2d_is_right_when_the_channels_equal_the_width`).
 pub fn conv2d(x: &Tensor, w: &Tensor, pad: usize) -> candle_core::Result<Tensor> {
+    let (_, cin, h, wd) = x.dims4()?;
+    let (_, cin_k, kh, kw) = w.dims4()?;
+    if cin != cin_k || h + 2 * pad < kh || wd + 2 * pad < kw {
+        candle_core::bail!("convolution shapes do not match");
+    }
+    // [ky][kx][cin][cout]
+    conv2d_taps(x, &w.permute((2, 3, 1, 0))?.contiguous()?, pad)
+}
+
+/// [`conv2d`] with the kernel already laid out as taps (`[kh, kw, cin, cout]`): a network that keeps its weights
+/// this way (Stable Diffusion's UNet and VAE, [`crate::sd`]) doesn't re-lay them out on every call.
+pub fn conv2d_taps(x: &Tensor, taps: &Tensor, pad: usize) -> candle_core::Result<Tensor> {
     let (n, cin, h, wd) = x.dims4()?;
-    let (cout, cin_k, kh, kw) = w.dims4()?;
+    let (kh, kw, cin_k, cout) = taps.dims4()?;
     if cin != cin_k || h + 2 * pad < kh || wd + 2 * pad < kw {
         candle_core::bail!("convolution shapes do not match");
     }
     if n != 1 {
-        let one: Vec<Tensor> = (0..n).map(|i| conv2d(&x.narrow(0, i, 1)?, w, pad)).collect::<candle_core::Result<_>>()?;
+        let one: Vec<Tensor> = (0..n).map(|i| conv2d_taps(&x.narrow(0, i, 1)?, taps, pad)).collect::<candle_core::Result<_>>()?;
         return Tensor::cat(&one, 0);
     }
     if kh == 1 && kw == 1 && pad == 0 {
-        return w.reshape((cout, cin))?.matmul(&x.contiguous()?.reshape((cin, h * wd))?)?.reshape((1, cout, h, wd));
+        return taps.reshape((cin, cout))?.t()?.matmul(&x.contiguous()?.reshape((cin, h * wd))?)?.reshape((1, cout, h, wd));
     }
     let (hp, wp) = (h + 2 * pad, wd + 2 * pad);
     let (oh, ow) = (hp + 1 - kh, wp + 1 - kw);
     // pixels × channels, one more zero row below so the last tap's slice stays inside: each tap's rows are then one
     // contiguous block
     let flat = x.pad_with_zeros(2, pad, pad + 1)?.pad_with_zeros(3, pad, pad)?.reshape((cin, (hp + 1) * wp))?.t()?.contiguous()?;
-    // [ky][kx][cin][cout]
-    let taps = w.permute((2, 3, 1, 0))?.contiguous()?;
     let len = oh * wp;
     let mut acc: Option<Tensor> = None;
     for ky in 0..kh {

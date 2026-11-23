@@ -563,30 +563,54 @@ fn reflection_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
 }
 
-/// Remove ▸ Use Generative AI (`gen.ai.`): new Remove / Fill strokes are filled by LaMa; the model's download
-/// row while it is missing.
+/// Remove ▸ Use Generative AI (`gen.ai.`): new Remove / Fill strokes are filled by the diffusion model (or LaMa
+/// alone with `quick.`); progress and `stop.` while fills are made; the models' download rows while they are
+/// missing.
 fn generative_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let models = app.session.enhancer.models_status();
-    let installed = models["models"].as_array().and_then(|a| a.iter().find(|m| m["model"] == "inpaint")).is_some_and(|m| m["installed"] == true);
+    let has = |key: &str| models["models"].as_array().and_then(|a| a.iter().find(|m| m["model"] == key)).is_some_and(|m| m["installed"] == true);
+    let (lama, diffusion) = (has("inpaint"), has("gen-fill"));
+    let dim = Tokens::get(ui.ctx()).text_dim;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
         let on = app.ui.remove_generative;
         let r = text_button(ui, "removeGenerative", "gen.ai.", on).on_hover_text(crate::i18n::tr(
-            "Use Generative AI: Remove and Fill strokes are filled by an inpainting model (LaMa), with three variations to pick from (< / >)",
+            "Use Generative AI: Remove and Fill strokes are filled by a diffusion model (Stable Diffusion Inpainting), with three variations to pick from (< / >)",
         ));
         if r.clicked() {
             app.ui.remove_generative = !on;
         }
+        if on {
+            let q = app.ui.remove_quick;
+            let r = text_button(ui, "removeQuick", "quick.", q)
+                .on_hover_text(crate::i18n::tr("New spots are filled by LaMa alone: about a second a variation, smoother fills"));
+            if r.clicked() {
+                app.ui.remove_quick = !q;
+            }
+        }
         let busy = app.session.genremove.busy();
         if busy > 0 {
-            ui.label(egui::RichText::new(crate::i18n::tr("making…")).size(12.0).color(Tokens::get(ui.ctx()).text_dim));
+            let pct = (app.session.genremove.progress() * 100.0).round();
+            ui.label(egui::RichText::new(format!("{} {pct}%", crate::i18n::tr("making…"))).size(12.0).color(dim));
+            if text_button(ui, "removeStop", "stop.", false).on_hover_text(crate::i18n::tr("Stop making fills (what is made stays)")).clicked() {
+                let _ = app.run("remove.cancel", json!({}));
+            }
         }
     });
-    if app.ui.remove_generative && !installed {
+    if !app.ui.remove_generative {
+        return;
+    }
+    if !app.ui.remove_quick && !diffusion {
         ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(crate::i18n::tr("Filled content-aware until the model is there:")).size(12.0).color(Tokens::get(ui.ctx()).text_dim),
-        );
+        let text = if lama { "LaMa fills until the diffusion model is there:" } else { "Filled content-aware until a model is there:" };
+        ui.label(egui::RichText::new(crate::i18n::tr(text)).size(12.0).color(dim));
+        crate::enhance::model_row(app, ui, "gen-fill", &models);
+    }
+    if !lama {
+        ui.add_space(4.0);
+        let text =
+            if app.ui.remove_quick { "Filled content-aware until LaMa is there:" } else { "LaMa (quick., and the diffusion model's first guess):" };
+        ui.label(egui::RichText::new(crate::i18n::tr(text)).size(12.0).color(dim));
         crate::enhance::model_row(app, ui, "inpaint", &models);
     }
 }
@@ -613,10 +637,33 @@ fn variations_row(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, g: &ligh
         {
             let _ = app.run("spot.moreVariations", json!({}));
         }
+        if text_button(ui, "genQuick", "quick.", g.quick)
+            .on_hover_text(crate::i18n::tr("Fill this spot with LaMa alone (fast) instead of the diffusion model"))
+            .clicked()
+        {
+            let _ = app.run("spot.update", json!({"quick": !g.quick}));
+        }
         if text_button(ui, "genDelete", "del.", false).on_hover_text(crate::i18n::tr("Delete the spot (⌫)")).clicked() {
             let _ = app.run("spot.delete", json!({}));
         }
     });
+    // shown by LaMa in place of the diffusion model: say why, offer to make it again
+    let why = made.as_ref().and_then(|m| m["fallback"].get(g.variation as usize).and_then(serde_json::Value::as_str).map(str::to_string));
+    if shown && let Some(why) = why {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+            let text =
+                if why == "missing" { "Filled by LaMa: the diffusion model isn't installed" } else { "Filled by LaMa: the diffusion model failed" };
+            ui.label(egui::RichText::new(crate::i18n::tr(text)).size(12.0).color(Tokens::get(ui.ctx()).text_dim));
+            if text_button(ui, "genRemake", "remake.", false)
+                .on_hover_text(crate::i18n::tr("Make the LaMa fills again with the diffusion model"))
+                .clicked()
+                && let Err(e) = app.run("remove.generate", json!({"remake": "fallbacks"}))
+            {
+                app.toast(ui.ctx(), e);
+            }
+        });
+    }
     if !shown {
         let busy = app.session.genremove.busy() > 0;
         let text = if busy {

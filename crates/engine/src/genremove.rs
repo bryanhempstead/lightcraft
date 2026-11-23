@@ -1,6 +1,12 @@
-//! Generative Remove (Lightroom Classic's Remove tool with "Use Generative AI"): a Fill spot whose pixels LaMa
-//! (`lightcraft_enhance::lama`, Apache-2.0, downloaded with consent as the Enhance model `inpaint`) makes, in a
-//! few variations to pick from.
+//! Generative Remove (Lightroom Classic's Remove tool with "Use Generative AI"): a Fill spot whose pixels an
+//! inpainting model makes, in a few variations to pick from. Two engines, each downloaded with consent as an
+//! Enhance model:
+//! - **gen.ai.** (the default): Stable Diffusion 1.5 Inpainting (`lightcraft_enhance::genfill`, CreativeML
+//!   OpenRAIL-M, model `gen-fill`) repaints LaMa's fill with real texture; variations are seeds; large crops are
+//!   repainted again in tiles near the photo's resolution, and the fill is joined seamlessly at the mask's edge.
+//! - **quick.**: LaMa alone (`lightcraft_enhance::lama`, Apache-2.0, model `inpaint`) — about a second a variation.
+//!   It is also the fallback: when the diffusion model is missing or fails (memory, a damaged file) LaMa fills the
+//!   spot and the notice says so; a fill made that way is remade by the diffusion model once it is installed.
 //!
 //! - A generative spot names its pixels ([`lightcraft_develop::Generative`]: a key, the variation shown and how
 //!   many there are). The key is a hash of what the model looks at: the photo's content, the pixel-moving settings
@@ -18,7 +24,7 @@
 //!   the results; the CLI and MCP wait for them.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -32,6 +38,15 @@ use crate::Session;
 
 /// Version of the generation (part of every key: a change remakes the pixels).
 const GEN_VERSION: u32 = 1;
+/// The diffusion engine's part of a key (LaMa's keys are as they were before it).
+const DIFFUSION_VERSION: &str = "sd15-1";
+/// Longest edge of the crop the diffusion engine works on, at the photo's own resolution
+/// (`LIGHTCRAFT_GENAI_EDGE` overrides, 256..8192): larger crops are scaled down to it.
+pub const GENAI_EDGE: usize = 3072;
+
+fn genai_edge() -> usize {
+    std::env::var("LIGHTCRAFT_GENAI_EDGE").ok().and_then(|v| v.parse::<usize>().ok()).map_or(GENAI_EDGE, |v| v.clamp(256, 8192))
+}
 /// Longest edge of the crop the model looks at (`LIGHTCRAFT_GENREMOVE_EDGE` overrides, 64..4096).
 pub const MAX_EDGE: usize = 1024;
 /// Variations a new generative spot gets (Lightroom: three).
@@ -128,6 +143,64 @@ pub fn made(name: &str) -> bool {
     path_of(&cache_dir(), name).is_some_and(|p| p.is_file())
 }
 
+/// Why a diffusion spot's variation was filled by LaMa instead: the marker beside its pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fallback {
+    /// The diffusion model wasn't installed (remade once it is).
+    Missing,
+    /// It failed (memory, a damaged file): remade on request (`remove.generate {remake: true}`).
+    Failed,
+}
+
+fn marker_of(dir: &Path, name: &str) -> Option<PathBuf> {
+    valid_name(name).then(|| dir.join(format!("{name}.lama")))
+}
+
+/// Mark (or, with `None`, unmark) variation `name` as filled by LaMa in place of the diffusion model.
+pub fn set_fallback(dir: &Path, name: &str, why: Option<Fallback>) {
+    let Some(p) = marker_of(dir, name) else { return };
+    match why {
+        Some(w) => {
+            let _ = std::fs::create_dir_all(dir);
+            let _ = std::fs::write(&p, if w == Fallback::Missing { "missing" } else { "failed" });
+        }
+        None => {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+}
+
+/// Whether variation `name` was filled by LaMa in place of the diffusion model, and why.
+pub fn fallback(name: &str) -> Option<Fallback> {
+    let p = marker_of(&cache_dir(), name)?;
+    let text = std::fs::read(&p).ok()?;
+    Some(if text.starts_with(b"missing") { Fallback::Missing } else { Fallback::Failed })
+}
+
+/// Forget variation `name`'s pixels (and its marker), so it is made again.
+pub fn forget(name: &str) {
+    let dir = cache_dir();
+    if let Some(p) = path_of(&dir, name) {
+        let _ = std::fs::remove_file(p);
+    }
+    set_fallback(&dir, name, None);
+    let mut g = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
+    g.hits.retain(|(n, _)| n != name);
+    g.misses.clear();
+}
+
+/// Whether variation `name` of a spot (`quick`: LaMa's) still has to be made: missing, or filled by LaMa because
+/// the diffusion model was missing and it is there now.
+fn to_make(name: &str, quick: bool, diffusion: bool) -> bool {
+    !made(name) || (!quick && diffusion && fallback(name) == Some(Fallback::Missing))
+}
+
+/// The seed of variation `v` of the spot keyed `key` (the same on every machine).
+pub fn seed_of(key: &str, v: u8) -> u64 {
+    let h = key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+    h ^ u64::from(v).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+}
+
 /// Recently used pixels (and names known to be missing), so renders don't read the disk each time.
 struct Loaded {
     hits: Vec<(String, Arc<GenFill>)>,
@@ -205,7 +278,11 @@ pub fn key_of(content: &str, d: &DevelopSettings, i: usize) -> Option<String> {
     let spot = d.spots.get(i)?;
     let mut before = d.clone();
     before.spots.truncate(i);
-    let text = format!("v{GEN_VERSION} {content} {} {:016x}", lightcraft_develop::ai::basis(&before), gen_geometry(spot));
+    let mut text = format!("v{GEN_VERSION} {content} {} {:016x}", lightcraft_develop::ai::basis(&before), gen_geometry(spot));
+    if spot.generative.as_ref().is_some_and(|g| !g.quick) {
+        text.push(' ');
+        text.push_str(DIFFUSION_VERSION);
+    }
     let h = text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
     Some(format!("{h:016x}"))
 }
@@ -240,6 +317,34 @@ pub struct GenJob {
     pub variations: Vec<(u8, crate::media::RenderJob, [f64; 4])>,
     /// Instead: separate the whole photo (this render of it) into the scene and its reflection.
     pub reflection: Option<crate::media::RenderJob>,
+    /// LaMa only (`quick.`), else the diffusion model.
+    pub quick: bool,
+    /// Progress and cancelling (shared with the session).
+    pub shared: Arc<Shared>,
+    /// The cancel generation the job was queued in: a later `remove.cancel` stops it.
+    pub epoch: u64,
+}
+
+/// What the session and its worker share: progress of the variation being made, and cancelling.
+#[derive(Default)]
+pub struct Shared {
+    /// 0..=10000 of the job in hand.
+    progress: AtomicUsize,
+    /// Bumped by `remove.cancel`: jobs queued before it stop.
+    epoch: AtomicU64,
+}
+
+impl Shared {
+    /// The job in hand, 0..1.
+    pub fn progress(&self) -> f32 {
+        self.progress.load(Ordering::Relaxed).min(10_000) as f32 / 10_000.0
+    }
+    fn set(&self, f: f32) {
+        self.progress.store((f.clamp(0.0, 1.0) * 10_000.0) as usize, Ordering::Relaxed);
+    }
+    fn current(&self, epoch: u64) -> bool {
+        self.epoch.load(Ordering::SeqCst) == epoch
+    }
 }
 
 /// What a finished job made.
@@ -262,11 +367,25 @@ pub struct GenRemover {
     pending: Vec<String>,
     /// The model was missing when a generative spot was added (said once per session).
     pub missing_said: bool,
+    shared: Arc<Shared>,
+    /// Whether the diffusion model was installed when last looked (`gen_poll`, once a second).
+    diffusion_seen: Option<bool>,
+    checked: Option<std::time::Instant>,
 }
 
 impl Default for GenRemover {
     fn default() -> Self {
-        GenRemover { background: false, jobs: None, done: None, busy: Arc::new(AtomicUsize::new(0)), pending: Vec::new(), missing_said: false }
+        GenRemover {
+            background: false,
+            jobs: None,
+            done: None,
+            busy: Arc::new(AtomicUsize::new(0)),
+            pending: Vec::new(),
+            missing_said: false,
+            shared: Arc::default(),
+            diffusion_seen: None,
+            checked: None,
+        }
     }
 }
 
@@ -274,6 +393,17 @@ impl GenRemover {
     /// Spots being generated now.
     pub fn busy(&self) -> usize {
         self.busy.load(Ordering::SeqCst)
+    }
+
+    /// How far the spot being made is (0..1).
+    pub fn progress(&self) -> f32 {
+        self.shared.progress()
+    }
+
+    /// Stop the generations running and queued (what is made so far is kept). Returns how many were stopped.
+    pub fn cancel(&mut self) -> usize {
+        self.shared.epoch.fetch_add(1, Ordering::SeqCst);
+        self.busy()
     }
 
     fn sender(&mut self) -> Option<Sender<GenJob>> {
@@ -308,9 +438,19 @@ impl GenRemover {
     }
 }
 
-/// Whether the inpainting model is installed.
+/// Whether an inpainting model is installed (LaMa or the diffusion one): Generative Remove can fill.
 pub fn model_installed(models_root: &Path) -> bool {
+    lama_installed(models_root) || diffusion_installed(models_root)
+}
+
+/// Whether LaMa (`quick.`, and the diffusion engine's first guess) is installed.
+pub fn lama_installed(models_root: &Path) -> bool {
     lightcraft_enhance::models::installed(models_root, lightcraft_enhance::models::ModelId::Inpaint).is_some()
+}
+
+/// Whether the diffusion model (`gen.ai.`) is installed.
+pub fn diffusion_installed(models_root: &Path) -> bool {
+    lightcraft_enhance::models::installed(models_root, lightcraft_enhance::models::ModelId::GenFill).is_some()
 }
 
 /// Whether both Remove Reflections models are installed.
@@ -332,9 +472,19 @@ pub fn reflection_missing(models_root: &Path) -> String {
 
 /// What to tell the user when the model is missing.
 pub fn missing_message(models_root: &Path) -> String {
+    use lightcraft_enhance::models::{ModelId, missing_message};
     format!(
-        "Generative Remove fills content-aware until its model is there: {}",
-        lightcraft_enhance::models::missing_message(models_root, lightcraft_enhance::models::ModelId::Inpaint)
+        "Generative Remove fills content-aware until its models are there: {}; and LaMa (quick., the fast one): {}",
+        missing_message(models_root, ModelId::GenFill),
+        missing_message(models_root, ModelId::Inpaint)
+    )
+}
+
+/// What to tell the user when a gen.ai. spot is filled by LaMa because the diffusion model is missing.
+pub fn diffusion_missing_message(models_root: &Path) -> String {
+    format!(
+        "gen.ai. fills with LaMa (quick.) until the diffusion model is there, then remakes the fill: {}",
+        lightcraft_enhance::models::missing_message(models_root, lightcraft_enhance::models::ModelId::GenFill)
     )
 }
 
@@ -360,6 +510,23 @@ mod model {
         }
         let m = Arc::new(lightcraft_enhance::dsrnet::Dereflector::load(&net, &vgg, lightcraft_enhance::best_device()).map_err(|e| e.to_string())?);
         *g = Some((net, m.clone()));
+        Ok(m)
+    }
+
+    static DIFFUSION: Mutex<Option<(std::path::PathBuf, Arc<lightcraft_enhance::genfill::GenFiller>)>> = Mutex::new(None);
+
+    /// The diffusion model (kept for the process: loading reads 2.1 GB).
+    pub fn diffusion(root: &std::path::Path) -> Result<Arc<lightcraft_enhance::genfill::GenFiller>, String> {
+        let unet = models::installed(root, ModelId::GenFill).ok_or_else(|| super::diffusion_missing_message(root))?;
+        let mut g = DIFFUSION.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((p, m)) = g.as_ref()
+            && *p == unet
+        {
+            return Ok(m.clone());
+        }
+        let dir = models::dir(root, ModelId::GenFill);
+        let m = Arc::new(lightcraft_enhance::genfill::GenFiller::load(&dir, lightcraft_enhance::best_device()).map_err(|e| e.to_string())?);
+        *g = Some((unet, m.clone()));
         Ok(m)
     }
 
@@ -502,6 +669,55 @@ fn make(_job: &GenJob) -> (Vec<String>, Option<String>) {
     (Vec::new(), Some("Generative Remove is not available in this build".into()))
 }
 
+/// A variation's crop, ready for a model: scene-linear, its white balance, the hole, and how it is shown.
+#[cfg(feature = "enhance")]
+struct Crop {
+    lin: Rgb32f,
+    wb: Option<[[f32; 3]; 3]>,
+    hole: Vec<bool>,
+    enc: Encoding,
+    /// What the model sees (display-encoded 0..1).
+    shown: Rgb32f,
+    rect: [f64; 4],
+}
+
+#[cfg(feature = "enhance")]
+impl Crop {
+    fn of(job: &GenJob, render: &crate::media::RenderJob, rect: [f64; 4]) -> Result<Crop, String> {
+        let (lin, wb) = render.clone().linear()?;
+        let hole = hole_of(&job.spot, rect, lin.width, lin.height, job.oriented);
+        if !hole.iter().any(|h| *h) {
+            return Err("the spot is outside the photo".into());
+        }
+        let enc = Encoding::of(&lin, &hole, job.exposure);
+        let mut shown = lin.clone();
+        shown.data.iter_mut().for_each(|p| *p = enc.encode(*p));
+        Ok(Crop { lin, wb, hole, enc, shown, rect })
+    }
+
+    /// The model's picture `out` decoded and taken back before white balance.
+    fn finish(&self, job: &GenJob, out: &Rgb32f) -> GenFill {
+        let back = self.wb.and_then(invert3);
+        let mut image = self.lin.clone();
+        for ((d, o), h) in image.data.iter_mut().zip(&out.data).zip(&self.hole) {
+            // outside the hole the crop stays as it was (never shown: the spot's alpha is 0 there)
+            let c = if *h { self.enc.decode(*o) } else { *d };
+            *d = match &back {
+                Some(m) => std::array::from_fn(|r| m[r][0] * c[0] + m[r][1] * c[1] + m[r][2] * c[2]),
+                None => c,
+            };
+        }
+        GenFill { geometry: job.geometry, rect: self.rect, image }
+    }
+
+    /// LaMa's fill of this crop (at most [`MAX_EDGE`] across; scaled back up), mirrored and scaled per `recipe`.
+    fn lama(&self, m: &lightcraft_enhance::lama::Inpainter, recipe: (f64, bool, f64)) -> Result<Rgb32f, String> {
+        let long = self.shown.width.max(self.shown.height).max(1) as f64;
+        let scale = recipe.2 * (MAX_EDGE as f64 / long).min(1.0);
+        inpaint_variant(m, &self.shown, &self.hole, recipe.1, scale)
+    }
+}
+
 /// One variation: its crop through the model, decoded and taken back before white balance.
 #[cfg(feature = "enhance")]
 fn make_one(
@@ -511,26 +727,82 @@ fn make_one(
     rect: [f64; 4],
     recipe: (f64, bool, f64),
 ) -> Result<GenFill, String> {
-    let (lin, wb) = render.clone().linear()?;
-    let hole = hole_of(&job.spot, rect, lin.width, lin.height, job.oriented);
-    if !hole.iter().any(|h| *h) {
-        return Err("the spot is outside the photo".into());
-    }
-    let enc = Encoding::of(&lin, &hole, job.exposure);
-    let mut shown = lin.clone();
-    shown.data.iter_mut().for_each(|p| *p = enc.encode(*p));
-    let out = inpaint_variant(m, &shown, &hole, recipe.1, recipe.2)?;
-    let back = wb.and_then(invert3);
-    let mut image = lin;
-    for ((d, o), h) in image.data.iter_mut().zip(&out.data).zip(&hole) {
-        // outside the hole the crop stays as it was (never shown: the spot's alpha is 0 there)
-        let c = if *h { enc.decode(*o) } else { *d };
-        *d = match &back {
-            Some(m) => std::array::from_fn(|r| m[r][0] * c[0] + m[r][1] * c[1] + m[r][2] * c[2]),
-            None => c,
+    let crop = Crop::of(job, render, rect)?;
+    let out = inpaint_variant(m, &crop.shown, &crop.hole, recipe.1, recipe.2)?;
+    Ok(crop.finish(job, &out))
+}
+
+/// The diffusion engine: one crop for every variation (they are seeds), LaMa's fill as the start, then Stable
+/// Diffusion per seed. A missing or failing model is a LaMa fill (marked, with a notice), never a crash.
+#[cfg(feature = "enhance")]
+fn make_diffusion(job: &GenJob) -> (Vec<String>, Option<String>) {
+    let dir = cache_dir();
+    let mut made = Vec::new();
+    let Some((_, render, rect)) = job.variations.first() else { return (made, None) };
+    let crop = match Crop::of(job, render, *rect) {
+        Ok(c) => c,
+        Err(e) => return (made, Some(e)),
+    };
+    let lama = model::get(&job.models_root).ok();
+    let (sd, mut notice) = match model::diffusion(&job.models_root) {
+        Ok(m) => (Some(m), None),
+        Err(e) if !diffusion_installed(&job.models_root) => (None, Some(e)),
+        Err(e) => (None, Some(format!("gen.ai. could not load its model ({e}); LaMa (quick.) filled the spot"))),
+    };
+    let why = if diffusion_installed(&job.models_root) { Fallback::Failed } else { Fallback::Missing };
+    // LaMa's fill: the diffusion model's start (its structure), and the fallback
+    let init = lama.as_ref().and_then(|m| crop.lama(m, RECIPES[0]).map_err(|e| log::warn!("generative remove: LaMa: {e}")).ok());
+    let n = job.variations.len().max(1) as f32;
+    for (k, (v, _, _)) in job.variations.iter().enumerate() {
+        if !job.shared.current(job.epoch) {
+            return (made, Some("cancelled".into()));
+        }
+        job.shared.set(k as f32 / n);
+        let name = format!("{}-{v}", job.key);
+        let mut fell_back = None;
+        let out = match &sd {
+            Some(m) => {
+                let p = lightcraft_enhance::genfill::Params { seed: seed_of(&job.key, *v), ..Default::default() };
+                let progress = |f: f32| {
+                    job.shared.set((k as f32 + f) / n);
+                    job.shared.current(job.epoch)
+                };
+                match m.fill(&crop.shown, &crop.hole, init.as_ref(), &p, &progress) {
+                    Ok(o) => Ok(o),
+                    Err(lightcraft_enhance::Error::Cancelled) => return (made, Some("cancelled".into())),
+                    Err(e) => {
+                        log::warn!("generative remove: diffusion failed: {e}");
+                        notice.get_or_insert_with(|| format!("gen.ai. failed ({e}); LaMa (quick.) filled the spot"));
+                        fell_back = Some(Fallback::Failed);
+                        Err(e.to_string())
+                    }
+                }
+            }
+            None => {
+                fell_back = Some(why);
+                Err(String::new())
+            }
         };
+        let out = match (out, &lama) {
+            (Ok(o), _) => o,
+            (Err(_), Some(m)) => {
+                let recipe = RECIPES.get(*v as usize).copied().unwrap_or(RECIPES[0]);
+                match crop.lama(m, (recipe.0, recipe.1, recipe.2)) {
+                    Ok(o) => o,
+                    Err(e) => return (made, Some(e)),
+                }
+            }
+            // neither model: the spot stays content-aware (the notice says which model to get)
+            (Err(_), None) => return (made, notice.or_else(|| Some(missing_message(&job.models_root)))),
+        };
+        if let Err(e) = save(&dir, &name, &crop.finish(job, &out)) {
+            return (made, Some(e));
+        }
+        set_fallback(&dir, &name, fell_back);
+        made.push(name);
     }
-    Ok(GenFill { geometry: job.geometry, rect, image })
+    job.shared.set(1.0);
+    (made, notice)
 }
 
 /// Separate the whole photo into the scene and its reflection; the layers are kept before white balance.
@@ -576,13 +848,21 @@ fn make(job: &GenJob) -> (Vec<String>, Option<String>) {
     if let Some(r) = &job.reflection {
         return make_reflection(job, r);
     }
+    if !job.quick {
+        return make_diffusion(job);
+    }
     let m = match model::get(&job.models_root) {
         Ok(m) => m,
         Err(e) => return (Vec::new(), Some(e)),
     };
     let dir = cache_dir();
     let mut made = Vec::new();
-    for (v, render, rect) in &job.variations {
+    let n = job.variations.len().max(1) as f32;
+    for (k, (v, render, rect)) in job.variations.iter().enumerate() {
+        if !job.shared.current(job.epoch) {
+            return (made, Some("cancelled".into()));
+        }
+        job.shared.set(k as f32 / n);
         let name = format!("{}-{v}", job.key);
         let recipe = RECIPES.get(*v as usize).copied().unwrap_or(RECIPES[0]);
         match make_one(&m, job, render, *rect, recipe).and_then(|fill| save(&dir, &name, &fill)) {
@@ -590,6 +870,7 @@ fn make(job: &GenJob) -> (Vec<String>, Option<String>) {
             Err(e) => return (made, Some(e)),
         }
     }
+    job.shared.set(1.0);
     (made, None)
 }
 
@@ -631,14 +912,18 @@ impl Session {
         let p = self.catalog.photo(id)?.clone();
         let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
         let oriented = if d.orientation.swaps_axes() { (h, w) } else { (w, h) };
-        let edge = max_edge();
+        // LaMa (quick.) sees each variation differently (RECIPES); the diffusion model sees one crop, at up to the
+        // photo's own resolution, and its variations are seeds
+        let quick = g.quick;
+        let diffusion = diffusion_installed(&self.enhancer.models_root);
+        let edge = if quick { max_edge() } else { genai_edge() };
         let mut variations = Vec::new();
         for v in 0..g.count.min(Generative::MAX) {
             let name = format!("{}-{v}", g.key);
-            if made(&name) || self.genremove.pending.contains(&name) {
+            if !to_make(&name, quick, diffusion) || self.genremove.pending.contains(&name) {
                 continue;
             }
-            let recipe = RECIPES.get(v as usize).copied().unwrap_or(RECIPES[0]);
+            let recipe = if quick { RECIPES.get(v as usize).copied().unwrap_or(RECIPES[0]) } else { RECIPES[0] };
             let rect = context_rect(&spot, oriented, recipe.0)?;
             // the crop at the photo's own resolution, at most `edge` across, and big enough for the model
             let native = ((rect[2] - rect[0]) * oriented.0).max((rect[3] - rect[1]) * oriented.1);
@@ -670,6 +955,9 @@ impl Session {
             oriented,
             exposure: d.light.exposure,
             variations,
+            quick,
+            shared: self.genremove.shared.clone(),
+            epoch: self.genremove.shared.epoch.load(Ordering::SeqCst),
         })
     }
 
@@ -767,6 +1055,9 @@ impl Session {
             exposure: d.light.exposure,
             variations: Vec::new(),
             reflection: Some(render),
+            quick: true,
+            shared: self.genremove.shared.clone(),
+            epoch: self.genremove.shared.epoch.load(Ordering::SeqCst),
         };
         self.gen_submit(id, job, names.to_vec())
     }
@@ -785,11 +1076,22 @@ impl Session {
     pub fn gen_poll(&mut self) -> (Vec<PhotoId>, Vec<String>) {
         let mut photos = Vec::new();
         let mut errors = Vec::new();
+        // the diffusion model just arrived (its download finished): the active photo's LaMa stand-ins are remade
+        if self.genremove.checked.is_none_or(|t| t.elapsed().as_secs_f64() > 1.0) {
+            self.genremove.checked = Some(std::time::Instant::now());
+            let now = diffusion_installed(&self.enhancer.models_root);
+            let arrived = self.genremove.diffusion_seen == Some(false) && now;
+            self.genremove.diffusion_seen = Some(now);
+            if arrived && let Some(id) = self.active() {
+                errors.extend(self.gen_schedule(id).1);
+            }
+        }
         let Some(rx) = &self.genremove.done else { return (photos, errors) };
         while let Ok(d) = rx.try_recv() {
             let prefix = format!("{}-", d.key);
             self.genremove.pending.retain(|n| !n.starts_with(&prefix));
-            if let Some(e) = d.error {
+            // a stop the user asked for is not an error
+            if let Some(e) = d.error.filter(|e| e != "cancelled") {
                 errors.push(e);
             }
             log::info!("generative remove: {} variation(s) in {:.1} s", d.made.len(), d.seconds);
@@ -814,27 +1116,61 @@ impl Session {
                     .filter_map(|(i, s)| {
                         let g = s.generative.as_ref()?;
                         let made: Vec<bool> = (0..g.count).map(|v| made(&format!("{}-{v}", g.key))).collect();
-                        Some(json!({"index": i, "variation": g.variation, "count": g.count, "made": made, "key": g.key}))
+                        // variations LaMa filled in place of the diffusion model: "missing" (remade once it is
+                        // there) or "failed" (remade with remove.generate {remake: true})
+                        let fallback: Vec<Value> = (0..g.count)
+                            .map(|v| match (g.quick, fallback(&format!("{}-{v}", g.key))) {
+                                (false, Some(Fallback::Missing)) => json!("missing"),
+                                (false, Some(Fallback::Failed)) => json!("failed"),
+                                _ => Value::Null,
+                            })
+                            .collect();
+                        let engine = if g.quick { "quick" } else { "diffusion" };
+                        Some(json!({
+                            "index": i, "variation": g.variation, "count": g.count, "made": made, "key": g.key,
+                            "engine": engine, "fallback": fallback,
+                        }))
                     })
                     .collect()
             })
             .unwrap_or_default();
         json!({
             "model": model_installed(&self.enhancer.models_root),
+            "lama": lama_installed(&self.enhancer.models_root),
+            "diffusion": diffusion_installed(&self.enhancer.models_root),
             "busy": self.genremove.busy(),
+            "progress": self.genremove.progress(),
             "spots": spots,
             "available": crate::enhance::AVAILABLE,
         })
     }
 
-    /// Make spot `i` of `d` generative (a Fill spot with [`VARIATIONS`] variations, the first shown).
-    pub fn gen_make(&self, id: PhotoId, d: &mut DevelopSettings, i: usize) {
+    /// Make spot `i` of `d` generative (a Fill spot with [`VARIATIONS`] variations, the first shown), filled by
+    /// LaMa alone when `quick`, else by the diffusion model.
+    pub fn gen_make(&self, id: PhotoId, d: &mut DevelopSettings, i: usize, quick: bool) {
         if let Some(s) = d.spots.get_mut(i) {
             s.mode = SpotMode::Fill;
             s.source_offset = None;
-            s.generative = Some(Generative { variation: 0, count: VARIATIONS, key: String::new() });
+            s.generative = Some(Generative { variation: 0, count: VARIATIONS, key: String::new(), quick });
         }
         self.gen_rekey(id, d);
+    }
+
+    /// Forget the made variations of photo `id`'s generative spots so they are made again: all of them, or only
+    /// the ones LaMa filled in place of the diffusion model (`only_fallbacks`). Returns how many were forgotten.
+    pub fn gen_forget(&mut self, id: PhotoId, only_fallbacks: bool) -> usize {
+        let Some(d) = self.develop_of(id) else { return 0 };
+        let mut n = 0;
+        for g in d.spots.iter().filter_map(|s| s.generative.as_ref()) {
+            for v in 0..g.count.min(Generative::MAX) {
+                let name = format!("{}-{v}", g.key);
+                if made(&name) && (!only_fallbacks || (!g.quick && fallback(&name).is_some())) {
+                    forget(&name);
+                    n += 1;
+                }
+            }
+        }
+        n
     }
 }
 
