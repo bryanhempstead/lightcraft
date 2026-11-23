@@ -79,6 +79,59 @@ impl CropGeometry {
         let _ = best;
         CropGeometry { rect: nr.scale(1.0 / w, 1.0 / h), angle: self.angle }
     }
+
+    /// The crop moved by `(dx, dy)` (normalized) along that line only, as far as it can go while it
+    /// stays inside the rotated image (a console's CropPositionX / Y: the other axis never moves).
+    /// A crop that is already outside the image moves the whole way.
+    pub fn shifted(&self, dx: f64, dy: f64, w: f64, h: f64) -> CropGeometry {
+        if !(dx.is_finite() && dy.is_finite()) {
+            return *self;
+        }
+        let at = |t: f64| CropGeometry { rect: self.rect.translate(Vec2::new(dx * t, dy * t)), angle: self.angle };
+        let full = at(1.0);
+        if full.is_within_image(w, h) || !self.is_within_image(w, h) {
+            return full;
+        }
+        // the translations that keep a rectangle inside a convex shape are convex: bisect the last one
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..40 {
+            let mid = (lo + hi) / 2.0;
+            if at(mid).is_within_image(w, h) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        at(lo)
+    }
+
+    /// The crop scaled by `k` about its centre, keeping its shape (a console's CropScale): never
+    /// bigger than the largest crop of that shape the rotated image holds; one that no longer fits
+    /// around its centre slides towards the image centre, only as far as it has to.
+    pub fn scaled(&self, k: f64, w: f64, h: f64) -> CropGeometry {
+        let r = self.rect_px(w, h);
+        if !(k.is_finite() && k > 0.0) || r.width() <= 0.0 || r.height() <= 0.0 {
+            return *self;
+        }
+        let k = k.min(max_inscribed_scale(w, h, self.angle, r.width(), r.height()));
+        let (cw, ch) = (r.width() * k, r.height() * k);
+        let at = |c: Point| CropGeometry { rect: Rect::from_center(c, cw, ch).scale(1.0 / w, 1.0 / h), angle: self.angle };
+        let here = at(r.center());
+        if here.is_within_image(w, h) {
+            return here;
+        }
+        let mid = Point::new(w / 2.0, h / 2.0);
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..40 {
+            let t = (lo + hi) / 2.0;
+            if at(r.center().lerp(mid, t)).is_within_image(w, h) {
+                hi = t;
+            } else {
+                lo = t;
+            }
+        }
+        at(r.center().lerp(mid, hi))
+    }
 }
 
 /// Largest scale `s` such that a centred `cw·s × ch·s` rectangle fits inside a `w × h` image rotated
@@ -131,6 +184,45 @@ mod tests {
         let c = CropGeometry { rect: Rect::new(0.5, 0.5, 1.4, 1.2), angle: 12.0 };
         let k = c.constrained(300.0, 200.0);
         assert!(k.is_within_image(300.0, 200.0));
+    }
+
+    /// The old console nudge slid a crop that left a straightened photo back with `constrained`,
+    /// which pulls it towards the image centre on both axes: an x move also moved y.
+    #[test]
+    fn shifted_moves_along_one_axis_only() {
+        let (w, h) = (600.0, 400.0);
+        let c = CropGeometry { rect: Rect::new(0.4, 0.2, 0.7, 0.5), angle: 6.0 };
+        assert!(c.is_within_image(w, h));
+        let pushed = CropGeometry { rect: c.rect.translate(Vec2::new(0.35, 0.0)), angle: 6.0 };
+        assert!(!pushed.is_within_image(w, h));
+        assert!((pushed.constrained(w, h).rect.y0 - c.rect.y0).abs() > 1e-3, "the old way drifts in y");
+        let s = c.shifted(0.35, 0.0, w, h);
+        assert!(s.is_within_image(w, h));
+        assert_eq!((s.rect.y0, s.rect.y1), (c.rect.y0, c.rect.y1));
+        assert!((s.rect.width() - c.rect.width()).abs() < 1e-12);
+        assert!(s.rect.x0 > c.rect.x0 + 0.01, "{s:?}");
+        let v = c.shifted(0.0, -0.4, w, h);
+        assert_eq!((v.rect.x0, v.rect.x1), (c.rect.x0, c.rect.x1));
+        assert!(v.is_within_image(w, h) && v.rect.y0 < c.rect.y0);
+        // nonsense: unchanged
+        assert_eq!(c.shifted(f64::NAN, 0.0, w, h), c);
+    }
+
+    #[test]
+    fn scaled_keeps_centre_and_shape() {
+        let (w, h) = (600.0, 400.0);
+        let c = CropGeometry { rect: Rect::new(0.4, 0.3, 0.6, 0.5), angle: 5.0 };
+        let a = c.rect_px(w, h).aspect();
+        let z = c.scaled(0.8, w, h);
+        assert!((z.rect.center().x - c.rect.center().x).abs() < 1e-12 && (z.rect.center().y - c.rect.center().y).abs() < 1e-12);
+        let mut g = c;
+        for _ in 0..100 {
+            g = g.scaled(1.1, w, h);
+            assert!(g.is_within_image(w, h), "{g:?}");
+            assert!((g.rect_px(w, h).aspect() - a).abs() < 1e-9);
+        }
+        assert_eq!(c.scaled(f64::NAN, w, h), c);
+        assert_eq!(c.scaled(-1.0, w, h), c);
     }
 
     #[test]

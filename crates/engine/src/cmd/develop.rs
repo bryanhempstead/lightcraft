@@ -569,6 +569,46 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         }),
         cmd!(
+            "crop.nudge",
+            "Nudge Crop",
+            [],
+            None,
+            "{x?, y?, scale?, axes?: crop|image} in percent of the image — moves the crop right (+x) / down (+y) as the photo is shown, only along that axis and only as far as the photo goes: axes crop (default) = the cropped photo's axes (flips honoured), image = the uncropped, unstraightened photo's (the Crop tool, where a straightened crop is a tilted frame); scale + zooms in, − out, about the crop's centre, keeping its shape (a console's CropPositionX / CropPositionY / CropScale)",
+            has_active,
+            |s, p| {
+                let id = active(s, "crop.nudge")?;
+                let (w, h) = crop_dims(s, id);
+                let f = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0) / 100.0;
+                let (dx, dy, k) = (f("x"), f("y"), (1.0 - f("scale")).clamp(0.05, 20.0));
+                let image_axes = match str_param(p, "axes") {
+                    None | Some("crop") => false,
+                    Some("image") => true,
+                    Some(other) => return Err(bad("crop.nudge", format!("unknown axes `{other}` (crop|image)"))),
+                };
+                edit(s, "crop.nudge", "Crop", |d| {
+                    let (dx, dy) = if image_axes {
+                        // the photo's axes, turned into the straightened frame the rect lives in
+                        let a = d.crop.geometry.angle.to_radians();
+                        let (sin, cos) = a.sin_cos();
+                        let (px, py) = (dx * w, dy * h);
+                        ((px * cos - py * sin) / w, (px * sin + py * cos) / h)
+                    } else {
+                        // the rect lives before the flips: a flipped photo moves the other way
+                        (if d.crop.flip_h { -dx } else { dx }, if d.crop.flip_v { -dy } else { dy })
+                    };
+                    let mut g = d.crop.geometry;
+                    if k != 1.0 {
+                        g = g.scaled(k, w, h);
+                    }
+                    if dx != 0.0 || dy != 0.0 {
+                        g = g.shifted(dx, dy, w, h);
+                    }
+                    d.crop.geometry = g.constrained(w, h);
+                    Ok(())
+                })
+            }
+        ),
+        cmd!(
             "crop.drag",
             "Drag Crop Handle",
             [],

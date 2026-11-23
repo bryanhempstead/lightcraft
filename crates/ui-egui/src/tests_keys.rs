@@ -942,3 +942,94 @@ fn remove_tool_marquee_deletes_spots_and_fill_mode_adds_fill_spots() {
     assert_eq!(spots.len(), 1, "{spots:?}");
     assert_eq!(spots[0].mode, lightcraft_develop::SpotMode::Fill);
 }
+
+fn crop_of(h: &Headless) -> lightcraft_geom::CropGeometry {
+    let id = h.app.session.active().expect("active photo");
+    h.app.session.develop_of(id).unwrap_or_default().crop.geometry
+}
+
+/// CropPositionX moves the crop sideways only, CropPositionY up/down only, as the photo is shown —
+/// also on a straightened photo: in the loupe (the cropped photo) along the crop's axes, where the
+/// slide-back-inside used to pull it towards the image centre on both axes; in the Crop tool (the
+/// whole photo, the crop a tilted frame) along the screen's (Bryan, 2026-11-23: "the crop
+/// adjustment horizontal is being buggy and going both vertical and horizontal").
+#[test]
+fn crop_dials_move_one_axis_only() {
+    // the crop's centre on screen: in the cropped photo's frame, or turned back onto the photo
+    fn centre(c: &lightcraft_geom::CropGeometry, tool: bool, w: f64, h: f64) -> (f64, f64) {
+        let m = c.rect.center();
+        if !tool {
+            return (m.x, m.y);
+        }
+        let a = -c.angle.to_radians();
+        let (px, py) = ((m.x - 0.5) * w, (m.y - 0.5) * h);
+        ((px * a.cos() - py * a.sin()) / w, (px * a.sin() + py * a.cos()) / h)
+    }
+    for tool in [false, true] {
+        for angle in [0.0, 4.0, -7.5] {
+            let mut h = demo();
+            h.request("ui.set", json!({"view": "detail"}), T);
+            exec(&mut h, "panel.crop", json!({}));
+            exec(&mut h, "crop.set", json!({"angle": angle}));
+            exec(&mut h, "crop.set", json!({"rect": [0.3, 0.25, 0.6, 0.55]}));
+            if !tool {
+                h.request("ui.set", json!({"right": "edit"}), T);
+            }
+            h.step();
+            let id = h.app.session.active().unwrap();
+            let p = h.app.session.catalog.photo(id).unwrap();
+            let (w, hh) = if p.develop.orientation.swaps_axes() { (p.height as f64, p.width as f64) } else { (p.width as f64, p.height as f64) };
+            let start = crop_of(&h);
+            let (sx, sy) = centre(&start, tool, w, hh);
+            let (w0, h0) = (start.rect.width(), start.rect.height());
+            // far enough right to hit the (rotated) edge
+            for _ in 0..120 {
+                exec(&mut h, "keys.lrinput", json!({"line": "CropPositionX = ^0.5,-100,100"}));
+                let c = crop_of(&h);
+                let (_, y) = centre(&c, tool, w, hh);
+                assert!((y - sy).abs() < 1e-9, "x dial moved y at {angle}° (tool {tool}): {c:?}");
+                assert!((c.rect.width() - w0).abs() < 1e-9 && (c.rect.height() - h0).abs() < 1e-9, "x dial resized the crop at {angle}°: {c:?}");
+                assert!(c.is_within_image(w, hh));
+            }
+            let right = crop_of(&h);
+            assert!(centre(&right, tool, w, hh).0 > sx + 0.05, "it moved right at {angle}° (tool {tool}): {right:?}");
+            // (against a slanted edge it may not go up at all: start again from the middle)
+            exec(&mut h, "crop.set", json!({"rect": [0.3, 0.25, 0.6, 0.55]}));
+            let mid = crop_of(&h);
+            let (mx, my) = centre(&mid, tool, w, hh);
+            for _ in 0..120 {
+                exec(&mut h, "keys.lrinput", json!({"line": "CropPositionY = v0.5,-100,100"}));
+                let c = crop_of(&h);
+                assert!((centre(&c, tool, w, hh).0 - mx).abs() < 1e-9, "y dial moved x at {angle}° (tool {tool}): {c:?}");
+            }
+            assert!(centre(&crop_of(&h), tool, w, hh).1 < my - 0.05, "it moved up at {angle}° (tool {tool})");
+            assert!((crop_of(&h).angle - angle).abs() < 1e-9, "the angle stays");
+        }
+    }
+}
+
+/// CropScale zooms about the crop's centre and keeps its shape.
+#[test]
+fn crop_scale_keeps_centre_and_shape() {
+    for angle in [0.0, 5.0] {
+        let mut h = demo();
+        h.request("ui.set", json!({"view": "detail"}), T);
+        exec(&mut h, "panel.crop", json!({}));
+        exec(&mut h, "crop.set", json!({"angle": angle}));
+        exec(&mut h, "crop.set", json!({"rect": [0.35, 0.3, 0.65, 0.6]}));
+        let start = crop_of(&h);
+        let aspect = start.rect.width() / start.rect.height();
+        for _ in 0..6 {
+            exec(&mut h, "keys.lrinput", json!({"line": "CropScale = ^0.5,-100,100"}));
+        }
+        let c = crop_of(&h);
+        assert!(c.rect.width() < start.rect.width(), "^ zooms in");
+        assert!((c.rect.center().x - start.rect.center().x).abs() < 1e-9 && (c.rect.center().y - start.rect.center().y).abs() < 1e-9, "{c:?}");
+        // zooming out a long way: the shape stays and it stays on the photo
+        for _ in 0..200 {
+            exec(&mut h, "keys.lrinput", json!({"line": "CropScale = v0.5,-100,100"}));
+            let c = crop_of(&h);
+            assert!((c.rect.width() / c.rect.height() - aspect).abs() < 1e-6, "shape kept at {angle}°: {c:?}");
+        }
+    }
+}
