@@ -1033,3 +1033,35 @@ fn crop_scale_keeps_centre_and_shape() {
         }
     }
 }
+
+/// Lens Corrections ▸ Profile: with Enable Profile Corrections on, the Make / Model / Profile
+/// pickers and auto. / none. are there for a lens the file doesn't name (Bryan's manual Leica M
+/// lenses), and the checkbox runs `lens.profileCorrections` (which picks the Set Lens profile).
+#[test]
+fn lens_corrections_show_the_profile_pickers() {
+    let mut h = demo();
+    let r = h.request("ui.set", json!({"view": "detail", "right": "edit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    if !h.app.ui.section_open("lensCorrections") {
+        h.app.ui.toggle_section("lensCorrections");
+    }
+    h.step();
+    h.step();
+    let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    assert!(!has(&h, "button:lensProfileAuto"), "off: no pickers");
+    exec(&mut h, "photo.setLens", json!({"lens": "Leica Summicron-M 1:2/50", "focal": 50}));
+    let r = exec(&mut h, "lens.profileCorrections", json!({"on": true}));
+    assert_eq!(r["on"], true);
+    h.step();
+    h.step();
+    assert!(has(&h, "button:lensProfileAuto") && has(&h, "button:lensProfileNone"), "the pickers");
+    let r = h.request("ui.clickWidget", json!({"id": "button:lensProfileNone"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let id = h.app.session.active().unwrap();
+    assert!(h.app.session.develop_of(id).unwrap().optics.lens_profile_ref.is_none());
+    let r = h.request("ui.clickWidget", json!({"id": "button:lensProfileAuto"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(h.app.session.develop_of(id).unwrap().optics.lens_profile, "still on");
+}

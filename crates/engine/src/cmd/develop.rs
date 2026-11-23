@@ -608,6 +608,89 @@ pub fn specs() -> Vec<CommandSpec> {
                 })
             }
         ),
+        // ---- lens corrections: Adobe's installed lens profiles (Bryan's fork, `crate::lcp`)
+        cmd!(
+            "lens.profiles",
+            "Lens Profiles",
+            [],
+            None,
+            "{make?, model?} — the installed lens profiles: no make → {makes}; a make → {models}; make + model → {profiles: [{name, file}]}",
+            always,
+            |_s, p| {
+                let make = str_param(p, "make").map(str::trim).filter(|m| !m.is_empty());
+                let model = str_param(p, "model").map(str::trim).filter(|m| !m.is_empty());
+                Ok(match (make, model) {
+                    (None, _) => json!({"makes": crate::lcp::makes()}),
+                    (Some(m), None) => json!({"make": m, "models": crate::lcp::models(m)}),
+                    (Some(m), Some(l)) => {
+                        let v: Vec<Value> = crate::lcp::profiles(m, l)
+                            .into_iter()
+                            .map(|(name, path)| json!({"name": name, "file": path.file_name().map(|n| n.to_string_lossy().into_owned())}))
+                            .collect();
+                        json!({"make": m, "model": l, "profiles": v})
+                    }
+                })
+            }
+        ),
+        cmd!(
+            "lens.setProfile",
+            "Set Lens Profile",
+            [],
+            None,
+            "{make, model, file?} picks an installed profile by hand (Lightroom's Profile ▸ Make / Model / Profile; file = the profile's .lcp file name, default the model's first) · {auto: true} the one for the photo's lens (Set Lens) · {clear: true} none (the file's own lens data) → {profile} — applied only while Enable Profile Corrections is on",
+            has_active,
+            |s, p| {
+                let id = active(s, "lens.setProfile")?;
+                let photo = s.catalog.photo(id).cloned().ok_or_else(|| bad("lens.setProfile", "no photo"))?;
+                let chosen = if bool_or(p, "clear", false) {
+                    None
+                } else if bool_or(p, "auto", false) {
+                    crate::lcp::auto_for(&photo)
+                } else {
+                    let make = str_param(p, "make").map(str::trim).unwrap_or("");
+                    let model = str_param(p, "model").map(str::trim).unwrap_or("");
+                    let file = str_param(p, "file").map(str::trim).unwrap_or("");
+                    let list = crate::lcp::profiles(make, model);
+                    let path = list
+                        .iter()
+                        .find(|(_, path)| file.is_empty() || path.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(file)))
+                        .map(|(_, path)| path.clone())
+                        .ok_or_else(|| bad("lens.setProfile", format!("no installed profile for {make} {model} {file}")))?;
+                    let mut r = crate::lcp::reference(&path).ok_or_else(|| bad("lens.setProfile", "that profile can't be read"))?;
+                    r.custom = true;
+                    Some(r)
+                };
+                let name = chosen.as_ref().map(|r| r.name.clone());
+                edit(s, "lens.setProfile", "Lens Profile", |d| {
+                    d.optics.lens_profile_ref = chosen;
+                    Ok(())
+                })?;
+                Ok(json!({"profile": name}))
+            }
+        ),
+        cmd!(
+            "lens.profileCorrections",
+            "Enable Profile Corrections",
+            [],
+            None,
+            "{on: bool} — Lens Corrections ▸ Enable Profile Corrections; turning it on with no profile picked takes the installed profile for the photo's lens (Set Lens) when the file has no lens data of its own → {on, profile}",
+            has_active,
+            |s, p| {
+                let id = active(s, "lens.profileCorrections")?;
+                let on = bool_or(p, "on", true);
+                let photo = s.catalog.photo(id).cloned().ok_or_else(|| bad("lens.profileCorrections", "no photo"))?;
+                let auto = if on && photo.develop.optics.lens_profile_ref.is_none() { crate::lcp::auto_for(&photo) } else { None };
+                edit(s, "lens.profileCorrections", "Lens Corrections", |d| {
+                    d.optics.lens_profile = on;
+                    if auto.is_some() {
+                        d.optics.lens_profile_ref = auto;
+                    }
+                    Ok(())
+                })?;
+                let d = s.develop_of(id).unwrap_or_default();
+                Ok(json!({"on": d.optics.lens_profile, "profile": d.optics.lens_profile_ref.as_ref().map(|r| r.name.clone())}))
+            }
+        ),
         cmd!(
             "crop.drag",
             "Drag Crop Handle",
