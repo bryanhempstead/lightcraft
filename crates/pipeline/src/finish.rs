@@ -936,7 +936,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     let key = p99 + ev;
                     let m = crate::colorops::pp_matrices();
                     let q = mul3(&m.0, c);
-                    let q = q.map(|v| if v > 0.0 { v * crate::dehaze_cr::gain(dz.max(-1.0), key, crate::dehaze_cr::level(v)).exp2() } else { v });
+                    // round 13: read at the regional level, the luminance detail scaled by (1 + s)
+                    let detail = p.dz_blur.as_ref().and_then(|b| Some(p.log_l.data.get(i)? - b.data.get(i)?)).unwrap_or(0.0);
+                    let s_dz = dz.max(-1.0);
+                    let q =
+                        q.map(|v| if v > 0.0 { v * crate::dehaze_cr::gain_spatial(s_dz, key, crate::dehaze_cr::level(v), detail).exp2() } else { v });
                     c = mul3(&m.1, q);
                 } else {
                     let k = (-dz).min(1.0) * 0.7 * (0.35 + 0.65 * d);

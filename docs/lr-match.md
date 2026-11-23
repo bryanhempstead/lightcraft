@@ -1418,3 +1418,114 @@ L1007494). JPEG exports now carry the colour map; AVIF stays single-channel (mac
 colour map: the file opened as its SDR base). ImageIO adapts a gain map to the screen's current
 headroom (here about 2.5–2.9 stops), so files whose map reaches 3.5–4 stops decode lower on this Mac —
 by design, the same adaptation the loupe now uses. Not checked: Chrome and Lightroom reading the files.
+
+## Round 13 (2026-11-22): the acceptance set on Camera Raw, grouped radials, negative Dehaze's spatial part
+
+### The acceptance set, re-made with Camera Raw as its ground truth
+
+Round 12's acceptance folder (Lightroom's stored previews of 183 photos) was lost with the scratch disk, and the
+catalog's `Previews.lrdata` is no longer on this Mac, so the set could not be rebuilt from Lightroom's previews.
+Camera Raw is Lightroom's renderer, so the set's ground truth is now Camera Raw's render of each photo with its
+**whole catalog edit**: `oracle/luaxmp.py` turns the catalog's Lua develop settings into XMP (sliders, point
+curves, the look with its RGB table taken from the installed settings, masks, crop, lens, detail),
+`oracle/make_acc.py pick` copies each original into the work folder with that XMP beside it (a sidecar; JPEGs get it
+embedded as standard + Extended XMP, since Camera Raw ignores a JPEG's sidecar) and `make_acc.py finish` turns the
+16-bit ProPhoto TIFFs into the `lr_compare.py` "previews" (Adobe RGB, Bradford-adapted). Then `migrate / render /
+compare --no-publish / gate` exactly as before. Two things had to be right for the renders to be Lightroom's: the
+catalog leaves crop edges at their default out of its table, and Camera Raw ignores a crop missing any of them
+(30 photos rendered uncropped until `luaxmp` filled them in); and a DNG's sidecar is honoured (checked: Exposure ±3
+in the sidecar moved the render by the expected amount).
+
+The set: the `acceptance.json` cells (Summer Fields / Nautica / Adobe Color / Monochrome × M262 / R6 PV5 + PV6 /
+GR III / X-T2 / X100F / iPhone JPEG + ProRAW; the Q2's originals are not readable), the photos earlier rounds'
+oracle sets name, and 30 more edited raws with masks — **206 photos, 190 edited, 36 with masks** (seed 13, split
+A 98). Its numbers are not comparable with rounds 1–12's (another ground truth, other photos). Photoshop is shared
+with the other oracle users through `oracle/psq.sh` (a lock directory, `/private/tmp/lightcraft-photoshop.lock`,
+only missing outputs rendered, a watchdog that gives up after 300 s without a new render instead of waiting on a
+hidden modal dialog — Photoshop hung on one this round and had to be force-quit).
+
+| run | ΔE | p95 | pass | masked photos (36) |
+|---|---|---|---|---|
+| main (`base2`) | 4.85 | 12.2 | 33 | 5.80 / 1 passing |
+| + negative Dehaze's spatial part (`dz`) | 4.85 | 12.2 | 33 | — (few of the 206 use it) |
+| + grouped radials' `Flipped` ignored (`r13`) | **4.65** | **11.8** | **34** | **4.61** / 2 |
+
+**Gate: pass** (every cell within tolerance; Summer Fields · R6 · PV6 4.92 → 3.86, Monochrome · M262 4.02 → 2.83,
+Summer Fields · X100F · PV6 4.91 → 3.83, Summer Fields · M262 5.29 → 5.34 within the 0.15 tolerance).
+
+### Grouped radial masks: Camera Raw ignores `crs:Flipped` (R16)
+
+The 36 masked photos rendered once more without their masks (both sides) split the gap: with masks 6.22 ΔE, without
+4.63, and the masks' own effect (render with − without, L* at 96 px) Camera Raw against ours 4.53 L* RMS. On seven R6
+and X100F photos Camera Raw's mask effect was **0.01–0.02 L***, ours ~7: a small radial (5 % of the frame, Bryan's
+"Mask 1" with Shadows +71) whose `Flipped = true` we read as "affect the outside". A flat-field probe (radial,
+Exposure +4, every `Flipped` × `MaskInverted` × mask `Version`) shows Camera Raw puts a grouped radial's effect
+inside unless `MaskInverted`, whatever `Flipped` says. `crs_masks` now ignores `Flipped` inside
+`MaskGroupBasedCorrections` (the legacy radial container keeps it): probe 28.8–30.1 → 0.30–1.42 ΔE, masked photos
+5.80 → 4.61, the one Adobe Monochrome portrait 16.1 → 4.2. Libraries migrated earlier keep the inverted radials until
+they are migrated again.
+
+### Negative Dehaze's spatial part (R21)
+
+New probes (`oracle/make_r13.py SET deh`, `r13deh.py`): flat fields, full-frame gratings (3–144 px, amplitude and
+level variants), checkerboards, a step edge and thin lines, at Dehaze −25 / −50 / −100. Camera Raw
+
+- leaves a flat field exactly as it is (ours lifted it +0.11 EV at −50);
+- keeps **×(1 + s)** of the log contrast at every period and amplitude (×0.75 / 0.50 / 0.00; ours 0.81 / 0.62 / 0.25),
+  so detail is scaled, not curved;
+- lifts a region by how far its blurred level sits below the photo's brightest: an edge's dark half (3 EV down)
+  +1.55 EV at −50, the bright half 0.00; gratings of ≥ 21 px +0.27, of 8–13 px 0.00 (their blurred level is flat, at
+  the key), of 3–5 px −0.16 / −0.24 (not modelled).
+
+So the curve (`dehaze_cr`, RAWmakase's) is now read at each channel's level less the luminance detail — log
+luminance less its Gaussian of σ 0.4 % of the long edge —, the detail is scaled by (1 + s), and the key is the 99.9th
+percentile of that blurred luminance (`dehaze_cr::SPATIAL`, CPU and GPU: the blurred level rides after the dark
+channel in the GPU's `dark` buffer; equivalence tests pass). Variants of σ (0.4 / 0.8 %), key (pixels' p99 / blurred
+p99 / p99.9) and detail weight were rendered on all three sets:
+
+| ΔE2000 against Camera Raw | before | after |
+|---|---|---|
+| probes −25 / −50 / −100 (24 scenes each) | 1.24 / 2.46 / 5.13 | **0.85 / 1.63 / 3.37** |
+| Bryan's raws −25 / −50 (9) | 1.80 / 3.50 | **1.75 / 3.33** |
+| synthetic scenes (grid, spatial, land, room, frequency) | 2.30 | 2.36 (grid −50 3.33 → 3.84, spatial 2.21 → 1.85) |
+
+Left: flat fields still lift (the table is not 0 at the key), the 3–5 px mean drop, and the real raws' remaining
+3.3 ΔE at −50 (mostly colour).
+
+### Highlights / Shadows: same-sign pairs measured, not changed (R02)
+
+Re-rendered round 12's H/S set (168 Camera Raw renders, 22 of Bryan's raws). With both sliders up RAWmakase's pair
+blend spreads Highlights' gain towards its extreme over the whole photo; dropping that share
+(`LIGHTCRAFT_HS_PAIR=0,1,0`) takes the R6 night photos at Shadows +69 / Highlights +30 from 3.62 to 1.88 ΔE (all
+five same-sign photos' own Basic tone 2.53 → 2.41), and keeping Shadows' share or scaling the opposite-sign pairs
+only hurts. But that pair is round 8's M262 recipe put on R6 night photos; Bryan's own same-sign edits are his
+daylight M262 / GR III Summer Fields photos, and on the acceptance set the change darkens them (Summer Fields · M262
++0.24, a gate failure). So RAWmakase's fractions stay (`scene_cr::PAIR_SCALE`, all 1). The "Summer Fields M262 2.3
+L* darker" of round 12 is, on the new ground truth, three photos 6–11 L* dark (H +6…+100 with S +69…+73,
+ParametricLights +31…+67) — two of them straightened crops (below), which this comparison misreads. Their recipe
+split part by part (Camera Raw and LightCraft each without the parametric curve, the point curve, the look, HSL,
+Calibration, H/S or detail) only aligns on the two uncropped photos: 8647563 is already 1.71 ΔE, and on 8551144
+(−2.2 L*) dropping H/S takes 2.66 → 1.56 and dropping the parametric curve 2.08, so both H/S and the parametric
+curve add to the dark M262 renders; not resolved this round.
+
+### Clarity's regional move (R21): measured, not changed
+
+New flat two-level layouts (`make_r13.py SET cla`, `r13cla.py`; no texture, so every change is regional). At +100
+Camera Raw leaves both halves of a −1 | −4 EV split exactly alone (no halo at 3 px from the edge), lifts a dark
+−7 EV bottom by +0.6 EV everywhere, and darkens a 200 px dark square (−5 EV) inside a bright field by **−4.2 EV**
+(L* 20.6 → 1.5) uniformly to its centre, while a bright square in a dark field is left alone. Ours makes halos at the
+straight edges (−1.2 EV next to them, fading over ~300 px) and darkens the square only −1.8. So the regional move is
+not a large-radius local contrast: it depends on a region's size and level against the whole photo (more like a
+histogram-adaptive global curve with an edge-preserving region term). Refitting Clarity with extra large-scale
+features (`clafit13.py`, Gaussian σ 15 % / 35 %, leave one scene out) generalized worse than the current weights
+(+100: 0.36 → 0.52 EV RMS). Only 8 of Bryan's 16,823 photos use positive Clarity; left for a model of that region term.
+
+### Found: straightened crops come out the wrong shape (LR-EDIT-CROP)
+
+On the new set 71 photos carry a `CropAngle`; their crop's aspect is off by 5.9 % on average, growing with the angle
+(a 4:5 crop at 1.4° renders 0.841 instead of 0.800). The error is θ·(r + 1/r) to 0.25 % on all 71 (θ the angle in
+radians, r the crop's aspect): Lightroom's `CropLeft / Top / Right / Bottom` are two *opposite corners of the rotated
+crop* in the unrotated image's normalized coordinates, while `crs.rs` reads them as an axis-aligned rectangle in the
+rotated frame. The fix belongs to `crates/engine` (`crs::to_partial`, needs the image's aspect) and a repair of
+migrated libraries; not done this round. Until then those photos compare after the gate's alignment search, which
+absorbs part of it.

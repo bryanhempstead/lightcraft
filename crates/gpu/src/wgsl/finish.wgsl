@@ -746,11 +746,11 @@ fn hs_lut_at(ev: f32) -> f32 {
 }
 
 // `dehaze_cr::gain` applied to a channel `v` at Dehaze `s` (−1..0), tables at DZ_OFF.
-fn dz_cr(s: f32, v: f32) -> f32 {
+fn dz_cr(s: f32, v: f32, det: f32) -> f32 {
     if (v <= 0.0 || s >= 0.0) {
         return v;
     }
-    let level = log2(max(v, 6.1035156e-5));
+    let level = log2(max(v, 6.1035156e-5)) - det;
     let x = clamp((level - pf(F_DZ_KEY) + 12.0) / 13.0 * 48.0 - 0.5, 0.0, 47.0);
     let i = min(u32(x), 46u);
     let f = x - f32(i);
@@ -766,7 +766,7 @@ fn dz_cr(s: f32, v: f32) -> f32 {
     } else {
         g = b2 * (s / -0.2);
     }
-    return v * exp2(g);
+    return v * exp2(g + s * det);
 }
 
 // `local_tone_cr::at`: table `k` (0 Contrast, 1 Whites, 2 Blacks) at amount `a`, level `l1`.
@@ -1235,7 +1235,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Camera Raw's negative Dehaze (`dehaze_cr`): a curve per ProPhoto channel
             let q = mul3(ad_mat(F_PP_TO), c);
             let s = max(dz, -1.0);
-            c = mul3(ad_mat(F_PP_FROM), vec3<f32>(dz_cr(s, q.x), dz_cr(s, q.y), dz_cr(s, q.z)));
+            // round 13: the curve at the regional level, the luminance detail scaled by (1 + s)
+            var det = 0.0;
+            if (pu(F_DZ_SP_OFF) != 0u) {
+                det = log_l[i] - dark[pu(F_DZ_SP_OFF) + i];
+            }
+            c = mul3(ad_mat(F_PP_FROM), vec3<f32>(dz_cr(s, q.x, det), dz_cr(s, q.y, det), dz_cr(s, q.z, det)));
         } else {
             let k = min(-dz, 1.0) * 0.7 * (0.35 + 0.65 * d);
             c = c + (air * 0.9 - c) * k;

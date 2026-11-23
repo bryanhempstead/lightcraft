@@ -28,6 +28,44 @@ const TABLES: [[f32; 48]; 6] = [
     [1.5139, 1.3648, 1.2157, 1.0666, 0.9175, 0.7684, 0.6193, 0.4702, 0.3211, 0.1720, 0.0229, -0.1263, -0.2745, -0.4141, -0.5277, -0.5927, -0.6392, -0.7127, -0.6795, -0.6096, -0.7216, -0.9731, -1.0807, -1.1210, -1.1462, -1.1115, -1.0462, -1.0240, -1.0122, -0.9857, -0.9890, -0.9750, -0.8771, -0.8607, -0.8664, -0.7553, -0.7529, -0.7319, -0.8617, -0.8765, -0.8850, -1.0829, -0.8554, -0.5386, -0.2762, -0.2647, -0.1875, 0.0132],
 ];
 
+/// Round 13's spatial part (`docs/lr-match.md` → Round 13). On flat fields, full-frame gratings, edges and lines
+/// Camera Raw's negative Dehaze leaves a flat image exactly as it is, keeps ×(1 + s) of the contrast of detail at
+/// every scale, and lifts a region's mean only by how far the region's *blurred* level sits below the photo's
+/// brightest blurred level (fine gratings keep their mean). So the curve is read at each channel's level less the
+/// luminance detail — log luminance less its Gaussian of σ [`SIGMA`] × the long edge — the detail itself is scaled
+/// by (1 + s), and the key is the [`KEY_PERCENTILE`]th percentile of the blurred luminance. Probes 2.94 → 1.95 ΔE,
+/// Bryan's raws at −50 3.50 → 3.33.
+pub const SPATIAL: bool = true;
+/// σ of the regional level, as a fraction of the long edge.
+pub const SIGMA: f32 = 0.004;
+/// The key's percentile of the regional level.
+pub const KEY_PERCENTILE: f32 = 99.9;
+
+/// The key (log2, before exposure) from the regional level's values ([`crate::local`]'s `log_l` blurred, over
+/// [`crate::tone::GREY`]), every `step`-th value; `None` without finite values.
+pub fn key_of(values: impl Iterator<Item = f32>) -> Option<f32> {
+    if !SPATIAL {
+        return p99_of(values);
+    }
+    let mut v: Vec<f32> = values.filter(|v| v.is_finite()).map(|v| v.clamp(-20.0, 10.0)).collect();
+    if v.is_empty() {
+        return None;
+    }
+    let n = v.len();
+    let i = ((KEY_PERCENTILE / 100.0 * n as f32) as usize).min(n - 1);
+    Some(*v.select_nth_unstable_by(i, f32::total_cmp).1 + crate::tone::GREY.log2())
+}
+
+/// log2 gain of a channel at `level` whose pixel's luminance detail (log luminance less its regional level) is
+/// `detail`: the curve at the regional level, plus the detail scaled by (1 + s).
+#[inline]
+pub fn gain_spatial(s: f32, key: f32, level: f32, detail: f32) -> f32 {
+    if s.is_nan() || s >= 0.0 || !detail.is_finite() {
+        return gain(s, key, level);
+    }
+    gain(s, key, level - detail) + s.max(-1.0) * detail
+}
+
 /// The tables after RAWmakase's `monotone` projection: output log luminance (input + gain)
 /// never decreases along a row (pool adjacent violators, done once).
 fn tables() -> &'static [[f32; 48]; 6] {

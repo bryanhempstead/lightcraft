@@ -146,7 +146,10 @@ pub(crate) fn person_part(cat: &str) -> Option<&'static str> {
     })
 }
 
-fn component(m: &XmpValue, aspect: f64) -> Result<Value, String> {
+/// One mask component. `group`: it belongs to a `MaskGroupBasedCorrections` correction, where Camera Raw ignores a
+/// radial's `crs:Flipped` (round 13, measured: Flipped × MaskInverted on a flat field — only `MaskInverted` moves
+/// the effect outside; Lightroom keeps `Flipped = true` on many of Bryan's radials whose effect sits inside).
+fn component(m: &XmpValue, aspect: f64, group: bool) -> Result<Value, String> {
     let what = text(m, "crs:What").unwrap_or("");
     let op = match num(m, "crs:MaskBlendMode").unwrap_or(0.0) as i64 {
         1 => "subtract",
@@ -171,7 +174,7 @@ fn component(m: &XmpValue, aspect: f64) -> Result<Value, String> {
                 "ry": ((b - t).abs() / 2.0 * sy).max(1e-3),
                 "angle": g("Angle", 0.0),
                 "feather": g("Feather", 50.0).clamp(0.0, 100.0),
-                "invert": flag(m, "crs:Flipped").unwrap_or(false),
+                "invert": !group && flag(m, "crs:Flipped").unwrap_or(false),
             })
         }
         "Mask/Paint" => {
@@ -253,7 +256,7 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             let comps = c.field("crs:CorrectionMasks").map(XmpValue::items).unwrap_or_default();
             let mut parts = Vec::new();
             for m in comps {
-                match component(m, aspect) {
+                match component(m, aspect, container == "crs:MaskGroupBasedCorrections") {
                     Ok(v) => parts.push(v),
                     Err(kind) => skipped.push(kind),
                 }
@@ -379,7 +382,8 @@ mod tests {
         let MaskShape::Radial { center, rx, ry, angle, feather, invert } = &rad.components[0].shape else { panic!() };
         assert!((center.x - 0.5).abs() < 1e-9 && (center.y - 0.5).abs() < 1e-9);
         assert!((rx - 0.3).abs() < 1e-9 && (ry - 0.2 / 1.5).abs() < 1e-9, "radii in long-edge units: {rx} {ry}");
-        assert_eq!((*angle, *feather, *invert), (10.0, 40.0, true));
+        // a grouped radial's `crs:Flipped` does not invert it (Camera Raw ignores it there)
+        assert_eq!((*angle, *feather, *invert), (10.0, 40.0, false));
         let MaskShape::LuminanceRange { lo, hi, lo_feather, .. } = &rad.components[1].shape else { panic!() };
         assert!(lo < hi && *lo_feather > 0.0);
         let brush = &s.masks[2];

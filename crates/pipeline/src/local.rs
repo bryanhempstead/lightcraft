@@ -264,8 +264,10 @@ pub(crate) struct Planes {
     pub texture_detail: Option<(u32, Arc<Rgb32f>)>,
     /// Dark channel and its airlight.
     pub dark: Option<(u32, Arc<Plane>, f32)>,
-    /// The 99th log2 luminance percentile ([`crate::dehaze_cr::p99_of`]).
+    /// Negative Dehaze's key ([`crate::dehaze_cr::key_of`]).
     pub p99: Option<f32>,
+    /// Negative Dehaze's regional level (`log_l` blurred, [`crate::dehaze_cr::SIGMA`]).
+    pub dz_blur: Option<(u32, Arc<Plane>)>,
     /// Blurred chromaticity (local Moiré / Noise).
     pub chroma: Option<(u32, Arc<Rgb32f>)>,
     /// Camera Raw's scene tone map and haze ([`crate::scene_cr`]; `None` inside: the image is empty).
@@ -311,6 +313,8 @@ pub struct PlaneSigmas {
     pub dark: Option<f32>,
     /// Chromaticity blur for local Moiré / colour noise (Gaussian).
     pub chroma: Option<f32>,
+    /// Negative Dehaze's regional level (Gaussian of `log_l`, [`crate::dehaze_cr::SIGMA`]).
+    pub dz: Option<f32>,
 }
 
 pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
@@ -334,7 +338,8 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
     let texture = (texture_old || local_any(|a| a.noise) || s.masks.iter().any(|m| m.adjust.defringe > 0.0)).then(|| (0.0018 * ppl).max(0.6));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
     let chroma = (local_any(|a| a.moire) || s.masks.iter().any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
-    PlaneSigmas { base, clarity, texture, dark, chroma }
+    let dz = (crate::dehaze_cr::SPATIAL && dehaze_key_needed(s)).then(|| (crate::dehaze_cr::SIGMA * ppl).max(0.5));
+    PlaneSigmas { base, clarity, texture, dark, chroma, dz }
 }
 
 /// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
@@ -373,7 +378,7 @@ pub(crate) fn prepare(
             p
         }
     });
-    let PlaneSigmas { base: base_sigma, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma } =
+    let PlaneSigmas { base: base_sigma, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma, dz: dz_sigma } =
         plane_sigmas(s, px_per_long, q);
 
     let Planes { base: sb, clarity: sc, texture: st, dark: sd, chroma: sch, .. } = planes;
@@ -423,9 +428,14 @@ pub(crate) fn prepare(
         Some((d, air)) => (Some(d), air),
         None => (None, 1.0),
     };
+    let dz_blur = dz_sigma.map(|sg| plane_at(&mut planes.dz_blur, sg, || timed("dehaze level", || gaussian(&log_l, sg))));
     let p99 = match (dehaze_key_needed(s), planes.p99) {
         (true, None) => {
-            let k = crate::dehaze_cr::p99_of(log_l.data.iter().step_by(crate::tone::lr::KEY_STEP).copied());
+            let step = crate::tone::lr::KEY_STEP;
+            let k = match &dz_blur {
+                Some(b) => crate::dehaze_cr::key_of(b.data.iter().step_by(step).copied()),
+                None => crate::dehaze_cr::p99_of(log_l.data.iter().step_by(step).copied()),
+            };
             planes.p99 = k;
             k
         }
@@ -452,6 +462,7 @@ pub(crate) fn prepare(
         texture_detail,
         dark,
         p99,
+        dz_blur,
         chroma_blur,
         air,
         masks,

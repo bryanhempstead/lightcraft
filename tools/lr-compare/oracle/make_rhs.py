@@ -47,7 +47,7 @@ for sn, img in SCENES.items():
         dng.write_dng(f"{SET}/dng/{name}.dng", c, cam, info["spec"]["camera_white"], info, dng.xmp_packet(s, curves=dng.LINEAR))
         man.append(f"{os.path.abspath(SET)}/dng/{name}.dng\t{os.path.abspath(SET)}/acr/{name}.tif")
         meta[name] = {"scene": sn, "settings": st, "camera": cam}
-sample = {os.path.splitext(os.path.basename(p["path"]))[0]: p for p in json.load(open(f"{ACC}/sample.json"))}
+sample = {os.path.splitext(os.path.basename(p.get("original") or p["path"]))[0]: p for p in json.load(open(f"{ACC}/sample.json"))}
 cams = set()
 for stem in PHOTOS:
     p = sample[stem]

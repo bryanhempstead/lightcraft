@@ -48,7 +48,9 @@ struct Planes {
     texture_detail: Option<(u32, Arc<Buf>)>,
     dark: Option<(u32, Arc<Buf>, f32)>,
     chroma: Option<(u32, Arc<Buf>)>,
-    /// The 99th log2 luminance percentile (negative Dehaze, `dehaze_cr`).
+    /// Negative Dehaze's regional level (`dehaze_cr::SIGMA`).
+    dz: Option<(u32, Arc<Buf>)>,
+    /// Negative Dehaze's key (`dehaze_cr::key_of`).
     p99: Option<f32>,
     /// The tone statistics of `log_l` (`tone::lr::image_stats`).
     tone_stats: Option<lightcraft_pipeline::tone::lr::ToneStats>,
@@ -633,6 +635,7 @@ pub fn render(
         texture_detail: prep.texture_detail,
         tex_g_off: prep.tex_g_off,
         dark: prep.dark.is_some(),
+        dz_off: prep.dz_off,
         chroma: masks.is_some() && prep.chroma.is_some(),
     };
     let (p, aux) = finish_block(&fp, &terms, &present);
@@ -807,7 +810,9 @@ struct Prep {
     texture_gauss: bool,
     texture_detail: bool,
     tex_g_off: u32,
+    /// The dark channel, and after it (at `dz_off`, when not 0) negative Dehaze's regional level.
     dark: Option<Arc<Buf>>,
+    dz_off: u32,
     p99: Option<f32>,
     /// Blurred chromaticity (local Moiré / Noise).
     chroma: Option<Arc<Buf>>,
@@ -908,16 +913,32 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, inf
             }
         },
     };
+    // negative Dehaze's regional level (round 13), packed after the dark channel
+    let dz = sig.dz.map(|sg| plane_at(&mut planes.dz, sg, || gaussian(cx, &log_l, w, h, 1, sg)));
+    let (dark, dz_off) = match (dark, &dz) {
+        (Some(d), Some(z)) => {
+            let b = cx.gpu.buffer(2 * n);
+            cx.copy_into(&d, &b, 0);
+            cx.copy_into(z, &b, n);
+            (Some(Arc::new(b)), n as u32)
+        }
+        (d, _) => (d, 0),
+    };
     // negative Dehaze's key, from the same every-KEY_STEP-th values the CPU reads
     let p99 = match (local::dehaze_key_needed(&plan.settings), planes.p99) {
         (true, None) => {
             let step = lightcraft_pipeline::tone::lr::KEY_STEP;
             let m = n.div_ceil(step);
             let sub = cx.gpu.buffer(m);
-            map(cx, "subsample", m, &[step as u32], [Some(&log_l), None, None], &sub);
+            let src = dz.as_deref().unwrap_or(&log_l);
+            map(cx, "subsample", m, &[step as u32], [Some(src), None, None], &sub);
             let v: Vec<f32> = cx.read(&sub, m);
             cx.flush();
-            let k = lightcraft_pipeline::dehaze_cr::p99_of(v.into_iter());
+            let k = if dz.is_some() {
+                lightcraft_pipeline::dehaze_cr::key_of(v.into_iter())
+            } else {
+                lightcraft_pipeline::dehaze_cr::p99_of(v.into_iter())
+            };
             planes.p99 = k;
             k
         }
@@ -944,7 +965,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, inf
     }
     let scene_map = if need_map { planes.scene_map.clone().flatten() } else { None };
     let haze = if need_haze { planes.haze.clone().flatten() } else { None };
-    Prep { log_l, base, clarity, texture, texture_gauss, texture_detail, tex_g_off, dark, p99, chroma, air, tone_stats, scene_map, haze }
+    Prep { log_l, base, clarity, texture, texture_gauss, texture_detail, tex_g_off, dark, dz_off, p99, chroma, air, tone_stats, scene_map, haze }
 }
 
 /// Most brush dabs the mask kernel evaluates per pixel (more: the CPU rasterizes the brush).

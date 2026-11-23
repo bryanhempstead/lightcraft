@@ -464,6 +464,31 @@ fn camera_raw_clarity_lifts_fine_and_coarse_detail() {
     }
 }
 
+/// Round 13: negative Dehaze keeps ×(1 + s) of fine detail's log contrast, as Camera Raw does at every period
+/// (the per-pixel curve alone kept ×0.62 at −50), and leaves a fine grating's mean level nearly where it was.
+#[test]
+fn negative_dehaze_scales_fine_detail_like_camera_raw() {
+    let src = Rgb32f::from_fn(512, 96, |x, _| [0.18 * 2f32.powf(-1.5 + 0.4 * (std::f32::consts::TAU * x as f32 / 4.0).sin()); 3]);
+    let stats = |img: &Rgb32f| {
+        let l: Vec<f32> = img.data.iter().map(|c| lightcraft_color::luminance_2020(*c).max(1e-6).log2()).collect();
+        let m = l.iter().sum::<f32>() / l.len() as f32;
+        (m, (l.iter().map(|v| (v - m).powi(2)).sum::<f32>() / l.len() as f32).sqrt())
+    };
+    let req = RenderRequest { space: crate::OutputSpace::ProPhoto, depth: crate::OutputDepth::F32Linear, ..RenderRequest::fit(512, 96) };
+    let lin = |s: &DevelopSettings| {
+        let r = render(&src, &SourceInfo::default(), s, &req);
+        let Some(crate::DeepImage { samples: crate::DeepSamples::F32(v), width, height, .. }) = r.deep else { panic!("no deep render") };
+        Rgb32f { width, height, data: v.chunks(3).map(|c| [c[0], c[1], c[2]]).collect() }
+    };
+    let mut s = DevelopSettings::default();
+    let (m0, k0) = stats(&lin(&s));
+    s.effects.dehaze = -50.0;
+    let (m1, k1) = stats(&lin(&s));
+    let ratio = k1 / k0;
+    assert!((0.42..0.56).contains(&ratio), "contrast ratio {ratio}");
+    assert!((m1 - m0).abs() < 0.3, "mean moved {m0} → {m1}");
+}
+
 /// Round 11: positive Dehaze (`scene_cr`, Camera Raw's haze model) darkens a hazy region and adds
 /// contrast, and leaves a scene without haze nearly alone at +30.
 #[test]
