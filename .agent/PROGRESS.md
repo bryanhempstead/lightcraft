@@ -6,19 +6,43 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
-- [ ] (Claude fix session, 2026-11-23 14:50) **Bryan's 11-23 list — in flight** (check each off when merged + verified):
-  - [x] sharp loupe/exports, console = one drag, fav. (tap/hold H), picked sliders, sync from first pick + Return = OK,
-    Edit In ⌘E → PhotoCraft (PSD, grain held back), wheel steps photos, merges. (merged from `merges-area`), Leica M
-    apertures (library repaired: 6,154), presets' Look → profile (`preset.linkLooks`: 29 linked), Set Lens + lens list,
-    center./dust. quick tools after a `|` in the tool strip (Settings ▸ Interface ▸ Quick tools), WB pick., file-type
+- [ ] (Claude fix session, 2026-11-23 16:20) **Bryan's 11-23 list — HANDOFF STATE (read this first)**
+  - DONE + in the running app: sharp loupe/exports, console = one drag, fav. (tap/hold H), picked sliders, sync from
+    first pick + Return = OK, Edit In ⌘E → PhotoCraft (PSD, grain held), wheel steps photos, merges. (merged),
+    Leica M apertures (6,154 repaired), presets' Look → profile (29 linked), Set Lens + lens list (Heliar 1:4.5/15,
+    Summicron-M 1:2/35, 1:2/50, Leitz Elmar 1:4/135), quick tools after `|` (center./dust.), WB pick., file-type
     tags, delete → next photo, crop grid while adjusting, no stale 1:1 tiles, every action bindable + searchable.
-  - [ ] English only (agent, branches `english-only` in ~/crafts/lightcraft-english and ~/crafts/photocraft-english)
-  - [ ] crop X dial also moves Y; lens profile corrections per lens; console preview speed (agent, `agent-crop-lens`)
-  - [ ] drag to reorder side panels + default-open; Enhance previews pan/zoom + accent `ok.`; left off restored on
-    launch (agent, `agent-panels-dialogs`)
-  - [ ] Second Brain's console editor and dev. share one set of files (agent)
-  - [ ] waiting on Bryan: one photo that looks "flat" (raw render matches macOS's raw engine in contrast on
-    L1001008.DNG); thumbnails vs loupe checked on one photo only — check a whole folder
+  - UNCOMMITTED ON MAIN (written, full ui-egui test run was in progress — rerun, fix, commit): picked slider takes
+    the wheel from anywhere (`widgets::take_wheel_for_picked_slider` in shortcuts::handle); edge tabs
+    (`panels::edge_toggles`); centre mask = darkening vignette + Settings ▸ Develop ▸ Center mask
+    (`settings::center_mask_rows`, `menus::default_center_mask` invert:true, −0.6 EV, feather 85); Ctrl+key →
+    ⌘ command when Ctrl+key unbound (`shortcuts::ctrl_as_cmd`, his NEBULA68B layer 1 has LCTL in the ⌘ spot);
+    Esc in Develop deselects (mask/spot, then multi-selection), never leaves Develop (`view.back`); WB dropper
+    cursor drawn at pointer + W toggles (`tool.wbPicker`). Tests updated in tests_keys.rs / tests_classic.rs.
+  - BRANCHES READY TO MERGE (one at a time, test after each): `english-only` (~/crafts/lightcraft-english
+    141cb56a4; PhotoCraft ~/crafts/photocraft-english 501c7f0 — merge there too, rebuild PhotoCraft app with
+    packaging/macos/package.sh --arch aarch64 + MACOS_SIGN_IDENTITY, re-install /Applications/PhotoCraft.app and
+    re-apply the green Ps icon from ~/crafts/photocraft-icon/photocraft-ps.icns, re-sign with --options runtime
+    --entitlements packaging/macos/entitlements.plist); `agent-panels-dialogs` (d21aaa5d0: panel reorder +
+    default-open, Enhance pan/zoom + accent ok., left-off resume at launch; may conflict in panels/edit.rs with lens work).
+  - AGENTS STILL RUNNING (worktrees): `agent-crop-lens` (~/crafts/lc-crop-lens: crop X dial moving Y, lens profile
+    corrections per lens, preview/console lag — Bryan: "still preview lag"), `agent-accents` (~/crafts/lc-accents:
+    up to 4 accent colours, wheel + presets, roles), `agent-map-tags` (~/crafts/lc-map-tags: no-GPS photos off the
+    map, void GPS fix (M262 GPSStatus=V → 6,474 photos at 0,0) + repair, lens placeholders "not selected" → none +
+    repair, place search/apply, keyword suggestions).
+  - TODO by me: `library.importRated` (engine/src/cmd/shoot.rs) must not overwrite stars changed in LightCraft
+    (only set when rating is 0 / keepExisting); after merges: restart LightCraft (log in ~/second-brain/.restarts.log,
+    `lightcraft-cli run --connect app.quit`, cp binary into target/release/LightCraft.app, codesign --identifier
+    ai.storyteller.lightcraft with F142493EF338CE19AF1072995A7AAA4961F53DE9, open -a … --args --no-demo --control 7980),
+    run repairs from map-tags (void GPS, lens placeholders) dry run first; delete agent worktrees' target/ dirs.
+  - Second Brain (agent done, UNCOMMITTED in ~/second-brain: cull previews keep raw orientation; LightCraft auto
+    send gets the landed folders not the drive root). Blocked on stale ~/second-brain/.agent/HOLD-REQUEST (Bryan:
+    needs.you #218/#219, question #220 photo app setting). ~/.hammerspoon dev. sync is committed (ddaa414).
+  - Hammerspoon/dev. macros (Ctrl→⌘) are the "Steam Deck modifier for keyboard macro" session's
+    (local_6e1fc28f…); LightCraft keymap's 22 Ctrl+Alt+Shift+letter Monogram codes stay (⌘⌥⇧ collides with 7 built-ins).
+  - A watcher keeps cargo/rustc at background QoS until ~19:00 (task in the session).
+  - Waiting on Bryan: a "flat" photo example (#217).
+
 - [ ] (merges agent, 2026-11-23, branch `merges-area`, not merged) **LC-MERGE-FIND: merges. — found photo merges in
   the sidebar** (Bryan: "recognize possible photo merges and put those in a separate area … on the side bar").
   Engine `crates/engine/src/merge_find.rs`: per folder, capture-time runs (body / lens / focal, a few s apart) →
