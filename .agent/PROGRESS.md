@@ -21,8 +21,13 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   an open dialog (`shortcuts::handle`). Settings ▸ Interface: automation clicks wait for a still widget and scroll a
   hidden one into view (`Headless::request`, `widgets::reveal_in_scroll` / `ask_reveal`, `control::Outcome::Retry`)
   — the 4 Settings tests broken by this morning's scrolling Interface tab pass again.
-  Left: a filter-bar heart toggle (only `fav:yes` search for now); merges. area; wheel-over-photo = next/previous
-  photo option + menu toggles; ⌘E → PhotoCraft (Bryan asked 11-23).
+  View ▸ Scroll Wheel ▸ "Mouse Wheel Steps Photos (⌘ Zooms)" (`WheelMode::Photos`, `detail::navigate_gesture`).
+  Photo ▸ Edit In: "Edit in <editor> ⌘E" + the editors in /Applications (`state::installed_editors`,
+  `cmd:app.externalEditor {app}`; Settings ▸ General quick picks photocraft. / photoshop. / default.). PhotoCraft
+  (~/crafts/photocraft, Bryan's fork) packaged with `packaging/macos/package.sh --arch aarch64` (his Apple Development
+  identity) and installed to /Applications/PhotoCraft.app; opening a TIFF with `open -a PhotoCraft` verified.
+  Left: a filter-bar heart toggle (only `fav:yes` search for now); merges. area (agent branch `merges-area`,
+  worktree ~/crafts/lightcraft-merges).
 - [x] (Claude fix session, 2026-11-23 09:02) **Lightroom-import repair APPLIED to Bryan's real library** (he OK'd it in the
   coordinator session: "oka fix it now"; it never ran there because the Mac was out of processes — Hammerspoon appboost
   spawn storm, fixed in ~/.hammerspoon). Backup first: `Backups/2026-11-23 pre-lr-repair/` (full catalog.snap, cmp-checked).

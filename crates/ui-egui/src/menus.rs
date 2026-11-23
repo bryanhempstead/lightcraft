@@ -195,6 +195,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.export", "Export…", None, "File"),
     ("dialog.syncLightroom", "Sync from Lightroom Classic…", None, "File"),
     ("photo.editInExternal", "Edit in External Editor", Some("Cmd+Shift+E"), "Photo"),
+    ("app.externalEditor", "Choose External Editor", None, ""),
     ("dialog.enhance", "Enhance…", Some("Ctrl+Alt+I"), "Photo"),
     ("dialog.mergeHdr", "HDR…", Some("Ctrl+H"), "Photo>Photo Merge"),
     ("dialog.mergePanorama", "Panorama…", Some("Ctrl+M"), "Photo>Photo Merge"),
@@ -1003,7 +1004,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             if let Some(m) = p.get("mode") {
                 match serde_json::from_value::<crate::state::WheelMode>(m.clone()) {
                     Ok(m) => app.ui.wheel = m,
-                    Err(_) => return Some(Err(format!("view.wheelZoom: mode {m} (auto, zoom or pan)"))),
+                    Err(_) => return Some(Err(format!("view.wheelZoom: mode {m} (auto, zoom, pan or photos)"))),
                 }
             }
             if let Some(s) = p.get("step") {
@@ -1560,6 +1561,13 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "app.about" => {
             app.ui.dialog = Some(Dialog::About);
             Ok(Value::Null)
+        }
+        "app.externalEditor" => {
+            // {app: "PhotoCraft" | "Adobe Photoshop 2026" | any app name | "" (the system default)}
+            if let Some(a) = p.get("app").and_then(Value::as_str) {
+                app.ui.settings.external_editor = a.trim().to_string();
+            }
+            Ok(json!({"app": app.ui.settings.external_editor}))
         }
         "photo.editInExternal" => {
             // render an edit copy (stacked on the original), then open it in the editor

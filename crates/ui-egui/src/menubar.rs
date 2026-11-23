@@ -216,6 +216,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "photo.saveMetadataToFile",
             "photo.readMetadataFromFile",
             "photo.reload",
+            "@Edit In",
             "app.showInFinder",
             "dialog.rename",
             "dialog.captureTime",
@@ -458,6 +459,25 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
                 MenuNode::Separator,
                 item("library.clearPreviews", Value::Null, "Discard Preview Cache", None, true, None),
             ]
+        }
+        // ⌘E opens the photo in the external editor; the editor is picked here (Settings ▸ General too)
+        "Edit In" => {
+            let current = app.ui.settings.external_editor.trim().to_string();
+            let name = if current.is_empty() { crate::i18n::tr("Default App").to_string() } else { current.clone() };
+            let mut v = vec![
+                item("photo.editInExternal", json!({}), format!("{} {name}", crate::i18n::tr("Edit in")), Some("Cmd+E"), has, None),
+                MenuNode::Separator,
+            ];
+            let mut choices = crate::state::installed_editors();
+            if !current.is_empty() && !choices.contains(&current) {
+                choices.push(current.clone());
+            }
+            for e in choices {
+                let on = e == current;
+                v.push(item("app.externalEditor", json!({"app": e}), e.clone(), None, true, Some(on)));
+            }
+            v.push(item("app.externalEditor", json!({"app": ""}), crate::i18n::tr("System Default"), None, true, Some(current.is_empty())));
+            v
         }
         "Set Rating" => (0..=5u8)
             .map(|r| {

@@ -230,7 +230,7 @@ pub(crate) fn scroll_zooms(mode: crate::state::WheelMode, mouse: bool, alt: bool
     match mode {
         WheelMode::Auto => mouse && !alt,
         WheelMode::Zoom => !alt,
-        WheelMode::Pan => false,
+        WheelMode::Pan | WheelMode::Photos => false,
     }
 }
 
@@ -259,6 +259,24 @@ pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp:
             i.modifiers.alt,
         )
     });
+    // Photos mode: each mouse-wheel notch over the photo steps a photo (down / towards you = next);
+    // ⌘-scroll still zooms (egui makes it a zoom), a trackpad still pans
+    if app.ui.wheel == crate::state::WheelMode::Photos && !touch && app.ui.wheel_mouse && factor == 1.0 {
+        let notches: Vec<f32> = ui.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::MouseWheel { unit, delta, modifiers, .. } if *unit != egui::MouseWheelUnit::Point && !modifiers.command && delta.y != 0.0 => Some(delta.y),
+                    _ => None,
+                })
+                .collect()
+        });
+        ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+        for d in notches.into_iter().take(4) {
+            let _ = app.run(if d < 0.0 { "library.next" } else { "library.previous" }, json!({}));
+        }
+        return false;
+    }
     if !touch && delta != egui::Vec2::ZERO && scroll_zooms(app.ui.wheel, app.ui.wheel_mouse, alt) {
         // one notch = one step; a trackpad's points scale the same way, so it feels continuous.
         // Down / towards you zooms out. Sideways (⇧-wheel) still pans on a mouse.

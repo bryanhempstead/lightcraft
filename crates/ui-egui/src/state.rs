@@ -537,16 +537,20 @@ pub enum WheelMode {
     Zoom,
     /// Every scroll pans (⌘-scroll and pinch zoom).
     Pan,
+    /// A mouse-wheel notch over the photo steps to the next / previous photo; ⌘-scroll and pinch
+    /// zoom, a trackpad pans (Bryan, 2026-11-23).
+    Photos,
 }
 
 impl WheelMode {
-    pub const ALL: [WheelMode; 3] = [WheelMode::Auto, WheelMode::Zoom, WheelMode::Pan];
+    pub const ALL: [WheelMode; 4] = [WheelMode::Auto, WheelMode::Zoom, WheelMode::Pan, WheelMode::Photos];
 
     pub fn label(self) -> &'static str {
         match self {
             WheelMode::Auto => "Mouse Wheel Zooms, Trackpad Pans",
             WheelMode::Zoom => "Scrolling Zooms",
             WheelMode::Pan => "Scrolling Pans",
+            WheelMode::Photos => "Mouse Wheel Steps Photos (⌘ Zooms)",
         }
     }
 
@@ -555,8 +559,25 @@ impl WheelMode {
             WheelMode::Auto => "auto",
             WheelMode::Zoom => "zoom",
             WheelMode::Pan => "pan",
+            WheelMode::Photos => "photos",
         }
     }
+}
+
+/// Photo editors found in /Applications for Edit In (⌘E): PhotoCraft first, then Photoshop. Read
+/// once per run (the menu bar is rebuilt every frame).
+pub fn installed_editors() -> Vec<String> {
+    static FOUND: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    FOUND
+        .get_or_init(|| {
+            let mut names: Vec<String> = std::fs::read_dir("/Applications")
+                .map(|d| d.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".app")).map(str::to_string)).collect())
+                .unwrap_or_default();
+            names.retain(|n| n == "PhotoCraft" || n.starts_with("Adobe Photoshop") || n == "Pixelmator Pro" || n.starts_with("Affinity Photo"));
+            names.sort_by_key(|n| (n != "PhotoCraft", n.clone()));
+            names
+        })
+        .clone()
 }
 
 /// How much one wheel notch (40 points of scrolling) zooms, in percent: fine, normal, coarse, double.

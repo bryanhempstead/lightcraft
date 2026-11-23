@@ -392,6 +392,35 @@ fn sync_copies_from_the_first_pick_and_return_presses_ok() {
     }
 }
 
+/// View ▸ Scroll Wheel ▸ photos: a mouse-wheel notch over the photo steps a photo (down = next),
+/// ⌘-scroll still zooms; Photo ▸ Edit In picks the ⌘E editor (Bryan, 2026-11-23).
+#[test]
+fn wheel_steps_photos_and_edit_in_picks_the_editor() {
+    let mut h = demo();
+    h.request("ui.set", json!({"view": "detail"}), T);
+    exec(&mut h, "view.wheelZoom", json!({"mode": "photos"}));
+    h.step();
+    let first = h.app.session.active().unwrap();
+    let img = h.app.image_rect.unwrap();
+    h.request("ui.move", json!({"x": img.center().x, "y": img.center().y}), T);
+    h.request("ui.scroll", json!({"dy": -1.0, "unit": "line"}), T);
+    h.step();
+    let second = h.app.session.active().unwrap();
+    assert_ne!(second, first, "a notch down = the next photo");
+    h.request("ui.scroll", json!({"dy": 1.0, "unit": "line"}), T);
+    h.step();
+    assert_eq!(h.app.session.active(), Some(first), "a notch up = back");
+    assert!(matches!(h.app.ui.zoom, crate::state::Zoom::Fit), "stepping never zoomed");
+    // Edit In: the editor list and the choice
+    exec(&mut h, "app.externalEditor", json!({"app": "PhotoCraft"}));
+    assert_eq!(h.app.ui.settings.external_editor, "PhotoCraft");
+    let photo = crate::menubar::menu_bar(&h.app).into_iter().find(|(t, _)| t == "Photo").unwrap().1;
+    let text = format!("{photo:?}");
+    assert!(text.contains("Edit in PhotoCraft"), "the menu names the editor: {text}");
+    exec(&mut h, "app.externalEditor", json!({"app": ""}));
+    assert!(h.app.ui.settings.external_editor.is_empty(), "system default");
+}
+
 /// A console slider moved through 20 positions is one drag: draft renders while it moves, then one
 /// history step once it has been still ([`crate::keymap::CONSOLE_SETTLE`]) — not 20 committed edits
 /// (Bryan, 2026-11-23: the Monogram lagged behind Lightroom).

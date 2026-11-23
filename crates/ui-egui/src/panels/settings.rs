@@ -210,6 +210,20 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             .add(egui::TextEdit::singleline(&mut app.ui.settings.external_editor).hint_text(crate::i18n::tr("System default")).desired_width(220.0));
         register(ui.ctx(), "field:externalEditor", r.rect);
     });
+    // one click to switch (the same list as Photo ▸ Edit In)
+    row(ui, t, "", |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let current = app.ui.settings.external_editor.clone();
+        for e in crate::state::installed_editors() {
+            let label = if e == "PhotoCraft" { "photocraft.".to_string() } else if e.starts_with("Adobe Photoshop") { "photoshop.".to_string() } else { format!("{}.", e.to_lowercase().replace(' ', ".")) };
+            if crate::widgets::text_button(ui, &format!("editor-{e}"), &label, current == e).clicked() {
+                app.ui.settings.external_editor = e.clone();
+            }
+        }
+        if crate::widgets::text_button(ui, "editor-default", "default.", current.trim().is_empty()).clicked() {
+            app.ui.settings.external_editor.clear();
+        }
+    });
     hint(
         ui,
         t,
