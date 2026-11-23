@@ -27,6 +27,9 @@ pub enum LibrarySource {
     /// A published collection (LRC-LIB-PUBLISH, [`crate::publish`]): its photos grouped New,
     /// Modified, Published, Deleted.
     Published(u64),
+    /// merges.: the photo merges found in a folder or collection ([`crate::Session::merges_scope`],
+    /// [`crate::merge_find`]), grouped, then its merged photos.
+    Merges,
 }
 
 /// The folder a [`LibrarySource::Folder`] view shows.
@@ -63,7 +66,7 @@ impl LibrarySource {
             LibrarySource::RecentlyDeleted => f.deleted = true,
             LibrarySource::Picks => f.flag = Some(lightcraft_catalog::Flag::Pick),
             // the folder itself is filled in by the session (it holds the path)
-            LibrarySource::Folder | LibrarySource::Missing | LibrarySource::LibraryFolder | LibrarySource::Published(_) => {}
+            LibrarySource::Folder | LibrarySource::Missing | LibrarySource::LibraryFolder | LibrarySource::Published(_) | LibrarySource::Merges => {}
         }
         f
     }
@@ -80,6 +83,7 @@ impl LibrarySource {
             LibrarySource::LibraryFolder => "Folder".into(),
             LibrarySource::Missing => "Missing Photos".into(),
             LibrarySource::Published(c) => crate::publish::collection(cat, *c).map(|c| c.name).unwrap_or_else(|| "Published Collection".into()),
+            LibrarySource::Merges => "merges.".into(),
         }
     }
 }

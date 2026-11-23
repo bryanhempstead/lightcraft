@@ -162,6 +162,13 @@ pub struct Meta {
     pub aperture: Option<f32>,
     pub shutter: String,
     pub iso: Option<u32>,
+    /// Exposure compensation (EV) the camera recorded: brackets step it (merges., format v12).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exposure_bias: Option<f32>,
+    /// Focus (subject) distance in metres, when the camera recorded it: a focus stack steps it
+    /// (merges., format v12).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focus_distance: Option<f32>,
     /// Place (sublocation, e.g. a landmark).
     pub location: String,
     pub city: String,
@@ -306,6 +313,83 @@ pub struct Photo {
     /// whole clip, poster at its first frame. Format version 8.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video: Option<VideoEdit>,
+    /// Photo merges. (format version 12): a frame folded into a merged photo, or a merged photo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge: Option<MergeMark>,
+}
+
+/// What a photo merge made of a photo (merges.).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MergeMark {
+    /// A source frame: the merged photo that replaced it. It is hidden from every view (never
+    /// deleted, its file untouched) until it is unmerged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub into: Option<PhotoId>,
+    /// A merged photo: what kind of merge made it (the tag on its thumbnail).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<MergeType>,
+    /// A merged photo shown only in merges., not in its folder and collections (`merges.only.`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub only_merges: bool,
+}
+
+impl MergeMark {
+    /// Nothing set: the same as no mark.
+    pub fn is_empty(&self) -> bool {
+        *self == MergeMark::default()
+    }
+}
+
+/// The kinds of photo merge (merges.): HDR from brackets, panorama, focus stack, HDR panorama.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeType {
+    Hdr,
+    Pano,
+    Stack,
+    HdrPano,
+}
+
+impl MergeType {
+    pub const ALL: [MergeType; 4] = [MergeType::Hdr, MergeType::Pano, MergeType::Stack, MergeType::HdrPano];
+    /// `hdr`, `pano`, `stack`, `hdrPano` (commands, records).
+    pub fn id(self) -> &'static str {
+        match self {
+            MergeType::Hdr => "hdr",
+            MergeType::Pano => "pano",
+            MergeType::Stack => "stack",
+            MergeType::HdrPano => "hdrPano",
+        }
+    }
+    /// The label on thumbnails and buttons: `hdr.`, `pano.`, `stack.`, `hdr.pano.`.
+    pub fn tag(self) -> &'static str {
+        match self {
+            MergeType::Hdr => "hdr.",
+            MergeType::Pano => "pano.",
+            MergeType::Stack => "stack.",
+            MergeType::HdrPano => "hdr.pano.",
+        }
+    }
+    /// The Photo Merge command that makes it.
+    pub fn command(self) -> &'static str {
+        match self {
+            MergeType::Hdr => "merge.hdr",
+            MergeType::Pano => "merge.panorama",
+            MergeType::Stack => "merge.focus",
+            MergeType::HdrPano => "merge.hdrPanorama",
+        }
+    }
+    /// From an id, a tag or a Photo Merge kind (`hdr`, `pano.`, `panorama`, `focus`, `hdrPanorama`, `hdr.pano.`).
+    pub fn parse(s: &str) -> Option<MergeType> {
+        match s.trim().trim_end_matches('.').to_ascii_lowercase().replace(['.', '-', '_', ' '], "").as_str() {
+            "hdr" => Some(MergeType::Hdr),
+            "pano" | "panorama" => Some(MergeType::Pano),
+            "stack" | "focus" | "focusstack" => Some(MergeType::Stack),
+            "hdrpano" | "hdrpanorama" => Some(MergeType::HdrPano),
+            _ => None,
+        }
+    }
 }
 
 /// What the library keeps about a video (LR-VID-TRIM / LR-VID-COVER), in seconds from its start.
@@ -448,6 +532,7 @@ impl Photo {
             xmp_sync: None,
             original_name: None,
             video: None,
+            merge: None,
         }
     }
     /// Sets [`Photo::preview_only`] as this build decided it, with its stamp.
@@ -493,9 +578,20 @@ impl Photo {
         }
         d
     }
-    /// In the library: not deleted and not only browsed (Local).
+    /// In the library: not deleted, not only browsed (Local), and not hidden by a photo merge
+    /// ([`Photo::merge_hidden`]).
     pub fn in_library(&self) -> bool {
-        !self.deleted && !self.local
+        !self.deleted && !self.local && !self.merge_hidden()
+    }
+    /// Hidden from the library's views by merges.: a frame folded into a merged photo, or a merged
+    /// photo shown in merges. only. Never deleted; its file is untouched.
+    pub fn merge_hidden(&self) -> bool {
+        self.merge.is_some_and(|m| m.into.is_some() || m.only_merges)
+    }
+    /// The merge that made this photo: its mark, else the name merges give files (`-HDR.dng`,
+    /// `-Pano.dng`, `-HDR-Pano.dng`, `-Focus.dng`).
+    pub fn merge_type(&self) -> Option<MergeType> {
+        self.merge.and_then(|m| m.kind).or_else(|| crate::query::merged_kind(&self.file_name).and_then(MergeType::parse))
     }
     /// Edited by the user: settings differ from what import gave the photo.
     pub fn is_edited(&self) -> bool {

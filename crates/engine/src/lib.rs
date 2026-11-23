@@ -53,6 +53,7 @@ pub mod map;
 pub mod media;
 pub mod memory;
 pub mod merge;
+pub mod merge_find;
 pub mod originals;
 pub mod people;
 pub mod preset_import;
@@ -362,6 +363,10 @@ pub struct Session {
     xmp_synced_now: Vec<PhotoId>,
     /// L33: the running tethered capture, if any.
     pub tether: Option<cmd::tether::Tether>,
+    /// merges.: the folder or collection a [`LibrarySource::Merges`] view shows.
+    pub merges_scope: Option<merge_find::Scope>,
+    /// merges.: the finder looking on a worker thread ([`Session::merge_find_poll`]).
+    pub merge_find_job: Option<merge_find::FindJob>,
 }
 
 impl Default for Session {
@@ -467,6 +472,8 @@ impl Session {
             metadata_status: Default::default(),
             xmp_synced_now: Vec::new(),
             tether: None,
+            merges_scope: None,
+            merge_find_job: None,
         }
     }
 
@@ -954,6 +961,17 @@ impl Session {
             // the view fills in as the background checks find files gone
             key.1.push_str(&format!("|{}", self.media.availability.generation()));
         }
+        if self.source == LibrarySource::Merges {
+            key.1.push_str(&format!("|merges {:?}", self.merges_scope));
+        }
+        if self.visible_key.as_ref() != Some(&key) && self.source == LibrarySource::Merges {
+            // merges.: the groups of a folder or collection, then its merged photos (no filter)
+            let scope = self.merges_scope.clone().unwrap_or_default();
+            self.visible_base = merge_find::view_order(&self.catalog, &scope).into();
+            self.base_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.visible_key = Some(key);
+            return;
+        }
         if self.visible_key.as_ref() != Some(&key) {
             // "in the last N days" rules count back from the session's clock
             lightcraft_catalog::rules::set_now(Some((self.clock)()));
@@ -1067,6 +1085,9 @@ impl Session {
     pub fn source_total(&mut self) -> Option<usize> {
         if self.source == LibrarySource::Missing {
             return None;
+        }
+        if self.source == LibrarySource::Merges {
+            return Some(self.visible_unlocated().len());
         }
         let key = (
             self.catalog.revision,
@@ -1195,6 +1216,8 @@ mod tests_library;
 mod tests_map;
 #[cfg(test)]
 mod tests_merge;
+#[cfg(test)]
+mod tests_merges;
 #[cfg(test)]
 mod tests_metadata_status;
 #[cfg(test)]

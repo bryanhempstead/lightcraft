@@ -25,6 +25,8 @@ fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         aperture: m.f_number.map(|f| f as f32),
         shutter,
         iso: m.iso,
+        exposure_bias: m.exposure_bias.filter(|v| v.is_finite()).map(|v| v as f32),
+        focus_distance: m.subject_distance.filter(|v| v.is_finite() && *v > 0.0).map(|v| v as f32),
         location: m.sublocation.clone().unwrap_or_default(),
         city: m.city.clone().unwrap_or_default(),
         state: m.state.clone().unwrap_or_default(),

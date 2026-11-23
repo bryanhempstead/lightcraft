@@ -269,6 +269,12 @@ pub enum Op {
         key: String,
         value: Option<serde_json::Value>,
     },
+    /// What merges. made of a photo (`None` clears it): a frame folded into a merged photo
+    /// (hidden), or a merged photo's kind and where it shows. Format version 12.
+    SetMerge {
+        id: PhotoId,
+        merge: Option<MergeMark>,
+    },
     /// Several ops as one step (undo applies the inverses in reverse).
     Batch {
         ops: Vec<Op>,
@@ -392,7 +398,7 @@ impl Catalog {
         match self.albums.get(&id) {
             // counted in place: no id list is built just for its length
             Some(Album { smart: Some(_), .. }) => self.photos.values().filter(|p| self.album_contains(id, p)).count(),
-            Some(a) => a.photos.iter().filter(|p| self.photos.get(p).is_some_and(|p| !p.deleted)).count(),
+            Some(a) => a.photos.iter().filter(|p| self.photos.get(p).is_some_and(|p| !p.deleted && !p.merge_hidden())).count(),
             None => 0,
         }
     }
@@ -687,6 +693,10 @@ impl Catalog {
             Op::SetVideo { id, video } => {
                 let p = self.photo_mut(id)?;
                 Op::SetVideo { id, video: std::mem::replace(&mut p.video, video.filter(|v| !v.is_default())) }
+            }
+            Op::SetMerge { id, merge } => {
+                let p = self.photo_mut(id)?;
+                Op::SetMerge { id, merge: std::mem::replace(&mut p.merge, merge.filter(|m| !m.is_empty())) }
             }
             Op::SetRecord { key, value } => {
                 let key = key.trim().to_string();

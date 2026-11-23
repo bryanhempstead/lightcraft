@@ -473,3 +473,59 @@ fn random_sort_has_no_date_headers() {
     let ids = many(&mut c, 5);
     assert!(c.date_runs(&ids, SortKey::Random, GroupBy::Day).is_empty());
 }
+
+/// merges.: a frame folded into a merged photo leaves every view and count (never deleted), a
+/// merged photo kept in merges. only too; the op undoes and journals like any other.
+#[test]
+fn merge_marks_hide_frames_and_round_trip() {
+    let mut c = Catalog::new();
+    let a = photo(&mut c, "a.jpg", "2026-04-01T10:00:00");
+    let b = photo(&mut c, "b.jpg", "2026-04-01T10:00:01");
+    let m = photo(&mut c, "a-HDR.dng", "2026-04-01T10:00:00");
+    let al = c.alloc_album_id();
+    let mut album = Album::new(al, "Sunrise");
+    album.photos = vec![a, b, m];
+    c.apply(Op::AddAlbum { album }).unwrap();
+    let smart = c.alloc_album_id();
+    let mut s = Album::new(smart, "All JPEG");
+    s.smart = Some(Box::new(Filter::default()));
+    c.apply(Op::AddAlbum { album: s }).unwrap();
+    let before = c.clone();
+    let hide = Op::Batch {
+        ops: vec![
+            Op::SetMerge { id: a, merge: Some(MergeMark { into: Some(m), ..Default::default() }) },
+            Op::SetMerge { id: b, merge: Some(MergeMark { into: Some(m), ..Default::default() }) },
+            Op::SetMerge { id: m, merge: Some(MergeMark { kind: Some(MergeType::Hdr), ..Default::default() }) },
+        ],
+    };
+    // journaled: the record decodes to the same op
+    let line = crate::journal::encode_record(7, &hide);
+    assert_eq!(crate::journal::decode_record(&line), Some((7, hide.clone())));
+    let inv = c.apply(hide).unwrap();
+    assert!(!c.photo(a).unwrap().in_library() && c.photo(a).unwrap().merge_hidden() && !c.photo(a).unwrap().deleted);
+    assert_eq!(c.query(&Filter::default(), &Sort::default()), vec![m]);
+    assert_eq!(c.album_count(al), 1);
+    assert_eq!(c.album_photos(smart), vec![m]);
+    assert_eq!(c.photo(m).unwrap().merge_type(), Some(MergeType::Hdr));
+    // merges. only: the merged photo leaves the views too
+    c.apply(Op::SetMerge { id: m, merge: Some(MergeMark { kind: Some(MergeType::Hdr), only_merges: true, ..Default::default() }) }).unwrap();
+    assert!(c.query(&Filter::default(), &Sort::default()).is_empty());
+    // an empty mark is no mark
+    c.apply(Op::SetMerge { id: m, merge: Some(MergeMark::default()) }).unwrap();
+    assert_eq!(c.photo(m).unwrap().merge, None);
+    assert_eq!(c.photo(m).unwrap().merge_type(), Some(MergeType::Hdr), "the file name still says it");
+    c.apply(Op::SetMerge { id: m, merge: Some(MergeMark { kind: Some(MergeType::Hdr), ..Default::default() }) }).unwrap();
+    c.apply(inv).unwrap();
+    assert_eq!(c.photos().collect::<Vec<_>>(), before.photos().collect::<Vec<_>>());
+    // the snapshot keeps the marks; an older catalog without them reads
+    let mut d = c.clone();
+    d.apply(Op::SetMerge { id: a, merge: Some(MergeMark { into: Some(m), ..Default::default() }) }).unwrap();
+    let back: Catalog = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+    assert_eq!(back.photo(a).unwrap().merge, Some(MergeMark { into: Some(m), ..Default::default() }));
+    assert!(!serde_json::to_string(&before).unwrap().contains("\"merge\""), "no mark, no field");
+    for (s, k) in [("pano.", MergeType::Pano), ("hdr.pano.", MergeType::HdrPano), ("focus", MergeType::Stack), ("panorama", MergeType::Pano)] {
+        assert_eq!(MergeType::parse(s), Some(k), "{s}");
+    }
+    assert_eq!(MergeType::parse("blur"), None);
+    assert_eq!(query::merged_kind("IMG_1-Focus.dng"), Some("focus"));
+}
