@@ -59,9 +59,139 @@ fn remove_keeps_files_and_delete_from_disk_trashes_them() {
     assert!(!a.exists() && !a.with_extension("xmp").exists(), "original and sidecar trashed");
     assert!(dir.join("trash/p0.png").exists() && dir.join("trash/p0.xmp").exists());
     assert!(s.catalog.photo(ids[0]).is_none());
-    // undo brings the record back (the file stays in the Trash: Put Back from there)
+    // undo brings the record and the files back
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(s.catalog.photo(ids[0]).is_some());
+    assert!(a.exists() && a.with_extension("xmp").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ⌘Z after a Delete from Disk moves every trashed file (originals and sidecars, a multi-photo
+/// selection) back to its exact path; ⌘⇧Z trashes them again; undo again brings them back.
+#[test]
+fn undo_puts_trashed_files_back_and_redo_trashes_them_again() {
+    let dir = temp_dir("undo");
+    let (mut s, ids) = setup(&dir, 3);
+    let (a, b, c) = (path(&s, ids[0]), path(&s, ids[1]), path(&s, ids[2]));
+    std::fs::write(a.with_extension("xmp"), "<x:xmpmeta a/>").unwrap();
+    let album = s.execute("album.create", &json!({"name": "Keepers"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("album.addPhotos", &json!({"id": album, "ids": [ids[0].0, ids[1].0]})).unwrap();
+    let r = s.execute("photo.deleteFromDisk", &json!({"ids": [ids[0].0, ids[1].0]})).unwrap();
+    assert_eq!(r["removed"], 2, "{r}");
+    assert_eq!(r["trashed"].as_array().unwrap().len(), 3, "two originals and a sidecar: {r}");
+    assert!(!a.exists() && !b.exists() && !a.with_extension("xmp").exists() && c.exists());
+    assert_eq!(s.undo.last().map(|e| e.trashed.len()), Some(3), "the undo step knows where they went");
+
+    let r = s.execute("edit.undo", &json!({})).unwrap();
+    assert!(r.get("notBack").is_none(), "{r}");
+    assert!(a.exists() && b.exists(), "back at their exact paths");
+    assert_eq!(std::fs::read_to_string(a.with_extension("xmp")).unwrap(), "<x:xmpmeta a/>", "the sidecar too");
+    assert!(!dir.join("trash/p0.png").exists() && !dir.join("trash/p1.png").exists(), "out of the Trash");
+    assert!(s.catalog.photo(ids[0]).is_some() && s.catalog.photo(ids[1]).is_some());
+    assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(album)).unwrap().photos.len(), 2, "album membership back");
+    assert!(s.last_delete.is_none(), "nothing left for Put Back Last Delete");
+
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(!a.exists() && !b.exists() && !a.with_extension("xmp").exists(), "redo trashes them again");
+    assert!(dir.join("trash/p0.png").exists() && dir.join("trash/p0.xmp").exists());
+    assert!(s.catalog.photo(ids[0]).is_none());
+    assert_eq!(s.last_delete.as_ref().map(|l| l.photos.len()), Some(2));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(a.exists() && b.exists() && a.with_extension("xmp").exists(), "and back once more");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file emptied from the Trash, or whose original path is taken now, can't come back: the photo
+/// returns anyway, nothing is overwritten, and the undo says which files stayed out.
+#[test]
+fn undo_after_the_trash_was_emptied_or_the_path_taken() {
+    let dir = temp_dir("undo-gone");
+    let (mut s, ids) = setup(&dir, 2);
+    let (a, b) = (path(&s, ids[0]), path(&s, ids[1]));
+    s.execute("photo.deleteFromDisk", &json!({"ids": [ids[0].0, ids[1].0]})).unwrap();
+    // p0 emptied from the Trash; a new file now sits at p1's path
+    std::fs::remove_file(dir.join("trash/p0.png")).unwrap();
+    std::fs::write(&b, b"someone else's file").unwrap();
+    let r = s.execute("edit.undo", &json!({})).unwrap();
+    let not_back = r["notBack"].as_array().unwrap();
+    assert_eq!(not_back.len(), 2, "{r}");
+    assert!(not_back[0].as_str().unwrap().contains("no longer in the Trash"), "{r}");
+    assert!(not_back[1].as_str().unwrap().contains("another file is there"), "{r}");
+    assert!(s.catalog.photo(ids[0]).is_some() && s.catalog.photo(ids[1]).is_some(), "the photos return anyway");
+    assert!(!a.exists());
+    assert_eq!(std::fs::read(&b).unwrap(), b"someone else's file", "never overwritten");
+    assert!(dir.join("trash/p1.png").exists(), "p1 stays in the Trash");
+    // redo: only files that came back go to the Trash again; the newcomer at p1's path stays
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert!(b.exists() && s.catalog.photo(ids[1]).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Delete Rejected Photos (from disk) undoes the same way.
+#[test]
+fn undo_of_delete_rejected_puts_the_files_back() {
+    let dir = temp_dir("undo-rejected");
+    let (mut s, ids) = setup(&dir, 3);
+    s.execute("photo.flag", &json!({"ids": [ids[1].0], "flag": "reject"})).unwrap();
+    s.execute("library.deleteRejected", &json!({"fromDisk": true})).unwrap();
+    assert!(!path_exists(&dir, "src/p1.png"));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(path_exists(&dir, "src/p1.png") && s.catalog.photo(ids[1]).is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Put Back Last Delete: after the undo history moved on, and after the library is reopened (the
+/// undo history is gone then), the last delete's files and photos come back.
+#[test]
+fn put_back_last_delete_works_after_history_moved_on_and_a_reopen() {
+    let dir = temp_dir("putback");
+    let (_memory, _) = setup(&dir, 2);
+    let mut s = Session::new();
+    s.trash_dir = Some(dir.join("trash"));
+    s.open_library(dir.join("lib"), false).unwrap();
+    s.execute("library.import", &json!({"paths": [dir.join("src").to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().find(|p| p.file_name == "p0.png").unwrap().id;
+    let album = s.execute("album.create", &json!({"name": "Best"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("album.addPhotos", &json!({"id": album, "ids": [id.0]})).unwrap();
+    assert!(s.execute("photo.putBackLastDelete", &json!({})).is_err(), "nothing to put back yet");
+    s.execute("photo.deleteFromDisk", &json!({"ids": [id.0]})).unwrap();
+    assert!(!path_exists(&dir, "src/p0.png"));
+    s.close_library().unwrap();
+    drop(s);
+
+    let mut s = Session::new();
+    s.open_library(dir.join("lib"), false).unwrap();
+    assert!(s.undo.is_empty() && s.catalog.photo(id).is_none());
+    let r = s.execute("photo.putBackLastDelete", &json!({})).unwrap();
+    assert_eq!(r["photos"], 1, "{r}");
+    assert!(path_exists(&dir, "src/p0.png") && !path_exists(&dir, "trash/p0.png"));
+    assert!(s.catalog.photo(id).is_some());
+    assert!(s.catalog.album(lightcraft_catalog::AlbumId(album)).unwrap().photos.contains(&id), "back in its album");
+    assert!(s.execute("photo.putBackLastDelete", &json!({})).is_err(), "only once");
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Delete key ▸ album.: in an album the photo leaves only that album; elsewhere it leaves the
+/// library (files kept).
+#[test]
+fn remove_from_album_only_in_albums_and_from_the_library_elsewhere() {
+    let dir = temp_dir("album");
+    let (mut s, ids) = setup(&dir, 2);
+    let album = s.execute("album.create", &json!({"name": "Trip"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("album.addPhotos", &json!({"id": album, "ids": [ids[0].0, ids[1].0]})).unwrap();
+    s.execute("library.source", &json!({"kind": "album", "id": album})).unwrap();
+    let r = s.execute("photo.removeFromAlbum", &json!({"ids": [ids[0].0]})).unwrap();
+    assert_eq!((r["removed"].as_u64(), r["fromLibrary"].as_bool()), (Some(1), None), "{r}");
+    assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(album)).unwrap().photos, vec![ids[1]]);
+    assert!(s.catalog.photo(ids[0]).is_some() && path(&s, ids[0]).exists(), "library and file untouched");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.album(lightcraft_catalog::AlbumId(album)).unwrap().photos.len(), 2);
+    // All Photographs: out of the library, the file stays
+    s.execute("library.source", &json!({"kind": "all"})).unwrap();
+    let r = s.execute("photo.removeFromAlbum", &json!({"ids": [ids[0].0]})).unwrap();
+    assert_eq!(r["fromLibrary"], true, "{r}");
+    assert!(s.catalog.photo(ids[0]).is_none() && dir.join("src/p0.png").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -2,6 +2,16 @@
 
 ## November 2026
 
+### Delete without the question, undo that really undoes
+- ⌫ no longer asks: the photo's file (and its own XMP sidecar) goes to the system Trash and the photo leaves the
+  library. A toast says "3 photos moved to the Trash · undo."; undo. or ⌘Z moves every file back to exactly where it
+  was and the photos return, albums and all. A file you've emptied from the Trash, or whose spot is taken by a new
+  file, stays out (nothing is ever overwritten) and the toast tells you which. ⌘⇧Z trashes them again.
+- Photo ▸ Put Back Last Delete does the same after the undo history moved on, even after reopening the library.
+- Settings ▸ General ▸ Delete key: trash. (default), recent. (Recently Deleted), album. (in an album, out of that
+  album only; elsewhere out of the library, files kept) or ask. (Lightroom's question). Confirm first brings a
+  question back for the others. ⌘⌫ Delete Rejected Photos follows the same setting.
+
 ### Identity plate, and a clean launch
 - Your own logo or name in the window, like Lightroom Classic's identity plate but anywhere: Settings ▸ identity.
   (Edit ▸ Identity Plate Setup…). Pick a transparent PNG, SVG, WebP or JPEG (it's copied into LightCraft's

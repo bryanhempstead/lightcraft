@@ -109,6 +109,10 @@ pub struct UndoEntry {
     /// A folder to rename on disk (`from` → `to`) before `op` is applied: Rename / Move Folder
     /// (whose `op` relinks the photos inside). Never overwrites; refused when `to` exists.
     pub folder: Option<FolderMove>,
+    /// Files a delete moved to the Trash. In an undo step they are in the Trash and undo puts
+    /// them back to their original paths before the photos return; in a redo step they are at
+    /// their originals and redo moves them to the Trash again.
+    pub trashed: Vec<trash::TrashedFile>,
 }
 
 /// The one photo an undo step changes, when it changes exactly one through its edit, rating, flag,
@@ -236,6 +240,12 @@ pub struct Session {
     /// Delete from Disk moves files into this folder instead of the system Trash (tests, scripts;
     /// also `LIGHTCRAFT_TRASH_DIR`).
     pub trash_dir: Option<std::path::PathBuf>,
+    /// The last delete that moved files to the Trash, for Put Back Last Delete after the undo
+    /// history has moved on (the library's `last-delete.json`, so it survives a reopen).
+    pub last_delete: Option<trash::LastDelete>,
+    /// Files the last undo couldn't bring back from the Trash (emptied, or their path taken):
+    /// `edit.undo` reports them.
+    pub not_back: Vec<String>,
     /// Copied metadata (`photo.copyMetadata`): photo.setMeta params.
     pub meta_clipboard: Option<Value>,
     /// The photo that was active before the current one (Paste Settings from Previous).
@@ -392,6 +402,8 @@ impl Session {
             export_log: Default::default(),
             watermark_presets: Vec::new(),
             trash_dir: None,
+            last_delete: None,
+            not_back: Vec::new(),
             previous_active: None,
             copy_groups: lightcraft_develop::SettingsGroup::default_copy(),
             copy_subsets: Vec::new(),
@@ -541,7 +553,7 @@ impl Session {
         let fwd = op.clone();
         let inv = self.catalog.apply(op)?;
         self.pending_log.push(fwd);
-        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None });
+        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, trashed: Vec::new() });
         if self.undo.len() > 1000 {
             self.undo.remove(0);
         }
@@ -633,12 +645,12 @@ impl Session {
             return;
         }
         // a step that moves a folder on disk stays on its own
-        if self.undo[self.undo.len() - n..].iter().any(|e| e.folder.is_some()) {
+        if self.undo[self.undo.len() - n..].iter().any(|e| e.folder.is_some() || !e.trashed.is_empty()) {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
         let ops = tail.into_iter().rev().map(|e| e.op).collect();
-        self.undo.push(UndoEntry { label: label.to_string(), op: Op::Batch { ops }, folder: None });
+        self.undo.push(UndoEntry { label: label.to_string(), op: Op::Batch { ops }, folder: None, trashed: Vec::new() });
     }
 
     /// Apply without recording undo (interactive previews).
@@ -649,31 +661,61 @@ impl Session {
 
     pub fn undo_step(&mut self) -> Result<String> {
         let e = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
+        // a delete that moved files to the Trash: they come back first (each one that can: an
+        // emptied Trash or a taken path keeps that file out, the photo returns anyway)
+        self.not_back.clear();
+        let mut back = Vec::new();
+        for f in &e.trashed {
+            match trash::put_back(f) {
+                Ok(()) => back.push(f.clone()),
+                Err(m) => self.not_back.push(m),
+            }
+        }
         let redo = match self.apply_with_files(&e.op, e.folder.as_ref()) {
             Ok(r) => r,
             Err(err) => {
+                cmd::delete::retrash(&back);
+                self.not_back.clear();
                 self.undo.push(e);
                 return Err(err);
             }
         };
+        if !e.trashed.is_empty() {
+            cmd::delete::forget_last_delete_if_back(self);
+        }
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
-        self.redo.push(UndoEntry { label: e.label.clone(), op: redo, folder: e.folder.as_ref().map(FolderMove::reversed) });
+        self.redo.push(UndoEntry { label: e.label.clone(), op: redo, folder: e.folder.as_ref().map(FolderMove::reversed), trashed: back });
         Ok(e.label)
     }
 
     pub fn redo_step(&mut self) -> Result<String> {
         let e = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
-        let undo = match self.apply_with_files(&e.op, e.folder.as_ref()) {
-            Ok(r) => r,
+        // a delete's files go to the Trash again (all of them, or the redo doesn't happen)
+        let again = match cmd::delete::trash_again(self, &e.trashed) {
+            Ok(a) => a,
             Err(err) => {
                 self.redo.push(e);
                 return Err(err);
             }
         };
+        let gone = (!again.is_empty()).then(|| trash::LastDelete::before(self, &e.label, &e.op, again.clone()));
+        let undo = match self.apply_with_files(&e.op, e.folder.as_ref()) {
+            Ok(r) => r,
+            Err(err) => {
+                again.iter().for_each(|f| {
+                    let _ = trash::put_back(f);
+                });
+                self.redo.push(e);
+                return Err(err);
+            }
+        };
+        if let Some(gone) = gone {
+            cmd::delete::remember_last_delete(self, Some(gone));
+        }
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
-        self.undo.push(UndoEntry { label: e.label.clone(), op: undo, folder: e.folder.as_ref().map(FolderMove::reversed) });
+        self.undo.push(UndoEntry { label: e.label.clone(), op: undo, folder: e.folder.as_ref().map(FolderMove::reversed), trashed: again });
         Ok(e.label)
     }
 

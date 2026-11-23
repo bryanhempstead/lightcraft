@@ -14,7 +14,7 @@ pub mod copy_subsets;
 pub mod cull;
 pub(crate) use cull::scores_of as cull_scores;
 pub mod curves;
-mod delete;
+pub(crate) mod delete;
 pub(crate) mod develop;
 mod edit;
 mod enhance;

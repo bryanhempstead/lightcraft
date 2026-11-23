@@ -616,10 +616,23 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
                 Dialog::Settings { tab } => crate::panels::settings::body(app, ui, tab),
                 Dialog::SamModel { error, .. } => sam_model_body(app, ui, error.as_deref()),
-                Dialog::ConfirmDelete { count } => {
-                    let what = if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
-                    ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
-                    ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
+                Dialog::ConfirmDelete { count, rejected } => {
+                    let what = match (*rejected, *count) {
+                        (true, 1) => crate::i18n::tr("the rejected photo").to_string(),
+                        (true, n) => format!("the {n} rejected photos", n = n),
+                        (false, 1) => crate::i18n::tr("this photo").to_string(),
+                        (false, n) => crate::i18n::tr_format!("these {count} photos", count = n),
+                    };
+                    let in_album = matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_));
+                    let (ask, note) = match app.ui.settings.delete_key {
+                        crate::state::DeleteKey::Recent => ("Move {what} to Recently Deleted?", "They can be restored from Recently Deleted until it is emptied."),
+                        crate::state::DeleteKey::Album if in_album => ("Remove {what} from this album?", "The files and the library keep them."),
+                        crate::state::DeleteKey::Album => ("Remove {what} from the library?", "The files stay on disk."),
+                        _ => ("Move {what} to the Trash?", "The files go to the system Trash; Undo (⌘Z) brings them back."),
+                    };
+                    ui.label(crate::i18n::tr(ask).replace("{what}", &what));
+                    ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
+                    ui.label(egui::RichText::new(crate::i18n::tr("Settings ▸ General ▸ Confirm first turns this question off.")).color(t.text_dim));
                 }
                 Dialog::DeletePhotos { count, copies, rejected } => {
                     let (count, copies) = (*count, *copies);
@@ -802,7 +815,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::Merge { .. } => "Merge",
                     Dialog::Enhance { opts } if !opts.options().any() => "",
                     Dialog::Enhance { .. } => "enh.",
-                    Dialog::ConfirmDelete { .. } => "Delete",
+                    Dialog::ConfirmDelete { .. } => "delete.",
                     Dialog::DeletePhotos { count, copies, .. } if count == copies => "remove.",
                     Dialog::DeletePhotos { .. } => "delete.from.disk.",
                     Dialog::Backups { pick: Some(_) } => "restore.",
@@ -872,6 +885,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 if let Dialog::SamModel { error, .. } = &mut dlg {
                     *error = None;
                 }
+            }
+            // a delete that failed says why (its photos stay)
+            Err(e) if matches!(dlg, Dialog::ConfirmDelete { .. } | Dialog::DeletePhotos { .. }) => {
+                app.toast_error(ctx, e);
+                close = true;
             }
             _ => close = true,
         }
@@ -1120,23 +1138,17 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::Merge { opts } => crate::merge::start_final(app, opts),
         Dialog::Enhance { opts } => crate::enhance::start_final(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
-        Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
+        Dialog::ConfirmDelete { rejected, .. } => crate::menus::delete_now(app, *rejected),
         Dialog::DeletePhotos { count, copies, rejected } => {
             let r = match (*rejected, count == copies) {
                 (true, _) => app.run("library.deleteRejected", json!({"fromDisk": true})),
                 (false, true) => app.run("photo.removeFromLibrary", json!({})),
                 (false, false) => app.run("photo.deleteFromDisk", json!({})),
             }?;
-            // files that couldn't go to the Trash keep their photos: say so
-            match r.get("failed").and_then(serde_json::Value::as_array).map(Vec::len).unwrap_or(0) {
-                0 => Ok(r),
-                n => Err(format!(
-                    "{n} file{} couldn't be moved to the Trash: {e}",
-                    if n == 1 { "" } else { "s" },
-                    n = n,
-                    e = r["failed"][0]["error"].as_str().unwrap_or("")
-                )),
-            }
+            // what went (· undo.), and files that couldn't go to the Trash keep their photos: say so
+            let text = crate::menus::trash_message(&r);
+            crate::menus::delete_toast(app, &r, text);
+            Ok(r)
         }
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
         Dialog::Backups { pick: Some(path) } => {

@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::state::{BeforeAfter, Dialog, Module, RightPanel, ViewMode, Zoom};
+use crate::state::{BeforeAfter, DeleteKey, Dialog, Module, RightPanel, ViewMode, Zoom};
 
 /// (id, label, shortcut, menu path)
 pub type UiCommand = (&'static str, &'static str, Option<&'static str>, &'static str);
@@ -2180,35 +2180,152 @@ pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
     v
 }
 
-/// With Settings → General → "Confirm before deleting" on, open the confirmation dialog instead
-/// of deleting; true when it did (the dialog's OK runs `photo.delete`).
-pub fn confirm_delete(app: &mut LightcraftApp) -> bool {
+/// The Delete key and Photo ▸ Delete Photo: what Settings ▸ General ▸ Delete key says. By default
+/// straight to the Trash with no dialog (⌘Z, or the toast's undo., brings it back); or Recently
+/// Deleted, the album only, or Lightroom's question; with Confirm first on, a confirmation before
+/// it. True when it handled the delete (with nothing selected: false, nothing happens).
+pub fn delete_key(app: &mut LightcraftApp) -> bool {
     let targets = app.session.targets(&json!({}));
     if targets.is_empty() {
         return false;
     }
-    if app.ui.settings.trash_delete {
+    if app.ui.settings.delete_key == DeleteKey::Ask {
         let copies = targets.iter().filter(|id| app.session.catalog.photo(**id).is_some_and(|p| p.copy_of.is_some())).count();
         app.ui.dialog = Some(Dialog::DeletePhotos { count: targets.len(), copies, rejected: false });
         return true;
     }
-    if !app.ui.settings.confirm_delete {
-        return false;
+    if app.ui.settings.confirm_delete {
+        app.ui.dialog = Some(Dialog::ConfirmDelete { count: targets.len(), rejected: false });
+        return true;
     }
-    app.ui.dialog = Some(Dialog::ConfirmDelete { count: targets.len() });
+    if let Err(e) = delete_now(app, false) {
+        app.toast_soon(e, 6.0);
+    }
     true
 }
 
-/// Photo ▸ Delete Rejected Photos (⌘⌫): ask Delete from Disk / Remove for the view's rejects.
+/// Photo ▸ Delete Rejected Photos (⌘⌫): the view's rejects go the way the Delete key setting says
+/// (asking first with ask. or Confirm first).
 fn delete_rejected(app: &mut LightcraftApp) -> Result<Value, String> {
     let r = app.session.execute("library.rejected", &json!({})).map_err(|e| e.to_string())?;
     let count = r["count"].as_u64().unwrap_or(0) as usize;
     if count == 0 {
         return Err(crate::i18n::tr("There are no rejected photos here.").into());
     }
-    let copies = r["virtualCopies"].as_u64().unwrap_or(0) as usize;
-    app.ui.dialog = Some(Dialog::DeletePhotos { count, copies, rejected: true });
-    Ok(json!({"count": count}))
+    if app.ui.settings.delete_key == DeleteKey::Ask {
+        let copies = r["virtualCopies"].as_u64().unwrap_or(0) as usize;
+        app.ui.dialog = Some(Dialog::DeletePhotos { count, copies, rejected: true });
+        return Ok(json!({"count": count}));
+    }
+    if app.ui.settings.confirm_delete {
+        app.ui.dialog = Some(Dialog::ConfirmDelete { count, rejected: true });
+        return Ok(json!({"count": count}));
+    }
+    delete_now(app, true)
+}
+
+/// "1 photo" / "3 photos".
+fn photos(n: u64) -> String {
+    if n == 1 { crate::i18n::tr("1 photo").to_string() } else { crate::i18n::tr_format!("{n} photos", n = n) }
+}
+
+/// Delete the selected photos (or, `rejected`, the view's rejects) the way Settings ▸ Delete key
+/// says, without asking, and say what happened in a toast with an undo. button. Files that can't go
+/// to the Trash keep their photos and the toast says why (an error only when nothing went).
+pub fn delete_now(app: &mut LightcraftApp, rejected: bool) -> Result<Value, String> {
+    let ids: Vec<u64> = if rejected {
+        let r = app.session.execute("library.rejected", &json!({})).map_err(|e| e.to_string())?;
+        r["ids"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default()
+    } else {
+        app.session.targets(&json!({})).iter().map(|id| id.0).collect()
+    };
+    if ids.is_empty() {
+        return Err(crate::i18n::tr("No photos selected.").into());
+    }
+    if rejected {
+        // the rejects are what leaves (and the commands act on a selection)
+        let picked: Vec<lightcraft_catalog::PhotoId> = ids.iter().map(|i| lightcraft_catalog::PhotoId(*i)).collect();
+        app.session.selection = lightcraft_engine::Selection { active: picked.first().copied(), ids: picked };
+    }
+    let n = ids.len() as u64;
+    let (r, text) = match app.ui.settings.delete_key {
+        DeleteKey::Trash | DeleteKey::Ask => {
+            let r = if rejected {
+                app.run("library.deleteRejected", json!({"fromDisk": true}))?
+            } else {
+                app.run("photo.deleteFromDisk", json!({"ids": ids}))?
+            };
+            let text = trash_message(&r);
+            (r, text)
+        }
+        DeleteKey::Recent => {
+            let r = app.run("photo.delete", json!({"ids": ids}))?;
+            (r, format!("{what} moved to Recently Deleted", what = photos(n)))
+        }
+        DeleteKey::Album => {
+            let r = app.run("photo.removeFromAlbum", json!({"ids": ids}))?;
+            let gone = r["removed"].as_u64().unwrap_or(n);
+            let text = if r["fromLibrary"] == true {
+                let mut t = format!("{what} removed from the library (files kept)", what = photos(gone));
+                if !app.ui.settings.album_fallback_told {
+                    app.ui.settings.album_fallback_told = true;
+                    t.push_str(crate::i18n::tr(" — not in an album, so Delete removes from the library"));
+                }
+                t
+            } else {
+                format!("{what} removed from {name}", what = photos(gone), name = r["name"].as_str().unwrap_or("the album"))
+            };
+            (r, text)
+        }
+    };
+    delete_toast(app, &r, text);
+    Ok(r)
+}
+
+/// What a Delete from Disk did, for its toast: "3 photos moved to the Trash", with the files that
+/// couldn't go (their photos stay).
+pub fn trash_message(r: &Value) -> String {
+    let removed = r["removed"].as_u64().unwrap_or(0);
+    let trashed = r["trashed"].as_array().map(Vec::len).unwrap_or(0);
+    let failed = r["failed"].as_array().map(Vec::len).unwrap_or(0);
+    let mut text = match (removed, trashed) {
+        (0, _) => String::new(),
+        (n, 0) => format!("{what} removed from the library", what = photos(n)),
+        (n, _) => format!("{what} moved to the Trash", what = photos(n)),
+    };
+    if failed > 0 {
+        if !text.is_empty() {
+            text.push_str(" · ");
+        }
+        text.push_str(&format!(
+            "{n} file{s} couldn't be moved to the Trash, so {it} stayed: {e}",
+            n = failed,
+            s = if failed == 1 { "" } else { "s" },
+            it = if failed == 1 { "its photo" } else { "their photos" },
+            e = r["failed"][0]["error"].as_str().unwrap_or("")
+        ));
+    }
+    text
+}
+
+/// The toast after a delete: what happened, and undo. when something changed.
+pub fn delete_toast(app: &mut LightcraftApp, r: &Value, text: String) {
+    let changed = r["removed"].as_u64().is_none_or(|n| n > 0);
+    app.toast_soon(text.clone(), if r["failed"].as_array().is_some_and(|f| !f.is_empty()) { 8.0 } else { 6.0 });
+    app.ui.toast_undo = changed.then_some(text);
+}
+
+/// The toast after an undo: "Undo", or which files couldn't come back from the Trash.
+pub fn undo_message(r: &Value) -> String {
+    match r["notBack"].as_array().filter(|a| !a.is_empty()) {
+        Some(a) => format!(
+            "Undo · {n} file{s} couldn't come back from the Trash: {e}",
+            n = a.len(),
+            s = if a.len() == 1 { "" } else { "s" },
+            e = a[0].as_str().unwrap_or("")
+        ),
+        None => crate::i18n::tr("Undo").to_string(),
+    }
 }
 
 /// One Painter click on photo `id` (L12): apply `mode`'s `value`; a label or album the photo
