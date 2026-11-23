@@ -42,6 +42,12 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
     (local_6e1fc28f…); LightCraft keymap's 22 Ctrl+Alt+Shift+letter Monogram codes stay (⌘⌥⇧ collides with 7 built-ins).
   - A watcher keeps cargo/rustc at background QoS until ~19:00 (task in the session).
   - Waiting on Bryan: a "flat" photo example (#217).
+  - NEW RULE (Bryan 11-23, ~/.hermes/SOUL.md): every UI label spelled out in full, lowercase, periods for spaces, no
+    abbreviations, "color" never "clr." (e.g. dl.→download., enh.→enhance., ovl.→overlay., wb.→white.balance.,
+    sav.→save., dflt→default.). TODO after the agent branches merge: relabel LightCraft (and PhotoCraft) labels in
+    one pass (agent), update tests that click by label ids only if ids change (prefer keeping widget ids).
+  - Done elsewhere: NEBULA68B layer 1 ⌘-position key now LGUI (deck session); dev. has no Ctrl; Lightroom-import
+    repair re-checked 16:45 (0 changes; 2,390 crops + 82 radials right, 5 skipped = edited here).
 
 - [ ] (merges agent, 2026-11-23, branch `merges-area`, not merged) **LC-MERGE-FIND: merges. — found photo merges in
   the sidebar** (Bryan: "recognize possible photo merges and put those in a separate area … on the side bar").
