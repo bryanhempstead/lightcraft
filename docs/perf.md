@@ -74,6 +74,10 @@ noisy; the UI-thread profiles (`sample <pid>`) say where the time goes regardles
 - **The grid's source total sorted the whole catalog** after every change just to count it
   (`Catalog::count`).
 - `ui.inspect` → `perf.window` / `resetPerf` (above), so the next measurement is one call.
+- **Reopening a library right after closing it** could say "already open in another LightCraft"
+  under load (seen once per full engine test run): `LibraryLock::acquire` now retries for up to
+  2 s while the holder left no owner note or is this process (a forked child's copy of the lock);
+  another program still gets refused at once. Test: `a_holder_without_an_owner_note_is_waited_for`.
 
 ## UI tests under load
 

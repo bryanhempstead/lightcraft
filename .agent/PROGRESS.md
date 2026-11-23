@@ -13,7 +13,8 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   (`render::Prepared` / `Pixels`, made on the render worker; 1:1 pan stalls up to 1.5 s), 60 fps polling while
   renders run (`JobPool::set_on_done` wakes the UI), GPU readback waiting for all GPU work in the process
   (`finish_and_read` waits for its own submission — the cause of the "0 thumbnails after 120 s" UI-test flake),
-  `source_total` sorting the catalog to count it (`Catalog::count`); `ui.inspect` → `perf.window` + `resetPerf`;
+  `source_total` sorting the catalog to count it (`Catalog::count`), `LibraryLock::acquire` refusing a reopen while
+  a forked child still held the lock (retries 2 s when no owner note); `ui.inspect` → `perf.window` + `resetPerf`;
   `Renderer::diagnose` in test failure messages; the grid / Alt-preview / identity-plate tests wait for what they
   check. Left (in docs/perf.md): first-view raw decodes for thumbnails (19 % cached), Shoots / folder tree /
   visible sort rebuilt per change, export + 1:1 render time, `keep_pixels` CPU copies with `--control`.
