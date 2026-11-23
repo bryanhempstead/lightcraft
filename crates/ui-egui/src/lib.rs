@@ -63,6 +63,8 @@ mod tests_filmstrip;
 #[cfg(test)]
 mod tests_fixnotes;
 #[cfg(test)]
+mod tests_galleries;
+#[cfg(test)]
 mod tests_grid;
 #[cfg(test)]
 mod tests_grid_cells;
@@ -201,6 +203,8 @@ pub struct Perf {
 pub struct LightcraftApp {
     /// The Map module's tiles and textures (LR-MAP-MODULE).
     pub map: panels::map::MapRuntime,
+    /// The galleries. tab: Second Brain's client galleries as last read (LC-GALLERIES).
+    pub galleries: panels::galleries::GalleriesRuntime,
     /// The Loupe's video playback (LR-VID-PLAY).
     pub video: video_ui::VideoView,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
@@ -349,6 +353,7 @@ impl LightcraftApp {
             fonts_ready: false,
             last_time: 0.0,
             map: Default::default(),
+            galleries: Default::default(),
             video: Default::default(),
             canvas_rect: None,
             image_rect: None,
@@ -1078,6 +1083,8 @@ impl LightcraftApp {
         if self.ui.right_panel {
             if develop {
                 panels::right::show(self, ui);
+            } else if self.ui.view == state::ViewMode::Galleries {
+                panels::galleries::right(self, ui);
             } else {
                 panels::library_right::show(self, ui);
             }
@@ -1087,11 +1094,14 @@ impl LightcraftApp {
                 panels::develop_left::show(self, ui);
             } else if self.ui.view == state::ViewMode::Map {
                 panels::map::left(self, ui);
+            } else if self.ui.view == state::ViewMode::Galleries {
+                panels::galleries::left(self, ui);
             } else {
                 panels::left::show(self, ui);
             }
         }
-        if self.ui.toolbar {
+        // (the galleries. tab has no grid toolbar: its actions are in its own header)
+        if self.ui.toolbar && self.ui.view != state::ViewMode::Galleries {
             panels::bottombar::show(self, ui);
         }
         let t = theme::Tokens::get(&ctx);
@@ -1109,6 +1119,7 @@ impl LightcraftApp {
             state::ViewMode::Reference => panels::compare::show_reference(self, ui),
             state::ViewMode::People => panels::people::show(self, ui),
             state::ViewMode::Map => panels::map::show(self, ui),
+            state::ViewMode::Galleries => panels::galleries::show(self, ui),
         });
         // the identity plate: over the panels and the photo area, under dialogs and menus
         identity::paint(self, ui, canvas.response.rect);

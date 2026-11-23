@@ -340,8 +340,9 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         // Every language's command is checked when it is the active one.
         _ if crate::menus::language_from_command(id).is_some() => Some(crate::menus::language_from_command(id) == Some(u.language)),
         "develop.autoSync" => Some(app.session.auto_sync),
-        "view.library" => Some(u.module == crate::state::Module::Library && u.view != ViewMode::Map),
+        "view.library" => Some(u.module == crate::state::Module::Library && !matches!(u.view, ViewMode::Map | ViewMode::Galleries)),
         "view.map" => Some(u.view == ViewMode::Map),
+        "view.galleries" => Some(u.view == ViewMode::Galleries),
         "view.develop" => Some(u.module == crate::state::Module::Develop),
         "view.rightPanel" => Some(u.right_panel),
         "view.topPanel" => Some(u.top_panel),

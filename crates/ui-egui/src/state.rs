@@ -21,6 +21,8 @@ pub enum ViewMode {
     /// The Map module (LR-MAP-MODULE): OpenStreetMap tiles, pins for photos with GPS, drop photos
     /// to geotag them, saved locations.
     Map,
+    /// The galleries. tab (LC-GALLERIES): Second Brain's client galleries.
+    Galleries,
 }
 
 /// Lightroom Classic's modules: Library (grid, loupe, compare, survey; organising) and Develop
@@ -38,9 +40,13 @@ impl Module {
     /// The views a module shows: Develop is the loupe (or the reference view), the rest is Library.
     pub fn of_view(view: ViewMode) -> Option<Module> {
         match view {
-            ViewMode::PhotoGrid | ViewMode::SquareGrid | ViewMode::Compare | ViewMode::Survey | ViewMode::People | ViewMode::Map => {
-                Some(Module::Library)
-            }
+            ViewMode::PhotoGrid
+            | ViewMode::SquareGrid
+            | ViewMode::Compare
+            | ViewMode::Survey
+            | ViewMode::People
+            | ViewMode::Map
+            | ViewMode::Galleries => Some(Module::Library),
             ViewMode::Detail | ViewMode::Reference => None,
         }
     }
@@ -1557,7 +1563,7 @@ impl UiState {
             self.view = ViewMode::Detail;
         }
         // (the map is a module of its own: Library goes back to the grid or loupe from it)
-        if self.module == Module::Library && self.view != ViewMode::Map {
+        if self.module == Module::Library && !matches!(self.view, ViewMode::Map | ViewMode::Galleries) {
             self.library_view = self.view;
         }
     }

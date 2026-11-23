@@ -272,6 +272,23 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.library", "Library", Some("Cmd+Alt+1"), "Window"),
     ("view.develop", "Develop", Some("Cmd+Alt+2"), "Window"),
     ("view.map", "Map", Some("Cmd+Alt+3"), "Window"),
+    // LC-GALLERIES: the galleries. tab (Second Brain's client galleries; engine: gallery.*)
+    ("view.galleries", "Galleries", Some("Cmd+Alt+4"), "Window"),
+    ("galleries.refresh", "Refresh Galleries", None, ""),
+    ("galleries.open", "Open Gallery", None, ""),
+    ("galleries.newFrom", "New Gallery from Photos", None, "Library"),
+    ("galleries.reexport", "Update Gallery Photos", None, ""),
+    ("galleries.publish", "Publish Gallery", None, ""),
+    ("galleries.pick", "Pick Gallery Photos", None, ""),
+    ("galleries.save", "Save Gallery Settings", None, ""),
+    ("galleries.develop", "Open Gallery Photo in Develop", None, ""),
+    ("galleries.showPicks", "Show Client Picks", None, ""),
+    ("galleries.applyPicks", "Apply Client Picks", None, ""),
+    ("galleries.copyLink", "Copy Gallery Link", None, ""),
+    ("galleries.openLink", "Open Gallery Link", None, ""),
+    ("galleries.hide", "Hide Gallery Photos", None, ""),
+    ("galleries.slideshow", "Make Gallery Slideshow", None, ""),
+    ("galleries.start", "Start Second Brain", None, ""),
     ("map.fit", "Fit Map to Photos", None, ""),
     // LR-VID-*: the Loupe's video controls (Space plays and pauses a video: shortcuts.rs)
     ("video.playPause", "Play / Pause Video", None, "Photo>Video"),
@@ -329,8 +346,9 @@ pub fn enter_library(app: &mut LightcraftApp, view: Option<ViewMode>) {
     let v = view.unwrap_or(app.ui.library_view);
     app.ui.module = Module::Library;
     // (Library from the map goes back to the grid: the map is a module of its own)
-    app.ui.view = if v == ViewMode::Reference || (view.is_none() && v == ViewMode::Map) { ViewMode::PhotoGrid } else { v };
-    if app.ui.view != ViewMode::Map {
+    app.ui.view =
+        if v == ViewMode::Reference || (view.is_none() && matches!(v, ViewMode::Map | ViewMode::Galleries)) { ViewMode::PhotoGrid } else { v };
+    if !matches!(app.ui.view, ViewMode::Map | ViewMode::Galleries) {
         app.ui.library_view = app.ui.view;
     }
     // Develop's on-canvas tools end with it
@@ -453,6 +471,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         return Some(r);
     }
     if let Some(r) = crate::fixnotes::run_command(app, id, p) {
+        return Some(r);
+    }
+    if let Some(r) = crate::panels::galleries::run_command(app, id, p) {
         return Some(r);
     }
     let ctx = egui::Context::default();

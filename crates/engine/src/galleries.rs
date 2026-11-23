@@ -343,10 +343,17 @@ pub fn fetch_list(dir: Option<&Path>) -> Result<Listing, String> {
             let galleries = v.get("galleries").and_then(Value::as_array).cloned().unwrap_or_default().into_iter().filter(Value::is_object).collect();
             Ok(Listing { online: true, galleries, notice: None })
         }
-        Err(why) => Ok(match offline_galleries(dir) {
-            Ok(l) => Listing { online: false, galleries: l, notice: Some(format!("{why}. Showing its galleries read-only.")) },
-            Err(e) => Listing { online: false, galleries: Vec::new(), notice: Some(format!("{why}, and {e}.")) },
-        }),
+        Err(why) => {
+            log::info!("galleries: {why}");
+            Ok(match offline_galleries(dir) {
+                Ok(l) => Listing {
+                    online: false,
+                    galleries: l,
+                    notice: Some("Second Brain isn't running: its galleries are shown read-only. start. opens it.".into()),
+                },
+                Err(e) => Listing { online: false, galleries: Vec::new(), notice: Some(format!("Second Brain isn't running, and {e}.")) },
+            })
+        }
     }
 }
 

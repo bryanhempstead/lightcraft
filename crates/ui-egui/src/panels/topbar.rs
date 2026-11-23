@@ -267,11 +267,13 @@ pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> 
     let t = Tokens::get(ui.ctx());
     let mut x = full.right() - 12.0;
     let map = app.ui.view == crate::state::ViewMode::Map;
-    // right to left: map. | develop. | library.
+    let galleries = app.ui.view == crate::state::ViewMode::Galleries;
+    // right to left: galleries. | map. | develop. | library.
     let items = [
+        ("galleries", "Galleries", galleries, "view.galleries", "Client galleries, kept by Second Brain (⌘⌥4)"),
         ("map", "Map", map, "view.map", "Map (⌘⌥3)"),
         ("develop", "Develop", app.ui.module == crate::state::Module::Develop, "view.develop", "Develop (D)"),
-        ("library", "Library", app.ui.module == crate::state::Module::Library && !map, "view.library", "Library (G)"),
+        ("library", "Library", app.ui.module == crate::state::Module::Library && !map && !galleries, "view.library", "Library (G)"),
     ];
     let last = items.len() - 1;
     for (i, (id, label, on, cmd, tip)) in items.into_iter().enumerate() {
