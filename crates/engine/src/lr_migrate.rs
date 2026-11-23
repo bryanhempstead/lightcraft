@@ -1948,7 +1948,15 @@ fn import_presets(s: &mut Session, dirs: &[String], dry: bool) -> crate::Result<
                 String::from_utf8_lossy(&bytes).contains("PresetType=\"Look\"") || String::from_utf8_lossy(&bytes).contains("<crs:PresetType>Look<");
             match crate::preset_import::read_presets(&f, &bytes, dir_group) {
                 Ok(list) => {
-                    for it in list {
+                    for mut it in list {
+                        // its creative look: the imported LUT profile of that name (Bryan, 11-23:
+                        // "BH - NMD - 7 - TD" lost its Summer Fields profile)
+                        if let Some((name, amount)) = &it.look
+                            && let Some(id) = matching_profile(s, &HashMap::new(), name)
+                            && let Some(o) = it.preset.settings.as_object_mut()
+                        {
+                            o.insert("profile".into(), json!({"id": id, "amount": (amount * 100.0).clamp(0.0, 200.0)}));
+                        }
                         let key = (it.preset.group.to_lowercase(), it.preset.name.to_lowercase());
                         if seen.contains(&it.preset.id) || seen_names.contains(&key) {
                             skipped += 1;

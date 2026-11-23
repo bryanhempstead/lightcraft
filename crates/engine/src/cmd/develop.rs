@@ -1298,6 +1298,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 ok()
             }
         ),
+        cmd!(
+            "preset.linkLooks",
+            "Link Preset Profiles",
+            [],
+            None,
+            "{dryRun?: bool, dirs?: [folder]} — re-read Lightroom / Camera Raw preset files (default: Camera Raw's Settings and ImportedSettings) and give your presets of the same name the creative profile (Look) they set, where they have none → {linked, presets (first 50), unmatched: [look names with no imported profile]}",
+            always,
+            |s, p| link_preset_looks(s, p)
+        ),
         // ---- versions & history
         cmd!("version.create", "Create Version", ["Photo"], Some("Cmd+Shift+S"), "{name?}", has_active, |s, p| {
             let id = active(s, "version.create")?;
@@ -1362,4 +1371,70 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         }),
     ]
+}
+
+/// `preset.linkLooks`: presets imported before their Look was read (Bryan, 2026-11-23: the
+/// console's "BH - NMD - 7 - TD" applied without its Summer Fields profile).
+fn link_preset_looks(s: &mut Session, p: &Value) -> Result<Value> {
+    let c = "preset.linkLooks";
+    let dirs: Vec<std::path::PathBuf> = match p.get("dirs").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(Value::as_str).map(std::path::PathBuf::from).collect(),
+        None => {
+            let home = std::env::var_os("HOME").map(std::path::PathBuf::from).ok_or_else(|| bad(c, "no home folder"))?;
+            let cr = home.join("Library/Application Support/Adobe/CameraRaw");
+            vec![cr.join("Settings"), cr.join("ImportedSettings")]
+        }
+    };
+    // preset name (lower case) → its look
+    let mut looks: std::collections::HashMap<String, (String, f64)> = std::collections::HashMap::new();
+    let mut stack: Vec<(std::path::PathBuf, usize)> = dirs.into_iter().map(|d| (d, 0)).collect();
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                if depth < 6 {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            if path.extension().and_then(|x| x.to_str()).is_none_or(|x| !x.eq_ignore_ascii_case("xmp")) || e.metadata().map_or(true, |m| m.len() > 8 << 20) {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Ok(found) = crate::preset_import::read_presets(&path.to_string_lossy(), &bytes, None) else { continue };
+            for it in found {
+                if let Some(l) = it.look {
+                    looks.entry(it.preset.name.trim().to_lowercase()).or_insert(l);
+                }
+            }
+        }
+    }
+    let mut linked = Vec::new();
+    let mut unmatched: Vec<String> = Vec::new();
+    let mut plan: Vec<(usize, String, f64)> = Vec::new();
+    for (i, pr) in s.presets.iter().enumerate() {
+        if pr.builtin || pr.settings.get("profile").is_some() {
+            continue;
+        }
+        let Some((look, amount)) = looks.get(&pr.name.trim().to_lowercase()) else { continue };
+        match crate::lr_migrate::matching_profile(s, &std::collections::HashMap::new(), look) {
+            Some(id) => plan.push((i, id, *amount)),
+            None => {
+                if !unmatched.contains(look) {
+                    unmatched.push(look.clone());
+                }
+            }
+        }
+    }
+    let dry = bool_or(p, "dryRun", false);
+    for (i, id, amount) in plan {
+        if let Some(pr) = s.presets.get_mut(i) {
+            if !dry && let Some(o) = pr.settings.as_object_mut() {
+                o.insert("profile".into(), json!({"id": id, "amount": (amount * 100.0).clamp(0.0, 200.0)}));
+            }
+            linked.push(pr.name.clone());
+        }
+    }
+    Ok(json!({"linked": linked.len(), "presets": linked.iter().take(50).collect::<Vec<_>>(), "unmatched": unmatched}))
 }

@@ -21,6 +21,9 @@ pub struct Imported {
     /// Names of the other editor's settings that have no counterpart here (local masks, its own
     /// profiles…).
     pub unmapped: Vec<String>,
+    /// The creative profile ("Look") it sets, by name and amount (0..1+), for the caller to match
+    /// to an imported LUT profile (`lr_migrate::matching_profile`).
+    pub look: Option<(String, f64)>,
 }
 
 /// Extensions of files read as presets (beyond our own `.lcpreset`).
@@ -511,7 +514,9 @@ pub(crate) fn build(props: &Props, values: &crate::crs_masks::Values, name: Stri
         .unwrap_or_else(|| "Imported Presets".into());
     let uuid = props.get("crs:UUID").and_then(|v| v.first()).map(|u| u.to_ascii_lowercase());
     let id = format!("user.xmp.{}", uuid.unwrap_or_else(|| crate::presets::slug(&format!("{group}-{name}"))));
-    Some(Imported { preset: Preset { id, name, group, settings, favorite: false, builtin: false }, unmapped })
+    let first = |k: &str| props.get(k).and_then(|v| v.first()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let look = first("crs:Look/crs:Name").map(|n| (n, first("crs:Look/crs:Amount").and_then(|a| a.parse::<f64>().ok()).filter(|a| a.is_finite()).unwrap_or(1.0)));
+    Some(Imported { preset: Preset { id, name, group, settings, favorite: false, builtin: false }, unmapped, look })
 }
 
 /// Read the presets in file `name` (`bytes`); `group` names the group when the file doesn't
@@ -571,7 +576,7 @@ pub fn read_presets(name: &str, bytes: &[u8], group: Option<String>) -> Result<V
                     {
                         p.group = g.clone();
                     }
-                    Imported { preset: p, unmapped: Vec::new() }
+                    Imported { preset: p, unmapped: Vec::new(), look: None }
                 })
                 .collect()
         }),

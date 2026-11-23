@@ -1154,6 +1154,42 @@ fn draft_actions(app: &LightcraftApp) -> Vec<(String, String, Value)> {
         v.push((format!("{label} {what}"), "keys.nudge".into(), json!({"control": control, "dir": dir, "size": size})));
     }
     v.push((format!("reset {label}"), "develop.resetControl".into(), json!({"control": control})));
+    // every crop ratio on its own key (Bryan, 2026-11-23), …
+    for (l, a) in [
+        ("As Shot", "original"),
+        ("1 × 1", "1x1"),
+        ("4 × 5 / 8 × 10", "4x5"),
+        ("5 × 7", "5x7"),
+        ("8.5 × 11", "85x110"),
+        ("2 × 3", "2x3"),
+        ("3 × 2", "3x2"),
+        ("4 × 3", "4x3"),
+        ("16 × 10", "16x10"),
+        ("16 × 9", "16x9"),
+        ("9 × 16", "9x16"),
+        ("2 × 1", "2x1"),
+        ("21 × 9", "21x9"),
+        ("XPan 65 × 24", "65x24"),
+        ("3 × 1", "3x1"),
+    ] {
+        v.push((format!("crop ratio {l}"), "crop.aspect".into(), json!({"aspect": a})));
+    }
+    // … each of the user's presets, …
+    for p in app.session.presets.iter().filter(|p| !p.builtin) {
+        v.push((format!("preset: {}", p.name), "preset.applyByName".into(), json!({"name": p.name})));
+    }
+    // … and every other command of the app (its menu name)
+    let have: std::collections::HashSet<String> = v.iter().filter(|(_, _, p)| p.as_object().is_none_or(|o| o.is_empty())).map(|(_, c, _)| c.clone()).collect();
+    for (id, l, _, _) in crate::menus::ui_commands() {
+        if !have.contains(*id) {
+            v.push((crate::i18n::tr(l).to_string(), id.to_string(), json!({})));
+        }
+    }
+    for c in lightcraft_engine::command_specs() {
+        if !have.contains(c.id) && !v.iter().any(|(_, id, _)| id == c.id) {
+            v.push((c.label.to_string(), c.id.to_string(), json!({})));
+        }
+    }
     v.push(("nothing (unbind)".into(), String::new(), Value::Null));
     v
 }
@@ -1212,8 +1248,23 @@ fn shortcuts_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         hint(ui, t, &format!("{} · edits here save at once; edits to the file reload by themselves", p.display()));
     }
     ui.add_space(8.0);
+    // search: the bound keys below AND every action that can be bound (Bryan, 2026-11-23)
+    let search_id = egui::Id::new("keysSearch");
+    let mut q: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
+    row(ui, t, "Search", |ui| {
+        let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text("keys, action or command (crop, preset, flag…)").desired_width(300.0));
+        register(ui.ctx(), "field:keysSearch", r.rect);
+    });
+    ui.data_mut(|d| d.insert_temp(search_id, q.clone()));
+    let ql = q.to_lowercase();
+    ui.add_space(8.0);
     // a new binding: pick an action, then rec. and press the keys
-    let actions = draft_actions(app);
+    let all_actions = draft_actions(app);
+    let actions: Vec<(String, String, Value)> = all_actions
+        .iter()
+        .filter(|(l, c, _)| ql.is_empty() || l.to_lowercase().contains(&ql) || c.to_lowercase().contains(&ql))
+        .cloned()
+        .collect();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -1259,15 +1310,9 @@ fn shortcuts_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             app.keymap.recording = if rec { None } else { Some(None) };
         }
     });
-    ui.add_space(8.0);
-    let search_id = egui::Id::new("keysSearch");
-    let mut q: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
-    row(ui, t, "Search", |ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text("keys, action or command").desired_width(260.0));
-        register(ui.ctx(), "field:keysSearch", r.rect);
-    });
-    ui.data_mut(|d| d.insert_temp(search_id, q.clone()));
-    let ql = q.to_lowercase();
+    if !ql.is_empty() {
+        ui.label(RichText::new(format!("{} actions match — pick one under Add, then rec.", actions.len())).size(11.0).color(t.text_dim));
+    }
     let rows: Vec<crate::keymap::Row> = crate::keymap::rows(&f)
         .into_iter()
         .filter(|r| {
