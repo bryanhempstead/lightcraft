@@ -28,9 +28,12 @@ pub trait Store: Send {
         self.write_atomic(name, &buf)?;
         Ok(buf.len() as u64)
     }
-    /// Append and make durable (fsync) before returning. On an error, part of `data` may have
-    /// been written (a full disk, a dropped network share): the journal cuts the file back to its
-    /// previous length with [`Store::truncate`] before appending again.
+    /// Append, and make durable. [`FsStore`] writes before returning (an app crash keeps the
+    /// bytes) and fsyncs on a worker thread right after: a flush to the drive took 5–400 ms of the
+    /// UI thread per star or flag while culling (QA-PERF). A failed fsync fails the next append.
+    /// On an error, part of `data` may have been written (a full disk, a dropped network share):
+    /// the journal cuts the file back to its previous length with [`Store::truncate`] before
+    /// appending again.
     fn append(&mut self, name: &str, data: &[u8]) -> io::Result<()>;
     /// Cut a file to `len` bytes (drop a torn tail before appending again). A missing file is
     /// left missing.
@@ -50,13 +53,100 @@ pub struct FsStore {
     dir: PathBuf,
     /// Open append handle (kept between appends; dropped on rewrite/truncate).
     appender: Option<(String, std::fs::File)>,
+    /// fsyncs appended bytes off the caller's thread (started by the first append).
+    syncer: Option<Syncer>,
+}
+
+/// A worker that fsyncs the files [`FsStore::append`] wrote: appends queued while one fsync runs
+/// are covered by the next (they share the file). Dropping it waits for the queued fsyncs.
+struct Syncer {
+    tx: Option<std::sync::mpsc::Sender<std::fs::File>>,
+    state: Arc<SyncState>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[derive(Default)]
+struct SyncState {
+    /// fsyncs queued or running.
+    pending: Mutex<usize>,
+    idle: std::sync::Condvar,
+    /// The first failed fsync, reported by the next append (or [`FsStore::flush`]).
+    error: Mutex<Option<io::Error>>,
+}
+
+impl Syncer {
+    fn start() -> Option<Syncer> {
+        let (tx, rx) = std::sync::mpsc::channel::<std::fs::File>();
+        let state = Arc::new(SyncState::default());
+        let st = state.clone();
+        let thread = std::thread::Builder::new()
+            .name("catalog-fsync".into())
+            .spawn(move || {
+                while let Ok(f) = rx.recv() {
+                    // everything queued meanwhile: one fsync per file covers all of its appends
+                    let mut files = vec![f];
+                    files.extend(rx.try_iter());
+                    let n = files.len();
+                    for f in files {
+                        if let Err(e) = f.sync_data() {
+                            st.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert(e);
+                        }
+                    }
+                    let mut p = st.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    *p = p.saturating_sub(n);
+                    st.idle.notify_all();
+                }
+            })
+            .ok()?;
+        Some(Syncer { tx: Some(tx), state, thread: Some(thread) })
+    }
+
+    /// Queue an fsync of `f`; gives it back when the worker is gone.
+    fn send(&self, f: std::fs::File) -> Result<(), std::fs::File> {
+        let Some(tx) = &self.tx else { return Err(f) };
+        *self.state.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
+        tx.send(f).map_err(|e| {
+            let mut p = self.state.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            *p = p.saturating_sub(1);
+            e.0
+        })
+    }
+
+    fn take_error(&self) -> Option<io::Error> {
+        self.state.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+    }
+
+    /// Wait until every queued fsync has run.
+    fn wait(&self) {
+        let mut p = self.state.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *p > 0 {
+            p = self.state.idle.wait(p).unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+}
+
+impl Drop for Syncer {
+    fn drop(&mut self) {
+        self.tx = None;
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
 }
 
 impl FsStore {
     /// Use `dir` (created if missing).
     pub fn open(dir: impl AsRef<Path>) -> io::Result<FsStore> {
         std::fs::create_dir_all(dir.as_ref())?;
-        Ok(FsStore { dir: dir.as_ref().to_path_buf(), appender: None })
+        Ok(FsStore { dir: dir.as_ref().to_path_buf(), appender: None, syncer: None })
+    }
+
+    /// Wait until everything appended so far is fsynced; the error of a failed fsync since the
+    /// last append, if any.
+    pub fn flush(&mut self) -> io::Result<()> {
+        let Some(s) = &self.syncer else { return Ok(()) };
+        s.wait();
+        s.take_error().map_or(Ok(()), Err)
     }
     pub fn dir(&self) -> &Path {
         &self.dir
@@ -134,8 +224,23 @@ impl Store for FsStore {
             }
             self.appender = Some((name.to_string(), f));
         }
+        // an earlier append whose fsync failed: this one fails (the handle may be dead)
+        if let Some(e) = self.syncer.as_ref().and_then(Syncer::take_error) {
+            self.appender = None;
+            return Err(e);
+        }
+        if self.syncer.is_none() && !cfg!(target_arch = "wasm32") {
+            self.syncer = Syncer::start();
+        }
         let Some((_, f)) = self.appender.as_mut() else { return Err(io::Error::other("appender not open")) };
-        let written = f.write_all(data).and_then(|()| f.sync_data());
+        let written = f.write_all(data).and_then(|()| {
+            // fsync on the worker; on this thread when there is none (or no second handle)
+            let queued = match (&self.syncer, f.try_clone()) {
+                (Some(s), Ok(c)) => s.send(c).is_ok(),
+                _ => false,
+            };
+            if queued { Ok(()) } else { f.sync_data() }
+        });
         if written.is_err() {
             // The handle may be dead (a network share that reconnected, a removed volume): the next
             // attempt reopens the file. Part of `data` may be in the file; the caller cuts it back
@@ -165,7 +270,7 @@ impl Store for FsStore {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn background_writer(&self) -> Option<Box<dyn Store>> {
-        Some(Box::new(FsStore { dir: self.dir.clone(), appender: None }))
+        Some(Box::new(FsStore { dir: self.dir.clone(), appender: None, syncer: None }))
     }
 }
 
@@ -229,5 +334,35 @@ impl Store for MemStore {
     }
     fn background_writer(&self) -> Option<Box<dyn Store>> {
         self.background.then(|| Box::new(self.clone()) as Box<dyn Store>)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Appends are in the file as soon as `append` returns (an app crash keeps them); their
+    /// fsyncs run on the worker, which `flush` and dropping the store wait for.
+    #[test]
+    fn appends_are_written_at_once_and_fsynced_on_the_worker() {
+        let dir = std::env::temp_dir().join(format!("lc-store-fsync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut s = FsStore::open(&dir).unwrap();
+        let mut want = Vec::new();
+        for k in 0..300 {
+            let line = format!("record {k}\n");
+            s.append("catalog.log", line.as_bytes()).unwrap();
+            want.extend_from_slice(line.as_bytes());
+            assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap().len(), want.len(), "written before append returned");
+        }
+        assert!(s.syncer.is_some(), "fsyncs run on a worker");
+        s.flush().unwrap();
+        assert_eq!(*s.syncer.as_ref().unwrap().state.pending.lock().unwrap(), 0);
+        // a rewrite and a truncate in between keep working; drop waits for the queued fsyncs
+        s.truncate("catalog.log", 9).unwrap();
+        s.append("catalog.log", b"after\n").unwrap();
+        drop(s);
+        assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap(), b"record 0\nafter\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

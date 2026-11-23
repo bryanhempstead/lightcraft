@@ -120,7 +120,10 @@ fn save_png(img: &egui::ColorImage, path: &std::path::Path) {
 fn text_plate_and_modules() {
     let mut h = demo();
     plate(&mut h, json!({"on": true, "kind": "text", "text": "hempstead.studio", "place": "canvas.br", "size": 40}));
-    assert!(h.settle(SETTLE));
+    // the plate is what's checked: wait for it, not for every thumbnail on a loaded machine
+    h.settle(SETTLE);
+    assert!(h.step_until(SETTLE, |h| h.app.identity.rect.is_some()), "{}", h.app.renderer.diagnose());
+    h.step();
     let r = drawn(&h);
     assert!(r.width() > r.height() * 3.0, "{r:?}");
     let img = h.paint();
@@ -134,11 +137,10 @@ fn text_plate_and_modules() {
     plate(&mut h, json!({"show": ["library"]}));
     let r = h.request("engine.execute", json!({"command": "view.develop"}), SETTLE);
     assert_eq!(r["ok"], true);
-    assert!(h.settle(SETTLE));
+    h.settle(SETTLE);
     assert!(h.app.identity.rect.is_none(), "not shown in Develop");
     plate(&mut h, json!({"show": "all"}));
-    assert!(h.settle(SETTLE));
-    assert!(h.app.identity.rect.is_some(), "shown in Develop again");
+    assert!(h.step_until(SETTLE, |h| h.app.identity.rect.is_some()), "shown in Develop again ({})", h.app.renderer.diagnose());
 }
 
 /// Bad input: a corrupt or missing file, a bad tint or parameter is an error that changes

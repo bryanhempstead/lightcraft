@@ -22,6 +22,18 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   `remove.cancel`, `remove.generate {remake}`), Remove panel `quick.` / `stop.` / `remake.`. ~10 s a 512 px
   variation, ~18 s 1024 px on an idle M3 Pro; much slower under load. needs.you #204 (download OK), #205 (real-photo
   test). Left: VAE ~40 % of the time (TAESD?), haze/softness vs Lightroom, first fill pays kernel compile.
+- [ ] (qa agent, 2026-11-22, branch worktree-agent-afcfd18c32ee6aa74, not merged) **QA-PERF: measured on a copy of
+  Bryan's 15,865-photo library** — `docs/perf.md` (numbers before/after, how to measure, what's still slow).
+  Fixed: smart-album recount per keystroke (`crates/catalog/src/album_counts.rs`, `AlbumCountMemo`), fsync per op
+  on the UI thread (`FsStore` fsyncs on a worker), render results converted to egui images on the UI thread
+  (`render::Prepared` / `Pixels`, made on the render worker; 1:1 pan stalls up to 1.5 s), 60 fps polling while
+  renders run (`JobPool::set_on_done` wakes the UI), GPU readback waiting for all GPU work in the process
+  (`finish_and_read` waits for its own submission), every demo session repainting every demo photo on the shared rayon pool (the "0 thumbnails after 120 s" UI-test flake; `media::demo_render` shares them),
+  `source_total` sorting the catalog to count it (`Catalog::count`), `LibraryLock::acquire` refusing a reopen while
+  a forked child still held the lock (retries 2 s when no owner note); `ui.inspect` → `perf.window` + `resetPerf`;
+  `Renderer::diagnose` in test failure messages; the grid / Alt-preview / identity-plate tests wait for what they
+  check. Left (in docs/perf.md): first-view raw decodes for thumbnails (19 % cached), Shoots / folder tree /
+  visible sort rebuilt per change, export + 1:1 render time, `keep_pixels` CPU copies with `--control`.
 - [ ] (fixnotes agent, 2026-11-22, branch worktree-agent-abcb4f6b3b76a1a30, not merged) **LC-UI-FIXNOTES: notes. →
   fix. → Claude** — `crates/ui-egui/src/fixnotes.rs` (new: top-bar `notes.` button with open-count badge, floating
   panel ⌘⌥⇧N, context capture, screenshots via `LightcraftApp::queue_screenshot` (the `ui.screenshot` path), request

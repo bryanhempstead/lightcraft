@@ -102,13 +102,24 @@ impl LibraryLock {
             Ok(f) => f,
             Err(e) => return Ok(unlocked(e)),
         };
-        match file.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
-                let owner = std::fs::read(dir.join(OWNER)).ok().and_then(|b| serde_json::from_slice::<LockOwner>(&b).ok());
-                return Err(LockError::InUse(owner));
+        // A holder that wrote no owner note (or this very process) is usually about to let go: a
+        // child process forked by another thread holds a copy of the lock until it execs, and the
+        // library this process just closed is released by then. Retry briefly before refusing;
+        // another program holding the library keeps its note and is refused at once.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(TryLockError::WouldBlock) => {
+                    let owner = std::fs::read(dir.join(OWNER)).ok().and_then(|b| serde_json::from_slice::<LockOwner>(&b).ok());
+                    let transient = owner.as_ref().is_none_or(|o| o.pid == std::process::id());
+                    if !transient || std::time::Instant::now() >= deadline {
+                        return Err(LockError::InUse(owner));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(TryLockError::Error(e)) => return Ok(unlocked(e)),
             }
-            Err(TryLockError::Error(e)) => return Ok(unlocked(e)),
         }
         let owner = LockOwner::this_process(program);
         if let Ok(json) = serde_json::to_vec_pretty(&owner)

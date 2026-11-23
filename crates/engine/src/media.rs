@@ -166,6 +166,40 @@ pub enum SourceRef {
     },
 }
 
+/// Procedural demo photos painted at a size, shared by every session in the process (most
+/// recently used last, up to [`DEMO_CACHE_BYTES`]).
+static DEMO_RENDERS: std::sync::Mutex<Vec<((u32, u32, usize), Arc<Rgb32f>)>> = std::sync::Mutex::new(Vec::new());
+const DEMO_CACHE_BYTES: usize = 384 << 20;
+
+/// A demo photo painted to fit `max_edge`. The painting is the same every time, so sessions share
+/// it: the UI tests run a dozen demo sessions at once, and each painting every demo photo itself
+/// queued a grid's thumbnails behind minutes of the others' painting on a loaded machine
+/// (`0 done, 10 in flight` after 120 s, QA-PERF).
+fn demo_render(scene: &lightcraft_scenes::Scene, max_edge: usize) -> Arc<Rgb32f> {
+    let key = (scene.kind as u32, scene.seed, max_edge);
+    let lock = || DEMO_RENDERS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    {
+        let mut v = lock();
+        if let Some(i) = v.iter().position(|(k, _)| *k == key) {
+            let hit = v.remove(i);
+            let img = hit.1.clone();
+            v.push(hit);
+            return img;
+        }
+    }
+    let img = Arc::new(scene.render_fit(max_edge));
+    let bytes = |i: &Rgb32f| i.data.len() * std::mem::size_of::<[f32; 3]>();
+    if bytes(&img) <= DEMO_CACHE_BYTES / 4 {
+        let mut v = lock();
+        v.retain(|(k, _)| *k != key);
+        v.push((key, img.clone()));
+        while v.iter().map(|(_, i)| bytes(i)).sum::<usize>() > DEMO_CACHE_BYTES && v.len() > 1 {
+            v.remove(0);
+        }
+    }
+    img
+}
+
 impl SourceRef {
     pub fn load(&self) -> Result<Arc<Rgb32f>, String> {
         self.load_source().map(|s| s.image)
@@ -174,7 +208,7 @@ impl SourceRef {
     pub fn load_source(&self) -> Result<DecodedSource, String> {
         let image = match self {
             SourceRef::Loaded(a) => return Ok((**a).clone()),
-            SourceRef::Demo { scene, max_edge } => Arc::new(scene.render_fit(*max_edge)),
+            SourceRef::Demo { scene, max_edge } => demo_render(scene, *max_edge),
             SourceRef::File { path, max_edge, loader, fallback, own_profile, base, enhanced } => {
                 let r = match loader {
                     Some(l) => crate::files::with_own_profile(*own_profile, || {
@@ -1577,6 +1611,21 @@ mod tests {
         assert_eq!(m.usage().1.count, 1);
         assert_eq!(m.usage().0.count, 0);
         assert_eq!(m.rendered.mem_usage().0, 0);
+    }
+
+    /// Demo photos are painted once per size for the whole process: a second session (or a second
+    /// load) gets the same pixels without painting again.
+    #[test]
+    fn demo_paintings_are_shared_between_sessions() {
+        let scene = lightcraft_scenes::demo_library().into_iter().next().expect("a demo scene");
+        let load = |edge| SourceRef::Demo { scene: Box::new(scene.clone()), max_edge: edge }.load().unwrap();
+        let (a, b) = (load(97), load(97));
+        assert!(Arc::ptr_eq(&a, &b), "painted once");
+        assert_eq!(a.width.max(a.height), 97);
+        let c = load(131);
+        assert!(!Arc::ptr_eq(&a, &c));
+        assert_eq!(c.width.max(c.height), 131);
+        assert_eq!(*a, scene.render_fit(97), "the same pixels as painting it");
     }
 
     #[test]

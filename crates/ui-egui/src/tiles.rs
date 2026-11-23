@@ -110,6 +110,7 @@ impl TileView {
         ms: f64,
         keep_pixels: bool,
         p3: bool,
+        prepared: Option<Vec<crate::render::Pixels>>,
     ) -> bool {
         let Some(asked) = self.asked.remove(&job_key) else { return false };
         let current = Some(asked.look) == self.look || Some(asked.look) == self.shown;
@@ -118,25 +119,21 @@ impl TileView {
         }
         self.frame += 1;
         let (fw, fh) = (px.full_w.max(1) as f64, px.full_h.max(1) as f64);
-        for ty in (0..px.h).step_by(PIECE) {
-            for tx in (0..px.w).step_by(PIECE) {
-                let (w, h) = (PIECE.min(px.w - tx), PIECE.min(px.h - ty));
+        // pieces converted on the render worker (in this loop's order), else here
+        let mut prepared = prepared.filter(|v| v.len() == pieces(px).count()).map(Vec::into_iter);
+        for (tx, ty, w, h) in pieces(px) {
+            {
                 let rect = Region {
                     x0: (px.x + tx) as f64 / fw,
                     y0: (px.y + ty) as f64 / fh,
                     x1: (px.x + tx + w) as f64 / fw,
                     y1: (px.y + ty + h) as f64 / fh,
                 };
-                let bytes = crop_bytes(image, tx, ty, w, h);
-                let srgb = Arc::new(egui::ColorImage::from_rgba_unmultiplied([w, h], &bytes));
-                let pixels = keep_pixels.then(|| srgb.clone());
-                let shown = if p3 {
-                    let mut b = bytes;
-                    crate::display_p3::srgb_to_p3(&mut b);
-                    Arc::new(egui::ColorImage::from_rgba_unmultiplied([w, h], &b))
-                } else {
-                    srgb
+                let crate::render::Pixels { srgb, shown } = match prepared.as_mut().and_then(Iterator::next) {
+                    Some(p) => p,
+                    None => crate::render::Pixels::of(&crop_bytes(image, tx, ty, w, h), [w, h], p3),
                 };
+                let pixels = keep_pixels.then(|| srgb.clone());
                 // the same place in the same look: replaced
                 self.pieces.retain(|p| !(p.look == asked.look && same(&p.rect, &rect)));
                 let tex = ctx.load_texture(format!("{name}-{:.5}-{:.5}", rect.x0, rect.y0), shown, egui::TextureOptions::LINEAR);
@@ -211,6 +208,16 @@ fn intersect(a: &Region, b: &Region) -> Region {
 }
 
 /// RGBA bytes of the `w × h` pixels at (`x`, `y`) of `img` (missing ones transparent black).
+/// A region render's pieces: (x, y, width, height) in it, row by row.
+fn pieces(px: RegionPx) -> impl Iterator<Item = (usize, usize, usize, usize)> {
+    (0..px.h).step_by(PIECE).flat_map(move |ty| (0..px.w).step_by(PIECE).map(move |tx| (tx, ty, PIECE.min(px.w - tx), PIECE.min(px.h - ty))))
+}
+
+/// A region render cut into its pieces' pixels (on the render worker, see [`crate::render::Prepared`]).
+pub(crate) fn piece_pixels(image: &lightcraft_raster::Rgba8, px: RegionPx, p3: bool) -> Vec<crate::render::Pixels> {
+    pieces(px).map(|(tx, ty, w, h)| crate::render::Pixels::of(&crop_bytes(image, tx, ty, w, h), [w, h], p3)).collect()
+}
+
 fn crop_bytes(img: &lightcraft_raster::Rgba8, x: usize, y: usize, w: usize, h: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(w * h * 4);
     for row in y..y + h {
@@ -384,6 +391,31 @@ pub fn inspect(views: &HashMap<u8, TileView>) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pieces the render worker prepares are the ones `accept` would cut, in its order, with
+    /// the same pixels.
+    #[test]
+    fn prepared_pieces_match_the_ones_cut_on_the_ui_thread() {
+        let (w, h) = (1100, 600);
+        let mut img = lightcraft_raster::Rgba8::new(w, h);
+        for (i, p) in img.data.iter_mut().enumerate() {
+            *p = [(i % 251) as u8, (i / w % 253) as u8, 7, 255];
+        }
+        let px = RegionPx { x: 0, y: 0, w, h, full_w: 4000, full_h: 3000 };
+        for p3 in [false, true] {
+            let prepared = piece_pixels(&img, px, p3);
+            let cut: Vec<_> = pieces(px).collect();
+            assert_eq!(prepared.len(), 6);
+            assert_eq!(cut.len(), prepared.len());
+            for ((tx, ty, pw, ph), got) in cut.into_iter().zip(&prepared) {
+                let here = crate::render::Pixels::of(&crop_bytes(&img, tx, ty, pw, ph), [pw, ph], p3);
+                assert_eq!(got.srgb.size, [pw, ph]);
+                assert_eq!(got.srgb.pixels, here.srgb.pixels);
+                assert_eq!(got.shown.pixels, here.shown.pixels);
+                assert_eq!(Arc::ptr_eq(&got.srgb, &got.shown), !p3, "sRGB screens share one image");
+            }
+        }
+    }
 
     #[test]
     fn levels_follow_the_zoom() {

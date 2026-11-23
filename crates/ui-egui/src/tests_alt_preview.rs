@@ -59,11 +59,14 @@ fn alt_drag(h: &mut Headless, control: &str, check: fn([u8; 3]) -> bool) {
     assert_eq!(h.app.ui.dragging_control.as_deref(), Some(control));
     assert!(share(h, check) < 0.5, "no preview without Alt");
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::ALT));
+    // under load the preview's render can land after the queue looked idle: wait for it
     h.settle(SETTLE);
-    assert!(share(h, check) > 0.99, "{control}: the preview: {}", share(h, check));
+    h.step_until(SETTLE, |h| share(h, check) > 0.99);
+    assert!(share(h, check) > 0.99, "{control}: the preview: {} ({})", share(h, check), h.app.renderer.diagnose());
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::NONE));
     h.settle(SETTLE);
-    assert!(share(h, check) < 0.5, "the photo is back");
+    h.step_until(SETTLE, |h| share(h, check) < 0.5);
+    assert!(share(h, check) < 0.5, "the photo is back ({})", h.app.renderer.diagnose());
     h.app.synthetic.push(Event::PointerButton {
         pos: from - egui::vec2(32.0, 0.0),
         button: PointerButton::Primary,

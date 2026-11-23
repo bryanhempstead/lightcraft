@@ -23,10 +23,14 @@ struct Entry<S, R> {
     job: Job<R>,
 }
 
+/// Called by a worker once a finished job's result can be received.
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
 struct Shared<S, R> {
     queue: Mutex<Vec<Entry<S, R>>>,
     cv: Condvar,
     shutdown: AtomicBool,
+    on_done: Mutex<Option<Waker>>,
 }
 
 /// A finished job.
@@ -54,7 +58,12 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
     pub fn new(threads: usize) -> Self {
         let (tx, rx) = channel();
         JobPool {
-            shared: Arc::new(Shared { queue: Mutex::new(Vec::new()), cv: Condvar::new(), shutdown: AtomicBool::new(false) }),
+            shared: Arc::new(Shared {
+                queue: Mutex::new(Vec::new()),
+                cv: Condvar::new(),
+                shutdown: AtomicBool::new(false),
+                on_done: Mutex::new(None),
+            }),
             tx,
             rx,
             threads,
@@ -91,6 +100,10 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                     let done = Done { slot: e.slot, key: e.key, result, ms: t0.elapsed().as_secs_f64() * 1000.0 };
                     if tx.send(done).is_err() {
                         break;
+                    }
+                    let wake = shared.on_done.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    if let Some(w) = wake {
+                        w();
                     }
                 }
             });
@@ -137,6 +150,17 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
     }
 
     /// A finished job, if any.
+    /// Call `f` on the worker each time a result is ready (a UI wakes its event loop instead of
+    /// polling every frame while jobs run).
+    pub fn set_on_done(&self, f: Option<Waker>) {
+        *self.shared.on_done.lock().unwrap_or_else(|e| e.into_inner()) = f;
+    }
+
+    /// Is a waker set ([`JobPool::set_on_done`])?
+    pub fn wakes(&self) -> bool {
+        self.shared.on_done.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    }
+
     pub fn try_recv(&self) -> Option<Done<S, R>> {
         self.rx.try_recv().ok()
     }
