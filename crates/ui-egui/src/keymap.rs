@@ -1578,6 +1578,9 @@ pub const CONSOLE_SETTLE: std::time::Duration = std::time::Duration::from_millis
 /// committed edit: history, journal, a sidecar written to the photo's drive, a full-size render.
 pub fn console_begin(app: &mut crate::LightcraftApp, control: &str) {
     let now = std::time::Instant::now();
+    if control.starts_with("crop.") {
+        app.crop_touch = Some(now);
+    }
     match &app.console_drag {
         Some((_, c)) if c == control && app.session.interaction.is_some() => {}
         Some(_) => {

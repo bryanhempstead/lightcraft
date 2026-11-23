@@ -140,7 +140,9 @@ fn detail_layer(
         return false;
     }
     if let Some(t) = app.renderer.tiles.get_mut(&view) {
-        t.draw(&p.with_clip_rect(clip), img, clip, at.interacting && overlay == lightcraft_pipeline::Overlay::None);
+        // never the previous look's tiles: over the (already new) preview they flashed the old edit
+        // back in patches on every slider / dial move (Bryan, 2026-11-23)
+        t.draw(&p.with_clip_rect(clip), img, clip);
     }
     true
 }
@@ -623,6 +625,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // LRC-VIEW-LOUPEOVERLAY: grid / guides / layout image / composition guides / frames on the
     // photo as shown (the crop tool draws its own guides on the uncropped frame)
     let guide_drag = !crop_tool && !show_before && super::crop_overlay::loupe(app, ui, &resp, img_rect, main_area.intersect(canvas));
+    // a crop dial turned outside the crop tool: the thirds over the (cropped) photo while it moves
+    if !crop_tool && !show_before && crop_grid_on(app, ui.ctx()) {
+        let p = ui.painter_at(main_area.intersect(canvas));
+        let guide = Stroke::new(0.8, Color32::from_white_alpha(150));
+        for line in super::crop_overlay::paths(crate::state::CropOverlay::Thirds, 0, img_rect.width(), img_rect.height()) {
+            p.add(egui::Shape::line(line.into_iter().map(|(x, y)| img_rect.min + vec2(x * img_rect.width(), y * img_rect.height())).collect(), guide));
+        }
+    }
     let map = CanvasMap::new(&frame, img_rect);
     brief_info(app, ui.ctx(), id);
     info_overlay(app, &p, canvas, &photo);
@@ -1571,8 +1581,14 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     // (u, v) across / down the (rotated) crop frame
     let at = |(u, v): (f32, f32)| pts[0] + (pts[1] - pts[0]) * u + (pts[3] - pts[0]) * v;
     let (cw, ch) = (pts[0].distance(pts[1]), pts[0].distance(pts[3]));
-    for line in super::crop_overlay::paths(app.ui.crop_overlay, app.ui.crop_overlay_orient, cw, ch) {
-        p.add(egui::Shape::line(line.into_iter().map(at).collect(), guide));
+    // the guides while the crop is being adjusted, gone 0.8 s after (Bryan, 2026-11-23)
+    if resp.dragged() {
+        app.crop_touch = Some(std::time::Instant::now());
+    }
+    if crop_grid_on(app, ui.ctx()) {
+        for line in super::crop_overlay::paths(app.ui.crop_overlay, app.ui.crop_overlay_orient, cw, ch) {
+            p.add(egui::Shape::line(line.into_iter().map(at).collect(), guide));
+        }
     }
     // handles: 0..3 corners, 4..7 edges (top, right, bottom, left)
     let handles: Vec<Pos2> = (0..8).map(|i| if i < 4 { pts[i] } else { lerp(pts[i - 4], pts[(i - 3) % 4], 0.5) }).collect();
@@ -2390,4 +2406,16 @@ pub(crate) fn hdr_headroom(app: &LightcraftApp) -> Option<f32> {
         return None;
     }
     app.hdr_view.as_ref().and_then(|v| v.headroom()).filter(|h| h.is_finite() && *h > 1.0)
+}
+
+/// The crop was adjusted within [`crate::CROP_GRID_HOLD`]: show its grid (and look again then).
+fn crop_grid_on(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+    let Some(at) = app.crop_touch else { return false };
+    let age = at.elapsed();
+    if age < crate::CROP_GRID_HOLD {
+        ctx.request_repaint_after(crate::CROP_GRID_HOLD - age);
+        true
+    } else {
+        false
+    }
 }

@@ -230,6 +230,9 @@ impl PerfWindow {
     }
 }
 
+/// How long the crop's thirds grid stays after the last crop adjustment.
+pub const CROP_GRID_HOLD: std::time::Duration = std::time::Duration::from_millis(800);
+
 pub struct LightcraftApp {
     /// The Map module's tiles and textures (LR-MAP-MODULE).
     pub map: panels::map::MapRuntime,
@@ -343,6 +346,9 @@ pub struct LightcraftApp {
     pub h_down: Option<(std::time::Instant, bool)>,
     /// The next H press is the hold's replay: the shortcuts get it ([`shortcuts`]' tap-or-hold).
     pub h_replay: bool,
+    /// When the crop was last adjusted (a handle drag, a crop dial): its thirds grid shows until
+    /// [`CROP_GRID_HOLD`] after (Lightroom's Auto crop overlay).
+    pub crop_touch: Option<std::time::Instant>,
     /// Control requests to handle again next frame (`control::Outcome::Retry`) and how often they were.
     pub control_retry: Vec<(ControlRequest, u8)>,
     /// The host's MIDI input status for the ctrl. page ("2 inputs: Monogram…", an error).
@@ -420,6 +426,7 @@ impl LightcraftApp {
             console_drag: None,
             h_down: None,
             h_replay: false,
+            crop_touch: None,
             control_retry: Vec::new(),
             midi_status: String::new(),
             left_off: leftoff::Tracker::default(),
