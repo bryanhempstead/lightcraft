@@ -538,7 +538,8 @@ pub struct FinishParams {
     pub win: (usize, usize, usize, usize),
     pub px_per_long: f64,
     /// Peak linear output relative to SDR white: 1 for SDR renders; `2^max_ev` for an HDR render
-    /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them.
+    /// ([`OutputDepth::F32Hdr`] with HDR on), which keeps values above 1 instead of clipping them;
+    /// an HDR display's view with less headroom: that headroom ([`lightcraft_develop::Hdr::view_peak`]).
     pub peak: f32,
     /// The SDR rendition's highlight saturation (`crs:SDRBlend` / 100, −1..1, see
     /// [`highlight_saturation`]); 0 for every other render.
@@ -550,6 +551,12 @@ pub struct FinishParams {
     pub tex_space: Option<([[f32; 3]; 3], [[f32; 3]; 3])>,
     /// Contrast's pivot key ([`crate::tone::lr::ToneStats::key`]) the tone map was made with.
     pub tone_key: Option<f32>,
+}
+
+/// The sliders that move Camera Raw's HDR tone ([`crate::tone_hdr`]).
+fn hdr_sliders(s: &DevelopSettings) -> crate::tone_hdr::Sliders {
+    let f = |v: f64| if v.is_finite() { v as f32 } else { 0.0 };
+    crate::tone_hdr::Sliders { whites: f(s.light.whites), contrast: f(s.light.contrast) }
 }
 
 /// Chroma gain of `crs:SDRBlend` at ±100 on the brightest SDR tones (Camera Raw's "highlight
@@ -610,9 +617,10 @@ impl FinishParams {
         });
         let (hl, sh) = if lr_tone { (0.0, 0.0) } else { (hl, sh) };
         // HDR edits (an HDR render only: every SDR render gets the SDR rendition, HDR off)
-        let peak = s.hdr.peak();
+        // (an HDR display with less headroom than the limit sees the edit as a gain map shows it)
+        let (peak, view) = (s.hdr.peak(), s.hdr.view_peak());
         FinishParams {
-            peak,
+            peak: view,
             hl_sat: if s.hdr.enabled || !s.hdr.rendition_blend.is_finite() { 0.0 } else { (s.hdr.rendition_blend / 100.0).clamp(-1.0, 1.0) as f32 },
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
@@ -625,7 +633,7 @@ impl FinishParams {
             } else {
                 ToneMap::display(s.light.contrast, s.light.whites, s.light.blacks)
             }
-            .with_headroom(peak),
+            .with_hdr_view(peak, view, hdr_sliders(s)),
             lut: crate::lut::get(&s.profile.id).map(|l| {
                 let k = l.blend((s.profile.amount / 100.0) as f32);
                 (l, k)
@@ -692,8 +700,9 @@ impl FinishParams {
         let hs_used = s.light.highlights != 0.0 || s.light.shadows != 0.0 || masks(|a| a.highlights) || masks(|a| a.shadows);
         let hs = sc::hs_measured() && self.adobe.is_some() && hs_used;
         let dehaze = sc::HAZE_MEASURED && (self.dehaze > 0.0 || s.masks.iter().any(|m| m.adjust.dehaze > 0.0));
-        // Camera Raw's default black follows the photo's dark key, after Shadows (`black_cr`)
-        if let (Some(m), true) = (map, self.adobe.is_some() && self.peak <= 1.0) {
+        // Camera Raw's default black follows the photo's dark key, after Shadows (`black_cr`); an
+        // HDR render too (its shadows are the SDR rendition's in Camera Raw: `docs/lr-match.md` → HDR tone)
+        if let (Some(m), true) = (map, self.adobe.is_some()) {
             self.black_from_map(m, s, hs);
         }
         let map = map.filter(|_| clarity || hs);
@@ -743,7 +752,7 @@ impl FinishParams {
         let from = if mode == b::Mode::Shift { key } else { b::RAMP_KEY + ev };
         let Some(c) = b::correction(key + shift, from, b::remaining((s.light.blacks / 100.0) as f32)) else { return };
         self.tone = ToneMap::adobe_lr_black(&a.base, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks, self.tone_key, Some(&c[..]))
-            .with_headroom(self.peak);
+            .with_hdr_view(s.hdr.peak(), self.peak, hdr_sliders(s));
     }
 }
 

@@ -606,8 +606,10 @@ impl RenderJob {
 
     /// The HDR rendition for an HDR (EDR) display whose headroom right now is `headroom` (peak
     /// over SDR white): a float render ([`lightcraft_pipeline::OutputDepth::F32Hdr`]) of a photo
-    /// edited in HDR, its highlights fitted to the smaller of its HDR Limit and the display's
-    /// headroom (Lightroom shows an HDR edit so). Photos without an HDR edit, a headroom of 1 or
+    /// edited in HDR; on a display with less headroom than its HDR Limit, shown as a gain map of the
+    /// edit is shown there (the SDR and HDR tones blended in log terms by the headroom's share of the
+    /// limit, [`lightcraft_pipeline::tone::ToneMap::with_hdr_view`]: macOS, Chrome and Lightroom
+    /// adapt an HDR photo to the display so). Photos without an HDR edit, a headroom of 1 or
     /// less (or not finite), and diagnostic overlays stay SDR. Never cached as the view preview
     /// (its 8-bit image is the clipped HDR render, not the SDR rendition).
     pub fn with_hdr_view(mut self, headroom: f32) -> Self {
@@ -617,8 +619,8 @@ impl RenderJob {
         // in tenth-stop steps: the headroom follows the screen's brightness, and each step re-renders
         let display_ev = (f64::from(headroom.log2()) * 10.0).floor() / 10.0;
         let mut s = (*self.settings).clone();
-        s.hdr.max_ev = s.hdr.headroom_ev().min(display_ev);
-        self.key ^= Hasher128::new().str("hdrView").u64(s.hdr.max_ev.to_bits()).finish().0 as u64;
+        s.hdr.view_ev = if display_ev < s.hdr.headroom_ev() { display_ev.max(0.01) } else { 0.0 };
+        self.key ^= Hasher128::new().str("hdrView").u64(s.hdr.view_ev.to_bits()).finish().0 as u64;
         self.settings = Arc::new(s);
         self.request.depth = lightcraft_pipeline::OutputDepth::F32Hdr;
         self.view_cache = None;

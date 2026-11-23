@@ -55,6 +55,8 @@ pub mod spots;
 pub mod texture_cr;
 pub mod tone;
 pub mod tone_adobe;
+pub mod tone_hdr;
+pub mod tone_hdr_cr;
 pub mod transform;
 pub mod upright;
 pub mod visualize;

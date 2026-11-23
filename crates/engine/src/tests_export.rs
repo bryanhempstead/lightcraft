@@ -396,6 +396,9 @@ fn hdr_jpeg_export_writes_a_gain_map_and_sdr_edits_stay_plain() {
     assert!(gainmap::is_gain_map_jpeg(&e.bytes));
     let gm = gainmap::read_jpeg(&e.bytes).unwrap();
     assert!(gm.meta.alternate_headroom > 0.5 && gm.meta.alternate_headroom <= 3.05, "headroom {}", gm.meta.alternate_headroom);
+    // a colour gain map: the SDR base's clipped, paler highlights get their HDR colour back
+    assert!(gm.meta.multichannel && gm.gain.channels == 3);
+    assert!(!crate::export::gain_map_options(crate::export::ExportFormat::Avif).multichannel, "ImageIO's AVIF writer drops colour maps");
     // the base is the SDR rendition: the same pixels as the SDR export (the decoders agree)
     let a = lightcraft_codecs::decode(&e.bytes, Default::default()).unwrap();
     let b = lightcraft_codecs::decode(&plain.bytes, Default::default()).unwrap();

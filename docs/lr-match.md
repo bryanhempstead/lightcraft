@@ -1339,3 +1339,82 @@ the profile's hue/sat map. With the round's other changes the acceptance gate pa
 now runs after Calibration for every camera (`HUE_SAT_IN_FINISH_ALL`; custom white balance at the DNG
 spec's strength). The round-8 edge cases (X100F PV6, one default R6 photo at the pass line) are within
 tolerance now: X100F PV6 2.35 → 2.33, default photos 19 → 19 passing.
+
+## HDR tone (2026-11-22): Camera Raw's HDR render measured
+
+LR-HDR-EDIT / LR-VIEW-HDR-DISPLAY / LR-EXP-HDR. Camera Raw 18.6 in Photoshop 2026 renders an edit with
+`crs:HDREditMode="1"` into a 16-bit **Rec. 2100 PQ** document (whatever colour space or depth the script
+asks for), SDR white at **203 nits** (BT.2408): on every photo the HDR render's shadows and midtones equal
+its SDR render's to 0.1 %. So the oracle reads the HDR master directly (`oracle/hdr_ps.sh` +
+`batch_hdr.jsx`, `hdr_common.py` decodes PQ to linear Rec. 2020 with SDR white = 1; `oracle_render`
+with `ORACLE_DEPTH=hdr` renders LightCraft's float HDR master, `ORACLE_SDR=1` its HDR-off twin,
+`ORACLE_EXPORT=jpg|avif` the HDR export). Error measure: **ΔEITP** (BT.2124, SDR white = 203 nits), split
+into the SDR part (Camera Raw luminance ≤ 1) and the headroom part (> 1); Visualize HDR's ranges compared
+by brightest channel. Not reachable this way: the **SDR rendition** of an HDR edit (Photoshop always gets
+the HDR master; its JPEG save writes an 8-bit PQ JPEG, no gain map) and Lightroom's own gain-map files
+(Bryan has no HDR edits or HDR exports in his catalog).
+
+Sets (all of Bryan's raws read-only, copied to scratch): `make_hdr_real.py` — 16 of his raws, 8 Canon
+R6 + 8 M262, half night scenes (ISO ≥ 1600 after 8 pm), half backlit daylight (his own edits pull
+Highlights ≤ −60 and lift Shadows ≥ 40), each at HDR Limit 4 and 2, Exposure ±1, Contrast +50,
+Whites +50, Highlights −60 and the SDR reference (128 Camera Raw renders); `make_hdr_syn.py` —
+synthetic neutral ramps and the colour grid (R6 / M262 colour) across HDR Limit 1–5, Exposure −2…+3,
+Whites / Contrast / Highlights / Blacks ±100, their combinations and SDR twins (≈150 renders).
+
+What Camera Raw does:
+- **The HDR curve doesn't depend on the HDR Limit**: Limits 1, 2, 3 and 4 give the same curve, cut
+  hard at 2^limit (no roll-off into the limit). Exposure moves the scene along it as a plain gain.
+- **Midtones are the SDR render's** up to about 0.4 of SDR white; above, the curve opens up much faster
+  than the SDR shoulder — an *expanding* curve, about 1.5 stops out per stop in at the top (0.5 → 1.0 →
+  2.5 → 7.6 over 1.5 stops), reaching 16× SDR white about 4.3 stops past where the SDR tone is at half
+  of white. LightCraft's old smoothstep opened too early (+0.3 to +0.8 EV at 0.45–4× white) and too
+  little at the top (−0.3 EV above 4×).
+- **Whites works much harder in HDR** (+100 reaches 16× about 1.3 stops earlier than the SDR tone's
+  own change predicts), **Contrast** flattens the top (+100: −0.47 EV) and **negative Contrast lifts
+  HDR shadows** that the SDR render keeps (−100: up to +0.9 EV in deep shadows; the SDR twins match
+  LightCraft's SDR to 0.001). **Highlights and Blacks** leave the HDR shadows / midtones as the SDR
+  ones; Highlights' ramp deltas didn't carry over to real photos, so they're left out.
+- **The default black** (round 12's `black_cr`) applies to the HDR render too: LightCraft skipped it
+  there, its HDR shadows were up to 0.15 EV brighter than its own SDR render.
+
+LightCraft now (`crates/pipeline/src/tone_hdr.rs`, tables `tone_hdr_cr.rs` from `hdr_fit.py` +
+`gen_hdr.py`): the HDR tone is the SDR tone table times 2^g, g per EV past the SDR tone's half-white
+point plus Whites' and Contrast's measured deltas, cut at the limit; the HDR render takes the
+default black; CPU and GPU share the table. An HDR display with **less headroom than the limit**
+(the loupe, Compare, Survey, Second Window) no longer gets a render cut at its headroom: it gets the
+SDR and HDR tones blended in log terms by `log2(headroom) / limit` (`ToneMap::with_hdr_view`), as macOS,
+Chrome and Lightroom show a gain map on such a display. SDR renders are bit-identical (checked
+against the previous build: the SDR acceptance numbers can't move).
+
+Mean ΔEITP over the 16 photos (overall / SDR part / headroom part), before (the previous HDR tone,
+with the HDR black already fixed) → after:
+
+| edit | before | after | Visualize HDR range differs (% of HDR pixels) |
+|---|---|---|---|
+| HDR Limit 4 | 8.78 / 7.13 / 38.9 | **6.26 / 5.98 / 14.3** | 80 → 20 |
+| HDR Limit 2 | 7.13 / 6.13 / 22.6 | **6.04 / 5.98 / 10.0** | 48 → 18 |
+| Exposure +1 | 11.08 / 8.36 / 37.7 | **7.06 / 6.91 / 10.5** | 64 → 12 |
+| Exposure −1 | 7.23 / 6.09 / 52.6 | **5.48 / 5.24 / 19.1** | 92 → 17 |
+| Contrast +50 | 11.68 / 9.82 / 42.2 | **8.60 / 8.63 / 12.0** | 76 → 19 |
+| Whites +50 | 9.85 / 7.86 / 34.3 | **7.65 / 7.11 / 28.5** | 44 → 44 |
+| Highlights −60 | 8.96 / 8.23 / 38.4 | **7.45 / 7.25 / 16.0** | 81 → 47 |
+| SDR (reference) | 5.96 | 5.96 (identical) | |
+
+All HDR edits: 9.23 → **6.93** ΔEITP, headroom part 38.1 → **15.8**. The SDR part of an HDR render now
+sits at the SDR render's own floor (5.98 against 5.96); what's left there is the SDR match itself (the
+R6 night scenes BHM_9052 / 9114 / 9662 / 6639 are 8–10 ΔEITP in SDR already). The HDR black alone, on
+L1007494: 5.40 → 2.36. Synthetic ramps (the fit's own data): 10.2 → 5.2 and 11.7 → 3.6. Left: Whites
+on real photos (LightCraft's mids are 0.2 EV darker there in SDR as well — the SDR Whites, not the HDR
+tone), saturated highlights (LightCraft's brightest channel is the same structure as Camera Raw's
+RGBTone; interpolating the middle channel in the DNG SDK's overrange encoding instead made the colour
+grid worse, so it stays linear), and Highlights / Shadows, whose HDR behaviour follows the photo.
+
+**Gain maps.** Exported gain-map JPEGs (base + ISO 21496-1 + Adobe `hdrgm` + Apple's description,
+already there) were decoded to HDR by macOS ImageIO (`hdrdecode.swift`, as Preview / Photos show them) and
+compared with LightCraft's own HDR render (`hdr_gm_cmp.py`): with one luminance gain the headroom part
+was ΔEITP **31.3** (the SDR base's paler, clipped highlights can't get their colour back from a single
+gain); a colour (R, G, B) gain map (ISO 21496-1 and Adobe's spec allow three channels) brings it to **3.5** (overall 3.08 → 2.36,
+L1007494). JPEG exports now carry the colour map; AVIF stays single-channel (macOS's AVIF writer drops a
+colour map: the file opened as its SDR base). ImageIO adapts a gain map to the screen's current
+headroom (here about 2.5–2.9 stops), so files whose map reaches 3.5–4 stops decode lower on this Mac —
+by design, the same adaptation the loupe now uses. Not checked: Chrome and Lightroom reading the files.
