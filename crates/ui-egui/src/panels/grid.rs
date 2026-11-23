@@ -983,6 +983,21 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let _ = app.run("photo.toggleFavorite", json!({}));
     }
     ui.menu_button(crate::i18n::tr("Set Color Label"), |ui| label_menu(app, ui));
+    // manual lenses the camera can't name (Settings' list; app.lenses)
+    let lenses = app.ui.settings.lenses.clone();
+    if !lenses.is_empty() {
+        ui.menu_button(crate::i18n::tr("Set Lens"), |ui| {
+            for l in &lenses {
+                if ui.button(format!("{} ({:.0} mm)", l.name, l.focal)).clicked() {
+                    let _ = app.run("photo.setLens", json!({"lens": l.name, "focal": l.focal}));
+                }
+            }
+            ui.separator();
+            if ui.button(crate::i18n::tr("No Lens")).clicked() {
+                let _ = app.run("photo.setLens", json!({"lens": ""}));
+            }
+        });
+    }
     ui.menu_button(crate::i18n::tr("Add to Album"), |ui| {
         let albums: Vec<_> = app.session.catalog.albums().filter(|a| !a.folder && !a.is_smart()).map(|a| (a.id.0, a.name.clone())).collect();
         for (aid, name) in albums {

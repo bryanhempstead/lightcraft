@@ -117,6 +117,33 @@ fn tool_strip(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let _ = app.run(&format!("panel.{id}"), json!({}));
         }
     }
+    // center.: a quick centre mask (the saved default's); default.: this photo's Center mask becomes it
+    let mut left = ui.new_child(
+        egui::UiBuilder::new().max_rect(Rect::from_min_max(r.min + vec2(12.0, 0.0), pos2(x0 - 8.0, r.bottom()))).layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    if crate::widgets::text_button(&mut left, "centerMask", "center.", false)
+        .on_hover_text(crate::i18n::tr("A soft mask on the centre of the photo — move, size and adjust it in Masking"))
+        .clicked()
+        && let Err(e) = app.run("mask.center", json!({}))
+    {
+        app.toast(ui.ctx(), e);
+    }
+    let has_center =
+        app.session.active().and_then(|id| app.session.develop_of(id)).is_some_and(|d| d.masks.iter().any(|m| m.name == crate::menus::CENTER_MASK));
+    if has_center {
+        let mut right = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(Rect::from_min_max(pos2(x0 + w * tools.len() as f32 + 8.0, r.top()), r.max - vec2(12.0, 0.0)))
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        if crate::widgets::text_button(&mut right, "centerMaskDefault", "default.", false)
+            .on_hover_text(crate::i18n::tr("Make this photo's Center mask what center. makes from now on"))
+            .clicked()
+            && let Err(e) = app.run("mask.centerDefault", json!({}))
+        {
+            app.toast(ui.ctx(), e);
+        }
+    }
     ui.painter().rect_filled(Rect::from_min_size(r.left_bottom() - vec2(0.0, 1.0), vec2(r.width(), 1.0)), 0.0, t.divider);
 }
 

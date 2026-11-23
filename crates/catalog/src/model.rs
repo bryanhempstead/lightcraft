@@ -152,6 +152,30 @@ impl CopyrightStatus {
     }
 }
 
+/// The aperture a photo's metadata can be trusted for. A Leica M body cannot read the aperture
+/// of its (manual) lenses: it writes an estimate from its light meter — f/1.0 on a lens that
+/// stops at f/2.8 (Bryan's M262, 2026-11-23). With no coded lens ("not selected") there is no
+/// aperture to show; with a coded lens ("Elmarit-M 1:2.8/21"), an estimate faster than the lens
+/// can open is dropped. Every other camera's value is kept.
+pub fn trusted_aperture(camera: &str, lens: &str, aperture: Option<f32>) -> Option<f32> {
+    let a = aperture.filter(|a| a.is_finite() && *a > 0.0)?;
+    let c = camera.to_ascii_lowercase();
+    let leica_m = c.contains("leica") && c.split_whitespace().any(|w| w == "m" || (w.starts_with('m') && w[1..].chars().all(|ch| ch.is_ascii_digit()) && w.len() > 1) || w.starts_with("m-") || w == "m-p");
+    if !leica_m {
+        return Some(a);
+    }
+    let l = lens.trim().to_ascii_lowercase();
+    if l.is_empty() || l == "not selected" || l.contains("unknown") {
+        return None;
+    }
+    // "1:2.8/21" → 2.8 (Leica's names); otherwise "f/2.8" or "2.8/90"
+    let fastest = l.split("1:").nth(1).or_else(|| l.split("f/").nth(1)).and_then(|r| r.split(['/', ' ']).next()).and_then(|v| v.replace(',', ".").parse::<f32>().ok());
+    match fastest {
+        Some(f) if a + 0.05 < f => None,
+        _ => Some(a),
+    }
+}
+
 /// Descriptive + capture metadata.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -609,5 +633,22 @@ mod edited_tests {
             p.preview_only = Some("unsupported".into());
             assert!(!p.relative_wb());
         }
+    }
+}
+
+#[cfg(test)]
+mod aperture_tests {
+    use super::trusted_aperture;
+
+    #[test]
+    fn leica_m_estimates_are_left_off_where_the_lens_cannot_report() {
+        let m262 = "Leica Camera AG LEICA M (Typ 262)";
+        assert_eq!(trusted_aperture(m262, "not selected", Some(1.0)), None, "uncoded lens: no aperture");
+        assert_eq!(trusted_aperture(m262, "", Some(4.0)), None);
+        assert_eq!(trusted_aperture(m262, "Elmarit-M 1:2.8/21", Some(1.7)), None, "faster than the lens opens");
+        assert_eq!(trusted_aperture(m262, "Elmarit-M 1:2.8/21", Some(4.0)), Some(4.0));
+        assert_eq!(trusted_aperture("Leica Camera AG LEICA M10", "not selected", Some(2.0)), None);
+        assert_eq!(trusted_aperture("Canon Canon EOS R6", "", Some(1.2)), Some(1.2), "other cameras untouched");
+        assert_eq!(trusted_aperture("LEICA Q2", "SUMMILUX 1:1.7/28 ASPH.", Some(1.7)), Some(1.7), "a Q reads its own lens");
     }
 }

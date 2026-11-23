@@ -196,6 +196,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.syncLightroom", "Sync from Lightroom Classic…", None, "File"),
     ("photo.editInExternal", "Edit in External Editor", Some("Cmd+Shift+E"), "Photo"),
     ("app.externalEditor", "Choose External Editor", None, ""),
+    ("mask.center", "Center Mask", None, ""),
+    ("app.lenses", "My Lenses", None, ""),
+    ("mask.centerDefault", "Set Center Mask as Default", None, ""),
     ("dialog.enhance", "Enhance…", Some("Ctrl+Alt+I"), "Photo"),
     ("dialog.mergeHdr", "HDR…", Some("Ctrl+H"), "Photo>Photo Merge"),
     ("dialog.mergePanorama", "Panorama…", Some("Ctrl+M"), "Photo>Photo Merge"),
@@ -1562,6 +1565,51 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.dialog = Some(Dialog::About);
             Ok(Value::Null)
         }
+        "app.lenses" => {
+            // {lenses?: [{name, focal}]} → the list Set Lens offers
+            if let Some(l) = p.get("lenses") {
+                match serde_json::from_value::<Vec<crate::state::LensPreset>>(l.clone()) {
+                    Ok(v) => app.ui.settings.lenses = v.into_iter().filter(|x| !x.name.trim().is_empty()).collect(),
+                    Err(e) => return Some(Err(format!("app.lenses: {e}"))),
+                }
+            }
+            Ok(serde_json::to_value(&app.ui.settings.lenses).unwrap_or_default())
+        }
+        "mask.center" => (|| {
+            // center.: a radial mask at the photo's centre (the saved default's shape and effect),
+            // or the photo's Center mask when it has one — then Masking, to move / size / adjust it
+            let id = app.session.active().ok_or("no photo selected")?;
+            let existing = app.session.develop_of(id).and_then(|d| d.masks.iter().find(|m| m.name == CENTER_MASK).map(|m| m.id));
+            let out = if let Some(mid) = existing {
+                app.run("mask.select", json!({"id": mid}))?;
+                json!({"mask": mid, "existing": true})
+            } else {
+                let t = app.ui.settings.center_mask.clone().unwrap_or_else(default_center_mask);
+                app.run("mask.add", json!({"shape": t["shape"], "name": CENTER_MASK}))?;
+                if let Some(adj) = t.get("adjust").filter(|a| a.is_object()) {
+                    app.run("mask.adjust", json!({"values": adj}))?;
+                }
+                json!({"mask": app.session.active_mask, "existing": false})
+            };
+            let _ = app.run("panel.masking", json!({}));
+            Ok(out)
+        })(),
+        "mask.centerDefault" => (|| {
+            // default.: the photo's Center mask (or the selected mask) becomes what center. makes
+            let id = app.session.active().ok_or("no photo selected")?;
+            let d = app.session.develop_of(id).ok_or("no photo")?;
+            let m = d
+                .masks
+                .iter()
+                .find(|m| Some(m.id) == app.session.active_mask && m.name == CENTER_MASK)
+                .or_else(|| d.masks.iter().find(|m| m.name == CENTER_MASK))
+                .ok_or("this photo has no Center mask (center. makes one)")?;
+            let shape = m.components.first().map(|c| serde_json::to_value(&c.shape).unwrap_or_default()).ok_or("the Center mask has no shape")?;
+            let t = json!({"shape": shape, "adjust": serde_json::to_value(m.adjust).unwrap_or_default()});
+            app.ui.settings.center_mask = Some(t.clone());
+            app.toast(&ctx, "center. will make this mask from now on");
+            Ok(t)
+        })(),
         "app.externalEditor" => {
             // {app: "PhotoCraft" | "Adobe Photoshop 2026" | any app name | "" (the system default)}
             // {app?, format?: psd|tiff, holdGrain?: bool}
@@ -2461,5 +2509,16 @@ fn view_space_state(app: &LightcraftApp) -> Value {
         "tagged": tagged,
         "colorManaged": tagged.is_some(),
         "texturesP3": app.renderer.display_p3,
+    })
+}
+
+/// The quick centre mask's name (center. finds it again by name).
+pub const CENTER_MASK: &str = "Center";
+
+/// center.'s built-in mask: a soft oval on the middle of the photo, a little brighter.
+pub fn default_center_mask() -> Value {
+    json!({
+        "shape": {"kind": "radial", "center": {"x": 0.5, "y": 0.5}, "rx": 0.34, "ry": 0.26, "angle": 0.0, "feather": 75.0, "invert": false},
+        "adjust": {"exposure": 0.25}
     })
 }

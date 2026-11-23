@@ -393,6 +393,11 @@ pub struct AppSettings {
     pub external_format: String,
     /// Edit In: leave Grain off the copy the editor gets and put it back on that copy (default on).
     pub external_hold_grain: bool,
+    /// center.: the quick centre mask's shape and effect ({shape, adjust}); None = the built-in one.
+    /// Set from a photo's Center mask with default. (`mask.centerDefault`).
+    pub center_mask: Option<serde_json::Value>,
+    /// The owner's lenses for right-click ▸ Set Lens (manual lenses the camera can't name).
+    pub lenses: Vec<LensPreset>,
     /// Memory the caches may hold together, in MB (0 = automatic; `app.memoryBudget`).
     pub memory_mb: u32,
     /// Filmstrip: file names above the thumbnails.
@@ -481,6 +486,8 @@ impl Default for AppSettings {
             external_editor: String::new(),
             external_format: "psd".into(),
             external_hold_grain: true,
+            center_mask: None,
+            lenses: Vec::new(),
             memory_mb: 0,
             film_names: true,
             film_badges: true,
@@ -568,6 +575,15 @@ impl WheelMode {
             WheelMode::Photos => "photos",
         }
     }
+}
+
+/// A lens for Set Lens: its name (Leica style "Summicron-M 1:2/50" carries the fastest aperture)
+/// and focal length.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LensPreset {
+    pub name: String,
+    pub focal: f64,
 }
 
 /// Photo editors found in /Applications for Edit In (⌘E): PhotoCraft first, then Photoshop. Read

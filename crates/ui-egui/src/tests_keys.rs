@@ -352,6 +352,45 @@ fn wb_selector_picks_from_a_click() {
     assert_eq!(h.app.ui.tool, "", "one pick, then it goes away");
 }
 
+/// center.: a soft radial mask on the photo's centre (Masking opens to adjust it); a second
+/// press finds the same mask; default. makes its shape and effect what center. makes next.
+#[test]
+fn center_mask_and_its_default() {
+    let mut h = demo();
+    h.request("ui.set", json!({"view": "detail", "module": "develop", "right": "edit"}), T);
+    h.step();
+    let id = h.app.session.active().unwrap();
+    h.request("ui.clickWidget", json!({"id": "button:centerMask"}), T);
+    let d = h.app.session.develop_of(id).unwrap();
+    let m = d.masks.iter().find(|m| m.name == crate::menus::CENTER_MASK).expect("a Center mask");
+    assert!(m.adjust.exposure > 0.0, "the built-in effect");
+    assert_eq!(h.app.ui.right, RightPanel::Masking);
+    let n = d.masks.len();
+    exec(&mut h, "mask.center", json!({}));
+    assert_eq!(h.app.session.develop_of(id).unwrap().masks.len(), n, "the same mask again, not a second");
+    // change it, save as the default, and a fresh photo's center. gets it
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": -0.5, "clarity": 20.0}}));
+    exec(&mut h, "mask.centerDefault", json!({}));
+    let other = h.app.session.visible_cloned()[1];
+    exec(&mut h, "library.select", json!({"ids": [other.0]}));
+    exec(&mut h, "mask.center", json!({}));
+    let m2 = h.app.session.develop_of(other).unwrap().masks.iter().find(|m| m.name == crate::menus::CENTER_MASK).cloned().unwrap();
+    assert_eq!((m2.adjust.exposure, m2.adjust.clarity), (-0.5, 20.0));
+}
+
+/// Set Lens: a manual lens on photos the camera couldn't name it for — name, focal length, and the
+/// lens's fastest aperture rules out impossible estimates.
+#[test]
+fn set_lens_names_the_lens_and_its_focal_length() {
+    let mut h = demo();
+    exec(&mut h, "app.lenses", json!({"lenses": [{"name": "Summicron-M 1:2/50", "focal": 50}]}));
+    let id = h.app.session.active().unwrap();
+    exec(&mut h, "photo.setLens", json!({"lens": "Summicron-M 1:2/50", "focal": 50}));
+    let m = h.app.session.catalog.photo(id).unwrap().meta.clone();
+    assert_eq!((m.lens.as_str(), m.focal_mm), ("Summicron-M 1:2/50", Some(50.0)));
+    assert_eq!(h.app.ui.settings.lenses.len(), 1);
+}
+
 /// fav.: a quick tap of H toggles the heart on the selected photos; H held does what H is bound
 /// to instead (Bryan's keymap: the Hue panel) and leaves the heart alone.
 #[test]

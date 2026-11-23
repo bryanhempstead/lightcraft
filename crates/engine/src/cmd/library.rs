@@ -743,6 +743,58 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("photo.unflag", "Unflag", ["Photo", "Set Flag"], Some("U"), "{ids?}", has_selection, |s, p| {
             for_targets(s, p, "Unflag", |id| Some(Op::SetFlag { id, flag: Flag::None }))
         }),
+        // a lens the camera couldn't name (manual M lenses on a Leica M: "not selected")
+        cmd!(
+            "photo.setLens",
+            "Set Lens",
+            ["Metadata"],
+            None,
+            "{lens: name ('' clears; Leica style \"Summicron-M 1:2/50\" gives the fastest aperture), focal?: mm, ids?} — one undo step",
+            has_selection,
+            |s, p| {
+                let lens = str_param(p, "lens").ok_or_else(|| bad("photo.setLens", "missing `lens`"))?.trim().to_string();
+                let focal = p.get("focal").and_then(Value::as_f64).filter(|f| f.is_finite() && *f > 0.0 && *f < 5000.0);
+                let metas: std::collections::HashMap<PhotoId, lightcraft_catalog::Meta> =
+                    s.targets(p).iter().filter_map(|id| s.catalog.photo(*id).map(|ph| (*id, ph.meta.clone()))).collect();
+                for_targets(s, p, "Set Lens", |id| {
+                    let old = metas.get(&id)?;
+                    let mut m = old.clone();
+                    m.lens = lens.clone();
+                    if let Some(f) = focal {
+                        m.focal_mm = Some(f as f32);
+                    }
+                    m.aperture = lightcraft_catalog::trusted_aperture(&m.camera, &m.lens, m.aperture);
+                    (m != *old).then(|| Op::SetMeta { id, meta: Box::new(m) })
+                })
+            }
+        ),
+        // Leica M estimated apertures (catalog::trusted_aperture) out of photos already imported
+        cmd!(
+            "library.fixEstimatedApertures",
+            "Fix Estimated Apertures",
+            [],
+            None,
+            "{dryRun?: bool} — drop the aperture a Leica M body estimated where its lens can't report one (no coded lens, or faster than the lens opens); one undo step → {fixed, photos: [id] (first 50)}",
+            always,
+            |s, p| {
+                let mut ops = Vec::new();
+                for ph in s.catalog.photos() {
+                    let m = &ph.meta;
+                    let t = lightcraft_catalog::trusted_aperture(&m.camera, &m.lens, m.aperture);
+                    if t != m.aperture {
+                        let mut nm = m.clone();
+                        nm.aperture = t;
+                        ops.push(Op::SetMeta { id: ph.id, meta: Box::new(nm) });
+                    }
+                }
+                let ids: Vec<u64> = ops.iter().filter_map(|o| if let Op::SetMeta { id, .. } = o { Some(id.0) } else { None }).take(50).collect();
+                let n = ops.len();
+                if n > 0 && !bool_or(p, "dryRun", false) {
+                    s.commit("Fix Estimated Apertures", Op::Batch { ops })?;
+                }
+                Ok(json!({"fixed": n, "photos": ids}))
+            }
+        ),
         // fav. — a heart apart from stars and flags (Bryan, 2026-11-23); the app's tap of H
         cmd!("photo.favorite", "Set Favorite", ["Photo", "Favorite"], None, "{favorite: bool, ids?}", has_selection, |s, p| {
             let on = bool_or(p, "favorite", true);

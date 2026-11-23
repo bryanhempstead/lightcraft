@@ -22,7 +22,12 @@ fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         camera,
         lens: m.lens_model.clone().unwrap_or_default(),
         focal_mm: m.focal_length.map(|f| f as f32),
-        aperture: m.f_number.map(|f| f as f32),
+        // a Leica M's estimate is left off when the lens can't give it (catalog::trusted_aperture)
+        aperture: lightcraft_catalog::trusted_aperture(
+            &[m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" "),
+            m.lens_model.as_deref().unwrap_or_default(),
+            m.f_number.map(|f| f as f32),
+        ),
         shutter,
         iso: m.iso,
         location: m.sublocation.clone().unwrap_or_default(),
