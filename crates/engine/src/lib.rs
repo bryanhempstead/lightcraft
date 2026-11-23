@@ -34,6 +34,7 @@ pub mod export_lrtemplate;
 pub mod faces;
 pub mod files;
 pub mod fonts;
+pub mod galleries;
 pub mod genremove;
 pub mod guard;
 pub mod imageio;
@@ -240,6 +241,9 @@ pub struct Session {
     /// Delete from Disk moves files into this folder instead of the system Trash (tests, scripts;
     /// also `LIGHTCRAFT_TRASH_DIR`).
     pub trash_dir: Option<std::path::PathBuf>,
+    /// Second Brain's userData folder, where its gallery API's port + token are (LC-GALLERIES,
+    /// [`galleries`]); `None` = `LIGHTCRAFT_SECOND_BRAIN_DIR`, else its standard place.
+    pub second_brain_dir: Option<std::path::PathBuf>,
     /// The last delete that moved files to the Trash, for Put Back Last Delete after the undo
     /// history has moved on (the library's `last-delete.json`, so it survives a reopen).
     pub last_delete: Option<trash::LastDelete>,
@@ -402,6 +406,7 @@ impl Session {
             export_log: Default::default(),
             watermark_presets: Vec::new(),
             trash_dir: None,
+            second_brain_dir: None,
             last_delete: None,
             not_back: Vec::new(),
             previous_active: None,
@@ -1158,6 +1163,8 @@ mod tests_faces_auto;
 mod tests_folders;
 #[cfg(test)]
 mod tests_forget_local;
+#[cfg(test)]
+mod tests_galleries;
 #[cfg(test)]
 mod tests_genremove;
 #[cfg(test)]

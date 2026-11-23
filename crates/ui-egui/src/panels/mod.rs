@@ -11,6 +11,7 @@ pub mod dialogs;
 pub mod edit;
 pub mod filmstrip;
 pub mod filterbar;
+pub mod galleries;
 pub mod grid;
 pub mod hdr_histogram;
 pub mod left;

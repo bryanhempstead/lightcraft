@@ -170,6 +170,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if record(app, ctx) {
         return;
     }
+    // the galleries. tab: ⌘A / Esc pick its photos, not the library's
+    if app.ui.view == crate::state::ViewMode::Galleries && crate::panels::galleries::keys(app, ctx) {
+        return;
+    }
     // ← / → over a Collections row close / open its folders instead of moving the photo
     if crate::panels::left::collection_keys(app, ctx) {
         return;
