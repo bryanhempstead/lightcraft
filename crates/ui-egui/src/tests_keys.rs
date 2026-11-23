@@ -325,6 +325,33 @@ fn crop_dial_turns_are_one_drag() {
     assert_eq!(steps(&h), before + 1);
 }
 
+/// The White Balance Selector: W (or the `pick.` chip) arms it, a click on the photo sets a Custom
+/// white balance from that spot, Esc puts it away without picking.
+#[test]
+fn wb_selector_picks_from_a_click() {
+    let mut h = demo();
+    h.request("ui.set", json!({"view": "detail", "module": "develop", "right": "edit"}), T);
+    h.step();
+    let id = h.app.session.active().unwrap();
+    h.request("ui.clickWidget", json!({"id": "button:wbPick"}), T);
+    assert_eq!(h.app.ui.tool, "wbPicker", "pick. arms it");
+    h.request("ui.key", json!({"key": "escape"}), T);
+    h.step();
+    assert_eq!(h.app.ui.tool, "", "Esc puts it away");
+    assert_eq!(h.app.ui.right, RightPanel::Edit, "and stays in Develop");
+    h.request("ui.key", json!({"key": "w"}), T);
+    h.step();
+    assert_eq!(h.app.ui.tool, "wbPicker", "W arms it");
+    let before = h.app.session.develop_of(id).unwrap().wb;
+    let img = h.app.image_rect.unwrap();
+    h.request("ui.click", json!({"x": img.left() + img.width() * 0.3, "y": img.top() + img.height() * 0.4}), T);
+    h.step();
+    let after = h.app.session.develop_of(id).unwrap().wb;
+    assert_eq!(after.mode, lightcraft_develop::WbMode::Custom);
+    assert!(after != before, "picked: {before:?} → {after:?}");
+    assert_eq!(h.app.ui.tool, "", "one pick, then it goes away");
+}
+
 /// fav.: a quick tap of H toggles the heart on the selected photos; H held does what H is bound
 /// to instead (Bryan's keymap: the Hue panel) and leaves the heart alone.
 #[test]

@@ -1408,6 +1408,17 @@ fn general_interaction(
         return;
     }
     if app.ui.tool == "wbPicker" {
+        // say what the tool wants, on the photo (Bryan couldn't find the selector, 2026-11-23)
+        let t = Tokens::get(ui.ctx());
+        let p = ui.painter_at(canvas);
+        let g = p.layout_no_wrap(crate::i18n::tr("click something white or neutral grey · Esc to stop").to_string(), t.font(12.5), egui::Color32::WHITE);
+        let pill = Rect::from_center_size(egui::pos2(img.center().x, img.top() + 26.0), g.size() + vec2(28.0, 14.0));
+        p.rect_filled(pill, pill.height() / 2.0, egui::Color32::from_black_alpha(175));
+        p.galley(pill.center() - g.size() / 2.0, g, egui::Color32::WHITE);
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            app.ui.tool.clear();
+            return;
+        }
         if resp.clicked()
             && let Some(q) = resp.interact_pointer_pos()
         {
