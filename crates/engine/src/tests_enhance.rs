@@ -166,7 +166,7 @@ fn missing_models_say_how_to_get_them() {
     assert!(s.execute("photo.enhance", &json!({})).is_err());
     assert!(s.execute("photo.enhance", &json!({"denoise": "lots"})).is_err());
     let m = s.execute("enhance.models", &json!({})).unwrap();
-    assert_eq!(m["models"].as_array().unwrap().len(), 6);
+    assert_eq!(m["models"].as_array().unwrap().len(), lightcraft_enhance::models::MODELS.len());
 }
 
 #[test]
