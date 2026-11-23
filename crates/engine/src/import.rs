@@ -262,6 +262,14 @@ pub struct ImportDefaults {
     pub auto_folder: Option<String>,
     pub auto_copy: bool,
     pub auto_album: Option<String>,
+    /// LR-MAP-PLACES: photos imported into an album or folder that has a place get it (those
+    /// without a GPS position of their own; on by default).
+    pub auto_place: bool,
+    /// … with the place's keywords (venue, city, state, country; on by default).
+    pub place_keywords: bool,
+    /// Imported photos get the keywords their album's or folder's name suggests ("C&J WEDDING" →
+    /// wedding; off by default).
+    pub auto_keywords: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -288,6 +296,9 @@ impl Default for ImportDefaults {
             auto_folder: None,
             auto_copy: false,
             auto_album: None,
+            auto_place: true,
+            place_keywords: true,
+            auto_keywords: false,
         }
     }
 }

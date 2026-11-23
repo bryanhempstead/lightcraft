@@ -131,6 +131,15 @@ fn dms(ifd: &Ifd, tag: u16) -> Option<f64> {
 }
 
 fn read_gps(g: &Ifd) -> Option<Gps> {
+    // a void GPS block: the receiver had no fix (Bryan's Leica M262 writes GPSStatus V, empty
+    // hemisphere refs and 0° values on every frame), so there is no position
+    if g.string(t::GPS_STATUS).is_some_and(|s| s.trim().eq_ignore_ascii_case("v")) {
+        return None;
+    }
+    let blank = |tag: u16| g.string(tag).is_none_or(|s| s.trim().trim_matches('\0').is_empty());
+    if blank(t::GPS_LATITUDE_REF) && blank(t::GPS_LONGITUDE_REF) {
+        return None;
+    }
     let mut lat = dms(g, t::GPS_LATITUDE)?;
     let mut lon = dms(g, t::GPS_LONGITUDE)?;
     if g.string(t::GPS_LATITUDE_REF).is_some_and(|s| s.starts_with('S')) {
@@ -142,6 +151,10 @@ fn read_gps(g: &Ifd) -> Option<Gps> {
     if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
         return None;
     }
+    // exactly 0, 0 is a GPS block written without a fix (cameras, phone apps): no position
+    if lat == 0.0 && lon == 0.0 {
+        return None;
+    }
     let altitude = g.f64(t::GPS_ALTITUDE).filter(|a| a.is_finite()).map(|a| if g.u32(t::GPS_ALTITUDE_REF) == Some(1) { -a } else { a });
     Some(Gps { latitude: lat, longitude: lon, altitude })
 }
@@ -150,6 +163,40 @@ fn read_gps(g: &Ifd) -> Option<Gps> {
 pub(crate) mod tests {
     use super::*;
     use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+
+    #[test]
+    fn gps_at_exactly_zero_zero_is_no_position() {
+        // a GPS block written without a fix (0°, 0°) put photos in the ocean off Africa
+        let parse = |lat: u32, lon: u32| {
+            let mut gps = IfdBuilder::new();
+            gps.set(t::GPS_LATITUDE_REF, Value::Ascii("N".into()));
+            gps.set(t::GPS_LATITUDE, Value::Rational(vec![(lat, 1), (0, 1), (0, 1)]));
+            gps.set(t::GPS_LONGITUDE_REF, Value::Ascii("E".into()));
+            gps.set(t::GPS_LONGITUDE, Value::Rational(vec![(lon, 1), (0, 1), (0, 1)]));
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set_child(t::GPS_IFD, gps);
+            from_tiff(&Tiff::parse(&TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()).unwrap()).gps
+        };
+        assert_eq!(parse(0, 0), None);
+        let g = parse(0, 10).unwrap();
+        assert_eq!((g.latitude, g.longitude), (0.0, 10.0), "on the equator is a real place");
+        // the Leica M262's void block: GPSStatus V, empty refs (here with a stray position too)
+        let void = |status: &str, lat_ref: &str, lon_ref: &str| {
+            let mut gps = IfdBuilder::new();
+            gps.set(t::GPS_STATUS, Value::Ascii(status.into()));
+            gps.set(t::GPS_LATITUDE_REF, Value::Ascii(lat_ref.into()));
+            gps.set(t::GPS_LATITUDE, Value::Rational(vec![(47, 1), (36, 1), (0, 1)]));
+            gps.set(t::GPS_LONGITUDE_REF, Value::Ascii(lon_ref.into()));
+            gps.set(t::GPS_LONGITUDE, Value::Rational(vec![(122, 1), (19, 1), (0, 1)]));
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set_child(t::GPS_IFD, gps);
+            from_tiff(&Tiff::parse(&TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()).unwrap()).gps
+        };
+        assert_eq!(void("V", "N", "W"), None, "status V: void");
+        assert_eq!(void("A", "", ""), None, "no hemisphere refs: void");
+        let g = void("A", "N", "W").unwrap();
+        assert!((g.latitude - 47.6).abs() < 1e-9 && (g.longitude + 122.316_666).abs() < 1e-3, "{g:?}");
+    }
 
     #[test]
     fn cinema_dng_make_comes_from_the_unique_camera_model() {

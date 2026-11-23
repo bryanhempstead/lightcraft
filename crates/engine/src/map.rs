@@ -83,6 +83,13 @@ pub fn valid(lat: f64, lon: f64) -> bool {
     lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0
 }
 
+/// A photo's position as the map places it: a usable latitude / longitude that isn't exactly
+/// 0, 0 ("null island", in the Gulf of Guinea: what cameras and apps write when they have no fix).
+/// `None`: the photo has no location and is left off the map.
+pub fn located(gps: Option<(f64, f64)>) -> Option<(f64, f64)> {
+    gps.filter(|g| valid(g.0, g.1) && !(g.0 == 0.0 && g.1 == 0.0))
+}
+
 /// Great-circle distance in metres.
 pub fn distance_m(a: (f64, f64), b: (f64, f64)) -> f64 {
     let (la1, la2) = (a.0.to_radians(), b.0.to_radians());
@@ -96,12 +103,16 @@ pub fn distance_m(a: (f64, f64), b: (f64, f64)) -> f64 {
 /// (`lat`, `lon`), in id order.
 pub fn photos_within(c: &Catalog, lat: f64, lon: f64, radius: f64) -> Vec<PhotoId> {
     let r = if radius.is_finite() { radius.max(0.0) } else { 0.0 };
-    c.photos().filter(|p| !p.deleted && !p.local).filter(|p| p.meta.gps.is_some_and(|g| distance_m(g, (lat, lon)) <= r)).map(|p| p.id).collect()
+    c.photos()
+        .filter(|p| !p.deleted && !p.local)
+        .filter(|p| located(p.meta.gps).is_some_and(|g| distance_m(g, (lat, lon)) <= r))
+        .map(|p| p.id)
+        .collect()
 }
 
 /// The position lies inside a saved location marked Private (exports leave its GPS out).
 pub fn in_private_location(c: &Catalog, gps: Option<(f64, f64)>) -> bool {
-    let Some(g) = gps.filter(|g| valid(g.0, g.1)) else { return false };
+    let Some(g) = located(gps) else { return false };
     c.record(LOCATIONS_KEY).is_some() && locations(c).iter().any(|l| l.private && distance_m(g, (l.lat, l.lon)) <= l.radius)
 }
 
@@ -140,7 +151,7 @@ impl LocationFilter {
 
     /// A photo at `gps` passes (`saved`: the library's saved locations, for [`LocationFilter::Saved`]).
     pub fn matches(&self, gps: Option<(f64, f64)>, saved: &[SavedLocation]) -> bool {
-        let gps = gps.filter(|g| valid(g.0, g.1));
+        let gps = located(gps);
         match *self {
             LocationFilter::None => true,
             LocationFilter::Tagged => gps.is_some(),

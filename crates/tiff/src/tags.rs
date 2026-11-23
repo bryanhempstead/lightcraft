@@ -99,6 +99,8 @@ pub const GPS_LONGITUDE: u16 = 4;
 pub const GPS_ALTITUDE_REF: u16 = 5;
 pub const GPS_ALTITUDE: u16 = 6;
 pub const GPS_TIME_STAMP: u16 = 7;
+/// `A` = measurement active, `V` = void (no fix: the position is meaningless).
+pub const GPS_STATUS: u16 = 9;
 pub const GPS_IMG_DIRECTION_REF: u16 = 16;
 pub const GPS_IMG_DIRECTION: u16 = 17;
 pub const GPS_DATE_STAMP: u16 = 29;

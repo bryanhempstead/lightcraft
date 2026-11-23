@@ -38,6 +38,7 @@ pub mod missing;
 pub mod naming;
 mod organize;
 mod people;
+mod places;
 mod prefs;
 mod preset_files;
 pub mod previews;
@@ -147,6 +148,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(mask_effects::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
+        v.extend(places::specs());
         v.extend(manage::specs());
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());

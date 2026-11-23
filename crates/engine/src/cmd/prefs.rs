@@ -50,6 +50,15 @@ fn prefs(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(v) = i.get("removeCa").and_then(Value::as_bool) {
             d.remove_ca = v;
         }
+        if let Some(v) = i.get("autoPlace").and_then(Value::as_bool) {
+            d.auto_place = v;
+        }
+        if let Some(v) = i.get("placeKeywords").and_then(Value::as_bool) {
+            d.place_keywords = v;
+        }
+        if let Some(v) = i.get("autoKeywords").and_then(Value::as_bool) {
+            d.auto_keywords = v;
+        }
         if let Some(v) = i.get("copyright").and_then(Value::as_str) {
             d.copyright = v.trim().to_string();
         }
@@ -118,7 +127,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Library Preferences",
         [],
         None,
-        "{import?: {rawPreset?: presetId|\"default\", otherPreset?: presetId|\"default\", perCamera?: bool, lensCorrections?: bool (raws start with profile corrections on; default on), removeCa?: bool (and Remove CA; default on), cameras?: [{camera: \"Make Model\", preset: presetId|null}], copyright?: text, creator?: text (given to imported photos without one)}, camera?: {camera, preset?, remove?: bool}, cacheMb?: n (0 = default), forgetLocalDays?: n (forget untouched Local photos of folders not browsed for n days; 0 = never), autoVersions?: bool (keep an automatic version when leaving an edited photo; off = Lightroom)} — develop defaults applied on import (raws / other images / per camera) and the thumbnail cache size, saved with the library → {xmp, import, cacheMb, forgetLocalDays, persistent}",
+        "{import?: {rawPreset?: presetId|\"default\", otherPreset?: presetId|\"default\", perCamera?: bool, lensCorrections?: bool (raws start with profile corrections on; default on), removeCa?: bool (and Remove CA; default on), cameras?: [{camera: \"Make Model\", preset: presetId|null}], copyright?: text, creator?: text (given to imported photos without one), autoPlace?: bool (photos imported into an album / folder with a place get it; default on), placeKeywords?: bool (… and its keywords; default on), autoKeywords?: bool (… and the keywords the album's / folder's name suggests; default off)}, camera?: {camera, preset?, remove?: bool}, cacheMb?: n (0 = default), forgetLocalDays?: n (forget untouched Local photos of folders not browsed for n days; 0 = never), autoVersions?: bool (keep an automatic version when leaving an edited photo; off = Lightroom)} — develop defaults applied on import (raws / other images / per camera) and the thumbnail cache size, saved with the library → {xmp, import, cacheMb, forgetLocalDays, persistent}",
         always,
         prefs
     )]

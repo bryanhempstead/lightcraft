@@ -114,6 +114,13 @@ pub fn import_batch_done(s: &mut Session, report: crate::import::ImportReport, m
         s.execute("album.addPhotos", &json!({"id": a, "ids": imported}))?;
         report["album"] = json!(a);
     }
+    // LR-MAP-PLACES: an album's or folder's place (and keywords) on its new photos
+    let ids: Vec<PhotoId> = imported.iter().copied().map(PhotoId).collect();
+    match crate::places::after_import(s, &ids, album.map(AlbumId)) {
+        Ok(v) if !v.is_null() => report["places"] = v,
+        Ok(_) => {}
+        Err(e) => log::warn!("import: placing the new photos: {e}"),
+    }
     // a camera not seen before: recognised, its profiles / lens data resolved and kept (after
     // the photos are in, so it never holds the import up)
     let new_cameras = crate::cameras::recognise_new(s, &imported);

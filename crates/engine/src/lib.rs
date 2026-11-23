@@ -56,6 +56,7 @@ pub mod merge;
 pub mod merge_find;
 pub mod originals;
 pub mod people;
+pub mod places;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
@@ -369,6 +370,8 @@ pub struct Session {
     pub merge_find_job: Option<merge_find::FindJob>,
     /// merges.: folders the automatic finder read this session (folder → fingerprint).
     pub merge_scanned: std::collections::BTreeMap<String, u64>,
+    /// LR-MAP-PLACES: place search (geocoder, answer cache) and keyword suggestions.
+    pub places: places::Places,
 }
 
 impl Default for Session {
@@ -477,6 +480,7 @@ impl Session {
             merges_scope: None,
             merge_find_job: None,
             merge_scanned: Default::default(),
+            places: Default::default(),
         }
     }
 
@@ -1231,6 +1235,8 @@ mod tests_organize;
 mod tests_people;
 #[cfg(test)]
 mod tests_persist;
+#[cfg(test)]
+mod tests_places;
 #[cfg(test)]
 mod tests_prefs;
 #[cfg(test)]
