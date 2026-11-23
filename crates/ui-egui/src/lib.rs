@@ -29,6 +29,7 @@ pub mod lr_sync;
 pub mod menubar;
 pub mod menus;
 pub mod merge;
+pub mod merges;
 pub mod panels;
 pub mod publish_ui;
 pub mod recheck;
@@ -88,6 +89,8 @@ mod tests_map;
 mod tests_masking;
 #[cfg(test)]
 mod tests_media;
+#[cfg(test)]
+mod tests_merges;
 #[cfg(test)]
 mod tests_metadata_views;
 #[cfg(test)]
@@ -443,6 +446,13 @@ impl LightcraftApp {
 
     /// Run a UI or engine command by id. The single entry point for every frontend path.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // merges.: the finder and merges in the background, the find mode setting
+        if let Some(r) = merges::run_ui(self, id, &params) {
+            if let Err(e) = &r {
+                self.ui.status = e.clone();
+            }
+            return r;
+        }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             if let Err(e) = &r {
                 self.fix_notes.saw_error(&format!("{id}: {e}"));
@@ -923,6 +933,7 @@ impl LightcraftApp {
         }
         self.renderer.poll(ctx, &mut self.session);
         merge::poll(self, ctx);
+        merges::tick(self, ctx);
         enhance::poll(self, ctx);
         import::poll_scan(self, ctx);
         import::tick(self, ctx);

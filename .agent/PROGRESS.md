@@ -6,6 +6,24 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (merges agent, 2026-11-23, branch `merges-area`, not merged) **LC-MERGE-FIND: merges. — found photo merges in
+  the sidebar** (Bryan: "recognize possible photo merges and put those in a separate area … on the side bar").
+  Engine `crates/engine/src/merge_find.rs`: per folder, capture-time runs (body / lens / focal, a few s apart) →
+  brackets from exposure steps (`hdr.`), pano / focus stack / hdr pano from 64 px thumbnails (shift search, 4×4
+  sharpness tiles) or recorded focus distance; groups are `merge.group.<id>` records (open / merged / dismissed, never
+  re-suggested). `cmd:merge.find` / `candidates` / `mergeGroups` / `dismiss` / `setKind` / `unmerge` / `showIn`,
+  `library.source {kind: merges, path|id}` (`LibrarySource::Merges` + `Session.merges_scope`). Catalog **v12**:
+  `Photo.merge` (`MergeMark {into, kind, onlyMerges}`, `Op::SetMerge`) — merged originals leave every view and
+  count (`in_library`, `Filter`, album counts), never deleted; `Meta.exposure_bias` / `focus_distance` (meta: Exif
+  SubjectDistance). App `crates/ui-egui/src/merges.rs`: Settings ▸ General ▸ find merges: auto. (default, background
+  per-folder fingerprints) / find.; `merges.` rows under folders (left.rs `folder_rows`) and collections
+  (`albums_tree_view`); the view's bar (find. all. none. merge. skip. both. merges.only. unmerge.) and group headers
+  (kind menu, merge., skip.); merges run one at a time on the merge worker (`merge::start_group` / `next_group`);
+  `hdr.` / `pano.` / `stack.` / `hdr.pano.` tags on grid + filmstrip. Tests: engine `tests_merges.rs` +
+  `merge_find` unit tests, ui-egui `tests_merges.rs` (row, view, layout audit, merge → originals gone, tag).
+  Left: not tried on Bryan's real brackets / panoramas (thresholds from synthetic tests — needs.you test.); a skipped
+  group comes back only by ⌘Z; on a 15k library the first auto pass loads thumbnails for every same-exposure run
+  (background, low priority) — watch it once; no hdr.pano. join of separate groups by hand.
 - [x] (Claude fix session, 2026-11-23 13:00) **Sharp views + exports, console as a drag, fav., picked sliders** —
   `geometry::Frame::supersample` / `sample_oriented` + gpu `render::sample`: a minified output is sampled at 2× and
   box-averaged (was Mitchell prefilter → bilinear tap = double blur; Laplacian sharpness of Bryan's loupe 0.13 → 0.23,

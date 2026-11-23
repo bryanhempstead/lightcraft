@@ -143,6 +143,17 @@ pub struct MergeTask {
     pub progress: Arc<Mutex<(f32, String)>>,
     pub cancel: Arc<AtomicBool>,
     rx: Receiver<Result<MergeOutput, String>>,
+    /// merges.: the group it merges and the frames it was given.
+    pub group: Option<(String, Vec<PhotoId>)>,
+}
+
+/// merges.: a group waiting to be merged (`merge.mergeGroups` in the app runs them one at a time
+/// on the merge worker).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupMerge {
+    pub group: String,
+    pub kind: lightcraft_catalog::MergeType,
+    pub frames: Vec<PhotoId>,
 }
 
 /// Merge state of the app.
@@ -164,6 +175,8 @@ pub struct MergeState {
     pub last: std::collections::HashMap<String, MergeDialog>,
     /// The kind of the last merge started: what Merge… opens on.
     pub last_kind: Option<String>,
+    /// merges.: groups waiting for the merge worker, in order.
+    pub group_queue: std::collections::VecDeque<GroupMerge>,
 }
 
 /// The kinds the Merge… dialog switches between: (command, button label, hover text).
@@ -225,7 +238,22 @@ fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: b
     std::thread::Builder::new().name("photo-merge".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    Ok(MergeTask { preview, job, options: options.clone(), progress, cancel, rx })
+    Ok(MergeTask { preview, job, options: options.clone(), progress, cancel, rx, group: None })
+}
+
+/// merges.: merge a group on the worker with the options last used for its kind (never stacked:
+/// its frames are hidden instead).
+pub fn start_group(app: &mut LightcraftApp, g: &GroupMerge) -> Result<(), String> {
+    if app.merge.final_task.is_some() {
+        return Err("a merge is already running".into());
+    }
+    let command = g.kind.command();
+    let mut opts = app.merge.last.get(command).cloned().unwrap_or_else(|| MergeDialog::for_command(command));
+    opts.stack = false;
+    let mut task = spawn(app, &opts, &g.frames, false)?;
+    task.group = Some((g.group.clone(), g.frames.clone()));
+    app.merge.final_task = Some(task);
+    Ok(())
 }
 
 /// Open the merge dialog for the selection.
@@ -346,6 +374,13 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let what = t.options.what();
                 match r.map_err(lightcraft_engine::EngineError::Other).and_then(|out| app.session.finish_merge(&t.job, out)) {
                     Ok(v) => {
+                        // merges.: the frames are hidden, the merged photo goes where they were
+                        if let Some((g, frames)) = &t.group
+                            && let Some(id) = v.get("id").and_then(Value::as_u64)
+                            && let Err(e) = app.session.merge_group_done(g, PhotoId(id), frames)
+                        {
+                            app.ui.status = e.to_string();
+                        }
                         app.merge.last_result = Some(v);
                         app.toast(ctx, crate::i18n::tr_format!("{what} merge added", what = what));
                     }
@@ -361,6 +396,22 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                 app.ui.toast = Some((crate::i18n::tr_format!("Merging… {stage} {:.0}%", f * 100.0, stage = stage), now + 0.5, None));
                 ctx.request_repaint_after(std::time::Duration::from_millis(100));
             }
+        }
+    }
+}
+
+/// merges.: start the next queued group once the worker is free.
+pub fn next_group(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if app.merge.final_task.is_some() {
+        return;
+    }
+    while let Some(g) = app.merge.group_queue.pop_front() {
+        match start_group(app, &g) {
+            Ok(()) => {
+                ctx.request_repaint();
+                return;
+            }
+            Err(e) => app.toast(ctx, format!("Merge failed: {e}")),
         }
     }
 }

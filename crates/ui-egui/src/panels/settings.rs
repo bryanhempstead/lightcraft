@@ -138,6 +138,18 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Location"), |ui| {
         ui.label(RichText::new(location).color(t.text));
     });
+    // merges.: found by themselves in the background, or only on find.
+    row(ui, t, "find merges:", |ui| {
+        let mut mode = app.ui.settings.merge_find;
+        if choices(ui, "settingsMergeFind", &[(crate::merges::FindMode::Auto, "auto."), (crate::merges::FindMode::Manual, "find.")], &mut mode) {
+            app.ui.settings.merge_find = mode;
+        }
+    });
+    hint(
+        ui,
+        t,
+        "auto.: brackets, panoramas and focus stacks are found in the background after imports and show under their folder and collection as merges.; find.: only when you click find. there. Nothing is merged until you say so.",
+    );
     row(ui, t, "", |ui| {
         let can = app.services.pick_folder.is_some();
         let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Open Library…")));

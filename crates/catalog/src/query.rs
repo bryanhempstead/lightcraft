@@ -349,6 +349,10 @@ impl Filter {
         if p.deleted != self.deleted {
             return false;
         }
+        // merges.: frames folded into a merged photo, and merged photos kept in merges. only
+        if p.merge_hidden() {
+            return false;
+        }
         match &self.folder {
             // browsed photos only show in folder views
             None if p.local => return false,
@@ -722,8 +726,8 @@ pub(crate) fn key_within(p: &str, r: &str) -> bool {
 }
 
 /// The kind of Photo Merge result a file is, from the name merges give it (`IMG_1-HDR.dng`,
-/// `IMG_1-Pano.dng`, `IMG_1-HDR-Pano.dng` — also the names other raw editors use):
-/// `hdr`, `panorama` or `hdrPanorama`.
+/// `IMG_1-Pano.dng`, `IMG_1-HDR-Pano.dng`, `IMG_1-Focus.dng` — also the names other raw editors
+/// use): `hdr`, `panorama`, `hdrPanorama` or `focus`.
 pub fn merged_kind(file_name: &str) -> Option<&'static str> {
     let stem = file_name.rsplit_once('.').map_or(file_name, |(s, _)| s).to_ascii_lowercase();
     let stem = stem.trim_end_matches(|c: char| c.is_ascii_digit() || c == '-' || c == ' ');
@@ -733,6 +737,8 @@ pub fn merged_kind(file_name: &str) -> Option<&'static str> {
         Some("hdr")
     } else if stem.ends_with("-pano") {
         Some("panorama")
+    } else if stem.ends_with("-focus") {
+        Some("focus")
     } else {
         None
     }

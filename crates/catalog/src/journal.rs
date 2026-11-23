@@ -54,6 +54,7 @@
 //! | 9 | faces: found faces, rejected suggestions, AI culling (fork) | `Op::SetRegions`, `Region.rejected`, `Analysis.faces` / `eyes_closed` / `face_focus` |
 //! | 10 | hand-drawn faces, expressions in culling (fork) | `Region.drawn`, `Analysis.smiles` / `expression` |
 //! | 11 | fav. — a heart apart from stars and flags (fork) | `Op::SetFavorite`, `Photo.favorite`, `Filter.favorite` |
+//! | 12 | merges. — found photo merges, merged photos and their hidden frames (fork) | `Op::SetMerge`, `Photo.merge`, `Meta.exposure_bias` / `focus_distance` (merge groups are `merge.group.*` records) |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -80,7 +81,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 11;
+pub const VERSION: u32 = 12;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]

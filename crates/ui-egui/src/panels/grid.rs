@@ -165,14 +165,30 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     }
-    super::chips::show(app, ui, &chips);
-    if app.ui.filter_bar {
-        super::filterbar::show(app, ui);
-        if app.ui.column_browser {
-            super::columns::show(app, ui);
+    let merges = app.session.source == lightcraft_engine::LibrarySource::Merges;
+    if merges {
+        // merges.: its own bar (find., all. / none., merge. / skip., both. / merges.only. / unmerge.);
+        // the filter bar doesn't apply to it
+        crate::merges::bar(app, ui);
+    } else {
+        super::chips::show(app, ui, &chips);
+        if app.ui.filter_bar {
+            super::filterbar::show(app, ui);
+            if app.ui.column_browser {
+                super::columns::show(app, ui);
+            }
         }
     }
     app.canvas_rect = Some(ui.max_rect());
+    if ids.is_empty() && merges {
+        let body = if app.ui.settings.merge_find == crate::merges::FindMode::Auto {
+            "Brackets, panoramas and focus stacks show up here as LightCraft finds them. find. looks now"
+        } else {
+            "Click find. to look here for brackets (hdr.), panoramas (pano.) and focus stacks (stack.)"
+        };
+        super::empty_message(ui, ui.max_rect(), "No merges here", body);
+        return;
+    }
     if ids.is_empty() {
         if !chips.is_empty() {
             let body = match total {
@@ -211,6 +227,8 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let runs = match app.session.source {
         // a published collection: New / Modified / Published / Deleted, not dates
         lightcraft_engine::LibrarySource::Published(c) => publish_runs(ui, &app.session.catalog, c, &ids, generation),
+        // merges.: one block per found group, then the merged photos
+        lightcraft_engine::LibrarySource::Merges => merges_runs(ui, &app.session, &ids, generation),
         _ => app.caches.grid.runs(stats, &app.session.catalog, &ids, runs_key),
     };
     // the layout only changes with the photos (and their shapes), the grouping, the width and
@@ -432,6 +450,31 @@ fn publish_runs(ui: &egui::Ui, cat: &Catalog, c: u64, ids: &[PhotoId], generatio
     runs
 }
 
+/// The blocks of a merges. view ([`lightcraft_engine::merge_find::view`]), once per view generation.
+fn merges_runs(ui: &egui::Ui, session: &lightcraft_engine::Session, ids: &[PhotoId], generation: u64) -> Arc<Vec<DateRun>> {
+    let key = egui::Id::new("merges-runs");
+    if let Some((g, r)) = ui.data(|d| d.get_temp::<(u64, Arc<Vec<DateRun>>)>(key))
+        && g == generation
+    {
+        return r;
+    }
+    let scope = session.merges_scope.clone().unwrap_or_default();
+    let mut start = 0;
+    let mut runs = Vec::new();
+    for v in lightcraft_engine::merge_find::view(&session.catalog, &scope) {
+        // the view the grid shows is the engine's list: stop where they part (never mislabel)
+        let n = v.ids.len();
+        if ids.get(start..start + n) != Some(&v.ids[..]) {
+            break;
+        }
+        runs.push(DateRun { key: v.key, label: v.label, start, count: n });
+        start += n;
+    }
+    let runs = Arc::new(runs);
+    ui.data_mut(|d| d.insert_temp(key, (generation, runs.clone())));
+    runs
+}
+
 fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: &[PhotoId], r: Rect, pinned: bool) {
     let t = Tokens::get(ui.ctx());
     let resp = ui.interact(r, egui::Id::new(("group-header", run.start, pinned)), Sense::click());
@@ -442,6 +485,14 @@ fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: 
     if pinned {
         p.rect_filled(r, 0.0, t.canvas);
         p.hline(r.x_range(), r.bottom(), Stroke::new(1.0, t.divider));
+    }
+    if run.key.starts_with("merges:") {
+        // merges.: the kind (a menu), the count, merge. / skip.; a click on the rest picks the group
+        crate::merges::group_header(app, ui, &run.key, run.count, r, pinned);
+        if resp.clicked() {
+            select_run(app, ui, run, ids);
+        }
+        return;
     }
     let title =
         if run.key.starts_with("publish:") { crate::i18n::tr(&run.label).to_string() } else { crate::i18n::date_group_label(&run.key, false) };
@@ -458,11 +509,16 @@ fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: 
         t.text_dim,
     );
     if resp.clicked() {
-        let group: Vec<u64> = ids[run.start..(run.start + run.count).min(ids.len())].iter().map(|p| p.0).collect();
-        let m = ui.input(|i| i.modifiers);
-        let mode = if m.command || m.shift { "add" } else { "replace" };
-        let _ = app.run("library.select", json!({"ids": group, "mode": mode}));
+        select_run(app, ui, run, ids);
     }
+}
+
+/// A click on a group's header: its photos are picked (⌘ / ⇧: added to the picked ones).
+fn select_run(app: &mut LightcraftApp, ui: &egui::Ui, run: &DateRun, ids: &[PhotoId]) {
+    let group: Vec<u64> = ids.get(run.start..(run.start + run.count).min(ids.len())).unwrap_or(&[]).iter().map(|p| p.0).collect();
+    let m = ui.input(|i| i.modifiers);
+    let mode = if m.command || m.shift { "add" } else { "replace" };
+    let _ = app.run("library.select", json!({"ids": group, "mode": mode}));
 }
 
 /// Request a grid/filmstrip thumbnail at `priority`. An unedited raw without a thumbnail texture
@@ -636,7 +692,9 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         }
     }
     let show_badges = match app.ui.settings.grid_badges {
-        crate::state::GridBadges::Auto => resp.hovered() || selected || photo.rating > 0 || photo.flag != Flag::None || photo.favorite || photo.label.is_some(),
+        crate::state::GridBadges::Auto => {
+            resp.hovered() || selected || photo.rating > 0 || photo.flag != Flag::None || photo.favorite || photo.label.is_some()
+        }
         crate::state::GridBadges::Always => true,
         crate::state::GridBadges::Never => false,
     };
@@ -698,6 +756,16 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         p.line_segment([c + vec2(s * 0.3, -s), c + vec2(s * 0.3, -s * 0.3)], Stroke::new(1.2, Color32::WHITE));
         p.line_segment([c + vec2(s * 0.3, -s * 0.3), c + vec2(s, -s * 0.3)], Stroke::new(1.2, Color32::WHITE));
         p.galley(pos2(br.left() + 22.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
+    }
+    if let Some(kind) = photo.merge_type() {
+        // merges.: what made it (pano. / hdr. / stack. / hdr.pano.) at the image's top right (the
+        // top left has the stack's badge and the left off. mark), under a virtual copy's name
+        let mut at = img_rect.right_top() + if square { vec2(-6.0, 6.0) } else { vec2(-5.0, 5.0) };
+        if photo.copy_name.is_some() {
+            at.y += 26.0;
+        }
+        let br = crate::merges::tag(p, &t, at, kind, false, true);
+        register(ui.ctx(), format!("badge:merge:{}", id.0), br);
     }
     if let Some(len) = crate::video_ui::badge(&photo) {
         // a video: its length at the image's bottom right, above the badge bar (Classic's)

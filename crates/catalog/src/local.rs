@@ -307,6 +307,10 @@ impl Op {
             | Op::SetXmpSync { .. }
             | Op::SetRecord { .. } => {}
             Op::SetVideo { id, .. } => out(*id),
+            Op::SetMerge { id, merge } => {
+                out(*id);
+                merge.and_then(|m| m.into).into_iter().for_each(&mut *out);
+            }
         }
     }
 }

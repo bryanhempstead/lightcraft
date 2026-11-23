@@ -383,6 +383,9 @@ pub struct AppSettings {
     pub trash_delete: Option<bool>,
     /// The album. choice fell back to Remove from Library outside an album and said so once.
     pub album_fallback_told: bool,
+    /// merges.: find photo merges by themselves in the background (auto., the default) or only
+    /// when find. is clicked (Settings ▸ General ▸ find merges:).
+    pub merge_find: crate::merges::FindMode,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
     /// Largest long edge (pixels) the loupe renders at.
@@ -481,6 +484,7 @@ impl Default for AppSettings {
             confirm_delete: false,
             trash_delete: None,
             album_fallback_told: false,
+            merge_find: crate::merges::FindMode::Auto,
             gpu: true,
             preview_edge: 2560,
             external_editor: String::new(),

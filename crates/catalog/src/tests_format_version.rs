@@ -185,9 +185,10 @@ fn op_variants_are_versioned() {
             Op::SetVideo { .. } | Op::SetRecord { .. } => 8,
             Op::SetRegions { .. } => 9,
             Op::SetFavorite { .. } => 11,
+            Op::SetMerge { .. } => 12,
         }
     }
-    let newest = since(&Op::SetFavorite { id: PhotoId(1), favorite: true });
+    let newest = since(&Op::SetMerge { id: PhotoId(1), merge: None });
     // a format can also add a field (v5: `Meta.iptc_ext`), so the newest op may be older
     assert!(newest <= VERSION, "an op newer than the current format version");
 }

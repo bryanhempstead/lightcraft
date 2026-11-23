@@ -78,6 +78,8 @@ pub fn from_tiff(tiff: &Tiff) -> Metadata {
     m.focal_length = pos(either(t::FOCAL_LENGTH).and_then(|v| v.get_f64(0)));
     m.focal_length_35mm = pos(exif.and_then(|e| e.f64(t::FOCAL_LENGTH_35MM)));
     m.exposure_bias = exif.and_then(|e| e.f64(t::EXPOSURE_BIAS)).filter(|v| v.is_finite() && v.abs() < 100.0);
+    // 0 is "unknown" and 0xFFFFFFFF/1 "infinity": neither says where the lens was focused
+    m.subject_distance = exif.and_then(|e| e.f64(t::SUBJECT_DISTANCE)).filter(|v| v.is_finite() && *v > 0.0 && *v < 100_000.0);
     m.exposure_program = exif.and_then(|e| e.u16(t::EXPOSURE_PROGRAM));
     m.metering_mode = exif.and_then(|e| e.u16(t::METERING_MODE));
     m.white_balance = exif.and_then(|e| e.u16(t::WHITE_BALANCE));
@@ -177,6 +179,7 @@ pub(crate) mod tests {
         exif.set(t::OFFSET_TIME_ORIGINAL, Value::Ascii("+02:00".into()));
         exif.set(t::SUBSEC_TIME_ORIGINAL, Value::Ascii("42".into()));
         exif.set(t::EXPOSURE_BIAS, Value::SRational(vec![(-2, 3)]));
+        exif.set(t::SUBJECT_DISTANCE, Value::Rational(vec![(35, 10)]));
         exif.set(t::METERING_MODE, Value::Short(vec![5]));
         exif.set(t::FLASH, Value::Short(vec![0x19]));
         exif.set(t::FOCAL_LENGTH, Value::Rational(vec![(50, 1)]));
@@ -220,6 +223,7 @@ pub(crate) mod tests {
             let dt = m.capture_time.unwrap();
             assert_eq!(dt.to_iso(), "2023-07-14T18:30:05.420+02:00");
             assert!((m.exposure_bias.unwrap() + 0.6667).abs() < 1e-3);
+            assert_eq!(m.subject_distance, Some(3.5));
             assert_eq!(m.metering_mode, Some(5));
             assert_eq!(m.flash, Some(Flash { fired: true, raw: 0x19 }));
             assert_eq!(m.focal_length, Some(50.0));

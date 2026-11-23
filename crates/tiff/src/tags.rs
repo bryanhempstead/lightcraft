@@ -66,6 +66,7 @@ pub const OFFSET_TIME_DIGITIZED: u16 = 36882;
 pub const SHUTTER_SPEED_VALUE: u16 = 37377;
 pub const APERTURE_VALUE: u16 = 37378;
 pub const EXPOSURE_BIAS: u16 = 37380;
+pub const SUBJECT_DISTANCE: u16 = 37382;
 pub const MAX_APERTURE: u16 = 37381;
 pub const METERING_MODE: u16 = 37383;
 pub const LIGHT_SOURCE: u16 = 37384;

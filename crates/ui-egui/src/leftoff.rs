@@ -85,6 +85,7 @@ pub fn source_key(app: &LightcraftApp) -> String {
         LibrarySource::Folder => format!("folder:{}", app.session.browse.as_ref().map(|b| b.path.as_str()).unwrap_or("")),
         LibrarySource::Missing => "missing".into(),
         LibrarySource::LibraryFolder => format!("libraryFolder:{}", app.session.library_folder.as_deref().unwrap_or("")),
+        LibrarySource::Merges => format!("merges:{}", serde_json::to_string(&app.session.merges_scope).unwrap_or_default()),
     }
 }
 

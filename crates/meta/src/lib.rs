@@ -125,6 +125,9 @@ pub struct Metadata {
     pub flash: Option<Flash>,
     /// EV.
     pub exposure_bias: Option<f64>,
+    /// Exif `SubjectDistance`: where the lens was focused, in metres (`None`: unknown or infinity).
+    #[serde(default)]
+    pub subject_distance: Option<f64>,
     /// Exif `ExposureProgram` code.
     pub exposure_program: Option<u16>,
     /// Exif `MeteringMode` code.
@@ -203,6 +206,7 @@ impl Metadata {
             focal_length_35mm,
             flash,
             exposure_bias,
+            subject_distance,
             exposure_program,
             metering_mode,
             white_balance,

@@ -62,3 +62,26 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   caption also lists them.
 - Panorama output is limited to `maxMegapixels` (default 40) — blending memory is ~25 bytes/pixel.
 - The browser build has no file access for merges yet.
+
+## merges. — found merges (Bryan's request, 2026-11-23)
+
+LightCraft looks for photos that belong together and lists them under a `merges.` row beneath
+their folder and their collections; nothing is merged until he says so.
+
+- **Finding** (`crates/engine/src/merge_find.rs`, `merge.find`): per folder, in capture order,
+  frames from one body / lens / focal length taken a few seconds apart (plus the exposure) form a
+  run. Exposure steps at one aperture and ISO (shutter or compensation, ≥ 0.9 EV in all) →
+  `hdr.`; frames at one exposure are compared as 64 px grey thumbnails: shifted ≥ 10 % with a
+  good match there (NCC ≥ 0.6, 0.15 better than unshifted) → `pano.`; the same framing with the
+  sharp 4 × 4 tiles moving (or a recorded focus distance stepping) → `stack.`; brackets of one
+  pattern at shifted framings → `hdr.pano.`. Missing metadata or pixels just mean nothing is found.
+- **When**: Settings ▸ General ▸ find merges: `auto.` (default) looks in the background at folders
+  whose photos changed (fingerprints in the `merge.scanned` record; all folders the first time);
+  `find.` only when find. is clicked in a merges. view.
+- **Groups**: `merge.group.<id>` library records (kind, frames, open / merged / dismissed, merged
+  photo). A group sharing a frame with an earlier one — skipped ones too — is never suggested again.
+- **Merging** (`merge.mergeGroups`; in the app one group at a time on the merge worker): the merged
+  DNG is written and imported as usual; its frames get `Photo.merge.into` and leave every view and
+  count (catalog v12; never deleted, files untouched); the merged photo goes into each collection
+  they were in, at the first frame's place, keeps their capture time, and shows its kind on the
+  thumbnail. `merge.showIn` both. / merges.only., `merge.unmerge` brings the frames back.

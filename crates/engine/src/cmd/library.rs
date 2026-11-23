@@ -310,7 +310,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Source",
             [],
             None,
-            "{kind: all|recentlyAdded|previousImport|album|recentlyDeleted|picks|missing|libraryFolder|published, id?: albumId (published: a published collection id), path?: a path from library.folders (for libraryFolder), subfolders?: bool (libraryFolder: show the folders inside it or not, whatever Show Photos in Subfolders says), folders? | cameras?: [key] (album: only the photos of these rows of album.parts — folders or cameras — together)}",
+            "{kind: all|recentlyAdded|previousImport|album|recentlyDeleted|picks|missing|libraryFolder|published|merges, id?: albumId (published: a published collection id; merges: the collection whose merges. to show), path?: a path from library.folders (for libraryFolder; merges: the folder whose merges. to show, deep?: with the folders inside it), subfolders?: bool (libraryFolder: show the folders inside it or not, whatever Show Photos in Subfolders says), folders? | cameras?: [key] (album: only the photos of these rows of album.parts — folders or cameras — together)}",
             always,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("all");
@@ -332,6 +332,21 @@ pub fn specs() -> Vec<CommandSpec> {
                     "recentlyDeleted" => LibrarySource::RecentlyDeleted,
                     "picks" => LibrarySource::Picks,
                     "missing" => LibrarySource::Missing,
+                    // merges.: a folder's or a collection's found merges (else all of them)
+                    "merges" => {
+                        let scope = match (str_param(p, "path").filter(|d| !d.trim().is_empty()), p.get("id").and_then(Value::as_u64)) {
+                            (Some(path), _) => crate::merge_find::Scope::Folder { path: path.to_string(), deep: super::bool_or(p, "deep", false) },
+                            (None, Some(a)) => {
+                                if s.catalog.album(lightcraft_catalog::AlbumId(a)).is_none_or(|a| a.folder) {
+                                    return Err(bad("library.source", "no such album"));
+                                }
+                                crate::merge_find::Scope::Album { id: lightcraft_catalog::AlbumId(a) }
+                            }
+                            (None, None) => crate::merge_find::Scope::All,
+                        };
+                        s.merges_scope = Some(scope);
+                        LibrarySource::Merges
+                    }
                     "published" => {
                         let c = p
                             .get("id")
