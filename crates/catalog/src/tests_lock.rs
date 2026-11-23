@@ -35,6 +35,25 @@ fn second_opener_is_refused_until_the_first_lets_go() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A holder with no owner note lets go within moments (a child process forked by another thread
+/// keeps a copy of the lock until it execs; seen as "library in use" when a test reopened its
+/// library under load): the opener waits for it instead of refusing.
+#[test]
+fn a_holder_without_an_owner_note_is_waited_for() {
+    let dir = temp_dir("transient");
+    let held = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join(LOCK)).unwrap();
+    held.try_lock().unwrap();
+    let t = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        drop(held);
+    });
+    let lock = LibraryLock::acquire(&dir, "LightCraft").unwrap();
+    assert!(lock.held());
+    t.join().unwrap();
+    drop(lock);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Files left behind by a crash (lock file + owner note) don't lock anyone out.
 #[test]
 fn leftover_lock_files_are_not_a_lock() {
