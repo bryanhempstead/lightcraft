@@ -103,7 +103,7 @@ pub fn reach(s: &DevelopSettings, px_per_long: f64, q: Quality, src_long: usize,
     for g in [sig.base, sig.clarity].into_iter().flatten() {
         r = r.max(guided(g));
     }
-    for g in [sig.texture, sig.dark, sig.chroma].into_iter().flatten() {
+    for g in [sig.texture, sig.dark, sig.chroma, sig.dz].into_iter().flatten() {
         r = r.max(gauss(g));
     }
     let (lum, col) = local::nr_params(s, src_long, out_long);

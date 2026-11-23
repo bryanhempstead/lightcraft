@@ -44,3 +44,16 @@ setting's effect against its reference), `r12sum.py SET LCDIR…` (runs side by 
 (full-frame gratings: mean and contrast change). Measurement switches: `LIGHTCRAFT_BLACK_CR=0|shift|photo`,
 `LIGHTCRAFT_HS_CR=0|1`, `LIGHTCRAFT_HS_SUP`, `LIGHTCRAFT_HS_PRE`, `LIGHTCRAFT_HUE_SAT_FINISH=0|1`,
 `LIGHTCRAFT_TEX_CHROMA=gain,scale|0`, `LIGHTCRAFT_CLA_LEVEL`; `lcrun.sh` takes another build in `ORACLE_BIN`.
+
+Round 13 (the acceptance set with Camera Raw as its ground truth; negative Dehaze and Clarity probes; H/S pairs):
+`make_acc.py pick SET [--masks N]` / `make_acc.py finish SET` builds an `lr_compare.py` work folder whose "previews"
+are Camera Raw's renders of each photo with its **whole catalog edit** (`luaxmp.py`: the catalog's Lua settings as
+XMP — sliders, curves, the look with its table from the installed settings, masks, crop, lens, detail; a sidecar for
+raws, standard + Extended XMP embedded in JPEGs, whose sidecars Camera Raw ignores). Then `lr_compare.py migrate /
+render / compare --no-publish / gate` as with Lightroom's previews. `make_r13.py SET deh|cla` (flat fields, gratings,
+checkers, an edge and lines at Dehaze −25 / −50 / −100; flat two-level layouts, windows and a hole at Clarity −50 /
++50 / +100), `r13deh.py` / `r13cla.py` (mean / contrast change and profiles, Camera Raw vs LightCraft), `clafit13.py`
+(Clarity refit with extra large-scale features, leave one scene out). The scripts that read `ACC` key photos by
+their original file name (`original`). Measurement switches: `LIGHTCRAFT_DZ_SP=sigma,key,offset,beta,alpha`
+(negative Dehaze's spatial variant, CPU only), `LIGHTCRAFT_HS_PAIR=c,shadows,highlights` (the H/S pair blend's
+fractions for one sign combination).

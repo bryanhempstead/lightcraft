@@ -798,6 +798,26 @@ impl Pair {
     }
 }
 
+/// Scale of the pair blend's fractions per sign combination (0: both up, 1: both down, 2: Shadows up / Highlights
+/// down, 3: the other way). Round 13: without Highlights' share with both sliders up the R6 night photos at
+/// Shadows +69 / Highlights +30 come 3.62 → 1.88 ΔE closer to Camera Raw, but Bryan's own same-sign edits (M262,
+/// Summer Fields) get darker and fail the acceptance gate (+0.24), so RAWmakase's fractions stay
+/// (`docs/lr-match.md` → Round 13).
+pub const PAIR_SCALE: [[f32; 2]; 4] = [[1., 1.], [1., 1.], [1., 1.], [1., 1.]];
+
+/// [`PAIR_SCALE`], or for measurement `LIGHTCRAFT_HS_PAIR=c,shadows,highlights` (combination `c`'s pair), read once.
+fn pair_scale(c: usize) -> [f32; 2] {
+    static S: OnceLock<Option<(usize, [f32; 2])>> = OnceLock::new();
+    let v = S.get_or_init(|| {
+        let v: Vec<f32> = std::env::var("LIGHTCRAFT_HS_PAIR").ok()?.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        (v.len() == 3 && v.iter().all(|x| x.is_finite())).then(|| (v[0] as usize, [v[1], v[2]]))
+    });
+    match v {
+        Some((k, s)) if *k == c => *s,
+        _ => PAIR_SCALE.get(c).copied().unwrap_or([1.; 2]),
+    }
+}
+
 fn ramp(ratio: f32, same: bool) -> f32 {
     let r = ratio.clamp(0., 1.);
     if same { r.powf(PAIR_SAME_POWER) } else { (1. - (-PAIR_OPPOSITE_RATE * r).exp()) / (1. - (-PAIR_OPPOSITE_RATE).exp()) }
@@ -1098,7 +1118,8 @@ impl RuleStats {
             std::array::from_fn(|slider| {
                 let w = &rule_pair::BETA[c][slider];
                 let z = x.iter().zip(&rule_pair::MU[c]).zip(&rule_pair::SD[c]);
-                z.zip(&w[1..]).fold(w[0], |sum, (((x, mu), sd), w)| sum + w * (x - mu) / sd).clamp(0., 1.)
+                let f = z.zip(&w[1..]).fold(w[0], |sum, (((x, mu), sd), w)| sum + w * (x - mu) / sd).clamp(0., 1.);
+                f * pair_scale(c)[slider]
             })
         });
         Pair { extremes, fractions }

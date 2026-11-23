@@ -539,6 +539,8 @@ def render(a):
         if pid is None:
             print("not in library:", p["path"], file=sys.stderr)
             continue
+        if not os.path.exists(p["preview"]):
+            continue  # no ground truth yet (a Camera Raw render still to come: oracle/make_acc.py)
         w, h = Image.open(p["preview"]).size
         out = os.path.join(outdir, f"{p['id']}.jpg")
         if os.path.exists(out):

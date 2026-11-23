@@ -277,9 +277,11 @@ pub(crate) struct Prepared {
     /// strength.
     pub texture_detail: Option<Arc<Rgb32f>>,
     pub dark: Option<Arc<Plane>>,
-    /// The photo's 99th log2 luminance percentile before exposure ([`dehaze_cr::p99_of`]), when
+    /// Negative Dehaze's key before exposure ([`dehaze_cr::key_of`]: a high percentile of the regional level), when
     /// negative Dehaze may apply.
     pub p99: Option<f32>,
+    /// Negative Dehaze's regional level ([`dehaze_cr::SIGMA`]), when its spatial model applies.
+    pub dz_blur: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
     /// Airlight of `dark` (before exposure).

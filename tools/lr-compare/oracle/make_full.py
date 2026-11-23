@@ -23,7 +23,7 @@ def look(amount):
 
 
 DROP = re.compile(r"^(Crop|Upright|Perspective|Lens|AutoLateralCA|Defringe|Sharp|Luminance(Smoothing|NoiseReduction)|ColorNoise|Grain|PostCrop|Vignette|HDR|SDR|CameraProfileDigest|Has|AlreadyApplied)")
-sample = {os.path.splitext(os.path.basename(p["path"]))[0]: p for p in json.load(open(f"{ACC}/sample.json"))}
+sample = {os.path.splitext(os.path.basename(p.get("original") or p["path"]))[0]: p for p in json.load(open(f"{ACC}/sample.json"))}
 man, meta = [], {}
 for stem in STEMS:
     p = sample[stem]

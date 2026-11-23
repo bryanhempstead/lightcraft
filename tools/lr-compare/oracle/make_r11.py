@@ -143,10 +143,10 @@ for iname, img, sweep in jobs:
         meta[name] = {"image": iname, "settings": st, "extra": bool(extra)}
 
 PHOTOS = ["L1009234", "L1005500", "L1004944", "L1006270", "BHM_9795", "BHM_8476", "BHM_8480", "R0003062", "R0002574"]
-REAL = BASE + [c for c in CLA if c[0] in ("Cla-50", "Cla+50", "Cla+100")] + [d for d in DEH if d[0] in ("Deh-25", "Deh+30", "Deh+100")] + \
+REAL = BASE + [c for c in CLA if c[0] in ("Cla-50", "Cla+50", "Cla+100")] + [d for d in DEH if d[0] in ("Deh-25", "Deh-50", "Deh+30", "Deh+100")] + \
     [h for h in HS if h[0] in ("H-100", "H+50", "S+100", "S-50", "H-100S+100")] + [("Tex+50", {"Texture": "+50"})] + TONE
 if "real" in WHAT:
-    sample = {os.path.splitext(os.path.basename(p["path"]))[0]: p for p in json.load(open(f"{ACC}/sample.json"))}
+    sample = {os.path.splitext(os.path.basename(p.get("original") or p["path"]))[0]: p for p in json.load(open(f"{ACC}/sample.json"))}
     for stem in PHOTOS:
         p = sample[stem]
         assert p["split"] == "A" and "/LOT48/" not in p["path"], stem

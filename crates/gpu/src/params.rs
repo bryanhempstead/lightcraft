@@ -71,6 +71,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("DZ_CR", 1),
     ("DZ_KEY", 1),
     ("DZ_OFF", 1),
+    // negative Dehaze's regional level in `dark` from this index (0: none; round 13)
+    ("DZ_SP_OFF", 1),
     ("PC_CR_N", 1),
     ("PC_CR_OFF", 1),
     ("GRADE_CR", 1),
@@ -234,6 +236,8 @@ pub struct Present {
     pub texture_detail: bool,
     pub tex_g_off: u32,
     pub dark: bool,
+    /// Where negative Dehaze's regional level starts in `dark` (0: not bound).
+    pub dz_off: u32,
     /// The blurred chromaticity follows the mask planes in the `masks` buffer.
     pub chroma: bool,
 }
@@ -368,6 +372,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.b("HAS_TEXD", present.texture_detail);
     p.u("TEX_G_OFF", present.tex_g_off);
     p.b("HAS_DARK", present.dark);
+    p.u("DZ_SP_OFF", present.dz_off);
     p.b("HAS_CHROMA", present.chroma);
 
     let ops = &fp.ops;

@@ -35,7 +35,7 @@ def sgn(v):
     return f"{v:+.2f}" if abs(v - round(v)) > 1e-9 else f"{int(round(v)):+d}"
 
 
-sample = {os.path.splitext(os.path.basename(p["path"]))[0]: p for p in json.load(open(f"{ACC}/sample.json"))}
+sample = {os.path.splitext(os.path.basename(p.get("original") or p["path"]))[0]: p for p in json.load(open(f"{ACC}/sample.json"))}
 man, meta = [], {}
 for stem in PHOTOS:
     p = sample.get(stem)
