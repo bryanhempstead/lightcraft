@@ -179,8 +179,15 @@ fn row_ex(
 fn sidebar_section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, title: &str) -> (Rect, bool) {
     let t = Tokens::get(ui.ctx());
     let title = crate::i18n::tr(title);
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+    let movable = super::order::title(super::order::LIBRARY_LEFT, id).is_some();
+    // (a reorderable section moves by its header: `panels::order`)
+    let sense = if movable { Sense::click_and_drag() } else { Sense::click() };
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), sense);
     register(ui.ctx(), format!("sidebarSection:{id}"), r);
+    if movable {
+        super::order::header(ui, super::order::LIBRARY_LEFT, id, &resp, 8.0);
+        resp.context_menu(|ui| super::order::menu_items(app, ui, super::order::LIBRARY_LEFT, id));
+    }
     if resp.clicked() {
         app.ui.toggle_sidebar_section(id);
     }
@@ -222,14 +229,24 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 d.insert_temp(egui::Id::new("left-visible-right"), ui.cursor().left() + viewport.max.x);
             });
             let src = app.session.source;
-            let (_, catalog_open) = sidebar_section_header(app, ui, "catalog", "Catalog");
-            if catalog_open {
-                catalog_rows(app, ui, total, picks, previous, deleted, src);
+            // Catalog, shoots., Folders, Collections, Publish Services in the order the user set
+            super::order::begin(ui, super::order::LIBRARY_LEFT);
+            for id in super::order::ordered(&app.ui.settings, super::order::LIBRARY_LEFT) {
+                match id {
+                    "catalog" => {
+                        let (_, catalog_open) = sidebar_section_header(app, ui, "catalog", "Catalog");
+                        if catalog_open {
+                            catalog_rows(app, ui, total, picks, previous, deleted, src);
+                        }
+                    }
+                    "shoots" => shoots_section(app, ui, viewport),
+                    "folders" => folders_section(app, ui, viewport),
+                    "collections" => collections_section(app, ui, viewport),
+                    "publish" => publish_section(app, ui, viewport),
+                    _ => {}
+                }
             }
-            shoots_section(app, ui, viewport);
-            folders_section(app, ui, viewport);
-            collections_section(app, ui, viewport);
-            publish_section(app, ui, viewport);
+            super::order::finish(app, ui, super::order::LIBRARY_LEFT);
             // Local (a folder browsed without importing) only while one is shown
             if src == LibrarySource::Folder {
                 ui.add_space(10.0);

@@ -621,7 +621,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                 }
                 Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
-                Dialog::Enhance { opts } => crate::enhance::body(app, ui, opts),
+                Dialog::Enhance { opts } => {
+                    // its own cancel. / ok. under the options; Return presses ok.
+                    ok_button = (true, false);
+                    match crate::enhance::body(app, ui, opts) {
+                        crate::export_dialog::Action::Close => close = true,
+                        crate::export_dialog::Action::Confirm => confirm = true,
+                        crate::export_dialog::Action::None => {}
+                    }
+                }
                 Dialog::Import { opts } => crate::import::body(app, ui, opts),
                 Dialog::Settings { tab } => crate::panels::settings::body(app, ui, tab),
                 Dialog::SamModel { error, .. } => sam_model_body(app, ui, error.as_deref()),
@@ -777,7 +785,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
             }
             // the Export dialogs draw their own buttons (Lightroom's row)
-            let own_buttons = matches!(dlg, Dialog::Export { .. } | Dialog::ExportExisting { .. });
+            let own_buttons = matches!(dlg, Dialog::Export { .. } | Dialog::ExportExisting { .. } | Dialog::Enhance { .. });
             if !own_buttons {
                 ui.add_space(4.0);
             }
@@ -824,8 +832,6 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         add_label.as_str()
                     }
                     Dialog::Merge { .. } => "Merge",
-                    Dialog::Enhance { opts } if !opts.options().any() => "",
-                    Dialog::Enhance { .. } => "enh.",
                     Dialog::ConfirmDelete { .. } => "delete.",
                     Dialog::DeletePhotos { count, copies, .. } if count == copies => "remove.",
                     Dialog::DeletePhotos { .. } => "delete.from.disk.",
@@ -891,8 +897,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         app.ui.dialog = before;
         match r {
             // the import review stays open on an error (e.g. an unusable folder template), and so
-            // does Export (e.g. no folder chosen) so the choices aren't lost
-            Err(e) if matches!(dlg, Dialog::Import { .. } | Dialog::Export { .. }) => app.toast(ctx, e),
+            // does Export (e.g. no folder chosen) so the choices aren't lost, and Enhance (nothing
+            // chosen yet)
+            Err(e) if matches!(dlg, Dialog::Import { .. } | Dialog::Export { .. } | Dialog::Enhance { .. }) => app.toast(ctx, e),
             // the SAM 3 dialog stays open to show the download (or why it can't start)
             Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
                 if let Dialog::SamModel { error, .. } = &mut dlg {

@@ -637,7 +637,8 @@ pub fn classic_header(ui: &mut Ui, id: &str, title: &str, open: bool, right_side
     let title = crate::i18n::tr(title);
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (r, resp) = ui.allocate_exact_size(vec2(w, CLASSIC_HEADER_H), Sense::click());
+    // (drags too: a reorderable panel moves the section by its header, `panels::order`)
+    let (r, resp) = ui.allocate_exact_size(vec2(w, CLASSIC_HEADER_H), Sense::click_and_drag());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
     register(ui.ctx(), format!("section:{id}"), r);
     let p = ui.painter();
@@ -736,6 +737,28 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     let p = ui.painter();
     p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
     p.galley(r.center() - galley.size() / 2.0, galley, t.text);
+    resp
+}
+
+/// The dialog's main button (`ok.`): filled with the accent colour, white label, as tall as a
+/// [`text_button`].
+pub fn accent_button(ui: &mut Ui, id: &str, label: &str) -> Response {
+    let label = crate::i18n::tr(label);
+    let t = Tokens::get(ui.ctx());
+    let galley = ui.painter().layout_no_wrap(label.to_string(), t.semibold(11.5), Color32::WHITE);
+    let size = vec2((galley.size().x + 24.0).max(56.0), 24.0);
+    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    register(ui.ctx(), format!("button:{id}"), r);
+    let fill = if resp.is_pointer_button_down_on() {
+        t.accent.gamma_multiply(0.85)
+    } else if resp.hovered() {
+        lerp(t.accent, Color32::WHITE, 0.12)
+    } else {
+        t.accent
+    };
+    ui.painter().rect_filled(r, CornerRadius::same(4), fill);
+    ui.painter().galley(r.center() - galley.size() / 2.0, galley, Color32::WHITE);
     resp
 }
 

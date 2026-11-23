@@ -440,6 +440,13 @@ pub struct AppSettings {
     pub develop_view: DevelopView,
     /// LRC-UI-IDENTITYPLATE: the identity plate (Settings ▸ identity., `app.identityPlate`).
     pub identity_plate: crate::identity::IdentityPlate,
+    /// The side panels' section order, per side (`panels::order::SIDES`: `developRight`,
+    /// `developLeft`, `libraryLeft`, `libraryRight`), set by dragging a section header
+    /// (`panel.order`). A side not listed keeps the built-in order.
+    pub panel_order: std::collections::BTreeMap<String, Vec<String>>,
+    /// The sections that open at launch, per side (a header's right-click ▸ Open by Default,
+    /// `panel.defaultOpen`). A side not listed opens what was open at quit.
+    pub panel_default_open: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// Develop View Options (LRC-DEV-VIEWOPTIONS): Develop's loupe has its own Info 1 / Info 2 lines,
@@ -512,6 +519,8 @@ impl Default for AppSettings {
             hidden_zooms: Vec::new(),
             develop_view: DevelopView::default(),
             identity_plate: crate::identity::IdentityPlate::default(),
+            panel_order: Default::default(),
+            panel_default_open: Default::default(),
         }
     }
 }
@@ -1691,6 +1700,7 @@ impl UiState {
             }
         }
         self.open_sections = open;
+        crate::panels::order::open_defaults(&mut self);
         self.sync_module();
         self
     }

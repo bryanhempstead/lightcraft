@@ -36,7 +36,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().id_salt("library-right-scroll").auto_shrink([false, false]).show(&mut top, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             let active = app.session.active();
-            for (id, title) in SECTIONS {
+            super::order::begin(ui, super::order::LIBRARY_RIGHT);
+            for id in super::order::ordered(&app.ui.settings, super::order::LIBRARY_RIGHT) {
+                let Some(title) = super::order::title(super::order::LIBRARY_RIGHT, id) else { continue };
                 if !header(app, ui, id, title) {
                     continue;
                 }
@@ -49,6 +51,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     _ => note(ui, "Select a photo"),
                 }
             }
+            super::order::finish(app, ui, super::order::LIBRARY_RIGHT);
             ui.add_space(12.0);
         });
         crate::widgets::set_classic_rows(ui.ctx(), false);
@@ -65,6 +68,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 fn header(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, title: &str) -> bool {
     let open = app.ui.library_sections.iter().any(|s| s == id);
     let (resp, _) = crate::widgets::classic_header(ui, &format!("lib.{id}"), title, open, true, None);
+    super::order::header(ui, super::order::LIBRARY_RIGHT, id, &resp, 16.0);
     if resp.clicked() {
         let solo = app.ui.single_panel || ui.input(|i| i.modifiers.alt);
         crate::state::UiState::toggle_in(&mut app.ui.library_sections, id, solo && !open);
@@ -74,6 +78,7 @@ fn header(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, title: &str) -> 
         if ui.checkbox(&mut solo, crate::i18n::tr("Solo Mode")).changed() {
             app.ui.single_panel = solo;
         }
+        super::order::menu_items(app, ui, super::order::LIBRARY_RIGHT, id);
     });
     open
 }

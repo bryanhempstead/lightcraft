@@ -81,6 +81,8 @@ pub struct EnhanceState {
     /// Lens Blur ▸ Refine brush size (‰ of the long edge) and the stroke being painted.
     pub brush_size: f64,
     pub lens_stroke: Vec<[f64; 2]>,
+    /// How the Before / After previews are framed (dragged and zoomed together).
+    pub view: crate::pan_zoom::PanZoom,
 }
 
 impl Default for EnhanceState {
@@ -98,6 +100,7 @@ impl Default for EnhanceState {
             visualize_depth: false,
             brush_size: 30.0,
             lens_stroke: Vec::new(),
+            view: initial_view(),
         }
     }
 }
@@ -109,13 +112,21 @@ impl EnhanceState {
     }
 }
 
+/// Each preview pane's side (points).
 const PREVIEW_SIDE: usize = 360;
+/// The part of the photo the preview renders (sensor pixels, square): more than a pane shows at
+/// 1:1, so the previews can be dragged around and zoomed out without waiting for a new render.
+const PREVIEW_REGION: usize = 640;
 
-/// What the preview shows: the middle of the photo at 1:1 (`PREVIEW_SIDE` sensor pixels), as Lightroom's Enhance
-/// preview does.
+/// The previews open at 1:1 on the middle of the region (Lightroom's Enhance preview).
+pub(crate) fn initial_view() -> crate::pan_zoom::PanZoom {
+    crate::pan_zoom::PanZoom { zoom: PREVIEW_REGION as f32 / PREVIEW_SIDE as f32, center: egui::vec2(0.5, 0.5) }
+}
+
+/// What the preview renders: the middle of the photo, [`PREVIEW_REGION`] sensor pixels square.
 fn preview_rect(app: &LightcraftApp, id: Option<PhotoId>) -> [f64; 4] {
     let (w, h) = id.and_then(|i| app.session.catalog.photo(i)).map_or((0, 0), |p| (p.width, p.height));
-    let half = |n: u32| if n as usize > PREVIEW_SIDE { PREVIEW_SIDE as f64 / 2.0 / n as f64 } else { 0.5 };
+    let half = |n: u32| if n as usize > PREVIEW_REGION { PREVIEW_REGION as f64 / 2.0 / n as f64 } else { 0.5 };
     // (the catalog's size is oriented; the crop is on the sensor: a square window either way)
     let (hx, hy) = (half(w.max(h)), half(w.max(h)) * w.max(h) as f64 / w.min(h).max(1) as f64);
     [0.5 - hx, 0.5 - hy.min(0.5), 0.5 + hx, 0.5 + hy.min(0.5)]
@@ -129,7 +140,7 @@ fn spawn(app: &LightcraftApp, options: &EnhanceDialog, ids: &[PhotoId], preview:
             ids,
             options.in_place && !preview,
             options.stack,
-            preview.then(|| (preview_rect(app, ids.first().copied()), PREVIEW_SIDE)),
+            preview.then(|| (preview_rect(app, ids.first().copied()), PREVIEW_REGION)),
         )
         .map_err(|e| e.to_string())?;
     let progress = Arc::new(Mutex::new((0.0, "Starting".to_string())));
@@ -168,6 +179,7 @@ pub fn open(app: &mut LightcraftApp) -> Result<Value, String> {
     app.enhance.error = None;
     app.enhance.preview = None;
     app.enhance.failed_options = None;
+    app.enhance.view = initial_view();
     let opts = app.enhance.last.clone().unwrap_or_default();
     app.ui.dialog = Some(crate::state::Dialog::Enhance { opts });
     Ok(json!({"photos": app.enhance.ids.len()}))
@@ -369,10 +381,13 @@ fn ctx_repaint(ui: &egui::Ui) {
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
 }
 
-/// The dialog body (preview on the left, options on the right).
-pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut EnhanceDialog) {
+/// The dialog body: Before / After on the left (drag to look around, scroll or pinch to zoom, both
+/// in step), the options on the right with cancel. and ok. under them. Returns what the buttons
+/// asked for.
+pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut EnhanceDialog) -> crate::export_dialog::Action {
     let t = crate::theme::Tokens::get(ui.ctx());
     let models = app.session.enhancer.models_status();
+    let mut action = crate::export_dialog::Action::None;
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
         // before | after
@@ -385,15 +400,24 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut EnhanceDialog
                 ui.painter().rect_filled(r, 4.0, t.canvas);
             }
             crate::widgets::register(ui.ctx(), "enhance.preview", rect);
+            let size = app.enhance.preview.as_ref().map_or([0, 0], |p| p.2);
+            // both panes move together: whichever the pointer is on drives the one view
+            let mut view = app.enhance.view;
+            for (pane, key) in [(left, "enhanceBefore"), (right, "enhanceAfter")] {
+                crate::pan_zoom::interact(ui, pane, key, size, &mut view);
+            }
+            app.enhance.view = view;
             if let Some((before, after, size, _, _)) = &app.enhance.preview {
-                let s = (side / size[0] as f32).min(side / size[1] as f32);
-                let dims = egui::vec2(size[0] as f32 * s, size[1] as f32 * s);
-                let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-                ui.painter().image(before.id(), egui::Rect::from_center_size(left.center(), dims), uv, egui::Color32::WHITE);
-                ui.painter().image(after.id(), egui::Rect::from_center_size(right.center(), dims), uv, egui::Color32::WHITE);
+                crate::pan_zoom::paint(ui, left, before.id(), *size, &view);
+                crate::pan_zoom::paint(ui, right, after.id(), *size, &view);
             }
             for (r, label) in [(left, "Before"), (right, "After")] {
-                ui.painter().text(r.left_top() + egui::vec2(10.0, 10.0), egui::Align2::LEFT_TOP, crate::i18n::tr(label), t.font(12.0), t.text);
+                let p = ui.painter_at(r);
+                let g = p.layout_no_wrap(crate::i18n::tr(label).to_string(), t.font(12.0), t.text);
+                let chip = egui::Rect::from_min_size(r.left_top() + egui::vec2(8.0, 8.0), g.size() + egui::vec2(12.0, 6.0));
+                // readable over any part of the photo
+                p.rect_filled(chip, 3.0, egui::Color32::from_black_alpha(150));
+                p.galley(chip.min + egui::vec2(6.0, 3.0), g, t.text);
             }
             if let Some(task) = &app.enhance.preview_task {
                 let (f, stage) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();
@@ -406,7 +430,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut EnhanceDialog
                 );
             }
             if let Some(e) = &app.enhance.error {
-                ui.painter().text(right.center(), egui::Align2::CENTER_CENTER, e, t.font(12.0), t.text);
+                let g = ui.painter().layout(e.clone(), t.font(12.0), t.text, side - 32.0);
+                ui.painter().galley(right.center() - g.size() / 2.0, g, t.text);
             }
             let info = app.enhance.preview.as_ref().map(|p| p.4.clone());
             let n = app.enhance.ids.len();
@@ -420,9 +445,13 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut EnhanceDialog
                     line.push_str(&format!(" · preview {total:.1} s"));
                 }
             }
-            ui.label(egui::RichText::new(line).color(t.text_dim).size(12.0));
+            if size[0] > 0 {
+                line.push_str(&format!(" · {:.0}%", view.zoom * PREVIEW_SIDE as f32 / size[0].max(size[1]) as f32 * 100.0));
+            }
+            ui.label(egui::RichText::new(line).color(t.text_dim).size(12.0))
+                .on_hover_text(crate::i18n::tr("Drag the previews to look around; scroll or pinch to zoom; double-click to see all of it"));
         });
-        // options
+        // options, then cancel. / ok. under them
         ui.vertical(|ui| {
             ui.set_width(250.0);
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
@@ -464,8 +493,38 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut EnhanceDialog
             if opts.super_resolution && opts.denoise {
                 ui.label(egui::RichText::new(crate::i18n::tr("Denoise runs first, then Super Resolution")).color(t.text_dim).size(11.0));
             }
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let tip = if opts.options().any() { "Enhance (Return)" } else { "Choose Denoise, Raw Details or Super Resolution first" };
+                if crate::widgets::accent_button(ui, "dialogOk", "ok.").on_hover_text(crate::i18n::tr(tip)).clicked() {
+                    action = crate::export_dialog::Action::Confirm;
+                }
+                if crate::widgets::text_button(ui, "dialogCancel", "cancel.", false).on_hover_text(crate::i18n::tr("Close (Esc)")).clicked() {
+                    action = crate::export_dialog::Action::Close;
+                }
+            });
         });
     });
+    action
+}
+
+/// `enhance.view {zoom?, center?: [x, y]}`: frame the Enhance previews (zoom 1 = the whole
+/// preview; `center` the point of it in the middle, 0..1). Without parameters: the current framing.
+pub fn set_view(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let mut v = app.enhance.view;
+    if let Some(z) = p.get("zoom").and_then(Value::as_f64) {
+        v.zoom = z as f32;
+    }
+    if let Some(c) = p.get("center").and_then(Value::as_array) {
+        let n = |i: usize| c.get(i).and_then(Value::as_f64).map(|x| x as f32);
+        v.center = egui::vec2(n(0).ok_or("`center` is [x, y]")?, n(1).ok_or("`center` is [x, y]")?);
+    }
+    let side = PREVIEW_SIDE as f32;
+    let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(side, side));
+    let size = app.enhance.preview.as_ref().map_or([PREVIEW_REGION, PREVIEW_REGION], |p| p.2);
+    app.enhance.view = v.clamped(pane, size);
+    Ok(json!({"zoom": app.enhance.view.zoom, "center": [app.enhance.view.center.x, app.enhance.view.center.y]}))
 }
 
 /// The dialog's Amount slider.

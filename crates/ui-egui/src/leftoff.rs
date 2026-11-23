@@ -62,9 +62,35 @@ pub struct Tracker {
     pub marker: Option<PhotoId>,
     /// [`entered`] ran since the last frame (it set the marker).
     entered: bool,
+    /// Go back to the last spot on the first frame (set at launch: [`LightcraftApp::resume_left_off_at_launch`]).
+    pub resume_at_launch: bool,
+    /// When (egui time) a spot was last recorded and not yet written to `ui.json`.
+    changed_at: Option<f64>,
 }
 
-fn now() -> i64 {
+/// How long after a new spot `ui.json` is written (seconds).
+pub const SAVE_DELAY: f64 = 1.0;
+
+impl Tracker {
+    /// A spot recorded at least [`SAVE_DELAY`] ago hasn't been written yet: true once (the
+    /// caller writes `ui.json` now).
+    pub fn save_due(&mut self, now: f64) -> bool {
+        match self.changed_at {
+            Some(t) if now - t >= SAVE_DELAY || now < t => {
+                self.changed_at = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// A spot was recorded and not written yet (on quit: write it).
+    pub fn unsaved(&self) -> bool {
+        self.changed_at.is_some()
+    }
+}
+
+fn now_secs() -> i64 {
     web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
@@ -92,7 +118,7 @@ pub fn source_key(app: &LightcraftApp) -> String {
 fn view_name(app: &LightcraftApp) -> String {
     match app.ui.view {
         ViewMode::PhotoGrid | ViewMode::SquareGrid => "grid",
-        _ if app.ui.right != RightPanel::None => "edit",
+        _ if app.ui.module == crate::state::Module::Develop => "edit",
         _ => "detail",
     }
     .into()
@@ -137,8 +163,12 @@ pub fn entered(app: &mut LightcraftApp) {
 }
 
 /// Per frame: record where we are (and, when the source changed some other way — an import
-/// showing its photos —, mark the remembered photo without moving the selection).
-pub fn tick(app: &mut LightcraftApp) {
+/// showing its photos —, mark the remembered photo without moving the selection). `now`: egui
+/// time, for writing `ui.json` about a second after the spot changes.
+pub fn tick(app: &mut LightcraftApp, now: f64) {
+    if std::mem::take(&mut app.left_off.resume_at_launch) {
+        resume_at_launch(app);
+    }
     let source = source_key(app);
     let lib = library_key(app);
     let changed = app.left_off.seen.as_ref().is_none_or(|(s, ..)| *s != format!("{lib}|{source}"));
@@ -160,7 +190,8 @@ pub fn tick(app: &mut LightcraftApp) {
     if first && app.ui.left_off.last.is_some() {
         return;
     }
-    let spot = Spot { library: lib.clone(), source: source.clone(), photo: id.0, view, at: now() };
+    let spot = Spot { library: lib.clone(), source: source.clone(), photo: id.0, view, at: now_secs() };
+    app.left_off.changed_at = Some(now);
     let per = &mut app.ui.left_off.per_source;
     per.insert(format!("{lib}|{source}"), spot.clone());
     if per.len() > MAX_SOURCES
@@ -171,6 +202,29 @@ pub fn tick(app: &mut LightcraftApp) {
     // throwaway sessions and Recently Deleted aren't places to go back to
     if !matches!(source.as_str(), "recentlyDeleted" | "missing") {
         app.ui.left_off.last = Some(spot);
+    }
+}
+
+/// At launch: back to the last spot of this library — its folder or album, the photo and (unless
+/// Settings ▸ General ▸ start in says otherwise) the view. Nothing happens when there is no spot for
+/// this library or it can't be reached (a removed album or photo: the launch view stays).
+fn resume_at_launch(app: &mut LightcraftApp) {
+    let lib = library_key(app);
+    if !app.ui.left_off.last.as_ref().is_some_and(|s| s.library == lib) {
+        return;
+    }
+    let keep_view = app.ui.settings.startup_view != crate::state::StartupView::Last;
+    let (view, right, module) = (app.ui.view, app.ui.right, app.ui.module);
+    match resume(app) {
+        Ok(_) => {
+            if keep_view {
+                app.ui.view = view;
+                app.ui.right = right;
+                app.ui.module = module;
+                app.ui.sync_module();
+            }
+        }
+        Err(e) => log::info!("left off: not resumed at launch: {e}"),
     }
 }
 
@@ -213,17 +267,18 @@ pub fn resume(app: &mut LightcraftApp) -> Result<Value, String> {
     app.run("library.select", json!({"ids": [id.0]}))?;
     match spot.view.as_str() {
         "grid" => {
-            if !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
-                app.ui.view = ViewMode::PhotoGrid;
+            if app.ui.module != crate::state::Module::Library || !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
+                crate::menus::enter_library(app, Some(ViewMode::PhotoGrid));
             }
         }
+        // Develop: the loupe with the develop panels
         "edit" => {
-            app.ui.view = ViewMode::Detail;
+            crate::menus::enter_develop(app);
             if app.ui.right == RightPanel::None {
                 app.ui.right = RightPanel::Edit;
             }
         }
-        _ => app.ui.view = ViewMode::Detail,
+        _ => crate::menus::enter_library(app, Some(ViewMode::Detail)),
     }
     // the source is entered here: the tracker sees it next frame, lands (already there) and marks it
     Ok(json!({"photo": id.0, "source": spot.source, "view": spot.view}))

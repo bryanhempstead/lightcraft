@@ -155,95 +155,111 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
     }
 
-    section(app, ui, &d, "basic", |app, ui, d| basic(app, ui, d, raw));
-    section(app, ui, &d, "toneCurve", |app, ui, d| {
-        curve_editor(app, ui, id, d);
-        ui.add_space(6.0);
-    });
-    section(app, ui, &d, "hsl", |app, ui, d| {
-        mixer(app, ui, d);
-        if !crate::is_bw(d) {
-            let open = app.ui.flyout_open("pointColor");
-            if flyout_row(ui, "pointColor", crate::i18n::tr("Point Color"), Icon::Picker, open).clicked() {
-                app.ui.toggle_flyout("pointColor");
-            }
-            if open {
-                point_color(app, ui, d);
-            }
-        }
-        ui.add_space(6.0);
-    });
-    section(app, ui, &d, "colorGrading", |app, ui, d| {
-        grading(app, ui, d);
-        ui.add_space(6.0);
-    });
-    section(app, ui, &d, "detail", |app, ui, d| {
-        sub_title(ui, crate::i18n::tr("Sharpening"));
-        for c in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail", "detail.sharpenMasking"] {
-            control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
-        }
-        sub_title(ui, crate::i18n::tr("Noise Reduction"));
-        for c in ["detail.nrLuminance", "detail.nrDetail", "detail.nrContrast", "detail.nrColor", "detail.nrColorDetail", "detail.nrColorSmoothness"]
-        {
-            control(app, ui, d, c, true);
-        }
-        denoise_row(app, ui, d, id);
-        ui.add_space(6.0);
-    });
-    section(app, ui, &d, "lensCorrections", |app, ui, d| lens_corrections(app, ui, d, id));
-    section(app, ui, &d, "transform", |app, ui, d| {
-        super::right::transform(app, ui, d);
-        ui.add_space(6.0);
-    });
-    section(app, ui, &d, "effects", |app, ui, d| {
-        sub_title(ui, crate::i18n::tr("Post-Crop Vignetting"));
-        {
-            use lightcraft_develop::VignetteStyle as V;
-            let styles = [
-                (V::HighlightPriority, "Highlight Priority", "highlightPriority"),
-                (V::ColorPriority, "Color Priority", "colorPriority"),
-                (V::PaintOverlay, "Paint Overlay", "paintOverlay"),
-            ];
-            let cur = styles.iter().find(|(v, _, _)| *v == d.vignette.style).map_or(styles[0].1, |s| s.1);
-            let mut chosen = None;
-            padded_row(ui, |ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr("Style")).font(t.font(12.0)).color(t.text_label));
-                let r = crate::widgets::dropdown(ui, "vignetteStyle", crate::i18n::tr(cur), t.font(12.0), t.text);
-                egui::Popup::menu(&r).show(|ui| {
-                    for (i, (v, label, key)) in styles.iter().enumerate() {
-                        let r = ui.selectable_label(*v == d.vignette.style, crate::i18n::tr(label));
-                        register(ui.ctx(), format!("button:vignetteStyle-{key}"), r.rect);
-                        if r.clicked() {
-                            chosen = Some(i);
-                        }
+    super::order::begin(ui, super::order::DEVELOP_RIGHT);
+    for sid in super::order::ordered(&app.ui.settings, super::order::DEVELOP_RIGHT) {
+        match sid {
+            "basic" => section(app, ui, &d, "basic", |app, ui, d| basic(app, ui, d, raw)),
+            "toneCurve" => section(app, ui, &d, "toneCurve", |app, ui, d| {
+                curve_editor(app, ui, id, d);
+                ui.add_space(6.0);
+            }),
+            "hsl" => section(app, ui, &d, "hsl", |app, ui, d| {
+                mixer(app, ui, d);
+                if !crate::is_bw(d) {
+                    let open = app.ui.flyout_open("pointColor");
+                    if flyout_row(ui, "pointColor", crate::i18n::tr("Point Color"), Icon::Picker, open).clicked() {
+                        app.ui.toggle_flyout("pointColor");
                     }
-                });
-            });
-            if let Some(i) = chosen {
-                let _ = app.run("develop.merge", json!({"settings": {"vignette": {"style": serde_json::to_value(styles[i].0).unwrap_or_default()}}}));
-            }
+                    if open {
+                        point_color(app, ui, d);
+                    }
+                }
+                ui.add_space(6.0);
+            }),
+            "colorGrading" => section(app, ui, &d, "colorGrading", |app, ui, d| {
+                grading(app, ui, d);
+                ui.add_space(6.0);
+            }),
+            "detail" => section(app, ui, &d, "detail", |app, ui, d| {
+                sub_title(ui, crate::i18n::tr("Sharpening"));
+                for c in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail", "detail.sharpenMasking"] {
+                    control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
+                }
+                sub_title(ui, crate::i18n::tr("Noise Reduction"));
+                for c in [
+                    "detail.nrLuminance",
+                    "detail.nrDetail",
+                    "detail.nrContrast",
+                    "detail.nrColor",
+                    "detail.nrColorDetail",
+                    "detail.nrColorSmoothness",
+                ] {
+                    control(app, ui, d, c, true);
+                }
+                denoise_row(app, ui, d, id);
+                ui.add_space(6.0);
+            }),
+            "lensCorrections" => section(app, ui, &d, "lensCorrections", |app, ui, d| lens_corrections(app, ui, d, id)),
+            "transform" => section(app, ui, &d, "transform", |app, ui, d| {
+                super::right::transform(app, ui, d);
+                ui.add_space(6.0);
+            }),
+            "effects" => section(app, ui, &d, "effects", |app, ui, d| {
+                sub_title(ui, crate::i18n::tr("Post-Crop Vignetting"));
+                {
+                    use lightcraft_develop::VignetteStyle as V;
+                    let styles = [
+                        (V::HighlightPriority, "Highlight Priority", "highlightPriority"),
+                        (V::ColorPriority, "Color Priority", "colorPriority"),
+                        (V::PaintOverlay, "Paint Overlay", "paintOverlay"),
+                    ];
+                    let cur = styles.iter().find(|(v, _, _)| *v == d.vignette.style).map_or(styles[0].1, |s| s.1);
+                    let mut chosen = None;
+                    padded_row(ui, |ui| {
+                        ui.label(egui::RichText::new(crate::i18n::tr("Style")).font(t.font(12.0)).color(t.text_label));
+                        let r = crate::widgets::dropdown(ui, "vignetteStyle", crate::i18n::tr(cur), t.font(12.0), t.text);
+                        egui::Popup::menu(&r).show(|ui| {
+                            for (i, (v, label, key)) in styles.iter().enumerate() {
+                                let r = ui.selectable_label(*v == d.vignette.style, crate::i18n::tr(label));
+                                register(ui.ctx(), format!("button:vignetteStyle-{key}"), r.rect);
+                                if r.clicked() {
+                                    chosen = Some(i);
+                                }
+                            }
+                        });
+                    });
+                    if let Some(i) = chosen {
+                        let _ = app.run(
+                            "develop.merge",
+                            json!({"settings": {"vignette": {"style": serde_json::to_value(styles[i].0).unwrap_or_default()}}}),
+                        );
+                    }
+                }
+                for c in ["vignette.amount", "vignette.midpoint", "vignette.roundness", "vignette.feather", "vignette.highlights"] {
+                    let enabled = c == "vignette.amount" || d.vignette.amount != 0.0;
+                    control(app, ui, d, c, enabled);
+                }
+                sub_title(ui, crate::i18n::tr("Grain"));
+                for c in ["grain.amount", "grain.size", "grain.roughness"] {
+                    control(app, ui, d, c, c == "grain.amount" || d.grain.amount != 0.0);
+                }
+                ui.add_space(6.0);
+            }),
+            "lensBlur" => section(app, ui, &d, "lensBlur", super::lens_blur::show),
+            "calibration" => section(app, ui, &d, "calibration", |app, ui, d| {
+                sub_title(ui, crate::i18n::tr("Shadows"));
+                control(app, ui, d, "calibration.shadowsTint", true);
+                for (title, k) in [("Red Primary", "red"), ("Green Primary", "green"), ("Blue Primary", "blue")] {
+                    sub_title(ui, title);
+                    control(app, ui, d, &format!("calibration.{k}Hue"), true);
+                    control(app, ui, d, &format!("calibration.{k}Sat"), true);
+                }
+                ui.add_space(6.0);
+            }),
+            _ => {}
         }
-        for c in ["vignette.amount", "vignette.midpoint", "vignette.roundness", "vignette.feather", "vignette.highlights"] {
-            let enabled = c == "vignette.amount" || d.vignette.amount != 0.0;
-            control(app, ui, d, c, enabled);
-        }
-        sub_title(ui, crate::i18n::tr("Grain"));
-        for c in ["grain.amount", "grain.size", "grain.roughness"] {
-            control(app, ui, d, c, c == "grain.amount" || d.grain.amount != 0.0);
-        }
-        ui.add_space(6.0);
-    });
-    section(app, ui, &d, "lensBlur", super::lens_blur::show);
-    section(app, ui, &d, "calibration", |app, ui, d| {
-        sub_title(ui, crate::i18n::tr("Shadows"));
-        control(app, ui, d, "calibration.shadowsTint", true);
-        for (title, k) in [("Red Primary", "red"), ("Green Primary", "green"), ("Blue Primary", "blue")] {
-            sub_title(ui, title);
-            control(app, ui, d, &format!("calibration.{k}Hue"), true);
-            control(app, ui, d, &format!("calibration.{k}Sat"), true);
-        }
-        ui.add_space(6.0);
-    });
+    }
+    super::order::finish(app, ui, super::order::DEVELOP_RIGHT);
     ui.add_space(24.0);
 }
 
@@ -560,6 +576,7 @@ fn section(
     let Some((_, title, switch)) = CLASSIC_PANELS.iter().find(|p| p.0 == id).copied() else { return };
     let open = app.ui.section_open(id);
     let (resp, toggled) = crate::widgets::classic_header(ui, id, title, open, true, switch.map(|s| d.section_enabled(s)));
+    super::order::header(ui, super::order::DEVELOP_RIGHT, id, &resp, 46.0);
     if let (Some(on), Some(s)) = (toggled, switch) {
         let _ = app.run("develop.sectionEnabled", json!({"section": s, "enabled": on}));
     } else if resp.clicked() {
@@ -588,6 +605,7 @@ fn section(
             app.ui.open_sections.retain(|s| !CLASSIC_PANELS.iter().any(|p| p.0 == s));
             ui.close();
         }
+        super::order::menu_items(app, ui, super::order::DEVELOP_RIGHT, id);
     });
     if open {
         // dimmed while the panel's switch is off (the settings are kept, not applied)

@@ -259,7 +259,11 @@ impl PrefsWriter {
     fn tick(&mut self, app: &mut LightcraftApp, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
         let moved = app.ui.settings.library_path != self.library;
-        if !moved && now - self.checked < 3.0 {
+        // a new "left off" spot is written about a second later, and everything when the window
+        // closes (Quit, ⌘Q, the control channel's app.quit), before anything else can happen
+        let left_off = app.left_off.save_due(now);
+        let closing = ctx.input(|i| i.viewport().close_requested());
+        if !moved && !left_off && !closing && now - self.checked < 3.0 {
             return;
         }
         self.checked = now;
@@ -642,6 +646,10 @@ fn main() -> eframe::Result {
             }
             if let Some(ui) = prefs {
                 app.ui = ui;
+                // "always actively remember where we left off": back to that photo, folder and view
+                if files.is_empty() && problem.is_none() {
+                    app.resume_left_off_at_launch();
+                }
             }
             lightcraft_ui_egui::i18n::set_language(app.ui.language);
             // identity-plate images are copied here (not with --memory / LIGHTCRAFT_NO_PREFS: nothing is written)
