@@ -440,6 +440,9 @@ pub struct AppSettings {
     pub develop_view: DevelopView,
     /// LRC-UI-IDENTITYPLATE: the identity plate (Settings ▸ identity., `app.identityPlate`).
     pub identity_plate: crate::identity::IdentityPlate,
+    /// Up to four accent colours and the areas they colour (Settings ▸ Interface ▸ accents.,
+    /// `app.accents`).
+    pub accents: crate::accents::Accents,
 }
 
 /// Develop View Options (LRC-DEV-VIEWOPTIONS): Develop's loupe has its own Info 1 / Info 2 lines,
@@ -512,6 +515,7 @@ impl Default for AppSettings {
             hidden_zooms: Vec::new(),
             develop_view: DevelopView::default(),
             identity_plate: crate::identity::IdentityPlate::default(),
+            accents: crate::accents::Accents::default(),
         }
     }
 }

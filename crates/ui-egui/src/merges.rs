@@ -391,6 +391,9 @@ pub fn tag(p: &egui::Painter, t: &Tokens, at: egui::Pos2, kind: MergeType, small
     let at = if from_right { at - vec2(w, 0.0) } else { at };
     let br = Rect::from_min_size(at, vec2(w, h));
     p.rect_filled(br, h / 2.0, Color32::from_black_alpha(170));
+    if let Some(a) = t.badge_accent {
+        p.rect_stroke(br, h / 2.0, egui::Stroke::new(1.0, a), egui::StrokeKind::Inside);
+    }
     p.galley(pos2(br.center().x - g.size().x / 2.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
     br
 }

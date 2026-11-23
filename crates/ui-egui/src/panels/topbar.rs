@@ -148,7 +148,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ai_rect,
                 4.0,
                 if app.ui.search_ai {
-                    t.accent
+                    t.tools_accent.unwrap_or(t.accent)
                 } else if ai_resp.hovered() {
                     t.hover
                 } else {
@@ -157,7 +157,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 Stroke::new(1.0, t.button_border),
                 StrokeKind::Inside,
             );
-            ui.painter().text(ai_rect.center(), Align2::CENTER_CENTER, "ai.", t.semibold(11.0), if app.ui.search_ai { t.canvas } else { t.text });
+            let ai_text = if app.ui.search_ai { crate::theme::text_on(t.tools_accent.unwrap_or(t.accent)) } else { t.text };
+            ui.painter().text(ai_rect.center(), Align2::CENTER_CENTER, "ai.", t.semibold(11.0), ai_text);
             let ai_tip = crate::i18n::tr("AI search: describe what's in the photo (“dog on the beach”), Return to search");
             if ai_resp.on_hover_text(ai_tip).clicked() {
                 app.ui.search_ai = !app.ui.search_ai;
@@ -222,8 +223,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let active = lightcraft_engine::filter_chips(&app.session.filter, &app.session.catalog).len();
             if active > 0 {
                 let c = fr.right_top() + vec2(-3.0, 8.0);
-                ui.painter().circle_filled(c, 7.0, t.accent);
-                ui.painter().text(c, Align2::CENTER_CENTER, active.to_string(), t.semibold(9.5), t.canvas);
+                let badge = t.badge_accent.unwrap_or(t.accent);
+                ui.painter().circle_filled(c, 7.0, badge);
+                ui.painter().text(c, Align2::CENTER_CENTER, active.to_string(), t.semibold(9.5), crate::theme::text_on(badge));
             }
             let fresp = fresp.on_hover_text(if active > 0 {
                 crate::i18n::tr_format!("Filter bar — {active} active filter{}", if active == 1 { "" } else { "s" }, active = active)
@@ -286,7 +288,7 @@ pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> 
         let resp = ui.interact(r, egui::Id::new(("module", id)), Sense::click()).on_hover_text(crate::i18n::tr(tip));
         register(ui.ctx(), format!("module:{id}"), r);
         let c = if on {
-            egui::Color32::from_gray(238)
+            t.tab_accent.map_or(egui::Color32::from_gray(238), crate::theme::legible)
         } else if resp.hovered() {
             egui::Color32::from_gray(175)
         } else {

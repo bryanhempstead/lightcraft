@@ -113,6 +113,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.beforeAfterCycle", "Cycle Before/After Layouts", None, "View"),
     ("app.viewSpace", "Photo Color Space", None, ""),
     ("app.identityPlate", "Identity Plate", None, ""),
+    ("app.accents", "Accent Colors", None, ""),
     ("app.identityPlateSetup", "Identity Plate Setup…", None, "Edit"),
     // LC-UI-FIXNOTES: notes about what isn't working, sent to the Claude session that builds LightCraft
     ("notes.toggle", "Fix Notes", Some("Cmd+Alt+Shift+N"), "Window"),
@@ -1236,6 +1237,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             }
         }
         "app.identityPlate" => crate::identity::command(app, p),
+        "app.accents" => crate::accents::command(app, p),
         "app.identityPlateSetup" => {
             // Lightroom Classic's Edit ▸ Identity Plate Setup…: Settings ▸ identity.
             app.ui.dialog = Some(Dialog::Settings { tab: "identity".into() });
