@@ -6,6 +6,13 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (polish agent, 2026-11-22, branch worktree-agent-a07ce8bef78df8a0c, not merged) **LC-POLISH: loose ends of
+  2026-11-22** — Before half of side-by-side / split Before/After at 1:1 gets its own native tiles (`detail.rs`
+  `detail_layer`, view 3); Develop's Collections = the Library rows with parts triangles (`left::develop_collections`);
+  Esc with a popup open only closes it, Esc closes notes. when it has the keyboard (`fixnotes::has_focus`); Settings
+  gets its own window id + hints wrap to the visible dialog; dialog buttons 8 px apart; layout audit test
+  (`tests_panels::settings_tabs_and_new_panels_have_nothing_clipped`, `HeadlessView::texts`); ~440 plain + 44 format
+  messages in all six catalogs. Left: HDR rendition at 1:1 (region renders are SDR), pets (docs/people.md → Pets).
 - [ ] (fixnotes agent, 2026-11-22, branch worktree-agent-abcb4f6b3b76a1a30, not merged) **LC-UI-FIXNOTES: notes. →
   fix. → Claude** — `crates/ui-egui/src/fixnotes.rs` (new: top-bar `notes.` button with open-count badge, floating
   panel ⌘⌥⇧N, context capture, screenshots via `LightcraftApp::queue_screenshot` (the `ui.screenshot` path), request

@@ -398,15 +398,19 @@ fn summary(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, plan: &lightcraft
     }
     let cam = plan.camera.as_deref().map(|c| format!("{c} ")).unwrap_or_default();
     let what = match plan.delta {
-        Some(d) => format!("{n} {cam}photo{} shift by {d}", if n == 1 { "" } else { "s" }, n = n, d = display_delta(d)),
-        None => format!("{n} photo{} get this time", if n == 1 { "" } else { "s" }, n = n),
+        Some(d) => crate::i18n::tr_format!("{n} {cam}photo{} shift by {d}", if n == 1 { "" } else { "s" }, n = n, cam = cam, d = display_delta(d)),
+        None => crate::i18n::tr_format!("{n} photo{} get this time", if n == 1 { "" } else { "s" }, n = n),
     };
     let mut extra = Vec::new();
     if plan.copies > 0 {
-        extra.push(format!("{c} virtual cop{}", if plan.copies == 1 { "y" } else { "ies" }, c = plan.copies));
+        extra.push(if plan.copies == 1 {
+            crate::i18n::tr("1 virtual copy").to_string()
+        } else {
+            crate::i18n::tr_format!("{c} virtual copies", c = plan.copies)
+        });
     }
     if plan.stacked > 0 {
-        extra.push(format!("{c} in collapsed stacks", c = plan.stacked));
+        extra.push(crate::i18n::tr_format!("{c} in collapsed stacks", c = plan.stacked));
     }
     let what = if extra.is_empty() { what } else { format!("{what} ({} {})", crate::i18n::tr("incl."), extra.join(", ")) };
     let r = ui.label(egui::RichText::new(what).color(t.text_label));

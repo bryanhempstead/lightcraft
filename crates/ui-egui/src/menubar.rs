@@ -521,8 +521,11 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
                 .into_iter()
                 .map(|pct| {
                     let ratio = if pct == 0 { json!("fill") } else { json!(pct as f64 / 100.0) };
-                    let label =
-                        if pct == 0 { "Click Zooms to Fill".to_string() } else { format!("Click Zooms to {}", crate::state::click_zoom_label(pct)) };
+                    let label = if pct == 0 {
+                        "Click Zooms to Fill".to_string()
+                    } else {
+                        crate::i18n::tr_format!("Click Zooms to {}", crate::state::click_zoom_label(pct))
+                    };
                     item("view.clickZoom", json!({"ratio": ratio}), label, None, true, Some(app.ui.click_zoom == pct))
                 })
                 .collect();
@@ -532,7 +535,14 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
             }
             v.push(MenuNode::Separator);
             for s in crate::state::WHEEL_STEPS {
-                v.push(item("view.wheelZoom", json!({"step": s}), format!("Wheel Notch Zooms {s}%"), None, true, Some(app.ui.wheel_step == s)));
+                v.push(item(
+                    "view.wheelZoom",
+                    json!({"step": s}),
+                    crate::i18n::tr_format!("Wheel Notch Zooms {s}%", s = s),
+                    None,
+                    true,
+                    Some(app.ui.wheel_step == s),
+                ));
             }
             v
         }
@@ -835,9 +845,9 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
         && let Ok(v) = &r
     {
         let n = v["photos"].as_u64().unwrap_or(0);
-        let mut msg = format!("{n} photo{} put back", if n == 1 { "" } else { "s" });
+        let mut msg = crate::i18n::tr_format!("{n} photo{} put back", if n == 1 { "" } else { "s" }, n = n);
         if let Some(e) = v["notBack"].as_array().and_then(|a| a.first()).and_then(Value::as_str) {
-            msg.push_str(&format!(" · not every file could come out of the Trash: {e}"));
+            msg.push_str(&crate::i18n::tr_format!(" · not every file could come out of the Trash: {e}", e = e));
         }
         app.toast_soon(msg, 6.0);
     }

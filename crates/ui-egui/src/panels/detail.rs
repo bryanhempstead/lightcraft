@@ -97,6 +97,54 @@ impl CanvasMap {
     }
 }
 
+/// What every detail layer of the loupe shares this frame ([`detail_layer`]).
+struct DetailAt {
+    photo: PhotoId,
+    ppp: f32,
+    max_edge: f32,
+    apply_crop: bool,
+    interacting: bool,
+    now: f64,
+}
+
+/// One view's native-resolution detail (`crate::tiles`; `(view, before)`): asked for the part of
+/// the photo at `target` (its final rectangle; `img` where it is drawn now) visible in `clip`, and
+/// drawn there over its preview. Whether the view has detail at this zoom.
+#[allow(clippy::too_many_arguments)]
+fn detail_layer(
+    app: &mut LightcraftApp,
+    p: &egui::Painter,
+    at: &DetailAt,
+    (view, before): (u8, bool),
+    target: Rect,
+    img: Rect,
+    clip: Rect,
+    overlay: lightcraft_pipeline::Overlay,
+    proof: Option<lightcraft_pipeline::Proof>,
+) -> bool {
+    let want = crate::tiles::Want {
+        view,
+        photo: at.photo,
+        img: target,
+        area: clip,
+        ppp: at.ppp,
+        apply_crop: at.apply_crop,
+        before,
+        preview_long: (target.width().max(target.height()) * at.ppp).min(at.max_edge) as usize,
+        interacting: at.interacting,
+        overlay,
+        proof,
+        now: at.now,
+    };
+    if crate::tiles::update(app, &want).is_none() {
+        return false;
+    }
+    if let Some(t) = app.renderer.tiles.get_mut(&view) {
+        t.draw(&p.with_clip_rect(clip), img, clip, at.interacting && overlay == lightcraft_pipeline::Overlay::None);
+    }
+    true
+}
+
 pub(crate) fn fit_rect(area: Rect, aspect: f32, zoom: Zoom, img_px: [usize; 2], ppp: f32, pan: (f32, f32)) -> Rect {
     let zoom = match zoom {
         Zoom::Percent(p) if !p.is_finite() || p <= 0.0 => Zoom::Fit,
@@ -464,65 +512,76 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.hdr_view = hdr_shown.into_inner();
     app.loupe_shown = Some((id, shown));
     // native-resolution detail over the preview at 1:1 and beyond the preview size (`tiles`):
-    // the after view (or the before view while it is shown alone); not over an HDR rendition
+    // the after view (or the before view while it is shown alone), and the before half of a
+    // two-view or split Before/After (view 3); not over an HDR rendition
     let hdr_view = d.hdr.enabled && hdr_headroom(app).is_some();
-    if !hdr_view && hover_key.is_none() && matches!(shown, "render" | "preview" | "thumb") {
+    let detail_ok = !hdr_view && hover_key.is_none() && matches!(shown, "render" | "preview" | "thumb");
+    let at = DetailAt { photo: id, ppp, max_edge, apply_crop: !crop_tool, interacting, now: ui.input(|i| i.time) };
+    let mut used: Vec<u8> = Vec::new();
+    if detail_ok {
         let (view, before) = if show_before && !split { (3u8, true) } else { (0u8, false) };
-        let want = crate::tiles::Want {
-            view,
-            photo: id,
-            img: target_rect,
-            area: main_area.intersect(canvas),
-            ppp,
-            apply_crop: !crop_tool,
-            before,
-            preview_long: (target_rect.width().max(target_rect.height()) * ppp).min(max_edge) as usize,
-            interacting,
-            overlay: if before { lightcraft_pipeline::Overlay::None } else { view_overlay(app, &d) },
-            proof: app.ui.soft_proof.then_some(app.ui.proof),
-            now: ui.input(|i| i.time),
+        let overlay = if before { lightcraft_pipeline::Overlay::None } else { view_overlay(app, &d) };
+        let proof = app.ui.soft_proof.then_some(app.ui.proof);
+        // a split view's after detail is only wanted on its after half
+        let mut clip = main_area.intersect(canvas);
+        if split_view && !before {
+            let c = img_rect.center();
+            if app.ui.before_after == BeforeAfter::Split {
+                clip.min.x = clip.min.x.max(c.x);
+            } else {
+                clip.min.y = clip.min.y.max(c.y);
+            }
+        }
+        if clip.is_positive() && detail_layer(app, &p, &at, (view, before), target_rect, img_rect, clip, overlay, proof) {
+            used.push(view);
+        }
+        // side by side / stacked: the before view in its own half
+        if split {
+            let before_img = fit_rect(areas[0], aspect, app.ui.zoom, native, ppp, app.ui.pan);
+            let none = lightcraft_pipeline::Overlay::None;
+            if detail_layer(app, &p, &at, (3, true), before_img, before_img, areas[0].intersect(canvas), none, None) {
+                used.push(3);
+            }
+        }
+    }
+    if split_view {
+        let left_right = app.ui.before_after == BeforeAfter::Split;
+        let mid = if left_right { img_rect.center().x } else { img_rect.center().y };
+        if let Some(tex) = app.renderer.textures.get(&Slot::Before).filter(|t| t.photo == id) {
+            let before_rect = fit_texture_rect(img_rect, tex.size);
+            let (half, uv) = if left_right {
+                (Rect::from_min_max(before_rect.min, pos2(before_rect.center().x, before_rect.bottom())), pos2(0.5, 1.0))
+            } else {
+                (Rect::from_min_max(before_rect.min, pos2(before_rect.right(), before_rect.center().y)), pos2(1.0, 0.5))
+            };
+            p.image(tex.tex.id(), half, Rect::from_min_max(pos2(0.0, 0.0), uv), Color32::WHITE);
+        }
+        // the before half's own detail, over its preview
+        if detail_ok {
+            let clip = main_area.intersect(canvas);
+            let clip = if left_right {
+                Rect::from_min_max(clip.min, pos2(clip.right().min(mid), clip.bottom()))
+            } else {
+                Rect::from_min_max(clip.min, pos2(clip.right(), clip.bottom().min(mid)))
+            };
+            let none = lightcraft_pipeline::Overlay::None;
+            if clip.is_positive() && detail_layer(app, &p, &at, (3, true), target_rect, img_rect, clip, none, None) {
+                used.push(3);
+            }
+        }
+        let line = if left_right {
+            [pos2(mid, img_rect.top()), pos2(mid, img_rect.bottom())]
+        } else {
+            [pos2(img_rect.left(), mid), pos2(img_rect.right(), mid)]
         };
-        if crate::tiles::update(app, &want).is_some()
-            && let Some(t) = app.renderer.tiles.get_mut(&view)
+        p.line_segment(line, Stroke::new(1.5, Color32::WHITE));
+    }
+    for v in [0u8, 3] {
+        if !used.contains(&v)
+            && let Some(t) = app.renderer.tiles.get_mut(&v)
         {
-            t.draw(
-                &p.with_clip_rect(main_area.intersect(canvas)),
-                img_rect,
-                main_area,
-                interacting && want.overlay == lightcraft_pipeline::Overlay::None,
-            );
+            t.look = None;
         }
-        for other in [0u8, 3] {
-            if other != view
-                && let Some(t) = app.renderer.tiles.get_mut(&other)
-            {
-                t.look = None;
-            }
-        }
-    } else {
-        for v in [0u8, 3] {
-            if let Some(t) = app.renderer.tiles.get_mut(&v) {
-                t.look = None;
-            }
-        }
-    }
-    if app.ui.before_after == BeforeAfter::Split {
-        let mid = img_rect.center().x;
-        if let Some(tex) = app.renderer.textures.get(&Slot::Before).filter(|t| t.photo == id) {
-            let before_rect = fit_texture_rect(img_rect, tex.size);
-            let left = Rect::from_min_max(before_rect.min, pos2(before_rect.center().x, before_rect.bottom()));
-            p.image(tex.tex.id(), left, Rect::from_min_max(pos2(0.0, 0.0), pos2(0.5, 1.0)), Color32::WHITE);
-        }
-        p.line_segment([pos2(mid, img_rect.top()), pos2(mid, img_rect.bottom())], Stroke::new(1.5, Color32::WHITE));
-    }
-    if app.ui.before_after == BeforeAfter::SplitTopBottom {
-        let mid = img_rect.center().y;
-        if let Some(tex) = app.renderer.textures.get(&Slot::Before).filter(|t| t.photo == id) {
-            let before_rect = fit_texture_rect(img_rect, tex.size);
-            let top = Rect::from_min_max(before_rect.min, pos2(before_rect.right(), before_rect.center().y));
-            p.image(tex.tex.id(), top, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 0.5)), Color32::WHITE);
-        }
-        p.line_segment([pos2(img_rect.left(), mid), pos2(img_rect.right(), mid)], Stroke::new(1.5, Color32::WHITE));
     }
     if app.ui.show_clipping && !show_before && !fullscreen {
         clipping_overlay(app, &p, img_rect);

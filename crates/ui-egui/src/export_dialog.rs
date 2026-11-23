@@ -57,7 +57,7 @@ pub struct State<'a> {
 pub fn title(app: &LightcraftApp) -> String {
     match app.session.targets(&json!({})).len() {
         0 | 1 => "Export One File".into(),
-        n => format!("Export {n} Files"),
+        n => crate::i18n::tr_format!("Export {n} Files", n = n),
     }
 }
 
@@ -146,7 +146,7 @@ pub fn sizing_summary(o: &ExportOptions, full_size: bool, r: &Resize) -> String 
         m if m.is_pair() => format!("{} {} × {} {}", m.label(), n(r.value), n(r.height), r.unit.label()),
         m => format!("{} {} {}", m.label(), n(r.value), r.unit.label()),
     };
-    format!("Resize to {what} at {res}")
+    crate::i18n::tr_format!("Resize to {what} at {res}", what = what, res = res)
 }
 
 /// Output Sharpening's summary.
@@ -200,7 +200,7 @@ pub fn after_summary(o: &ExportOptions) -> String {
         AfterExport::Nothing => "Do nothing".into(),
         AfterExport::ShowInFinder => crate::menus::reveal_label().into(),
         AfterExport::OpenInApp if o.after_app.trim().is_empty() => "Open in the default app".into(),
-        AfterExport::OpenInApp => format!("Open in {}", app_name(&o.after_app)),
+        AfterExport::OpenInApp => crate::i18n::tr_format!("Open in {}", app_name(&o.after_app)),
     }
 }
 
@@ -473,7 +473,7 @@ fn plugin_manager(ui: &mut egui::Ui) {
         .color(t.text_label));
         let installed = lightroom_plugins();
         if !installed.is_empty() {
-            ui.label(egui::RichText::new(format!("Lightroom plug-ins on this Mac (not loaded): {}", installed.join(", "))).color(t.text_dim));
+            ui.label(egui::RichText::new(crate::i18n::tr_format!("Lightroom plug-ins on this Mac (not loaded): {}", installed.join(", "))).color(t.text_dim));
         }
     });
 }
@@ -728,7 +728,8 @@ fn preset_menu(app: &mut LightcraftApp, ui: &egui::Ui, s: &mut State<'_>, what: 
             if s.opts.export_to == ExportTo::SpecificFolder && !s.dir.trim().is_empty() {
                 p["dir"] = json!(s.dir.trim());
             }
-            app.run("export.savePreset", json!({"name": name, "params": p})).map(|_| format!("Updated “{name}” with the current settings"))
+            app.run("export.savePreset", json!({"name": name, "params": p}))
+                .map(|_| crate::i18n::tr_format!("Updated “{name}” with the current settings", name = name))
         }
         "rename" => {
             crate::panels::dialogs::prompt(app, "Rename Preset", "New name", name, "export.renamePreset", json!({"name": name}), "to");
@@ -742,7 +743,7 @@ fn preset_menu(app: &mut LightcraftApp, ui: &egui::Ui, s: &mut State<'_>, what: 
                 *s.selected = None;
             }
             s.checked.retain(|x| x != name);
-            format!("Deleted export preset “{name}”")
+            crate::i18n::tr_format!("Deleted export preset “{name}”", name = name)
         }),
         "newFolder" => {
             remember(app, s);
@@ -750,9 +751,9 @@ fn preset_menu(app: &mut LightcraftApp, ui: &egui::Ui, s: &mut State<'_>, what: 
             app.ui.dialog_next = app.ui.dialog.clone();
             return;
         }
-        "removeFolder" => {
-            app.run("export.deletePresetFolder", json!({"name": name})).map(|_| format!("Removed “{name}”: its presets are in User Presets"))
-        }
+        "removeFolder" => app
+            .run("export.deletePresetFolder", json!({"name": name}))
+            .map(|_| crate::i18n::tr_format!("Removed “{name}”: its presets are in User Presets", name = name)),
         "import" => {
             let Some(path) = app.services.pick_preset_files.as_mut().and_then(|f| f().into_iter().next()) else { return };
             let mut q = json!({"path": path});
@@ -763,9 +764,9 @@ fn preset_menu(app: &mut LightcraftApp, ui: &egui::Ui, s: &mut State<'_>, what: 
                 let n = v["imported"].as_array().map_or(0, Vec::len);
                 let notes = v["notes"].as_array().map_or(0, Vec::len);
                 if notes > 0 {
-                    format!("Imported {n} preset(s); {notes} setting(s) couldn't be carried over")
+                    crate::i18n::tr_format!("Imported {n} preset(s); {notes} setting(s) couldn't be carried over", n = n, notes = notes)
                 } else {
-                    format!("Imported {n} preset(s)")
+                    crate::i18n::tr_format!("Imported {n} preset(s)", n = n)
                 }
             })
         }
@@ -780,7 +781,8 @@ fn preset_menu(app: &mut LightcraftApp, ui: &egui::Ui, s: &mut State<'_>, what: 
         }
         w if w.starts_with("move:") => {
             let folder = w.trim_start_matches("move:");
-            app.run("export.movePreset", json!({"name": name, "folder": folder})).map(|_| format!("Moved “{name}” to {folder}"))
+            app.run("export.movePreset", json!({"name": name, "folder": folder}))
+                .map(|_| crate::i18n::tr_format!("Moved “{name}” to {folder}", name = name, folder = folder))
         }
         _ => return,
     };
@@ -884,7 +886,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut egui::Ui, s: &mut State<'_>) {
             "{} × {} px{}",
             p.size.0,
             p.size.1,
-            p.estimated_bytes.map(|b| format!(" · ≈ {} each", lightcraft_engine::export::human_bytes(b))).unwrap_or_default()
+            p.estimated_bytes.map(|b| crate::i18n::tr_format!(" · ≈ {} each", lightcraft_engine::export::human_bytes(b))).unwrap_or_default()
         ),
         None => "As it will export".into(),
     };
@@ -1185,8 +1187,13 @@ fn file_settings(app: &mut LightcraftApp, ui: &mut egui::Ui, s: &mut State<'_>) 
         let b = p.estimated_bytes.unwrap_or(0);
         row(ui, "Estimated size:", |ui| {
             ui.label(
-                egui::RichText::new(format!("≈ {} per photo ({} × {} px)", lightcraft_engine::export::human_bytes(b), p.size.0, p.size.1))
-                    .color(t.text_label),
+                egui::RichText::new(crate::i18n::tr_format!(
+                    "≈ {} per photo ({} × {} px)",
+                    lightcraft_engine::export::human_bytes(b),
+                    p.size.0,
+                    p.size.1
+                ))
+                .color(t.text_label),
             )
         });
     }
@@ -1605,7 +1612,7 @@ fn post_processing(app: &mut LightcraftApp, ui: &mut egui::Ui, o: &mut ExportOpt
                 pick(ui, o, "photoshop", "Open in Adobe Photoshop", AfterExport::OpenInApp, ps);
             }
             if !editor.is_empty() {
-                pick(ui, o, "editor", &format!("Open in {}", app_name(&editor)), AfterExport::OpenInApp, &editor);
+                pick(ui, o, "editor", &crate::i18n::tr_format!("Open in {}", app_name(&editor)), AfterExport::OpenInApp, &editor);
             }
             pick(ui, o, "open", "Open in the default app", AfterExport::OpenInApp, "");
             let r = ui.selectable_label(other, crate::i18n::tr("Open in Other Application…"));
@@ -1655,7 +1662,7 @@ fn post_processing(app: &mut LightcraftApp, ui: &mut egui::Ui, o: &mut ExportOpt
                 if let Some(reveal) = app.services.reveal.as_mut() {
                     let _ = reveal(&path);
                 }
-                app.toast(ui.ctx(), format!("Export Actions folder: {}", path));
+                app.toast(ui.ctx(), crate::i18n::tr_format!("Export Actions folder: {}", path));
             }
             Err(e) => app.toast(ui.ctx(), e),
         }
@@ -1762,7 +1769,10 @@ fn preview(app: &mut LightcraftApp, ui: &mut egui::Ui, s: &mut State<'_>) {
                 let r = ui.add(egui::Image::new(tex).fit_to_exact_size(vec2(w as f32 * k, h as f32 * k)));
                 crate::widgets::register(ui.ctx(), "image:exportPreview", r.rect);
             }
-            let size = out.estimated_bytes.map(|b| format!(" · ≈ {} per photo", lightcraft_engine::export::human_bytes(b))).unwrap_or_default();
+            let size = out
+                .estimated_bytes
+                .map(|b| crate::i18n::tr_format!(" · ≈ {} per photo", lightcraft_engine::export::human_bytes(b)))
+                .unwrap_or_default();
             ui.label(
                 egui::RichText::new(format!(
                     "{} × {} px{size}. Sized, sharpened and watermarked as it will export (shown small, in sRGB).",
@@ -1785,7 +1795,7 @@ pub fn ask_body(ui: &mut egui::Ui, path: &str, left: usize, apply_all: &mut bool
     let t = Tokens::get(ui.ctx());
     ui.set_width(460.0);
     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-    ui.label(egui::RichText::new(format!("A file named “{}” already exists.", name)).font(t.semibold(13.0)).color(t.text));
+    ui.label(egui::RichText::new(crate::i18n::tr_format!("A file named “{}” already exists.", name)).font(t.semibold(13.0)).color(t.text));
     ui.label(egui::RichText::new(short_path(path)).color(t.text_dim));
     ui.label(
         egui::RichText::new(crate::i18n::tr(
@@ -1794,7 +1804,7 @@ pub fn ask_body(ui: &mut egui::Ui, path: &str, left: usize, apply_all: &mut bool
         .color(t.text_label),
     );
     if left > 1 {
-        let r = ui.checkbox(apply_all, format!("Apply to all {} files that exist", left));
+        let r = ui.checkbox(apply_all, crate::i18n::tr_format!("Apply to all {} files that exist", left));
         crate::widgets::register(ui.ctx(), "check:exportAskAll", r.rect);
     }
     ui.add_space(8.0);

@@ -151,6 +151,18 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     {
         ctx.memory_mut(|m| m.surrender_focus(f));
     }
+    let esc = ctx.input(|i| i.key_pressed(Key::Escape) && i.modifiers.is_none());
+    // Esc in the notes. panel (its field or the panel last clicked) closes the panel, nothing else
+    if esc && crate::fixnotes::has_focus(app, ctx) {
+        ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+        let _ = app.run("notes.toggle", json!({"open": false}));
+        return;
+    }
+    // Esc with a popup or menu open (the toolbar's zoom / click. / ovl. menus, a context menu)
+    // only closes it: the popup sees the key when it is drawn, and the view stays
+    if esc && egui::Popup::is_any_open(ctx) {
+        return;
+    }
     // don't steal keys from text fields
     if ctx.egui_wants_keyboard_input() || crate::widgets::slider_typing(ctx) {
         return;

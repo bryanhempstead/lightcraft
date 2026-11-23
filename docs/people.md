@@ -128,6 +128,15 @@ grid shows the best matches, best first, with every other filter still applied (
 The first time it downloads the model (the field says the size and licence) and indexes the library in the
 background. `search.ai {query}` / `library.filter {semantic}` do the same from the CLI, MCP and control channel.
 
+### Pets (not yet)
+
+Dogs and cats are not found or grouped like people (checked 2026-11-22). Nothing open already in LightCraft does it
+cheaply: YuNet / SFace are human-face models; SAM 3's concept detector (`crates/segment`, the "dog" / "cat" prompts)
+does find animals, but at seconds per photo on a multi-GB model, too slow to sweep a library in the background; and
+telling one dog from another needs an animal re-identification embedding, which no model here provides (CLIP's
+whole-photo embedding groups scenes, not individual animals). Until then the `ai.` search finds the photos with a pet
+("dog", "cat on the sofa") from the index it already has.
+
 A blink is both eyes of a main face clearly closed (each ≥ 0.7, together ≥ 0.85): a squint, a wink or glasses
 that confuse the eye network don't reject a photo. The network was trained on infrared eye crops; it is right on the
 public-domain test portraits and agrees with OpenCV + ONNX Runtime on Bryan's photos, but has not been checked on a

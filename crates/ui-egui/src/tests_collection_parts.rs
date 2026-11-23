@@ -484,3 +484,30 @@ fn a_shoot_opens_into_its_camera_folders() {
     shot(&mut h, "parts-9-shoot-added.png");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Develop's Collections panel has the Library's rows: each collection's triangle opens its
+/// camera folders, and a folder row narrows the collection the filmstrip shows.
+#[test]
+fn develop_collections_open_into_their_folders_too() {
+    let Fixture { mut h, erika, .. } = fixture();
+    let r = h.request("ui.set", json!({"module": "develop", "view": "detail", "leftPanel": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    // only Collections open in Develop's left panel
+    h.app.ui.develop_left_sections = vec!["collections".into()];
+    h.settle(SETTLE);
+    let toggle = format!("albumPartsToggle:{}", erika.0);
+    let r6 = format!("source:albumPart:{}:{}", erika.0, folder("raw/R6"));
+    assert!(has(&h, &toggle), "the collection row has its triangle in Develop");
+    assert!(!has(&h, &r6), "closed by default");
+    click(&mut h, &toggle);
+    assert!(h.app.ui.parts_open.contains(&format!("album:{}", erika.0)));
+    assert_eq!(part_rows(&h, erika).len(), 4, "{:?}", part_rows(&h, erika));
+    // the rows stay inside the panel
+    let (panel, row) = (widget(&h, "panel:left_panel"), widget(&h, &r6));
+    assert!(row.left() >= panel.left() - 0.5 && row.right() <= panel.right() + 0.5, "{row:?} in {panel:?}");
+    click(&mut h, &r6);
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::Album(erika));
+    assert_eq!(h.app.session.visible_unlocated().len(), 2, "the R6 folder only");
+    assert_eq!(h.app.ui.module, crate::state::Module::Develop, "still in Develop");
+    shot(&mut h, "parts-6-develop.png");
+}

@@ -416,7 +416,7 @@ fn ensure(app: &mut crate::LightcraftApp, ctx: &egui::Context) {
         Err(e) => {
             app.identity.texture = None;
             app.identity.pixels = None;
-            app.notices.push(format!("Identity plate: {e}. Pick another image in Settings ▸ identity."));
+            app.notices.push(crate::i18n::tr_format!("Identity plate: {e}. Pick another image in Settings ▸ identity.", e = e));
             app.identity.error = Some(e);
         }
     }

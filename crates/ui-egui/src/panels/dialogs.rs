@@ -176,6 +176,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::Import { .. } => "lightcraft-import-dialog",
         Dialog::Export { .. } => "lightcraft-export-dialog",
         Dialog::ExportExisting { .. } => "lightcraft-export-ask-dialog",
+        // its own size: a small dialog shown before (Delete's question) doesn't narrow it
+        Dialog::Settings { .. } => "lightcraft-settings-dialog",
         _ => "lightcraft-dialog",
     });
     let shown = egui::Window::new(crate::i18n::tr(&title)).id(window_id)
@@ -619,7 +621,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 Dialog::ConfirmDelete { count, rejected } => {
                     let what = match (*rejected, *count) {
                         (true, 1) => crate::i18n::tr("the rejected photo").to_string(),
-                        (true, n) => format!("the {n} rejected photos", n = n),
+                        (true, n) => crate::i18n::tr_format!("the {n} rejected photos", n = n),
                         (false, 1) => crate::i18n::tr("this photo").to_string(),
                         (false, n) => crate::i18n::tr_format!("these {count} photos", count = n),
                     };
@@ -639,7 +641,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let masters = count - copies.min(count);
                     let what = match (*rejected, count) {
                         (true, 1) => crate::i18n::tr("the rejected photo").to_string(),
-                        (true, n) => format!("the {n} rejected photos", n = n),
+                        (true, n) => crate::i18n::tr_format!("the {n} rejected photos", n = n),
                         (false, 1) => crate::i18n::tr("the selected photo").to_string(),
                         (false, n) => crate::i18n::tr_format!("the {n} selected photos", n = n),
                     };
@@ -773,6 +775,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 ui.add_space(4.0);
             }
             if !own_buttons { ui.horizontal(|ui| {
+                // neighbours 8 px apart (DESIGN.md §15)
+                ui.spacing_mut().item_spacing.x = 8.0;
                 let informational = matches!(dlg, Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. });
                 let sam = &app.session.segmenter;
                 let (sam_installed, sam_running, sam_failed) = (sam.installed(), sam.download_status().running, sam.download_status().error.is_some());

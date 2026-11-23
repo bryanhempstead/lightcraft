@@ -22,6 +22,137 @@ fn demo(size: [f32; 2], ui: serde_json::Value) -> Headless {
     h
 }
 
+/// DESIGN.md §15 in `area`: no text drawn past its clip rect or the area's edge (clipped), and no
+/// two texts on top of each other. Returns what is wrong, empty when nothing is.
+fn layout_faults(h: &Headless, area: egui::Rect) -> Vec<String> {
+    // the area's own texts: drawn clipped to it (what lies behind a window is clipped to its panel)
+    let texts: Vec<(String, egui::Rect, egui::Rect)> =
+        h.view.texts().into_iter().filter(|(_, r, clip)| area.contains(r.center()) && area.expand(2.0).contains_rect(*clip)).collect();
+    let mut out = Vec::new();
+    for (s, r, clip) in &texts {
+        let bound = clip.intersect(area.expand(1.0));
+        if r.right() > bound.right() + 1.0 || r.left() < bound.left() - 1.0 {
+            out.push(format!("clipped: {s:?} {r:?} in {bound:?}"));
+        }
+    }
+    for (i, (a, ra, _)) in texts.iter().enumerate() {
+        for (b, rb, _) in texts.iter().skip(i + 1) {
+            let o = ra.intersect(*rb);
+            if o.width() > 2.0 && o.height() > 2.0 {
+                out.push(format!("overlap: {a:?} {ra:?} / {b:?} {rb:?}"));
+            }
+        }
+    }
+    out
+}
+
+/// With `LIGHTCRAFT_TEST_SHOTS=<dir>`: a screenshot of the window there.
+fn shot(h: &mut Headless, name: &str) {
+    if let Some(dir) = std::env::var_os("LIGHTCRAFT_TEST_SHOTS") {
+        let p = std::path::Path::new(&dir).join(name);
+        let r = h.request("ui.screenshot", json!({"path": p.to_string_lossy(), "headless": true}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+}
+
+/// Every Settings tab and today's new panels and menus (identity., notes., Adjust Time, Export,
+/// the loupe's ovl. and click. menus) laid out with nothing clipped and no text on top of
+/// another; the Delete key note on General wraps inside the dialog.
+#[test]
+fn settings_tabs_and_new_panels_have_nothing_clipped() {
+    let services = Services {
+        png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
+            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+        })),
+        write: Some(Box::new(|p: &str, b: &[u8]| std::fs::write(p, b).map_err(|e| e.to_string()))),
+        ..Default::default()
+    };
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    app.fix_notes = crate::fixnotes::FixNotes::default();
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    h.request("ui.set", json!({"view": "photoGrid"}), T);
+    h.settle(SETTLE);
+    let exec = |h: &mut Headless, c: &str, p: serde_json::Value| {
+        let r = h.request("engine.execute", json!({"command": c, "params": p}), T);
+        assert_eq!(r["ok"], true, "{c}: {r}");
+        h.settle(SETTLE);
+    };
+    let mut faults = Vec::new();
+    // Delete's small question first (it used to share the Settings window's remembered size)
+    h.app.ui.dialog = Some(crate::state::Dialog::ConfirmDelete { count: 1, rejected: false });
+    h.settle(SETTLE);
+    for (tab, _) in crate::panels::settings::TABS {
+        for delete_key in [crate::state::DeleteKey::Trash, crate::state::DeleteKey::Ask] {
+            if *tab != "general" && delete_key != crate::state::DeleteKey::Trash {
+                continue;
+            }
+            h.app.ui.settings.delete_key = delete_key;
+            exec(&mut h, "app.settings", json!({"tab": tab}));
+            h.step();
+            let dialog = widget(&h, "dialog:window");
+            faults.extend(layout_faults(&h, dialog).into_iter().map(|f| format!("settings {tab}: {f}")));
+            if delete_key == crate::state::DeleteKey::Trash {
+                shot(&mut h, &format!("audit-settings-{tab}.png"));
+            }
+        }
+    }
+    // the Delete key note is there, in full, inside the dialog
+    exec(&mut h, "app.settings", json!({"tab": "general"}));
+    h.app.ui.settings.delete_key = crate::state::DeleteKey::Trash;
+    h.step();
+    let dialog = widget(&h, "dialog:window");
+    let note: Vec<_> = h.view.texts().into_iter().filter(|(s, _, _)| s.starts_with("trash.: the file")).collect();
+    assert_eq!(note.len(), 1, "{note:?}");
+    assert!(note[0].0.ends_with("puts the files back."), "{note:?}");
+    assert!(note[0].1.right() <= dialog.right() - 8.0, "wrapped inside the dialog: {:?} in {dialog:?}", note[0].1);
+    h.app.ui.dialog = None;
+    // Adjust Time…, Export…
+    for (c, name) in [("dialog.captureTime", "adjust-time"), ("dialog.export", "export")] {
+        exec(&mut h, c, json!({}));
+        h.step();
+        if let Some(d) = h.app.widgets.iter().find(|(w, _)| w == "dialog:window").map(|(_, r)| *r) {
+            faults.extend(layout_faults(&h, d).into_iter().map(|f| format!("{name}: {f}")));
+        }
+        shot(&mut h, &format!("audit-{name}.png"));
+        if name == "adjust-time" {
+            let (cancel, ok) = (widget(&h, "button:dialogCancel"), widget(&h, "button:dialogOk"));
+            assert!(ok.left() - cancel.right() >= 8.0 - 0.5, "Cancel and apply. 8 px apart: {cancel:?} {ok:?}");
+        }
+        h.app.ui.dialog = None;
+        h.settle(SETTLE);
+    }
+    // notes.
+    exec(&mut h, "notes.toggle", json!({"open": true}));
+    h.step();
+    let panel = widget(&h, "panel:fixNotes");
+    faults.extend(layout_faults(&h, panel).into_iter().map(|f| format!("notes.: {f}")));
+    shot(&mut h, "audit-notes.png");
+    exec(&mut h, "notes.toggle", json!({"open": false}));
+    // the loupe's ovl. and click. menus
+    h.request("ui.set", json!({"view": "detail", "right": "none"}), T);
+    h.settle(SETTLE);
+    for menu in ["overlays", "clickZoom", "zoom"] {
+        h.request("ui.clickWidget", json!({"id": format!("dropdown:{menu}")}), T);
+        h.step();
+        h.step();
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+        // the popup's own texts: those not in the frame without it
+        let open = h.view.texts();
+        shot(&mut h, &format!("audit-menu-{menu}.png"));
+        h.request("ui.key", json!({"key": "Escape"}), T);
+        h.step();
+        let closed: Vec<String> = h.view.texts().into_iter().map(|t| t.0).collect();
+        for (s, r, clip) in open.iter().filter(|t| !closed.contains(&t.0)) {
+            let bound = clip.intersect(canvas);
+            if r.right() > bound.right() + 1.0 || r.left() < bound.left() - 1.0 || r.bottom() > bound.bottom() + 1.0 {
+                faults.push(format!("{menu} menu: clipped {s:?} {r:?} in {bound:?}"));
+            }
+        }
+        assert_eq!(h.app.ui.view, crate::state::ViewMode::Detail, "Esc closed the {menu} menu only");
+    }
+    assert!(faults.is_empty(), "{} layout fault(s):\n{}", faults.len(), faults.join("\n"));
+}
+
 fn widget(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
