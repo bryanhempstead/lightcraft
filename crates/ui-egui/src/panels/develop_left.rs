@@ -3,11 +3,10 @@
 //! read-only shortcut), with "Copy…" and "Paste" at the bottom.
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
-use lightcraft_catalog::{Album, AlbumId, PhotoId};
+use lightcraft_catalog::PhotoId;
 use serde_json::json;
 
 use crate::LightcraftApp;
-use crate::icons::{Icon, paint};
 use crate::state::Zoom;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -213,55 +212,10 @@ fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
 }
 
-/// Collections: the library's albums (folders open), click = show that album in Library.
+/// Collections: the Library's collection rows (sets open and close, each collection's triangle
+/// opens its folders / cameras); click = show that collection in the filmstrip.
 fn collections(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let mut all: Vec<Album> = app.session.catalog.albums().cloned().collect();
-    all.sort_by_key(|a| (!a.folder, a.name.to_lowercase()));
-    if all.is_empty() {
-        note(ui, "No collections yet");
-        return;
-    }
-    ui.add_space(4.0);
-    album_rows(app, ui, &all, None, 0, 0);
-    ui.add_space(4.0);
-}
-
-fn album_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &[Album], parent: Option<AlbumId>, depth: usize, guard: usize) {
-    // a damaged catalog could loop its folders: never deeper than this
-    if guard > 32 {
-        return;
-    }
-    let t = Tokens::get(ui.ctx());
-    for a in all.iter().filter(|a| a.parent == parent) {
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
-        register(ui.ctx(), format!("devCollection:{}", a.id.0), r);
-        let current = app.session.source == lightcraft_engine::LibrarySource::Album(a.id);
-        if current {
-            ui.painter().rect_filled(r, 0.0, t.tool_active);
-        } else if resp.hovered() {
-            ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.7));
-        }
-        let x = r.left() + 14.0 + depth as f32 * 14.0;
-        let icon = if a.folder {
-            Icon::CollectionSet
-        } else if a.is_smart() {
-            Icon::SmartAlbum
-        } else {
-            Icon::Album
-        };
-        paint(ui.painter(), Rect::from_min_size(pos2(x, r.center().y - 7.0), vec2(14.0, 14.0)), icon, t.icon);
-        ui.painter().text(pos2(x + 20.0, r.center().y), Align2::LEFT_CENTER, &a.name, t.font(12.0), t.text_label);
-        if !a.folder {
-            let n = app.session.catalog.album_count(a.id);
-            ui.painter().text(pos2(r.right() - 20.0, r.center().y), Align2::RIGHT_CENTER, n.to_string(), t.font(11.0), t.text_dim);
-        }
-        if resp.clicked() && !a.folder {
-            let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
-        }
-        if a.folder {
-            album_rows(app, ui, all, Some(a.id), depth + 1, guard + 1);
-        }
-    }
+    super::left::develop_collections(app, ui);
 }
 
 /// "Copy…" (choose the settings to copy) and "Paste" at the bottom of the Develop left panel.

@@ -997,7 +997,7 @@ fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: Owner, indent: f
                 show_parts(app, ui.ctx(), &of, by, std::slice::from_ref(&r.key));
                 ui.close();
             }
-            if ui.button(format!("Show All of “{}”", owner.name())).clicked() {
+            if ui.button(crate::i18n::tr_format!("Show All of “{}”", owner.name())).clicked() {
                 show_parts(app, ui.ctx(), &of, by, &[]);
                 ui.close();
             }
@@ -1378,6 +1378,23 @@ fn catalog_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, total: usize, picks:
 pub(crate) fn map_collections(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
     ui.data_mut(|d| d.insert_temp(egui::Id::new("left-visible-right"), ui.cursor().left() + viewport.max.x));
     collections_section(app, ui, viewport);
+}
+
+/// Develop's Collections panel (under its own header): the Library's rows — sets, collections and
+/// smart collections with their counts, each collection's disclosure triangle opening the folders
+/// (or cameras, as the Library's fldr. / cam. says) its photos come from (LRC-LIB-COLL-PARTS).
+pub(crate) fn develop_collections(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    ui.data_mut(|d| d.insert_temp(egui::Id::new("left-visible-right"), ui.max_rect().right()));
+    let albums: Vec<Album> = app.session.catalog.albums().filter(|a| !a.quick).cloned().collect();
+    if albums.is_empty() {
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+        let t = Tokens::get(ui.ctx());
+        ui.painter().text(pos2(r.left() + 16.0, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr("No collections yet"), t.font(12.0), t.text_dim);
+        return;
+    }
+    ui.add_space(4.0);
+    albums_tree_view(app, ui, &albums, None, 0.0, &AlbumView { needle: String::new(), by_kind: false, fav_only: false });
+    ui.add_space(4.0);
 }
 
 /// A section header's "+" button, kept at the visible right edge when the sidebar scrolls

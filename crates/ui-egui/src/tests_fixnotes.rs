@@ -275,3 +275,56 @@ fn notes_are_edited_removed_and_reopened() {
     assert!(again.store.next_id > b);
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// Esc closes the notes. panel when it has the keyboard (its field focused, or the panel last
+/// clicked) — and only the panel: the loupe stays. Esc with the focus elsewhere leaves it open,
+/// and while a note is edited Esc cancels the edit.
+#[test]
+fn esc_closes_the_notes_panel_when_it_has_focus() {
+    use crate::state::ViewMode;
+    let d = tmp("esc");
+    let mut h = demo(&d);
+    h.app.ui.view = ViewMode::Detail;
+    assert!(h.settle(SETTLE));
+    let esc = |h: &mut Headless| {
+        assert_eq!(h.request("ui.key", json!({"key": "Escape"}), T)["ok"], true);
+        h.step();
+    };
+    // opened: the field has the keys; Esc closes the panel, the loupe stays
+    run(&mut h, "notes.toggle", json!({"open": true}));
+    h.step();
+    h.step();
+    assert!(h.view.ctx.memory(|m| m.has_focus(egui::Id::new("fix-notes-field"))), "the field takes the keys when the panel opens");
+    esc(&mut h);
+    assert!(!h.app.fix_notes.open, "Esc in the field closes the panel");
+    assert_eq!(h.app.ui.view, ViewMode::Detail, "and only the panel");
+    // the panel clicked (not its field): Esc closes it too
+    run(&mut h, "notes.toggle", json!({"open": true}));
+    h.settle(SETTLE);
+    let panel = h.app.widgets.iter().find(|(w, _)| w == "panel:fixNotes").map(|(_, r)| *r).expect("the panel");
+    let at = egui::pos2(panel.left() + 6.0, panel.bottom() - 6.0);
+    assert_eq!(h.request("ui.click", json!({"x": at.x, "y": at.y}), T)["ok"], true);
+    h.view.ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("fix-notes-field")));
+    h.step();
+    esc(&mut h);
+    assert!(!h.app.fix_notes.open, "Esc after a click in the panel closes it");
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    // a click elsewhere takes the keyboard back: Esc is the loupe's again
+    run(&mut h, "notes.toggle", json!({"open": true}));
+    h.settle(SETTLE);
+    let canvas = h.app.canvas_rect.expect("the loupe").center();
+    h.view.ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("fix-notes-field")));
+    assert_eq!(h.request("ui.click", json!({"x": canvas.x, "y": canvas.y}), T)["ok"], true);
+    h.settle(SETTLE);
+    run(&mut h, "view.zoomFit", json!({}));
+    esc(&mut h);
+    assert!(h.app.fix_notes.open, "the panel stays open");
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "Esc went to the loupe");
+    // editing a note: Esc cancels the edit, the panel stays
+    let id = run(&mut h, "notes.add", json!({"text": "one", "shot": false}))["id"].as_u64().unwrap();
+    h.app.fix_notes.editing = Some((id, "one".into()));
+    h.settle(SETTLE);
+    esc(&mut h);
+    assert!(h.app.fix_notes.open && h.app.fix_notes.editing.is_none(), "Esc cancelled the edit only");
+    let _ = std::fs::remove_dir_all(&d);
+}

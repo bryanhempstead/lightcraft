@@ -998,7 +998,7 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     // LR-LIB-CAPTURETIME: fix this photo's time, the selection moves along
     let n = app.session.targets(&json!({})).len();
-    let label = if n > 1 { format!("Adjust Time of {n} Photos…") } else { crate::i18n::tr("Adjust Time…").to_string() };
+    let label = if n > 1 { crate::i18n::tr_format!("Adjust Time of {n} Photos…", n = n) } else { crate::i18n::tr("Adjust Time…").to_string() };
     let r = ui.button(label);
     crate::widgets::register(ui.ctx(), "menu:adjustTime", r.rect);
     if r.clicked() {

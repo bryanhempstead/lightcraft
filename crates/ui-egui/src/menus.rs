@@ -2273,20 +2273,24 @@ pub fn delete_now(app: &mut LightcraftApp, rejected: bool) -> Result<Value, Stri
         }
         DeleteKey::Recent => {
             let r = app.run("photo.delete", json!({"ids": ids}))?;
-            (r, format!("{what} moved to Recently Deleted", what = photos(n)))
+            (r, crate::i18n::tr_format!("{what} moved to Recently Deleted", what = photos(n)))
         }
         DeleteKey::Album => {
             let r = app.run("photo.removeFromAlbum", json!({"ids": ids}))?;
             let gone = r["removed"].as_u64().unwrap_or(n);
             let text = if r["fromLibrary"] == true {
-                let mut t = format!("{what} removed from the library (files kept)", what = photos(gone));
+                let mut t = crate::i18n::tr_format!("{what} removed from the library (files kept)", what = photos(gone));
                 if !app.ui.settings.album_fallback_told {
                     app.ui.settings.album_fallback_told = true;
                     t.push_str(crate::i18n::tr(" — not in an album, so Delete removes from the library"));
                 }
                 t
             } else {
-                format!("{what} removed from {name}", what = photos(gone), name = r["name"].as_str().unwrap_or("the album"))
+                crate::i18n::tr_format!(
+                    "{what} removed from {name}",
+                    what = photos(gone),
+                    name = r["name"].as_str().unwrap_or(crate::i18n::tr("the album"))
+                )
             };
             (r, text)
         }
@@ -2303,8 +2307,8 @@ pub fn trash_message(r: &Value) -> String {
     let failed = r["failed"].as_array().map(Vec::len).unwrap_or(0);
     let mut text = match (removed, trashed) {
         (0, _) => String::new(),
-        (n, 0) => format!("{what} removed from the library", what = photos(n)),
-        (n, _) => format!("{what} moved to the Trash", what = photos(n)),
+        (n, 0) => crate::i18n::tr_format!("{what} removed from the library", what = photos(n)),
+        (n, _) => crate::i18n::tr_format!("{what} moved to the Trash", what = photos(n)),
     };
     if failed > 0 {
         if !text.is_empty() {

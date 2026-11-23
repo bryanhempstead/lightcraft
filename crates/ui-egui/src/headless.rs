@@ -85,6 +85,25 @@ impl HeadlessView {
         out.viewport_output.remove(&ViewportId::ROOT).map(|v| v.commands).unwrap_or_default()
     }
 
+    /// The texts painted in the last frame: (text, where it is drawn, the clip rect it is drawn
+    /// in), for layout audits (DESIGN.md §15: nothing clipped, neighbours apart).
+    pub fn texts(&self) -> Vec<(String, egui::Rect, egui::Rect)> {
+        fn walk(shape: &egui::epaint::Shape, clip: egui::Rect, out: &mut Vec<(String, egui::Rect, egui::Rect)>) {
+            match shape {
+                egui::epaint::Shape::Text(t) if !t.galley.job.text.trim().is_empty() => {
+                    out.push((t.galley.job.text.clone(), t.visual_bounding_rect(), clip));
+                }
+                egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for s in &self.shapes {
+            walk(&s.shape, s.clip_rect, &mut out);
+        }
+        out
+    }
+
     /// Frames run so far.
     pub fn frames(&self) -> u64 {
         self.frames

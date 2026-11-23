@@ -143,6 +143,11 @@ pub struct FixNotes {
     /// Give the note field the keyboard focus when the panel is drawn next (after a screenshot
     /// hid it).
     refocus: bool,
+    /// The panel was the last thing clicked (Esc then closes it, [`has_focus`]).
+    clicked_in: bool,
+    /// The note field had the keyboard when the panel was last drawn (egui lets go of the focus
+    /// as soon as Esc is pressed, before the shortcuts look).
+    field_focused: bool,
 }
 
 impl Default for FixNotes {
@@ -163,6 +168,8 @@ impl Default for FixNotes {
             recent: VecDeque::new(),
             message: None,
             refocus: false,
+            clicked_in: false,
+            field_focused: false,
         }
     }
 }
@@ -242,7 +249,11 @@ impl FixNotes {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
             Err(e) => {
                 self.file = None;
-                return Some(format!("The fix notes in {} can't be read ({e}). New notes are kept until LightCraft quits.", path.display()));
+                return Some(crate::i18n::tr_format!(
+                    "The fix notes in {} can't be read ({e}). New notes are kept until LightCraft quits.",
+                    path.display(),
+                    e = e
+                ));
             }
         };
         match serde_json::from_slice::<Store>(&bytes) {
@@ -263,9 +274,17 @@ impl FixNotes {
                     self.file = None;
                 }
                 Some(if kept {
-                    format!("The fix notes file was damaged ({e}); it was kept as {} and new notes start empty.", aside.display())
+                    crate::i18n::tr_format!(
+                        "The fix notes file was damaged ({e}); it was kept as {} and new notes start empty.",
+                        aside.display(),
+                        e = e
+                    )
                 } else {
-                    format!("The fix notes file {} is damaged ({e}). New notes are kept until LightCraft quits.", path.display())
+                    crate::i18n::tr_format!(
+                        "The fix notes file {} is damaged ({e}). New notes are kept until LightCraft quits.",
+                        path.display(),
+                        e = e
+                    )
                 })
             }
         }
@@ -548,7 +567,7 @@ pub fn send(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         .find(|p| !p.exists())
         .ok_or_else(|| format!("notes.send: too many requests named {stem} in {}", inbox.display()))?;
     if let Err(e) = write_atomic(&path, &body) {
-        let e = format!("Couldn't send the notes: {e}. They stay unsent.");
+        let e = crate::i18n::tr_format!("Couldn't send the notes: {e}. They stay unsent.", e = e);
         app.fix_notes.message = Some((e.clone(), true));
         return Err(e);
     }
@@ -561,8 +580,8 @@ pub fn send(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         }
     }
     app.fix_notes.picked.retain(|id| !ids.contains(id));
-    let what = if ids.len() == 1 { "1 note".to_string() } else { format!("{} notes", ids.len()) };
-    app.fix_notes.message = Some((format!("sent {what} — Claude will pick it up"), false));
+    let what = if ids.len() == 1 { crate::i18n::tr("1 note").to_string() } else { crate::i18n::tr_format!("{n} notes", n = ids.len()) };
+    app.fix_notes.message = Some((crate::i18n::tr_format!("sent {what} — Claude will pick it up", what = what), false));
     let save_error = persist(app);
     let mut out = json!({"path": file, "ids": ids, "count": ids.len()});
     if let Some(e) = save_error {
@@ -599,6 +618,10 @@ pub fn run_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Resul
         "notes.toggle" => {
             let open = p.get("open").and_then(Value::as_bool).unwrap_or(!app.fix_notes.open);
             app.fix_notes.open = open;
+            app.fix_notes.clicked_in = false;
+            app.fix_notes.field_focused = false;
+            // opened: the note field takes the keys (type straight away, Esc closes it again)
+            app.fix_notes.refocus = open;
             if open {
                 app.fix_notes.message = None;
             }
@@ -633,8 +656,8 @@ pub fn run_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Resul
                 }
             }
             if fixed {
-                let what = if ids.len() == 1 { "1 note".to_string() } else { format!("{} notes", ids.len()) };
-                app.fix_notes.message = Some((format!("{what} fixed"), false));
+                let what = if ids.len() == 1 { crate::i18n::tr("1 note").to_string() } else { crate::i18n::tr_format!("{n} notes", n = ids.len()) };
+                app.fix_notes.message = Some((crate::i18n::tr_format!("{what} fixed", what = what), false));
             }
             let save_error = persist(app);
             Ok(json!({"ids": ids, "open": app.fix_notes.count(Status::Open), "saveError": save_error}))
@@ -703,7 +726,7 @@ pub fn top_button(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let tip = if open == 0 {
         crate::i18n::tr("Notes about what isn't working (⌘⌥⇧N); fix. sends them to Claude").to_string()
     } else {
-        format!("{open} open — {}", crate::i18n::tr("fix. sends them to Claude (⌘⌥⇧N)"))
+        crate::i18n::tr_format!("{open} open — {}", crate::i18n::tr("fix. sends them to Claude (⌘⌥⇧N)"), open = open)
     };
     if resp.on_hover_text(tip).clicked() {
         let _ = app.run("notes.toggle", json!({}));
@@ -771,7 +794,22 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         .show(ctx, |ui| body(app, ui));
     if let Some(s) = shown {
         register(ctx, "panel:fixNotes", s.response.rect);
+        // a click in the panel gives it the keyboard's Esc, a click anywhere else takes it back
+        if let Some(at) = ctx.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()).flatten()) {
+            app.fix_notes.clicked_in = s.response.rect.contains(at);
+        }
     }
+}
+
+/// Does the notes. panel have the keyboard (its note field focused, or the panel the last thing
+/// clicked)? Esc then closes it ([`crate::shortcuts::handle`]); not while a note is being edited
+/// (Esc cancels the edit) or a screenshot hides it.
+pub fn has_focus(app: &LightcraftApp, ctx: &egui::Context) -> bool {
+    let n = &app.fix_notes;
+    n.open
+        && n.pending.is_empty()
+        && n.editing.is_none()
+        && (n.clicked_in || n.field_focused || ctx.memory(|m| m.has_focus(egui::Id::new("fix-notes-field"))))
 }
 
 fn body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -785,7 +823,9 @@ fn body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new(crate::i18n::tr("notes.")).font(t.semibold(13.0)).color(t.text));
         let open = app.fix_notes.count(Status::Open);
         let sent = app.fix_notes.count(Status::Sent);
-        ui.label(egui::RichText::new(format!("{open} open · {sent} sent")).font(t.font(11.5)).color(t.text_dim));
+        ui.label(
+            egui::RichText::new(crate::i18n::tr_format!("{open} open · {sent} sent", open = open, sent = sent)).font(t.font(11.5)).color(t.text_dim),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
             register(ui.ctx(), "button:fixNotesClose", r);
@@ -813,6 +853,7 @@ fn body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .hint_text(crate::i18n::tr("What isn't working?")),
     );
     register(ui.ctx(), "field:fixNote", resp.rect);
+    app.fix_notes.field_focused = resp.has_focus();
     let enter = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
     let mut add_now = enter;
     ui.horizontal(|ui| {
@@ -866,8 +907,12 @@ fn body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if resp.on_hover_text(crate::i18n::tr(tip)).clicked() {
                 match app.run("notes.send", json!({})) {
                     Ok(r) => {
-                        let msg =
-                            app.fix_notes.message.clone().map(|m| m.0).unwrap_or_else(|| format!("sent {} — Claude will pick it up", r["count"]));
+                        let msg = app
+                            .fix_notes
+                            .message
+                            .clone()
+                            .map(|m| m.0)
+                            .unwrap_or_else(|| crate::i18n::tr_format!("sent {} — Claude will pick it up", r["count"]));
                         app.toast(ui.ctx(), msg);
                     }
                     Err(e) => {

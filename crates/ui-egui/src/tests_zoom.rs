@@ -138,6 +138,66 @@ fn an_edit_at_one_to_one_re_renders_the_detail_in_the_new_look() {
     assert!(t.pieces.iter().all(|p| Some(p.look) == t.look), "the old look's pieces are gone");
 }
 
+/// The before view's detail layer (view 3): whether it shows native-resolution pieces of its
+/// current look, and where (normalized rectangles).
+fn before_detail(h: &Headless) -> Option<Vec<lightcraft_pipeline::Region>> {
+    let t = h.app.renderer.tiles.get(&3)?;
+    let look = t.look?;
+    let v: Vec<_> = t.pieces.iter().filter(|p| p.look == look).map(|p| p.rect).collect();
+    (!v.is_empty() && t.level == 1.0).then_some(v)
+}
+
+/// Before / After at 1:1: the Before half (side by side, and the split view's left half) gets the
+/// same native-resolution tiles as the After, not the preview magnified; the split view's
+/// before pieces cover its left half only, the after's its right half.
+#[test]
+fn before_after_at_one_to_one_renders_the_before_at_native_resolution_too() {
+    use crate::state::BeforeAfter;
+    let _one = heavy();
+    for mode in [BeforeAfter::Split, BeforeAfter::SideBySide] {
+        let mut h = demo();
+        h.request("ui.set", json!({"module": "develop", "view": "detail", "right": "none", "leftPanel": false, "filmstrip": false}), T);
+        exec(&mut h, "develop.set", json!({"control": "light.exposure", "value": 1.0}));
+        h.app.ui.before_after = mode;
+        exec(&mut h, "view.zoom100", json!({}));
+        assert!(h.step_until(RENDER, |h| before_detail(h).is_some() && detail(h).1 > 0), "{mode:?}: both halves at 1:1");
+        assert_ne!(h.app.renderer.tiles[&3].look, h.app.renderer.tiles[&0].look, "the before and after looks differ");
+        if mode == BeforeAfter::Split {
+            // the photo's centre (pan 0.5) is the split: the before half's pieces start left of it,
+            // the after half's end right of it (each half's ring of prefetched tiles may cross it)
+            let before = before_detail(&h).unwrap_or_default();
+            let t = &h.app.renderer.tiles[&0];
+            let after: Vec<_> = t.pieces.iter().filter(|p| Some(p.look) == t.look).map(|p| p.rect).collect();
+            assert!(before.iter().any(|r| r.x0 < 0.45), "{before:?}");
+            assert!(after.iter().any(|r| r.x1 > 0.55), "{after:?}");
+        }
+        // Off: no before detail
+        h.app.ui.before_after = BeforeAfter::Off;
+        h.settle(T);
+        assert!(h.app.renderer.tiles.get(&3).is_none_or(|t| t.look.is_none()), "no before view, no before detail");
+    }
+}
+
+/// Esc with a toolbar menu open closes the menu only; the next Esc goes back to the grid.
+#[test]
+fn esc_closes_a_toolbar_popup_without_leaving_the_loupe() {
+    use crate::state::ViewMode;
+    let mut h = demo();
+    loupe(&mut h);
+    for menu in ["dropdown:zoom", "dropdown:clickZoom", "dropdown:overlays"] {
+        h.request("ui.clickWidget", json!({"id": menu}), T);
+        h.step();
+        assert!(egui::Popup::is_any_open(&h.view.ctx), "{menu} opens");
+        h.request("ui.key", json!({"key": "Escape"}), T);
+        h.step();
+        assert!(!egui::Popup::is_any_open(&h.view.ctx), "{menu}: Esc closes it");
+        assert_eq!(h.app.ui.view, ViewMode::Detail, "{menu}: Esc stays in the loupe");
+    }
+    h.request("ui.key", json!({"key": "Escape"}), T);
+    h.step();
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "with nothing open Esc goes back to the grid");
+}
+
 #[test]
 fn auto_tags_the_window_display_p3_on_a_mac_and_the_manual_choices_do_not() {
     use crate::display_p3::{ViewSpace, WindowSpace};

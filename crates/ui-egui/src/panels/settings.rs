@@ -80,8 +80,14 @@ fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnce(&mut egui
     .inner
 }
 
+/// A quiet note, wrapped to what is visible of the dialog (8 px from its edge): a window wider in
+/// layout than on screen would otherwise cut the line off.
 fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
-    ui.label(RichText::new(crate::i18n::tr(text)).size(11.0).color(t.text_dim));
+    let w = (ui.clip_rect().right() - ui.cursor().left() - 8.0).min(ui.available_width()).max(120.0);
+    ui.scope(|ui| {
+        ui.set_max_width(w);
+        ui.add(egui::Label::new(RichText::new(crate::i18n::tr(text)).size(11.0).color(t.text_dim)).wrap());
+    });
 }
 
 /// A checkbox addressable as `check:{id}`; true when toggled.
