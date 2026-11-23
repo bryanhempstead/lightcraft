@@ -946,9 +946,9 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         // ---- delete / restore
         cmd!("photo.delete", "Delete Photo", ["Photo"], Some("Delete"), "{ids?} — moves to Recently Deleted", has_selection, |s, p| {
+            let (before, gone, active) = (s.visible_cloned(), s.targets(p), s.active());
             let v = for_targets(s, p, "Delete", |id| Some(Op::SetDeleted { id, deleted: true }))?;
-            let vis = s.visible_cloned();
-            s.selection = vis.first().map(|f| Selection::single(*f)).unwrap_or_default();
+            s.selection = crate::view::next_after_removal(&before, &gone, active).map(Selection::single).unwrap_or_default();
             Ok(v)
         }),
         cmd!("photo.restore", "Restore", ["Photo"], None, "{ids?}", has_selection, |s, p| for_targets(s, p, "Restore", |id| Some(Op::SetDeleted {

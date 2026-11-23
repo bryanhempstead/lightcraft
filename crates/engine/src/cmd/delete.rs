@@ -41,11 +41,10 @@ fn remove(s: &mut Session, label: &str, ids: &[PhotoId]) -> Result<usize> {
     if all.is_empty() {
         return Ok(0);
     }
+    let (before, active) = (s.visible_cloned(), s.active());
     let op = s.catalog.delete_photos_permanently_ops(&all);
     s.commit(label, op)?;
-    let gone: HashSet<PhotoId> = all.iter().copied().collect();
-    let vis = s.visible_cloned();
-    s.selection = vis.iter().find(|id| !gone.contains(id)).map(|f| Selection::single(*f)).unwrap_or_default();
+    s.selection = crate::view::next_after_removal(&before, &all, active).map(Selection::single).unwrap_or_default();
     Ok(all.len())
 }
 
@@ -257,9 +256,9 @@ fn remove_from_album(s: &mut Session, p: &Value) -> Result<Value> {
         let name = a.name.clone();
         let photos: Vec<PhotoId> = a.photos.iter().copied().filter(|x| !t.contains(x)).collect();
         let n = a.photos.len().saturating_sub(photos.len());
+        let (before, active) = (s.visible_cloned(), s.active());
         s.commit("Remove from Album", Op::SetAlbumPhotos { id, photos })?;
-        let vis = s.visible_cloned();
-        s.selection = vis.iter().find(|id| !t.contains(id)).map(|f| Selection::single(*f)).unwrap_or_default();
+        s.selection = crate::view::next_after_removal(&before, &t, active).map(Selection::single).unwrap_or_default();
         return Ok(json!({"album": id.0, "name": name, "removed": n}));
     }
     Ok(json!({"removed": remove(s, "Remove from Library", &t)?, "fromLibrary": true}))

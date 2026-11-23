@@ -263,3 +263,26 @@ mod selection_state_tests {
         assert_eq!(s.state_of(PhotoId(9)), SelectionState::NotSelected);
     }
 }
+
+/// The photo to show after `gone` leave the view `before` (its order before they went): the next
+/// one after the active photo (or the first one removed), else the one before it — never a jump
+/// back to the start (Bryan, 2026-11-23: "when I delete something it jumps randomly").
+pub fn next_after_removal(before: &[PhotoId], gone: &[PhotoId], active: Option<PhotoId>) -> Option<PhotoId> {
+    let at = active.and_then(|a| before.iter().position(|x| *x == a)).or_else(|| before.iter().position(|x| gone.contains(x)))?;
+    let keep = |x: &&PhotoId| !gone.contains(x);
+    before.get(at..).and_then(|r| r.iter().find(keep)).or_else(|| before.get(..at).and_then(|r| r.iter().rev().find(keep))).copied()
+}
+
+#[cfg(test)]
+mod removal_tests {
+    use super::*;
+
+    #[test]
+    fn after_a_delete_the_next_photo_is_shown() {
+        let v: Vec<PhotoId> = (1..=6).map(PhotoId).collect();
+        assert_eq!(next_after_removal(&v, &[PhotoId(3)], Some(PhotoId(3))), Some(PhotoId(4)), "the next one");
+        assert_eq!(next_after_removal(&v, &[PhotoId(3), PhotoId(4)], Some(PhotoId(4))), Some(PhotoId(5)), "past every removed one");
+        assert_eq!(next_after_removal(&v, &[PhotoId(6)], Some(PhotoId(6))), Some(PhotoId(5)), "the last one: the one before");
+        assert_eq!(next_after_removal(&v, &v, Some(PhotoId(2))), None, "nothing left");
+    }
+}
