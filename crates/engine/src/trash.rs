@@ -143,3 +143,105 @@ fn platform(paths: &[PathBuf]) -> Vec<Result<PathBuf, String>> {
 fn platform(paths: &[PathBuf]) -> Vec<Result<PathBuf, String>> {
     paths.iter().map(|p| Err(format!("{}: moving files to the Recycle Bin isn't available on this system; use Remove", p.display()))).collect()
 }
+
+/// A file a delete moved to the Trash: where it was, and where it is now.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TrashedFile {
+    pub original: String,
+    pub trash: String,
+}
+
+/// Move `f` back out of the Trash to its original path (undo of a delete, Put Back Last Delete).
+/// A rename, as the Trash is on the file's own volume; never over a file that is there now
+/// (no-clobber through a hard link where the volume has them). The folder it was in comes back
+/// if it is gone.
+pub fn put_back(f: &TrashedFile) -> Result<(), String> {
+    let (from, to) = (Path::new(&f.trash), Path::new(&f.original));
+    if std::fs::symlink_metadata(from).is_err() {
+        return Err(format!("{}: no longer in the Trash", f.original));
+    }
+    if std::fs::symlink_metadata(to).is_ok() {
+        return Err(format!("{}: another file is there now, so it stays in the Trash", f.original));
+    }
+    if let Some(dir) = to.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    match std::fs::hard_link(from, to) {
+        Ok(()) => {
+            if let Err(e) = std::fs::remove_file(from) {
+                log::warn!("put back: {} stays in the Trash too ({e})", from.display());
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(format!("{}: another file is there now, so it stays in the Trash", f.original));
+        }
+        // no hard links here (exFAT, a folder): a plain rename, the path checked just above
+        Err(_) => std::fs::rename(from, to).map_err(|e| format!("{}: can't put it back ({e})", f.original))?,
+    }
+    forget_trash_info(from);
+    Ok(())
+}
+
+/// The freedesktop.org Trash keeps a `.trashinfo` beside each file it holds: drop it once the
+/// file is back.
+fn forget_trash_info(trashed: &Path) {
+    let (Some(files), Some(name)) = (trashed.parent(), trashed.file_name()) else { return };
+    if files.file_name().is_none_or(|n| n != "files") {
+        return;
+    }
+    let Some(base) = files.parent() else { return };
+    let mut info = name.to_os_string();
+    info.push(".trashinfo");
+    let info = base.join("info").join(info);
+    if info.is_file() {
+        let _ = std::fs::remove_file(info);
+    }
+}
+
+/// The last delete that moved files to the Trash, kept for Put Back Last Delete
+/// (`photo.putBackLastDelete`) once the undo history has moved on, and saved with the library
+/// (`last-delete.json`) so it survives a reopen: the photos as they were, the albums they were
+/// in, and where their files went.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LastDelete {
+    pub label: String,
+    pub photos: Vec<lightcraft_catalog::Photo>,
+    /// Album → the deleted photos that were in it.
+    pub albums: Vec<(lightcraft_catalog::AlbumId, Vec<lightcraft_catalog::PhotoId>)>,
+    pub files: Vec<TrashedFile>,
+}
+
+impl LastDelete {
+    /// What `ids` are now (records and album memberships), before a delete that sends `files`
+    /// to the Trash.
+    pub(crate) fn of(s: &crate::Session, label: &str, ids: &[lightcraft_catalog::PhotoId], files: Vec<TrashedFile>) -> LastDelete {
+        let photos: Vec<lightcraft_catalog::Photo> = ids.iter().filter_map(|id| s.catalog.photo(*id)).map(|p| (**p).clone()).collect();
+        let albums = s
+            .catalog
+            .albums()
+            .filter(|a| !a.is_smart())
+            .filter_map(|a| {
+                let mine: Vec<_> = a.photos.iter().copied().filter(|p| ids.contains(p)).collect();
+                (!mine.is_empty()).then_some((a.id, mine))
+            })
+            .collect();
+        LastDelete { label: label.to_string(), photos, albums, files }
+    }
+
+    /// [`LastDelete::of`] for the photos an undo/redo op removes.
+    pub(crate) fn before(s: &crate::Session, label: &str, op: &lightcraft_catalog::Op, files: Vec<TrashedFile>) -> LastDelete {
+        let mut ids = Vec::new();
+        removed_photos(op, &mut ids, 0);
+        LastDelete::of(s, label, &ids, files)
+    }
+}
+
+/// The photos `op` removes (`RemovePhoto`, nested batches up to a few levels).
+fn removed_photos(op: &lightcraft_catalog::Op, out: &mut Vec<lightcraft_catalog::PhotoId>, depth: usize) {
+    match op {
+        lightcraft_catalog::Op::RemovePhoto { id } => out.push(*id),
+        lightcraft_catalog::Op::Batch { ops } if depth < 8 => ops.iter().for_each(|o| removed_photos(o, out, depth + 1)),
+        _ => {}
+    }
+}

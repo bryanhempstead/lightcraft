@@ -142,9 +142,29 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     heading(ui, t, crate::i18n::tr("Culling"));
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
-    check(ui, "settings.trashDelete", &mut app.ui.settings.trash_delete, "Delete asks like Lightroom: Delete from Disk (to the Trash) or Remove");
-    if !app.ui.settings.trash_delete {
-        check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
+    row(ui, t, crate::i18n::tr("Delete key"), |ui| {
+        use crate::state::DeleteKey;
+        choices(
+            ui,
+            "settingsDeleteKey",
+            &[(DeleteKey::Trash, "trash."), (DeleteKey::Recent, "recent."), (DeleteKey::Album, "album."), (DeleteKey::Ask, "ask.")],
+            &mut app.ui.settings.delete_key,
+        );
+    });
+    hint(
+        ui,
+        t,
+        match app.ui.settings.delete_key {
+            crate::state::DeleteKey::Trash => {
+                "trash.: the file and its sidecar go to the system Trash and the photo leaves the library, no question; ⌘Z puts the files back."
+            }
+            crate::state::DeleteKey::Recent => "recent.: photos go to Recently Deleted (restore them there); the files stay.",
+            crate::state::DeleteKey::Album => "album.: in an album, out of that album only; elsewhere out of the library, files kept.",
+            crate::state::DeleteKey::Ask => "ask.: Lightroom's question every time: Delete from Disk (to the Trash) or Remove.",
+        },
+    );
+    if app.ui.settings.delete_key != crate::state::DeleteKey::Ask {
+        check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm first: ask before deleting");
     }
     let mut autos = app.session.auto_versions;
     if check(ui, "settings.autoVersions", &mut autos, "Keep an automatic version when leaving an edited photo (Lightroom doesn't)") {

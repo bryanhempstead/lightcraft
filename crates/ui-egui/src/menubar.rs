@@ -321,6 +321,9 @@ fn host_supports(app: &LightcraftApp, id: &str) -> bool {
         "photo.delete" => !selection_deleted(app),
         // only where the trash is on screen
         "library.emptyRecentlyDeleted" => app.session.source == lightcraft_engine::LibrarySource::RecentlyDeleted,
+        // only when a delete can be put back, and only inside an album
+        "photo.putBackLastDelete" => app.session.last_delete.is_some(),
+        "photo.removeFromAlbum" => matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_)),
         _ => true,
     }
 }
@@ -820,12 +823,23 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
     if culling_cmd {
         crate::panels::compare::target_active(app, &mut params);
     }
-    if id == "photo.delete" && crate::menus::confirm_delete(app) {
+    if id == "photo.delete" && crate::menus::delete_key(app) {
         return Ok(Value::Null);
     }
     let r = app.run(id, params);
     if culling_cmd && r.is_ok() && app.ui.auto_advance {
         crate::panels::compare::advance(app);
+    }
+    // Put Back Last Delete says what came back (and which files couldn't)
+    if id == "photo.putBackLastDelete"
+        && let Ok(v) = &r
+    {
+        let n = v["photos"].as_u64().unwrap_or(0);
+        let mut msg = format!("{n} photo{} put back", if n == 1 { "" } else { "s" });
+        if let Some(e) = v["notBack"].as_array().and_then(|a| a.first()).and_then(Value::as_str) {
+            msg.push_str(&format!(" · not every file could come out of the Trash: {e}"));
+        }
+        app.toast_soon(msg, 6.0);
     }
     r
 }

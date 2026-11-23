@@ -90,11 +90,36 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     let wrap = (canvas.width() - 80.0).clamp(200.0, 720.0);
     let (background, foreground) = label.map(crate::theme::label_toast_colors).unwrap_or((egui::Color32::from_black_alpha(200), t.text));
     let foreground = foreground.gamma_multiply(fade);
-    let galley = painter.layout(text, t.font(14.0), foreground, wrap);
-    let size = vec2(galley.size().x + 40.0, (galley.size().y + 22.0).max(40.0));
+    // a delete's toast: "3 photos moved to the Trash · undo." (the button runs Undo)
+    let undo = app.ui.toast_undo.as_deref() == Some(text.as_str());
+    let shown = if undo { format!("{text} ·") } else { text };
+    let galley = painter.layout(shown, t.font(14.0), foreground, wrap);
+    let button_w = if undo {
+        (painter.layout_no_wrap(crate::i18n::tr("undo.").to_string(), t.semibold(11.5), t.text).size().x + 18.0).max(37.0) + 10.0
+    } else {
+        0.0
+    };
+    let size = vec2(galley.size().x + 40.0 + button_w, (galley.size().y + 22.0).max(40.0));
     let r = Rect::from_center_size(pos2(canvas.center().x, canvas.bottom() - 60.0), size);
     painter.rect_filled(r, 6.0, background.gamma_multiply(fade));
-    painter.galley(r.center() - galley.size() / 2.0, galley, foreground);
+    let text_at = pos2(r.left() + 20.0, r.center().y - galley.size().y / 2.0);
+    painter.galley(text_at, galley, foreground);
+    if undo {
+        let at = pos2(r.right() - 20.0 - (button_w - 10.0), r.center().y - 12.0);
+        let clicked = egui::Area::new(egui::Id::new("toast-undo"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(at)
+            .show(ctx, |ui| crate::widgets::text_button(ui, "toastUndo", "undo.", false).clicked())
+            .inner;
+        if clicked {
+            let msg = match app.run("edit.undo", serde_json::json!({})) {
+                Ok(v) => crate::menus::undo_message(&v),
+                Err(e) => e,
+            };
+            app.ui.toast_undo = None;
+            app.toast(ctx, msg);
+        }
+    }
     ctx.request_repaint_after(std::time::Duration::from_millis(30));
 }
 

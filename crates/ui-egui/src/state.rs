@@ -206,6 +206,23 @@ pub enum StartupView {
     Detail,
 }
 
+/// What the Delete key (and Photo ▸ Delete Photo in the app) does (Settings ▸ General ▸ Delete
+/// key). Nothing asks first unless `AppSettings::confirm_delete` is on, except `Ask`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeleteKey {
+    /// The original and its own XMP sidecars go to the system Trash (Finder's Put Back works) and
+    /// the photo leaves the library: one undo step that brings the files back too.
+    #[default]
+    Trash,
+    /// LightCraft's Recently Deleted (a soft delete, restorable there).
+    Recent,
+    /// In an album: out of that album only. Elsewhere: Remove from Library (files kept).
+    Album,
+    /// Lightroom's question: Delete from Disk or Remove.
+    Ask,
+}
+
 /// When grid cells show their rating / flag / edited badges.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -349,11 +366,17 @@ pub struct AppSettings {
     /// Library opened at launch when no `--library` is given (empty = the default location).
     pub library_path: String,
     pub startup_view: StartupView,
-    /// Ask before moving photos to Recently Deleted (keyboard and menu; with `trash_delete` off).
+    /// What Delete (⌫) does: the Trash (default), Recently Deleted, the album only, or ask.
+    pub delete_key: DeleteKey,
+    /// Confirm first: Delete asks before it does what `delete_key` says (off by default).
     pub confirm_delete: bool,
-    /// Delete (⌫) asks like Lightroom: Delete from Disk (files to the Trash) or Remove (out of the
-    /// library). Off: it moves photos to Recently Deleted.
-    pub trash_delete: bool,
+    /// The ui.json key of the setting `delete_key` replaced (true: Delete asked like Lightroom;
+    /// false: Recently Deleted), read once and migrated by [`AppSettings::migrated`]; never
+    /// written again.
+    #[serde(skip_serializing)]
+    pub trash_delete: Option<bool>,
+    /// The album. choice fell back to Remove from Library outside an album and said so once.
+    pub album_fallback_told: bool,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
     /// Largest long edge (pixels) the loupe renders at.
@@ -416,13 +439,30 @@ impl Default for DevelopView {
     }
 }
 
+impl AppSettings {
+    /// The old two checkboxes brought over to the Delete key choice (2026-11-22). `trashDelete`
+    /// true (Lightroom's question) → ask.; false (Recently Deleted) → trash., the new default:
+    /// Bryan asked for Delete to go straight to the Trash with no dialog, and his settings had
+    /// `trashDelete` false, so this one-time migration maps false to trash. rather than recent.
+    /// `confirmDelete` keeps its meaning (ask first). A ui.json without the old key uses the
+    /// default (trash.).
+    pub fn migrated(mut self) -> Self {
+        if let Some(old) = self.trash_delete.take() {
+            self.delete_key = if old { DeleteKey::Ask } else { DeleteKey::Trash };
+        }
+        self
+    }
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
             library_path: String::new(),
             startup_view: StartupView::Last,
+            delete_key: DeleteKey::Trash,
             confirm_delete: false,
-            trash_delete: true,
+            trash_delete: None,
+            album_fallback_told: false,
             gpu: true,
             preview_edge: 2560,
             external_editor: String::new(),
@@ -983,6 +1023,10 @@ pub struct UiState {
     /// Transient toast text, expiry (seconds of app time), and optional colour-label styling.
     #[serde(skip)]
     pub toast: Option<(String, f64, Option<lightcraft_catalog::ColorLabel>)>,
+    /// The toast text that carries an undo. button (a delete's "… · undo."); the button shows
+    /// while that toast does.
+    #[serde(skip)]
+    pub toast_undo: Option<String>,
     /// The result of the last Find Missing Photos (it searches in the background).
     #[serde(skip)]
     pub last_find_missing: Option<serde_json::Value>,
@@ -1257,9 +1301,11 @@ pub enum Dialog {
         #[serde(default)]
         error: Option<String>,
     },
-    /// Confirm moving photos to Recently Deleted.
+    /// Settings ▸ Confirm first: ask before Delete does what the Delete key setting says (OK runs
+    /// [`crate::menus::delete_now`]); `rejected`: Delete Rejected Photos.
     ConfirmDelete {
         count: usize,
+        rejected: bool,
     },
     /// Lightroom's delete question: Delete from Disk (`photo.deleteFromDisk`, OK) or Remove
     /// (`photo.removeFromLibrary`). `copies` of the `count` are virtual copies (only removable);
@@ -1437,6 +1483,7 @@ impl Default for UiState {
             reference: None,
             map: MapUi::default(),
             toast: None,
+            toast_undo: None,
             last_find_missing: None,
             rechecked_library: None,
             status: String::new(),
@@ -1554,6 +1601,7 @@ impl UiState {
             self.wheel_step = 25;
         }
         self.loupe_overlay = std::mem::take(&mut self.loupe_overlay).sanitized();
+        self.settings = std::mem::take(&mut self.settings).migrated();
         if !crate::state::PREVIEW_EDGES.contains(&self.settings.preview_edge) {
             self.settings.preview_edge = AppSettings::default().preview_edge;
         }

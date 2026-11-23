@@ -399,6 +399,8 @@ impl Session {
             self.media.smart_dir = Some(d.clone());
         }
         self.export_log = settings.read::<ExportsFile>(files.as_mut(), "exports.json").map(|e| e.photos).unwrap_or_default();
+        // Put Back Last Delete survives a reopen (the undo history doesn't)
+        self.last_delete = settings.read::<crate::trash::LastDelete>(files.as_mut(), "last-delete.json").filter(|l| !l.photos.is_empty());
         // presets
         if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
             for p in &mut self.presets {
@@ -731,6 +733,15 @@ impl Session {
         let Some(lib) = self.library.as_mut() else { return };
         if let Err(e) = lib.files.write_atomic("exports.json", &v) {
             log::error!("library: exports.json: {e}");
+        }
+    }
+
+    /// Write `last-delete.json` (Put Back Last Delete; no-op for in-memory sessions).
+    pub(crate) fn save_last_delete(&mut self) {
+        let v = serde_json::to_vec(&self.last_delete.clone().unwrap_or_default()).unwrap_or_default();
+        let Some(lib) = self.library.as_mut() else { return };
+        if let Err(e) = lib.files.write_atomic("last-delete.json", &v) {
+            log::error!("library: last-delete.json: {e}");
         }
     }
 

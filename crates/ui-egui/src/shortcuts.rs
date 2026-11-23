@@ -412,7 +412,7 @@ fn run_fired(app: &mut LightcraftApp, ctx: &egui::Context, f: String) {
                 R::RedEye => return,
                 _ => {}
             }
-            if crate::menus::confirm_delete(app) {
+            if crate::menus::delete_key(app) {
                 return;
             }
         }
@@ -478,16 +478,22 @@ fn run_fired(app: &mut LightcraftApp, ctx: &egui::Context, f: String) {
             }
         }
         // an export that can't start (e.g. no folder) says why instead of doing nothing
-        if let Err(e) = app.run(&f, json!({}))
-            && matches!(f.as_str(), "app.export" | "app.exportPrevious")
+        let result = app.run(&f, json!({}));
+        if let Err(e) = &result
+            && matches!(f.as_str(), "app.export" | "app.exportPrevious" | "edit.redo")
         {
-            app.toast(ctx, e);
+            app.toast(ctx, e.clone());
+            return;
         }
         match f.as_str() {
             "photo.pick" => app.toast(ctx, crate::i18n::tr("Flagged as Pick")),
             "photo.reject" => app.toast(ctx, crate::i18n::tr("Flagged as Reject")),
             "photo.unflag" => app.toast(ctx, crate::i18n::tr("Unflagged")),
-            "edit.undo" => app.toast(ctx, crate::i18n::tr("Undo")),
+            // an undone delete says which files couldn't come back from the Trash
+            "edit.undo" => {
+                let msg = result.as_ref().map(crate::menus::undo_message).unwrap_or_else(|_| crate::i18n::tr("Undo").to_string());
+                app.toast(ctx, msg);
+            }
             "edit.redo" => app.toast(ctx, crate::i18n::tr("Redo")),
             _ => {}
         }

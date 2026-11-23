@@ -1935,9 +1935,16 @@ mod tests {
             assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::Settings { tab: tab.into() }));
         }
         // General: confirm before delete, startup view
-        // ⌫ asks Lightroom's question by default; off, Recently Deleted (optionally confirmed)
-        h.request("ui.clickWidget", json!({"id": "check:settings.trashDelete"}), t);
-        assert!(!h.app.ui.settings.trash_delete);
+        // Delete key: trash. by default, with no question; ask. hides Confirm first (it always asks)
+        use crate::state::DeleteKey;
+        assert_eq!((h.app.ui.settings.delete_key, h.app.ui.settings.confirm_delete), (DeleteKey::Trash, false));
+        h.request("ui.clickWidget", json!({"id": "button:settingsDeleteKey-3"}), t);
+        assert_eq!(h.app.ui.settings.delete_key, DeleteKey::Ask);
+        h.step();
+        let r = h.request("ui.clickWidget", json!({"id": "check:settings.confirmDelete"}), t);
+        assert_eq!(r["ok"], false, "no Confirm first with ask.: {r}");
+        h.request("ui.clickWidget", json!({"id": "button:settingsDeleteKey-1"}), t);
+        assert_eq!(h.app.ui.settings.delete_key, DeleteKey::Recent);
         h.step();
         h.request("ui.clickWidget", json!({"id": "check:settings.confirmDelete"}), t);
         assert!(h.app.ui.settings.confirm_delete);
@@ -1972,14 +1979,14 @@ mod tests {
         h.request("ui.key", json!({"key": "escape"}), t);
         assert_eq!(h.app.ui.dialog, None);
         let active = h.app.session.active().unwrap();
-        // the Lightroom question by default (Delete from Disk / Remove), Recently Deleted when off
-        h.app.ui.settings.trash_delete = true;
+        // ask.: the Lightroom question (Delete from Disk / Remove); recent. + Confirm first: asks, then Recently Deleted
+        h.app.ui.settings.delete_key = DeleteKey::Ask;
         h.request("ui.key", json!({"key": "delete"}), t);
         assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::DeletePhotos { count: 1, copies: 0, rejected: false }));
         h.request("ui.key", json!({"key": "escape"}), t);
-        h.app.ui.settings.trash_delete = false;
+        h.app.ui.settings.delete_key = DeleteKey::Recent;
         h.request("ui.key", json!({"key": "delete"}), t);
-        assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::ConfirmDelete { count: 1 }));
+        assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::ConfirmDelete { count: 1, rejected: false }));
         assert!(!h.app.session.catalog.photo(active).unwrap().deleted);
         let r = h.request("ui.dialog.confirm", json!({}), t);
         assert_eq!(r["ok"], true, "{r}");
