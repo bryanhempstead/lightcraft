@@ -272,8 +272,16 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     if let Some(t) = app.merge.preview_task.take() {
         t.cancel.store(true, Ordering::Relaxed);
     }
-    // Merge… ("merge"): the kind used last, with the options used last
-    let command = if command == "merge" { app.merge.last_kind.clone().unwrap_or_else(|| "merge.hdr".into()) } else { command.to_string() };
+    // Merge… ("merge", ⌘⇧M): a found merges. group's kind, else the kind used last, else what
+    // the photos look like (brackets → hdr., else panorama.)
+    let command = if command == "merge" {
+        group_kind(&app.session, &app.merge.ids)
+            .or_else(|| app.merge.last_kind.clone())
+            .or_else(|| guess_kind(&app.session, &app.merge.ids))
+            .unwrap_or_else(|| "merge.panorama".into())
+    } else {
+        command.to_string()
+    };
     let mut opts = app.merge.last.get(&command).cloned().unwrap_or_else(|| MergeDialog::for_command(&command));
     if command == "merge.take" {
         opts.people.clear(); // other photos than last time
@@ -281,6 +289,40 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     }
     app.ui.dialog = Some(crate::state::Dialog::Merge { opts });
     Ok(json!({"photos": app.merge.ids.len()}))
+}
+
+/// What the picked photos look like: brackets (the exposure steps a stop or more) → `merge.hdr`,
+/// else `merge.panorama` (what Bryan shoots most).
+fn kind_command(k: lightcraft_catalog::MergeType) -> &'static str {
+    use lightcraft_catalog::MergeType as K;
+    match k {
+        K::Hdr => "merge.hdr",
+        K::Pano => "merge.panorama",
+        K::Stack => "merge.focus",
+        K::HdrPano => "merge.hdrPanorama",
+    }
+}
+
+/// The kind of a merges. group holding every picked photo.
+fn group_kind(s: &lightcraft_engine::Session, ids: &[lightcraft_catalog::PhotoId]) -> Option<String> {
+    let g = lightcraft_engine::merge_find::groups(&s.catalog).into_iter().find(|g| ids.iter().all(|i| g.photos.contains(i)))?;
+    Some(kind_command(g.kind).into())
+}
+
+fn guess_kind(s: &lightcraft_engine::Session, ids: &[lightcraft_catalog::PhotoId]) -> Option<String> {
+    use lightcraft_catalog::MergeType as K;
+    let cmd = kind_command;
+    // exposure in stops: shorter shutter = darker, plus exposure compensation
+    let ev: Vec<f64> = ids
+        .iter()
+        .filter_map(|i| s.catalog.photo(*i))
+        .filter_map(|p| lightcraft_engine::merge_find::shutter_secs(&p.meta.shutter).map(|t| t.log2() + f64::from(p.meta.exposure_bias.unwrap_or(0.0))))
+        .collect();
+    if ev.len() < 2 {
+        return None;
+    }
+    let spread = ev.iter().copied().fold(f64::MIN, f64::max) - ev.iter().copied().fold(f64::MAX, f64::min);
+    Some(cmd(if spread >= 0.9 { K::Hdr } else { K::Pano }).into())
 }
 
 /// `merge.view {zoom?, center?: [x, y]}`: frame the Merge preview (zoom 1 = the whole preview;

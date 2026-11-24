@@ -1524,6 +1524,7 @@ fn cmd_shift_e_exports_the_picked_photos() {
     assert_eq!(owners("Cmd+E"), ["photo.editInExternal"]);
     assert_eq!(owners("Cmd+V"), ["dialog.pasteSettings"]);
     assert_eq!(owners("Cmd+C"), ["develop.copy"]);
+    assert_eq!(owners("Cmd+Shift+M"), ["dialog.merge"]);
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
     exec(&mut h, "library.select", json!({"ids": ids}));
     h.step();
@@ -1533,4 +1534,41 @@ fn cmd_shift_e_exports_the_picked_photos() {
     }
     assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Export { .. })), "{:?}", h.app.ui.dialog.as_ref().map(|_| "other dialog"));
     assert_eq!(crate::export_dialog::title(&h.app), "Export 2 Files");
+}
+
+/// ⌘⇧M: Merge… for the picked photos; with no kind chosen before, guessed from them — brackets (exposure a stop or
+/// more apart) → hdr., one exposure → panorama. (Bryan 11-24)
+#[test]
+fn cmd_shift_m_merges_the_picked_photos_with_a_guessed_kind() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let first = s.visible_cloned()[0];
+    let base = lightcraft_catalog::Photo::clone(s.catalog.photo(first).unwrap());
+    let mut add = |id: u64, shutter: &str| {
+        let mut p = base.clone();
+        p.id = lightcraft_catalog::PhotoId(id);
+        p.meta.shutter = shutter.into();
+        p.meta.exposure_bias = None;
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    };
+    add(90_001, "1/500");
+    add(90_002, "1/30");
+    add(90_003, "1/250");
+    add(90_004, "1/250");
+    let app = crate::LightcraftApp::new(s, crate::Services::default());
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    h.step();
+    let kind = |h: &mut Headless, ids: [u64; 2]| {
+        exec(h, "library.select", json!({"ids": ids}));
+        h.app.ui.dialog = None;
+        h.app.merge.last_kind = None; // nothing chosen before: the guess
+        h.step();
+        key(h, "M", json!({"cmd": true, "shift": true}));
+        h.step();
+        match &h.app.ui.dialog {
+            Some(crate::state::Dialog::Merge { opts }) => opts.command.clone(),
+            _ => panic!("⌘⇧M opened no Merge box"),
+        }
+    };
+    assert_eq!(kind(&mut h, [90_001, 90_002]), "merge.hdr", "four stops apart");
+    assert_eq!(kind(&mut h, [90_003, 90_004]), "merge.panorama", "one exposure");
 }

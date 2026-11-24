@@ -253,6 +253,11 @@ pub fn resume(app: &mut LightcraftApp) -> Result<Value, String> {
             app.run("library.browse", json!({"path": f}))
         } else if let Some(f) = spot.source.strip_prefix("libraryFolder:") {
             app.run("library.source", json!({"kind": "libraryFolder", "path": f}))
+        } else if let Some(scope) = spot.source.strip_prefix("merges:") {
+            // a merges. view: its scope as source_key wrote it ({kind: folder|album|all, …})
+            let mut p = serde_json::from_str::<serde_json::Value>(scope).unwrap_or_else(|_| json!({}));
+            p["kind"] = json!("merges");
+            app.run("library.source", p)
         } else {
             app.run("library.source", json!({"kind": spot.source}))
         };

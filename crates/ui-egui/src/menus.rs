@@ -194,7 +194,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.mergeHdrPanorama", "HDR Panorama…", None, "Photo>Photo Merge"),
     ("dialog.mergeFocus", "Focus Stack…", Some("Ctrl+Alt+F"), "Photo>Photo Merge"),
     ("dialog.mergeTake", "Best Take…", Some("Ctrl+Alt+T"), "Photo>Photo Merge"),
-    ("dialog.merge", "Merge…", Some("Ctrl+Alt+M"), "Photo>Photo Merge"),
+    ("dialog.merge", "Merge…", Some("Cmd+Shift+M"), "Photo>Photo Merge"),
     ("merge.hdrLast", "HDR with Last Settings", Some("Ctrl+Shift+H"), "Photo>Photo Merge"),
     ("merge.panoramaLast", "Panorama with Last Settings", Some("Ctrl+Shift+M"), "Photo>Photo Merge"),
     ("merge.hdrPanoramaLast", "HDR Panorama with Last Settings", None, "Photo>Photo Merge"),
@@ -229,7 +229,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.publish", "Publish Now", None, "Library"),
     ("dialog.exportToPhotos", "Export to Photos…", None, "File"),
     // E12: File ▸ Email Photos…
-    ("file.emailPhotos", "Email Photos…", Some("Cmd+Shift+M"), "File"),
+    ("file.emailPhotos", "Email Photos…", None, "File"),
     // L26: Compare ▸ Link Focus
     ("compare.linkFocus", "Link Focus", None, ""),
     ("dialog.exportKeywords", "Export Keywords…", None, "Metadata"),

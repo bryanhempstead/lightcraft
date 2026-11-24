@@ -492,3 +492,24 @@ fn the_merges_view_is_a_stacked_wave_per_group() {
     assert!(cards(&h, &pano.id).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Left off in a merges. view: resuming (and the next launch) goes back to it, not to All
+/// Photographs (its scope was written as JSON and `library.source` didn't know it).
+#[test]
+fn resuming_goes_back_to_a_merges_view() {
+    let mut f = fixture("resume");
+    let folder = f.dir.to_string_lossy().to_string();
+    let frames = f.frames.clone();
+    let h = &mut f.h;
+    assert!(h.step_until(T, |h| merge_find::groups(&h.app.session.catalog).len() == 1));
+    h.app.run("library.source", json!({"kind": "merges", "path": folder})).unwrap();
+    h.app.run("library.select", json!({"ids": [frames[0].0]})).unwrap();
+    h.settle(SETTLE);
+    let spot = h.app.ui.left_off.last.clone().expect("a left-off spot");
+    assert!(spot.source.starts_with("merges:"), "{}", spot.source);
+    h.app.run("library.source", json!({"kind": "all"})).unwrap();
+    h.settle(SETTLE);
+    h.app.ui.left_off.last = Some(spot);
+    h.app.run("view.resumeLastLeftOff", json!({})).unwrap();
+    assert!(matches!(h.app.session.source, lightcraft_engine::LibrarySource::Merges), "{:?}", h.app.session.source);
+}
