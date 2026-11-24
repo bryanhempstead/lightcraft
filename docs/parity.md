@@ -47,10 +47,10 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 16 | 3 | 0 | 4 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 83 | 1 | 1 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 82 | 0 | 0 | 0 | 52/52 (100%) | 24/24 (100%) |
-| Lightroom Classic extras | 81 | 18 | 30 | 9 | — | 38/39 (97%) |
-| **Total** | 495 | 40 | 32 | 38 | 194/201 (97%) | 168/174 (97%) |
+| Lightroom Classic extras | 82 | 19 | 30 | 8 | — | 38/39 (97%) |
+| **Total** | 497 | 40 | 32 | 37 | 194/201 (97%) | 168/174 (97%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.8%** of 567 in-scope rows — P0 98.3% of 201 · P1 98.3% of 174 · P2 76.4% of 191.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.9%** of 569 in-scope rows — P0 98.3% of 201 · P1 98.3% of 174 · P2 76.8% of 192.
 <!-- /parity:summary -->
 
 ## Top gaps
