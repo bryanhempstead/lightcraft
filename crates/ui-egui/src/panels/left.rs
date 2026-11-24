@@ -2264,11 +2264,13 @@ fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, tree: &[FolderNode], 
         }
         row_menu(app, &resp, n, gone);
         if !n.volume {
-            // merges.: the merges found in it (an open folder: its own; a closed one: with the folders inside it)
-            let deep = !(open && !children.is_empty());
-            let found = crate::merges::counts(app, ui.ctx()).folder(&last.path, deep);
-            if found > 0 {
-                merges_row(app, ui, lightcraft_engine::merge_find::Scope::Folder { path: last.path.clone(), deep }, found, indent + 16.0);
+            // merges.: one pool per shoot (a shoot folder with its camera subfolders M262, GR3 …);
+            // a folder inside a shoot shows none of its own
+            if let Some((path, deep)) = merges_pool(app, &n.path, &last.path, open, !children.is_empty()) {
+                let found = crate::merges::counts(app, ui.ctx()).folder(&path, deep);
+                if found > 0 {
+                    merges_row(app, ui, lightcraft_engine::merge_find::Scope::Folder { path, deep }, found, indent + 16.0);
+                }
             }
             // pipeline.editing: a shoot in Second Brain's pipeline (on its topmost row only)
             if let Some(pipe) = crate::sb_pipeline::current(app, ui)
@@ -2281,6 +2283,22 @@ fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, tree: &[FolderNode], 
             folder_rows(app, ui, tree, children, indent + 16.0, gone);
         }
     }
+}
+
+/// The merges. pool a folder row (`first` … `last`: a chain row like `Erika › raw › M262`) offers:
+/// its shoot's when it stands for a shoot (the shoot folder with everything inside it: camera
+/// subfolders are one pool), none for a folder inside a shoot (its merges are in the shoot's
+/// pool), else its own (a closed folder: with the folders inside it).
+fn merges_pool(app: &mut LightcraftApp, first: &str, last: &str, open: bool, has_children: bool) -> Option<(String, bool)> {
+    use lightcraft_catalog::query::folder_within;
+    let shoots = app.caches.shoots(&app.session);
+    if let Some(s) = shoots.iter().map(|r| &r.shoot).find(|s| folder_within(last, &s.path) && folder_within(&s.path, first)) {
+        return Some((s.path.clone(), s.deep));
+    }
+    if shoots.iter().any(|r| r.shoot.deep && folder_within(first, &r.shoot.path)) {
+        return None;
+    }
+    Some((last.to_string(), !(open && has_children)))
 }
 
 /// merges.: a row under a folder or collection with merges found in it (brackets, panoramas,
@@ -2296,7 +2314,7 @@ fn merges_row(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: lightcraft_engi
     };
     let resp = row_ex(app, ui, &id, Icon::Stack, "merges.", Some("merges."), Some(count), sel, indent, &RowExtra::default());
     let resp = resp.on_hover_text(crate::i18n::tr(
-        "Photo merges found here — brackets (hdr.), panoramas (pano.), focus stacks (stack.) — to review and merge, and the merged photos",
+        "Photo merges found here — panoramas (panorama.), brackets (hdr.), focus stacks (focus.stack.) — to review and merge, and the merged photos. A shoot's camera subfolders are one pool",
     ));
     if resp.clicked()
         && let Err(e) = app.run("library.source", params)
