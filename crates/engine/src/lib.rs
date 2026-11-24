@@ -167,6 +167,9 @@ pub struct Interaction {
 static VISIBLE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 pub struct Session {
+    /// Photos the grid hides in folded groups: Next / Previous Photo step over them (set by the
+    /// UI each frame the grid is drawn, cleared by the loupe; never saved).
+    pub step_skip: std::collections::HashSet<PhotoId>,
     /// Auto Sync: edits to the active photo also change the other selected photos (the settings
     /// that changed, nothing else).
     pub auto_sync: bool,
@@ -413,6 +416,7 @@ impl Drop for Profiled<'_> {
 impl Session {
     pub fn new() -> Session {
         Session {
+            step_skip: Default::default(),
             auto_sync: false,
             catalog: Catalog::new(),
             source: LibrarySource::All,

@@ -235,6 +235,12 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // the thumbnail size
     // a group folded by its header's triangle keeps only its header (remembered, crate::folds)
     let folded: Vec<bool> = runs.iter().map(|r| !crate::folds::is_open(ui.ctx(), &group_fold_id(r))).collect();
+    // arrows (Next / Previous Photo) step over the photos a folded group hides
+    let skip: std::collections::HashSet<PhotoId> =
+        runs.iter().zip(&folded).filter(|(_, f)| **f).flat_map(|(r, _)| ids.iter().skip(r.start).take(r.count).copied()).collect();
+    if app.session.step_skip != skip {
+        app.session.step_skip = skip;
+    }
     let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square, folded.clone());
     let lay = match &app.caches.grid.layout {
         Some((k, l)) if *k == lay_key => l.clone(),

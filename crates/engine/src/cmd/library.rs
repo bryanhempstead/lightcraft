@@ -190,9 +190,18 @@ fn step(s: &mut Session, d: isize) -> Result<Value> {
         return ok();
     }
     let cur = s.selection.active.and_then(|a| vis.iter().position(|x| *x == a));
+    // the next photo in that direction the grid shows (a folded group's photos are stepped over);
+    // at the end, or when every one is hidden, it stays put
+    let shown = |i: usize| !s.step_skip.contains(&vis[i]);
     let next = match cur {
-        Some(i) => (i as isize + d).clamp(0, vis.len() as isize - 1) as usize,
-        None => 0,
+        Some(i) => {
+            let mut j = i as isize + d;
+            while (0..vis.len() as isize).contains(&j) && !shown(j as usize) {
+                j += d;
+            }
+            if (0..vis.len() as isize).contains(&j) { j as usize } else { i }
+        }
+        None => (0..vis.len()).find(|&i| shown(i)).unwrap_or(0),
     };
     s.end_interaction()?;
     s.selection = Selection::single(vis[next]);

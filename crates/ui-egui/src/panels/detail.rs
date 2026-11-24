@@ -331,6 +331,10 @@ fn animated_rect(ctx: &egui::Context, anim: &mut bool, target: Rect) -> Rect {
 }
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    // the loupe steps through every photo, folded grid groups or not
+    if !app.session.step_skip.is_empty() {
+        app.session.step_skip.clear();
+    }
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
     let fullscreen = app.ui.fullscreen;

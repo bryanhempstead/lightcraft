@@ -176,6 +176,13 @@ fn grid_groups_fold_by_their_triangle() {
     assert!(h.app.session.selection.ids.is_empty() || h.app.session.selection.ids.len() == 1, "the triangle doesn't pick the group");
     assert!(!on_screen(&h, vis[0]), "its photos are folded away");
     assert!(widget(&h, "group:2026-12-28").is_some(), "its header stays");
+    // the arrows step over the folded photos: Previous from the first shown photo stays put
+    let first_shown = vis.iter().position(|id| !h.app.session.step_skip.contains(id)).expect("a shown photo");
+    assert!(first_shown > 0, "the folded group's photos are skipped");
+    h.app.session.selection = lightcraft_engine::Selection::single(vis[first_shown]);
+    let r = h.request("engine.execute", json!({"command": "library.previous"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.session.selection.active, Some(vis[first_shown]), "Left doesn't step into the folded group");
     let next_after =
         h.app.widgets.iter().filter(|(w, _)| w.starts_with("group:") && w != "group:2026-12-28").map(|(_, r)| r.top()).fold(f32::MAX, f32::min);
     assert!(next_after < next_before, "the next header moves up: {next_before} → {next_after}");
