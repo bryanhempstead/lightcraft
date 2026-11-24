@@ -363,6 +363,17 @@ pub struct BriefInfo {
     pub shown: bool,
 }
 
+/// Which corner of the photo preview a prompt sits in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HintCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    #[default]
+    BottomRight,
+}
+
 /// App-level preferences (Settings dialog). They belong to the app, not a library, and are
 /// saved with the UI state in the app's config folder (`ui.json`, key `settings`); library
 /// preferences (import defaults, XMP, cache size) live in the library's `prefs.json`.
@@ -386,6 +397,11 @@ pub struct AppSettings {
     /// merges.: find photo merges by themselves in the background (auto., the default) or only
     /// when find. is clicked (Settings ▸ General ▸ find merges:).
     pub merge_find: crate::merges::FindMode,
+    /// denoise.: offer Denoise on a raw shot at `denoise_hint_iso` or above (a small prompt in a
+    /// corner of the photo preview; Settings ▸ General ▸ denoise:).
+    pub denoise_hint: bool,
+    pub denoise_hint_iso: u32,
+    pub denoise_hint_corner: HintCorner,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
     /// Largest long edge (pixels) the loupe renders at.
@@ -497,6 +513,9 @@ impl Default for AppSettings {
             trash_delete: None,
             album_fallback_told: false,
             merge_find: crate::merges::FindMode::Auto,
+            denoise_hint: true,
+            denoise_hint_iso: 3200,
+            denoise_hint_corner: HintCorner::BottomRight,
             gpu: true,
             preview_edge: 2560,
             external_editor: String::new(),

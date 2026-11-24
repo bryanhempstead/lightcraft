@@ -175,3 +175,66 @@ fn merge_preview_pans_and_zooms() {
     h.settle(SETTLE);
     assert!(h.app.merge.view.center.x > z.center.x, "dragged left shows more of the right: {z:?} → {:?}", h.app.merge.view);
 }
+
+/// denoise.: a raw shot at a high ISO shows ISO · denoise. · hide. in the chosen corner of the
+/// preview; denoise. opens Enhance with Denoise ticked; hide. puts it away for that photo; the
+/// Settings switch / ISO turn it off.
+#[test]
+fn high_iso_raw_offers_denoise_in_a_corner() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let first = s.visible_cloned()[0];
+    let mut p = lightcraft_catalog::Photo::clone(s.catalog.photo(first).unwrap());
+    let id = lightcraft_catalog::PhotoId(90_001);
+    p.id = id;
+    p.kind = lightcraft_catalog::MediaKind::Raw;
+    p.meta.iso = Some(6400);
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    let services = Services {
+        png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
+            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+        })),
+        write: Some(Box::new(|p: &str, b: &[u8]| std::fs::write(p, b).map_err(|e| e.to_string()))),
+        ..Default::default()
+    };
+    let mut app = LightcraftApp::new(s, services);
+    app.fix_notes = crate::fixnotes::FixNotes::default();
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    h.request("ui.set", json!({"view": "detail"}), T);
+    h.settle(SETTLE);
+    if !lightcraft_engine::enhance::AVAILABLE {
+        return;
+    }
+    let canvas = h.app.canvas_rect.unwrap();
+    let r = widget(&h, "notice:denoiseHint");
+    assert!(r.right() <= canvas.right() - 15.0 && r.bottom() <= canvas.bottom() - 15.0 && r.left() > canvas.center().x, "bottom right: {r:?} in {canvas:?}");
+    let faults = layout_faults(&h, r.expand(2.0));
+    assert!(faults.is_empty(), "{faults:?}");
+    shot(&mut h, "denoise-hint.png");
+    // the corner follows the setting
+    h.app.ui.settings.denoise_hint_corner = crate::state::HintCorner::TopLeft;
+    h.settle(SETTLE);
+    let r = widget(&h, "notice:denoiseHint");
+    assert!(r.left() >= canvas.left() + 15.0 && r.top() >= canvas.top() + 15.0 && r.right() < canvas.center().x, "top left: {r:?}");
+    // denoise. → Enhance, Denoise ticked
+    if let Some(e) = h.app.enhance.last.as_mut() {
+        e.denoise = false;
+    }
+    let r = h.request("ui.clickWidget", json!({"id": "button:denoiseHint"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::Enhance { opts }) if opts.denoise), "{:?}", h.app.ui.dialog.is_some());
+    h.app.ui.dialog = None;
+    h.settle(SETTLE);
+    // under the ISO limit: none
+    h.app.ui.settings.denoise_hint_iso = 12800;
+    h.settle(SETTLE);
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == "notice:denoiseHint"));
+    h.app.ui.settings.denoise_hint_iso = 3200;
+    h.settle(SETTLE);
+    // hide.: gone for this photo
+    let r = h.request("ui.clickWidget", json!({"id": "button:denoiseHintHide"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(!h.app.widgets.iter().any(|(w, _)| w == "notice:denoiseHint"));
+}

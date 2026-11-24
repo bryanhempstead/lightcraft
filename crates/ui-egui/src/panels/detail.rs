@@ -738,6 +738,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     // drawn and hit-tested above the loupe and its tools: clicks on it pan
     navigator(app, ui, canvas, img_rect, id);
+    denoise_hint(app, ui, canvas, img_rect, &photo);
     // the original is gone (moved, renamed, its disk not connected): say so over the photo, with
     // the ways to point the library at it again (a cached answer, checked off the UI thread)
     let missing = !fullscreen && missing_banner(app, ui, canvas, &photo, shown != "none");
@@ -1298,6 +1299,61 @@ fn pretty_date(iso: &str) -> String {
 
 /// Size of the Navigator mini map (points).
 const NAV_W: f32 = 180.0;
+
+/// denoise.: a raw shot at Settings ▸ General ▸ denoise:'s ISO or above offers Denoise in a corner
+/// of the preview — `denoise.` opens the Enhance box with Denoise ticked (amount and the rest to
+/// play with there), `hide.` puts it away for this photo. Not on Enhanced copies, in full screen
+/// or behind a dialog; above the Navigator when both want the bottom right.
+fn denoise_hint(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, img: Rect, photo: &lightcraft_catalog::Photo) {
+    let s = &app.ui.settings;
+    let iso = photo.meta.iso.unwrap_or(0);
+    if !s.denoise_hint
+        || iso < s.denoise_hint_iso.max(1)
+        || !lightcraft_engine::enhance::AVAILABLE
+        || app.ui.fullscreen
+        || app.ui.dialog.is_some()
+        || !photo.develops_raw()
+        || photo.file_name.contains("-Enhanced-")
+        || app.denoise_hidden.contains(&photo.id)
+    {
+        return;
+    }
+    use crate::state::HintCorner as C;
+    let corner = s.denoise_hint_corner;
+    let zoomed = img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0;
+    let nav = if corner == C::BottomRight && app.ui.navigator && zoomed { NAV_W + 8.0 } else { 0.0 };
+    let (pivot, at) = match corner {
+        C::TopLeft => (egui::Align2::LEFT_TOP, canvas.left_top() + vec2(16.0, 16.0)),
+        C::TopRight => (egui::Align2::RIGHT_TOP, canvas.right_top() + vec2(-16.0, 16.0)),
+        C::BottomLeft => (egui::Align2::LEFT_BOTTOM, canvas.left_bottom() + vec2(16.0, -16.0)),
+        C::BottomRight => (egui::Align2::RIGHT_BOTTOM, canvas.right_bottom() + vec2(-16.0, -16.0 - nav)),
+    };
+    let t = Tokens::get(ui.ctx());
+    let mut act: Option<(&str, serde_json::Value)> = None;
+    let r = egui::Area::new(egui::Id::new("denoise-hint")).pivot(pivot).fixed_pos(at).show(ui.ctx(), |ui| {
+        egui::Frame::new().fill(Color32::from_black_alpha(185)).corner_radius(8.0).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(egui::RichText::new(format!("ISO {iso}")).color(Color32::WHITE).font(t.font(12.0)));
+                if crate::widgets::text_button(ui, "denoiseHint", "denoise.", true).on_hover_text(crate::i18n::tr("Shot at a high ISO: open Enhance with Denoise to clean it up")).clicked() {
+                    act = Some(("dialog.enhance", json!({"denoise": true})));
+                }
+                if crate::widgets::text_button(ui, "denoiseHintHide", "hide.", false).on_hover_text(crate::i18n::tr("Not for this photo (Settings ▸ General ▸ denoise: turns it off)")).clicked() {
+                    act = Some(("view.hideDenoiseHint", json!({"id": photo.id.0})));
+                }
+            });
+        });
+    });
+    register(ui.ctx(), "notice:denoiseHint", r.response.rect);
+    if let Some((cmd, p)) = act {
+        if cmd == "dialog.enhance" {
+            let _ = app.run("library.select", json!({"ids": [photo.id.0]}));
+        }
+        if let Err(e) = app.run(cmd, p) {
+            app.toast_soon(e.to_string(), 4.0);
+        }
+    }
+}
 
 /// The Navigator: while zoomed in, a mini map of the photo at the canvas' bottom right with the
 /// visible region outlined; click or drag on it to pan.

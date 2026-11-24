@@ -185,6 +185,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.lenses", "My Lenses", None, ""),
     ("mask.centerDefault", "Set Center Mask as Default", None, ""),
     ("dialog.enhance", "Enhance…", Some("Ctrl+Alt+I"), "Photo"),
+    ("view.hideDenoiseHint", "Hide the Denoise Prompt", None, ""),
     // frame the Enhance / Merge previews (what dragging and the wheel do over them)
     ("enhance.view", "Frame Enhance Preview", None, ""),
     ("merge.view", "Frame Merge Preview", None, ""),
@@ -1562,7 +1563,23 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "dialog.mergeHdrPanorama" => crate::merge::open(app, "merge.hdrPanorama"),
         "dialog.mergeFocus" => crate::merge::open(app, "merge.focus"),
         "dialog.mergeTake" => crate::merge::open(app, "merge.take"),
-        "dialog.enhance" => crate::enhance::open(app),
+        "dialog.enhance" => {
+            let r = crate::enhance::open(app);
+            // from the denoise. prompt: Denoise ticked, the rest as last time
+            if p.get("denoise").and_then(Value::as_bool) == Some(true)
+                && let Some(Dialog::Enhance { opts }) = app.ui.dialog.as_mut()
+            {
+                opts.denoise = true;
+            }
+            r
+        }
+        "view.hideDenoiseHint" => match p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or(app.session.active()) {
+            Some(id) => {
+                app.denoise_hidden.insert(id);
+                Ok(json!({"hidden": id.0}))
+            }
+            None => Err("no photo".into()),
+        },
         "dialog.merge" => crate::merge::open(app, "merge"),
         "merge.focusLast" => crate::merge::start_last(app, "merge.focus"),
         "app.about" => {

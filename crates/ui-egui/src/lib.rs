@@ -312,6 +312,8 @@ pub struct LightcraftApp {
     pub image_rect: Option<egui::Rect>,
     /// HDR (EDR) display output, when the app's window can show it ([`hdr_view::HdrView`]).
     pub hdr_view: Option<Box<dyn hdr_view::HdrView>>,
+    /// Photos whose denoise. prompt was put away with hide. (this session).
+    pub denoise_hidden: std::collections::HashSet<lightcraft_catalog::PhotoId>,
     /// The window surface's colour space, when the app can set it ([`display_p3::WindowSpace`]).
     pub window_space: Option<Box<dyn display_p3::WindowSpace>>,
     /// Scroll offsets (points) of the photo grid (vertical) and the filmstrip (horizontal) as
@@ -426,6 +428,7 @@ impl LightcraftApp {
             canvas_rect: None,
             image_rect: None,
             hdr_view: None,
+            denoise_hidden: Default::default(),
             window_space: None,
             grid_scroll: None,
             film_scroll: None,

@@ -35,6 +35,25 @@ const CACHE_SIZES: [u32; 5] = [512, 1024, 2048, 4096, 8192];
 
 const LABEL_W: f32 = 150.0;
 
+/// A long tab scrolls inside instead of growing past the window (the dialog sizes to its
+/// content, so a tall tab would push the tab bar off the top).
+fn scrolling(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let h = (ui.ctx().content_rect().height() - 260.0).clamp(240.0, 640.0);
+    egui::ScrollArea::vertical()
+        .id_salt(id)
+        .scroll_source(egui::containers::scroll_area::ScrollSource {
+            scroll_bar: true,
+            mouse_wheel: true,
+            ..egui::containers::scroll_area::ScrollSource::NONE
+        })
+        .max_height(h)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            add(ui);
+            crate::widgets::reveal_in_scroll(ui);
+        });
+}
+
 /// The dialog body for `tab` (the tab bar switches `tab`).
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
     let t = Tokens::get(ui.ctx());
@@ -54,29 +73,13 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         "import" => import_tab(app, ui, &t),
         "performance" => performance_tab(app, ui, &t),
         "backup" => backup_tab(app, ui, &t),
-        "interface" => {
-            // scrolls inside instead of growing past the window (the dialog sizes to its content)
-            let h = (ui.ctx().content_rect().height() - 260.0).clamp(240.0, 640.0);
-            egui::ScrollArea::vertical()
-                .id_salt("settingsInterface")
-                .scroll_source(egui::containers::scroll_area::ScrollSource {
-                    scroll_bar: true,
-                    mouse_wheel: true,
-                    ..egui::containers::scroll_area::ScrollSource::NONE
-                })
-                .max_height(h)
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    interface_tab(app, ui, &t);
-                    crate::widgets::reveal_in_scroll(ui);
-                });
-        }
+        "interface" => scrolling(ui, "settingsInterface", |ui| interface_tab(app, ui, &t)),
         "identity" => identity_tab(app, ui, &t),
         "develop" => develop_tab(app, ui, &t),
         "shortcuts" => shortcuts_tab(app, ui, &t),
         "controllers" => controllers_tab(app, ui, &t),
         "cameras" => cameras_tab(app, ui, &t),
-        _ => general_tab(app, ui, &t),
+        _ => scrolling(ui, "settingsGeneral", |ui| general_tab(app, ui, &t)),
     }
 }
 
@@ -171,6 +174,33 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 hint(ui, t, crate::i18n::tr("not available here"));
             }
         });
+    }
+    if heading(ui, t, "settings.general.denoise", "Denoise") {
+        // denoise.: the high-ISO prompt on the photo preview (panels::detail::denoise_hint)
+        row(ui, t, "denoise:", |ui| {
+            let mut on = app.ui.settings.denoise_hint;
+            if choices(ui, "settingsDenoiseHint", &[(true, "on."), (false, "off.")], &mut on) {
+                app.ui.settings.denoise_hint = on;
+            }
+        });
+        row(ui, t, "from ISO:", |ui| {
+            let mut iso = app.ui.settings.denoise_hint_iso;
+            if choices(ui, "settingsDenoiseIso", &[(800u32, "800."), (1600, "1600."), (3200, "3200."), (6400, "6400."), (12800, "12800.")], &mut iso) {
+                app.ui.settings.denoise_hint_iso = iso;
+            }
+        });
+        row(ui, t, "where:", |ui| {
+            use crate::state::HintCorner as C;
+            let mut c = app.ui.settings.denoise_hint_corner;
+            if choices(ui, "settingsDenoiseCorner", &[(C::TopLeft, "top.left."), (C::TopRight, "top.right."), (C::BottomLeft, "bottom.left."), (C::BottomRight, "bottom.right.")], &mut c) {
+                app.ui.settings.denoise_hint_corner = c;
+            }
+        });
+        hint(
+            ui,
+            t,
+            "A raw photo shot at this ISO or higher shows ISO · denoise. · hide. in that corner of the photo preview: denoise. opens Enhance with Denoise ticked so you can set the amount and try it; hide. puts it away for that photo.",
+        );
     }
     if heading(ui, t, "settings.general.startup", crate::i18n::tr("Startup")) {
         row(ui, t, crate::i18n::tr("Open in"), |ui| {
