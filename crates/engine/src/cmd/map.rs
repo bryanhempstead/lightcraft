@@ -131,7 +131,8 @@ fn pins(s: &mut Session, p: &Value) -> Result<Value> {
     let mut without = 0usize;
     for id in ids {
         let Some(ph) = s.catalog.photo(id) else { continue };
-        match ph.meta.gps.filter(|g| map::valid(g.0, g.1)) {
+        // (no position, or 0, 0: never dropped in the ocean off Africa)
+        match map::located(ph.meta.gps) {
             Some((lat, lon)) => pins.push(json!({"id": id.0, "lat": lat, "lon": lon})),
             None => without += 1,
         }
@@ -180,7 +181,7 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             location_filter
         ),
-        cmd!(query "map.pins", "Map Pins", [], None, "{ids?} → {pins: [{id, lat, lon}], withoutGps}: photos in view (or `ids`) with a GPS position", always, pins),
+        cmd!(query "map.pins", "Map Pins", [], None, "{ids?} → {pins: [{id, lat, lon}], withoutGps}: photos in view (or `ids`) with a GPS position; photos without one (or at exactly 0, 0) are only counted", always, pins),
         cmd!(query "map.locations", "Saved Locations", [], None, "{} → [{id, name, lat, lon, radius (m), private, photos}]", always, |s, _| {
             let list = map::locations(&s.catalog);
             Ok(Value::Array(list.iter().map(|l| location_json(s, l)).collect()))

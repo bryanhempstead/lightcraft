@@ -176,6 +176,47 @@ pub fn trusted_aperture(camera: &str, lens: &str, aperture: Option<f32>) -> Opti
     }
 }
 
+/// Lens names that mean "no lens known": Leica bodies write "not selected" for an uncoded lens,
+/// others write dashes or "Unknown".
+pub fn placeholder_lens(lens: &str) -> bool {
+    let l = lens.trim().trim_matches(['(', ')']).trim().to_ascii_lowercase();
+    l.is_empty()
+        || l.chars().all(|c| c == '-' || c == '0' || c == ' ')
+        || matches!(l.as_str(), "not selected" | "unknown" | "unknown lens" | "none" | "n/a" | "na" | "no lens")
+}
+
+/// The lens of a camera with a built-in lens (by model, lower case; longer names first).
+const FIXED_LENSES: &[(&str, &str)] = &[
+    ("ricoh gr iiix", "GR LENS 26.1mm F2.8"),
+    ("ricoh gr iii", "GR LENS 18.3mm F2.8"),
+    ("ricoh gr ii", "GR LENS 18.3mm F2.8"),
+    ("x100vi", "Fujinon 23mm F2"),
+    ("x100v", "Fujinon 23mm F2"),
+    ("x100f", "Fujinon 23mm F2"),
+    ("x100t", "Fujinon 23mm F2"),
+    ("x100s", "Fujinon 23mm F2"),
+    ("leica q3 43", "APO-Summicron 43 f/2 ASPH."),
+    ("leica q3", "Summilux 28 f/1.7 ASPH."),
+    ("leica q2", "Summilux 28 f/1.7 ASPH."),
+    ("leica q (typ 116)", "Summilux 28 f/1.7 ASPH."),
+    ("dsc-rx1rm2", "Sonnar T* 35mm F2"),
+    ("dsc-rx1r", "Sonnar T* 35mm F2"),
+    ("dsc-rx1", "Sonnar T* 35mm F2"),
+];
+
+/// The lens name to keep for a photo: a placeholder ("not selected", "----", "Unknown") is no
+/// lens; a camera with a built-in lens (RICOH GR III, Fujifilm X100V, Leica Q2 …) names its own
+/// lens when the file doesn't.
+pub fn clean_lens(camera: &str, lens: &str) -> String {
+    if !placeholder_lens(lens) {
+        return lens.trim().to_string();
+    }
+    let c = camera.to_ascii_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
+    // the model as a whole word: "gr iii" isn't "gr iiix"
+    let whole = |i: usize, k: &str| c.get(i + k.len()..).and_then(|r| r.chars().next()).is_none_or(|ch| !ch.is_ascii_alphanumeric());
+    FIXED_LENSES.iter().find(|(k, _)| c.match_indices(k).any(|(i, _)| whole(i, k))).map(|(_, l)| l.to_string()).unwrap_or_default()
+}
+
 /// Descriptive + capture metadata.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -685,6 +726,22 @@ impl Album {
 #[cfg(test)]
 mod edited_tests {
     use super::*;
+
+    #[test]
+    fn placeholder_lenses_are_no_lens_and_fixed_lens_bodies_name_theirs() {
+        for p in ["", "  ", "not selected", "Not Selected", "----", "-", "Unknown", "(0)", "0"] {
+            assert!(placeholder_lens(p), "{p:?}");
+            assert_eq!(clean_lens("LEICA CAMERA AG LEICA M (Typ 262)", p), "", "{p:?}");
+        }
+        assert_eq!(clean_lens("Canon EOS R5", " RF24-70mm F2.8 L IS USM "), "RF24-70mm F2.8 L IS USM");
+        assert_eq!(clean_lens("RICOH IMAGING COMPANY, LTD. RICOH GR III", "----"), "GR LENS 18.3mm F2.8");
+        assert_eq!(clean_lens("RICOH IMAGING COMPANY, LTD. RICOH GR IIIx", ""), "GR LENS 26.1mm F2.8");
+        assert_eq!(clean_lens("FUJIFILM X100V", "not selected"), "Fujinon 23mm F2");
+        // a lens the file names is kept, even on a fixed-lens body
+        assert_eq!(clean_lens("RICOH GR III", "GR LENS 18.3mm F2.8"), "GR LENS 18.3mm F2.8");
+        // consistent with trusted_aperture: no lens on a Leica M → no aperture
+        assert_eq!(trusted_aperture("LEICA M (Typ 262)", &clean_lens("LEICA M (Typ 262)", "not selected"), Some(1.0)), None);
+    }
 
     #[test]
     fn raw_with_import_settings_is_not_edited() {

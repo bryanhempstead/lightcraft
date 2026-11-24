@@ -24,6 +24,7 @@ pub mod masking;
 pub mod notices;
 pub mod order;
 pub mod people;
+pub mod places;
 pub mod presets;
 pub mod profiles;
 pub mod right;

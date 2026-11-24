@@ -542,6 +542,8 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     if let (Some(lat), Some(lon)) =
         (first("exif:GPSLatitude").and_then(|s| parse_gps_coord(&s)), first("exif:GPSLongitude").and_then(|s| parse_gps_coord(&s)))
+        // (exactly 0, 0 = written without a fix: no position)
+        && !(lat == 0.0 && lon == 0.0)
     {
         let altitude = num("exif:GPSAltitude").map(|a| if first("exif:GPSAltitudeRef").as_deref() == Some("1") { -a } else { a });
         m.gps = Some(Gps { latitude: lat, longitude: lon, altitude });

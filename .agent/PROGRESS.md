@@ -6,6 +6,19 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (map-tags agent, 2026-11-23, merged 11-23 19:10) **LR-MAP-PLACES: no photos in the ocean,
+  place search, album places, suggested keywords.** Map: no pin without a position or at 0, 0 ("N without a
+  location" bottom left → untagged.); EXIF reader drops void GPS (GPSStatus V / no refs / 0,0 — the M262's), XMP 0,0;
+  `cmd:library.fixVoidGps {dryRun?}` clears stored 0,0 (one undo step). Lenses: `catalog::clean_lens` ("not
+  selected" / "----" / "Unknown" = no lens; GR III/IIIx, X100, Q, RX1 name theirs) on import +
+  `cmd:library.fixLensNames {dryRun?}`. Engine `places.rs` + `cmd/places.rs`: `location.search` (coordinates local;
+  Nominatim, only the typed text, ≤1 req/s, `geocode-cache.json`), `location.apply` (selection / album / folder,
+  one undo step, XMP), `location.setDefault` / `location.default`, imports into an album / folder with a place get
+  it (`import.autoPlace` / `placeKeywords` on, `autoKeywords` off), `keywords.suggest` (place, album name, CLIP
+  content from the AI search index) / `applySuggested` / `dropSuggested`. UI: Library right panel ▸ Place & Tags
+  (`ui-egui/src/panels/places.rs`, `view.places`), Settings ▸ Import rows. Left: run `library.fixVoidGps` and
+  `library.fixLensNames` on Bryan's library after merging; no EXIF LensID fallback (the meta crate reads none);
+  content tags need the AI search index built; not tried against the live Nominatim server.
 - [ ] (Claude fix session, 2026-11-23 16:20) **Bryan's 11-23 list — HANDOFF STATE (read this first)**
   - DONE + in the running app: sharp loupe/exports, console = one drag, fav. (tap/hold H), picked sliders, sync from
     first pick + Return = OK, Edit In ⌘E → PhotoCraft (PSD, grain held), wheel steps photos, merges. (merged),

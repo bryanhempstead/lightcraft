@@ -106,6 +106,8 @@ mod tests_panels;
 #[cfg(test)]
 mod tests_people;
 #[cfg(test)]
+mod tests_places;
+#[cfg(test)]
 mod tests_publish;
 #[cfg(test)]
 mod tests_quit_unsaved;
@@ -247,6 +249,8 @@ pub const CROP_GRID_HOLD: std::time::Duration = std::time::Duration::from_millis
 pub struct LightcraftApp {
     /// The Map module's tiles and textures (LR-MAP-MODULE).
     pub map: panels::map::MapRuntime,
+    /// The Library's Place & Tags section: its place search and picked tag chips (LR-MAP-PLACES).
+    pub places: panels::places::PlacesRuntime,
     /// The galleries. tab: Second Brain's client galleries as last read (LC-GALLERIES).
     pub galleries: panels::galleries::GalleriesRuntime,
     /// The Loupe's video playback (LR-VID-PLAY).
@@ -404,6 +408,7 @@ impl LightcraftApp {
             fonts_ready: false,
             last_time: 0.0,
             map: Default::default(),
+            places: Default::default(),
             galleries: Default::default(),
             video: Default::default(),
             canvas_rect: None,

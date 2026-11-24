@@ -165,3 +165,32 @@ fn map_location_filter_bar() {
     click(&mut h, "button:mapFilter-none");
     assert_eq!(n(&mut h), ids.len());
 }
+
+/// Photos without a position (or at 0, 0) are not pinned in the ocean: the bar counts them
+/// ("N without a location"), and a click on the count shows just them.
+#[test]
+fn map_leaves_unplaced_photos_off_and_counts_them() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
+    s.execute("photo.setMeta", &json!({"ids": ids, "gps": null})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[0]], "gps": [47.6062, -122.3321]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[1]], "gps": [0.0, 0.0]})).unwrap();
+    let mut h = headless(s);
+    h.app.map.offline = true;
+    click(&mut h, "module:map");
+    settle(&mut h);
+    assert!(rect(&mut h, &format!("map:pin-{}", ids[0])).is_some(), "Seattle pin");
+    assert!(rect(&mut h, &format!("map:pin-{}", ids[1])).is_none(), "nothing at 0, 0");
+    assert!(rect(&mut h, "map:unplaced").is_some(), "the count of photos without a location");
+    let texts: Vec<String> = h.view.texts().into_iter().map(|t| t.0).collect();
+    let want = format!("{} without a location", ids.len() - 1);
+    assert!(texts.iter().any(|t| *t == want), "{want} in {texts:?}");
+    let (x, y, w, hh) = rect(&mut h, "map:canvas").unwrap();
+    let canvas = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, hh));
+    let faults = crate::tests_panels::layout_faults(&h, canvas);
+    assert!(faults.is_empty(), "{faults:?}");
+    shot(&mut h, "map-unplaced.png");
+    click(&mut h, "map:unplaced");
+    let vis = h.app.session.visible_cloned();
+    assert_eq!(vis.len(), ids.len() - 1, "untagged.: the photos to place");
+}

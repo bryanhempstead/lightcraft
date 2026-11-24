@@ -18,14 +18,16 @@ pub mod sysdecode;
 fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
     let shutter = m.exposure_time.map(|t| if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) }).unwrap_or_default();
     let camera = [m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" ").trim().to_string();
+    // "not selected" / "----" is no lens; a fixed-lens body (RICOH GR III) names its own
+    let lens = lightcraft_catalog::clean_lens(&camera, m.lens_model.as_deref().unwrap_or_default());
     let meta = Meta {
         camera,
-        lens: m.lens_model.clone().unwrap_or_default(),
+        lens: lens.clone(),
         focal_mm: m.focal_length.map(|f| f as f32),
         // a Leica M's estimate is left off when the lens can't give it (catalog::trusted_aperture)
         aperture: lightcraft_catalog::trusted_aperture(
             &[m.make.clone().unwrap_or_default(), m.model.clone().unwrap_or_default()].join(" "),
-            m.lens_model.as_deref().unwrap_or_default(),
+            &lens,
             m.f_number.map(|f| f as f32),
         ),
         shutter,

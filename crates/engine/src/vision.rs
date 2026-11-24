@@ -884,7 +884,7 @@ impl Session {
 
     /// The CLIP embedding of a phrase (the model is loaded once and kept).
     #[cfg(not(target_arch = "wasm32"))]
-    fn embed_query(&mut self, q: &str) -> Result<Vec<f32>> {
+    pub(crate) fn embed_query(&mut self, q: &str) -> Result<Vec<f32>> {
         if !self.vision.installed(Package::Search) {
             return Err(crate::EngineError::Other(models::missing_message(&self.vision.root, Package::Search)));
         }
@@ -910,7 +910,7 @@ impl Session {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn embed_query(&mut self, _: &str) -> Result<Vec<f32>> {
+    pub(crate) fn embed_query(&mut self, _: &str) -> Result<Vec<f32>> {
         Err(crate::EngineError::Other("AI search isn't available here".into()))
     }
 }

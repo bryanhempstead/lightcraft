@@ -13,10 +13,12 @@ use crate::theme::Tokens;
 use crate::widgets::register;
 
 /// The panel's sections in Classic's order: (id, title).
-pub const SECTIONS: [(&str, &str); 5] = [
+pub const SECTIONS: [(&str, &str); 6] = [
     ("histogram", "Histogram"),
     ("quickDevelop", "Quick Develop"),
     ("keywording", "Keywording"),
+    // LR-MAP-PLACES: look a place up, put it on the photos / album, suggested keywords
+    ("places", "Place & Tags"),
     ("keywordList", "Keyword List"),
     ("metadata", "Metadata"),
 ];
@@ -47,6 +49,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ("quickDevelop", Some(_)) => quick_develop(app, ui),
                     ("keywording", Some(p)) => super::right::without_headers(ui, |ui| super::right::keywords(app, ui, p)),
                     ("keywordList", _) => keyword_list(app, ui, active),
+                    ("places", _) => super::places::section(app, ui),
                     ("metadata", Some(p)) => super::right::without_headers(ui, |ui| super::right::info(app, ui, p)),
                     _ => note(ui, "Select a photo"),
                 }

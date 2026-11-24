@@ -165,3 +165,30 @@ fn location_filter_bar() {
     }
     assert_eq!(s.execute("map.locationFilter", &json!({})).unwrap()["mode"], "none");
 }
+
+/// Photos without a position, or at exactly 0, 0 (a GPS block written without a fix), get no pin:
+/// they were all dropped in the ocean off Africa. They are counted, filtered as untagged, and
+/// never "in" a saved location around null island.
+#[test]
+fn no_position_or_null_island_is_not_placed() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
+    s.execute("photo.setMeta", &json!({"ids": ids, "gps": null})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[0]], "gps": [47.6062, -122.3321]})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [ids[1], ids[2]], "gps": [0.0, 0.0]})).unwrap();
+    // (on the equator / the prime meridian alone is a real place)
+    s.execute("photo.setMeta", &json!({"ids": [ids[3]], "gps": [0.0, 32.58]})).unwrap();
+    let pins = s.execute("map.pins", &json!({})).unwrap();
+    let mut placed: Vec<u64> = pins["pins"].as_array().unwrap().iter().map(|p| p["id"].as_u64().unwrap()).collect();
+    placed.sort();
+    assert_eq!(placed, vec![ids[0], ids[3]], "{pins}");
+    assert_eq!(pins["withoutGps"], ids.len() - 2);
+    s.location_filter_on = true;
+    s.execute("map.locationFilter", &json!({"mode": "untagged"})).unwrap();
+    let vis: Vec<u64> = s.visible_cloned().iter().map(|p| p.0).collect();
+    assert!(vis.contains(&ids[1]) && vis.contains(&ids[2]) && !vis.contains(&ids[0]), "0, 0 counts as untagged");
+    assert!(crate::map::photos_within(&s.catalog, 0.0, 0.0, 1000.0).is_empty());
+    assert_eq!(crate::map::located(Some((0.0, 0.0))), None);
+    assert_eq!(crate::map::located(Some((f64::NAN, 1.0))), None);
+    assert_eq!(crate::map::located(Some((0.0, 1.0))), Some((0.0, 1.0)));
+}
