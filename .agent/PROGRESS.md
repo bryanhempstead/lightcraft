@@ -27,7 +27,7 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
 - [ ] (Claude fix session, 2026-11-24) **Everything from 11-22 / 11-23 is merged** (every agent branch is 0 ahead of
   main; their entries moved to ## Done with their "Left:" lines). Real leftovers worth picking up: (done 11-24: filter-bar
   heart `filter:favorite`); merges. thresholds not tried on Bryan's real brackets/panoramas; edit-stall
-  (XMP queue) not tried on an external drive; (HDR loupe: already on the GPU since e0f0ea988, ~12 ms vs ~85 ms a drag; checked 11-24); Monogram profile not tried on the console.
+  (XMP queue) not tried on an external drive; 11-24 also: ⌘C copies every setting / ⌘V opens Paste Selected Settings (⌘⇧V straight paste); the app waits up to 30 s for a headless `lightcraft-cli --library` holding the library (Second Brain runs LightCraft's commands that way while it is closed); (HDR loupe: already on the GPU since e0f0ea988, ~12 ms vs ~85 ms a drag; checked 11-24); Monogram profile not tried on the console.
 
 - [x] (Claude fix session, 2026-11-23 13:00) **Sharp views + exports, console as a drag, fav., picked sliders** —
   `geometry::Frame::supersample` / `sample_oriented` + gpu `render::sample`: a minified output is sampled at 2× and

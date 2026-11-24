@@ -1428,7 +1428,7 @@ mod tests {
         exec(&mut h, "develop.set", json!({"values": {"light.exposure": 1.0, "color.vibrance": 30}}));
         exec(&mut h, "develop.copy", json!({"groups": ["light", "color"]}));
         exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
-        h.request("ui.key", json!({"key": "V", "cmd": true, "shift": true}), t);
+        h.request("ui.key", json!({"key": "V", "cmd": true}), t);
         h.settle(SETTLE);
         let Some(crate::state::Dialog::PasteSettings { groups, .. }) = &h.app.ui.dialog else { panic!("dialog not open: {:?}", h.app.ui.dialog) };
         assert_eq!(groups, &["exposure", "contrast", "highlights", "shadows", "whites", "blacks", "vibrance", "saturation"]);
