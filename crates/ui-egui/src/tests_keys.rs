@@ -1511,3 +1511,26 @@ fn cmd_c_copies_everything_and_cmd_v_asks_what_to_paste() {
     let Some(crate::state::Dialog::PasteSettings { groups, .. }) = &h.app.ui.dialog else { panic!("second ⌘V") };
     assert_eq!(groups, &["exposure".to_string()]);
 }
+
+/// The menu bar (which gets ⌘-keys before the window on macOS) gives each of Bryan's keys to
+/// one command: ⌘⇧E = Export for the picked photos, ⌘E = the external editor, ⌘C / ⌘V = copy
+/// settings / the paste box.
+#[test]
+fn cmd_shift_e_exports_the_picked_photos() {
+    let mut h = demo();
+    let menus = crate::menus::menu_entries(&h.app);
+    let owners = |sc: &str| -> Vec<String> { menus.iter().filter(|e| e.shortcut.as_deref().map(crate::keymap::canonical) == Some(crate::keymap::canonical(sc))).map(|e| e.id.clone()).collect() };
+    assert_eq!(owners("Cmd+Shift+E"), ["dialog.export"]);
+    assert_eq!(owners("Cmd+E"), ["photo.editInExternal"]);
+    assert_eq!(owners("Cmd+V"), ["dialog.pasteSettings"]);
+    assert_eq!(owners("Cmd+C"), ["develop.copy"]);
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    exec(&mut h, "library.select", json!({"ids": ids}));
+    h.step();
+    key(&mut h, "E", json!({"cmd": true, "shift": true}));
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Export { .. })), "{:?}", h.app.ui.dialog.as_ref().map(|_| "other dialog"));
+    assert_eq!(crate::export_dialog::title(&h.app), "Export 2 Files");
+}

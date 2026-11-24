@@ -15,7 +15,7 @@ pub const ALIASES: &[(&str, &str, &str)] = &[
     ("F6", "view.filmstrip", "{}"),
     ("F7", "view.leftPanel", "{}"),
     ("Shift+E", "dialog.export", "{}"),
-    ("Cmd+E", "app.exportPrevious", "{}"),
+    // ⌘E is the external editor (Bryan 11-23); Export with Previous stays ⌘⌥⇧E
     ("Space", "view.zoomToggle", "{}"),
     ("Shift+M", "version.create", "{}"),
     ("Shift+X", "photo.flag", r#"{"flag": "reject", "advance": true}"#),

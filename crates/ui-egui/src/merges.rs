@@ -356,9 +356,9 @@ fn group_view(cat: &lightcraft_catalog::Catalog, scope: &merge_find::Scope, g: M
     let mut cameras: Vec<String> = Vec::new();
     let mut subfolders: Vec<String> = Vec::new();
     for p in frames.iter().filter_map(|id| cat.photo(*id)) {
-        let c = p.meta.camera.trim();
-        if !c.is_empty() && !cameras.iter().any(|x| x == c) {
-            cameras.push(c.to_string());
+        let c = lightcraft_engine::merge_find::short_camera(&p.meta.camera);
+        if !c.is_empty() && !cameras.contains(&c) {
+            cameras.push(c);
         }
         let f = lightcraft_catalog::local::folder_of(p).unwrap_or_default();
         let s = merge_find::subfolder(&f, scope.root());

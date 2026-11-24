@@ -219,7 +219,7 @@ pub fn frame_json(cat: &Catalog, id: PhotoId, in_group: bool, root: Option<&str>
         "file": file,
         "folder": folder,
         "subfolder": subfolder(&folder, root),
-        "camera": p.meta.camera.trim(),
+        "camera": short_camera(&p.meta.camera),
         "captured": p.captured.clone().unwrap_or_default(),
         "exposure": exposure_text(&p.meta),
         "inGroup": in_group,
@@ -294,6 +294,19 @@ pub fn describe(cat: &Catalog, g: &MergeGroup) -> Vec<String> {
         out.push(exposures_text(&shots));
     }
     out
+}
+
+/// A camera as a chip says it: the model with the maker's first word once ("RICOH GR III", not
+/// "RICOH IMAGING COMPANY, LTD. RICOH GR III"; "LEICA M (Typ 262)").
+pub fn short_camera(camera: &str) -> String {
+    match crate::export::split_camera(camera) {
+        (Some(make), Some(model)) => {
+            let brand = make.split_whitespace().next().unwrap_or_default();
+            if brand.is_empty() || model.to_lowercase().starts_with(&brand.to_lowercase()) { model } else { format!("{brand} {model}") }
+        }
+        (_, Some(model)) => model,
+        _ => camera.trim().to_string(),
+    }
 }
 
 fn frame_shown(p: &Photo) -> bool {
