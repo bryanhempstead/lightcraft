@@ -139,13 +139,36 @@ fn engine_resume_point(app: &mut LightcraftApp, source: &str) -> Option<PhotoId>
     r.get("photoId").or_else(|| r.get("id")).and_then(Value::as_u64).map(PhotoId)
 }
 
-/// Where the last visit to the source on screen ended.
+/// Where the last visit to the source on screen ended. For a folder: the newest spot left in it,
+/// in a folder inside it, or in the folder around it — whichever was visited last and still shows
+/// here (a shoot worked on through its camera folders lands where the work stopped, Bryan 11-24).
 fn remembered(app: &mut LightcraftApp, source: &str) -> Option<PhotoId> {
-    let key = format!("{}|{source}", library_key(app));
+    let lib = library_key(app);
+    let key = format!("{lib}|{source}");
+    let folder = |src: &str| src.strip_prefix("libraryFolder:").or_else(|| src.strip_prefix("folder:")).map(str::to_string);
+    if let Some(here) = folder(source) {
+        let related = |p: &str| same_folder(p, &here) || lightcraft_catalog::query::folder_within(p, &here) || lightcraft_catalog::query::folder_within(&here, p);
+        let visible = app.session.visible();
+        let best = app
+            .ui
+            .left_off
+            .per_source
+            .values()
+            .filter(|s| s.library == lib && folder(&s.source).is_some_and(|p| related(&p)) && visible.contains(&PhotoId(s.photo)))
+            .max_by_key(|s| s.at)
+            .map(|s| PhotoId(s.photo));
+        if best.is_some() {
+            return best;
+        }
+    }
     match app.ui.left_off.per_source.get(&key) {
         Some(s) => Some(PhotoId(s.photo)),
         None => engine_resume_point(app, source),
     }
+}
+
+fn same_folder(a: &str, b: &str) -> bool {
+    lightcraft_catalog::query::folder_key(a).trim_end_matches('/') == lightcraft_catalog::query::folder_key(b).trim_end_matches('/')
 }
 
 /// A folder or album was opened (`library.source` / `library.browse` from the side panel, a key,

@@ -260,3 +260,24 @@ fn a_color_label_is_a_band_behind_the_shoot_row() {
     h.step();
     assert!(!has(h, &format!("fill:shoot:{first}")), "none. takes it off");
 }
+
+/// Left off in a shoot's camera folder: opening the shoot itself lands there (and the other way
+/// round) — every folder remembers, the newest visit in or around it wins (Bryan 11-24).
+#[test]
+fn a_shoot_lands_where_its_camera_folder_was_left() {
+    let mut f = fixture("leftoff");
+    let h = &mut f.h;
+    let shoot = format!("{GONE}/Erika and Connor wedding");
+    let gr3 = format!("{shoot}/raw/GR3");
+    h.app.run("library.source", json!({"kind": "libraryFolder", "path": gr3})).unwrap();
+    h.step();
+    let c = h.app.session.active().expect("GR3's photo");
+    h.step();
+    h.advance_time(1.0);
+    h.step();
+    h.app.run("library.source", json!({"kind": "all"})).unwrap();
+    h.step();
+    h.app.run("library.source", json!({"kind": "libraryFolder", "path": shoot, "subfolders": true})).unwrap();
+    h.step();
+    assert_eq!(h.app.session.active(), Some(c), "the shoot opens on the photo left in its GR3 folder");
+}
