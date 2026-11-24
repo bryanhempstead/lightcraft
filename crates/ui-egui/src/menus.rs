@@ -825,7 +825,17 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             } else if app.ui.lights_out != crate::state::LightsOut::On {
                 app.ui.lights_out = crate::state::LightsOut::On;
             } else if app.ui.module == Module::Develop {
-                enter_library(app, Some(ViewMode::PhotoGrid));
+                // Esc in Develop lets go of what's selected — it never leaves Develop (Bryan,
+                // 2026-11-23: "don't just bring me to Library, just deselect what's selected"):
+                // the selected mask / spot, then a multi-photo selection down to the photo shown
+                if app.session.active_mask.is_some() || app.session.active_spot.is_some() {
+                    app.session.active_mask = None;
+                    app.session.active_spot = None;
+                } else if app.session.selection.ids.len() > 1
+                    && let Some(a) = app.session.active()
+                {
+                    let _ = app.run("library.select", json!({"ids": [a.0]}));
+                }
             } else if matches!(app.ui.view, ViewMode::Compare | ViewMode::Survey) {
                 app.ui.view = ViewMode::Detail;
             } else if app.ui.view == ViewMode::Detail {
@@ -1425,6 +1435,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     app.ui.tool = tool.into();
                     return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
                 }
+                // W again puts it away (Bryan, 2026-11-23)
+                "wbPicker" if app.ui.tool == "wbPicker" => app.ui.tool.clear(),
                 "wbPicker" => {
                     enter_develop(app);
                     app.ui.right = RightPanel::Edit;
@@ -2521,10 +2533,12 @@ fn view_space_state(app: &LightcraftApp) -> Value {
 /// The quick centre mask's name (center. finds it again by name).
 pub const CENTER_MASK: &str = "Center";
 
-/// center.'s built-in mask: a soft oval on the middle of the photo, a little brighter.
+/// center.'s built-in mask: a centred vignette — everything around a soft oval on the middle of
+/// the photo a little darker, feathered in (Bryan, 2026-11-23). Settings ▸ Develop ▸ Center mask
+/// and right-click ▸ "make this the default" change it.
 pub fn default_center_mask() -> Value {
     json!({
-        "shape": {"kind": "radial", "center": {"x": 0.5, "y": 0.5}, "rx": 0.34, "ry": 0.26, "angle": 0.0, "feather": 75.0, "invert": false},
-        "adjust": {"exposure": 0.25}
+        "shape": {"kind": "radial", "center": {"x": 0.5, "y": 0.5}, "rx": 0.38, "ry": 0.30, "angle": 0.0, "feather": 85.0, "invert": true},
+        "adjust": {"exposure": -0.6}
     })
 }

@@ -1192,6 +1192,7 @@ impl LightcraftApp {
         });
         // the identity plate: over the panels and the photo area, under dialogs and menus
         identity::paint(self, ui, canvas.response.rect);
+        panels::edge_toggles(self, &ctx);
         panels::second::show(self, &ctx);
         panels::notices::show(self, &ctx);
         panels::dialogs::show(self, &ctx);

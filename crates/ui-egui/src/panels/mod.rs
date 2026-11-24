@@ -163,3 +163,48 @@ pub fn lights_out(app: &mut LightcraftApp, ctx: &egui::Context) {
         app.ui.lights_out = crate::state::LightsOut::On;
     }
 }
+
+/// Lightroom's edge tabs (Bryan, 2026-11-23): a small arrow on the window's left, right and bottom
+/// edges hides / shows the left panel, the right panel and the filmstrip. Faint until hovered; the
+/// arrow points where the panel goes.
+pub fn edge_toggles(app: &mut crate::LightcraftApp, ctx: &egui::Context) {
+    use egui::{Color32, Order, Rect, Sense, pos2, vec2};
+    let t = crate::theme::Tokens::get(ctx);
+    let w = ctx.content_rect();
+    let (long, short) = (44.0, 14.0);
+    // (id, tab rect, arrow pointing: -1 left / +1 right / 2 down / -2 up, command)
+    let left = if app.ui.left_panel { -1 } else { 1 };
+    let right = if app.ui.right_panel { 1 } else { -1 };
+    let bottom = if app.ui.filmstrip { 2 } else { -2 };
+    let tabs = [
+        ("edgeLeft", Rect::from_min_size(pos2(w.left(), w.center().y - long / 2.0), vec2(short, long)), left, "view.leftPanel", "Hide / show the left panel"),
+        ("edgeRight", Rect::from_min_size(pos2(w.right() - short, w.center().y - long / 2.0), vec2(short, long)), right, "view.rightPanel", "Hide / show the right panel"),
+        ("edgeBottom", Rect::from_min_size(pos2(w.center().x - long / 2.0, w.bottom() - short), vec2(long, short)), bottom, "view.filmstrip", "Hide / show the filmstrip"),
+    ];
+    for (id, r, dir, cmd, tip) in tabs {
+        let resp = egui::Area::new(egui::Id::new(id))
+            .order(Order::Foreground)
+            .fixed_pos(r.min)
+            .show(ctx, |ui| {
+                let (rr, resp) = ui.allocate_exact_size(r.size(), Sense::click());
+                let hot = resp.hovered();
+                ui.painter().rect_filled(rr, 4.0, if hot { t.header } else { t.header.gamma_multiply(0.55) });
+                let c = rr.center();
+                let col = if hot { t.text } else { Color32::from_gray(150) };
+                let (a, b) = (4.0, 3.0);
+                let pts = match dir {
+                    -1 => vec![c + vec2(-b, 0.0), c + vec2(b, -a), c + vec2(b, a)],
+                    1 => vec![c + vec2(b, 0.0), c + vec2(-b, -a), c + vec2(-b, a)],
+                    2 => vec![c + vec2(0.0, b), c + vec2(-a, -b), c + vec2(a, -b)],
+                    _ => vec![c + vec2(0.0, -b), c + vec2(-a, b), c + vec2(a, b)],
+                };
+                ui.painter().add(egui::Shape::convex_polygon(pts, col, egui::Stroke::NONE));
+                crate::widgets::register(ui.ctx(), format!("button:{id}"), rr);
+                resp.on_hover_text(crate::i18n::tr(tip))
+            })
+            .inner;
+        if resp.clicked() {
+            let _ = app.run(cmd, serde_json::json!({}));
+        }
+    }
+}

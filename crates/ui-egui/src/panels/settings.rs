@@ -1086,6 +1086,53 @@ fn loupe_info_rows(ui: &mut egui::Ui, t: &Tokens, info: &mut crate::state::Loupe
 
 /// LRC-DEV-VIEWOPTIONS: Develop's View Options (⌘J in Develop) — its own info overlay and Loupe
 /// Info lines, the loading message, and the Video options.
+/// Settings ▸ Develop ▸ Center mask: what the tool strip's centre mask lands on (a starting point;
+/// each mask stays adjustable in Masking).
+fn center_mask_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, crate::i18n::tr("Center mask"));
+    let mut m = app.ui.settings.center_mask.clone().unwrap_or_else(crate::menus::default_center_mask);
+    let before = m.clone();
+    let num = |m: &Value, path: &[&str], d: f64| path.iter().try_fold(m, |v, k| v.get(*k)).and_then(Value::as_f64).unwrap_or(d);
+    let mut outside = m.pointer("/shape/invert").and_then(Value::as_bool).unwrap_or(true);
+    row(ui, t, crate::i18n::tr("Effect on"), |ui| {
+        let mut i = usize::from(outside);
+        if choices(ui, "settingsCenterSide", &[(0usize, "inside."), (1usize, "outside.")], &mut i) {
+            outside = i == 1;
+        }
+    });
+    let mut feather = num(&m, &["shape", "feather"], 85.0);
+    let mut size = num(&m, &["shape", "rx"], 0.38) * 100.0;
+    let mut ev = num(&m, &["adjust", "exposure"], -0.6);
+    row(ui, t, crate::i18n::tr("Feather"), |ui| {
+        let r = ui.add(egui::Slider::new(&mut feather, 0.0..=100.0).fixed_decimals(0));
+        register(ui.ctx(), "slider:centerFeather", r.rect);
+    });
+    row(ui, t, crate::i18n::tr("Size"), |ui| {
+        let r = ui.add(egui::Slider::new(&mut size, 10.0..=90.0).fixed_decimals(0).suffix("%"));
+        register(ui.ctx(), "slider:centerSize", r.rect);
+    });
+    row(ui, t, crate::i18n::tr("Exposure"), |ui| {
+        let r = ui.add(egui::Slider::new(&mut ev, -4.0..=4.0).fixed_decimals(2));
+        register(ui.ctx(), "slider:centerExposure", r.rect);
+    });
+    let rx = size / 100.0;
+    let ry = (rx * num(&before, &["shape", "ry"], 0.30) / num(&before, &["shape", "rx"], 0.38).max(0.01)).clamp(0.05, 1.0);
+    m["shape"]["invert"] = json!(outside);
+    m["shape"]["feather"] = json!(feather);
+    m["shape"]["rx"] = json!(rx);
+    m["shape"]["ry"] = json!(ry);
+    m["adjust"]["exposure"] = json!(ev);
+    if m != before {
+        app.ui.settings.center_mask = Some(m);
+    }
+    row(ui, t, "", |ui| {
+        if crate::widgets::text_button(ui, "centerMaskReset", "reset.", false).clicked() {
+            app.ui.settings.center_mask = None;
+        }
+    });
+    hint(ui, t, "The tool strip's centre mask lands on this; adjust it on each photo in Masking, and right-click the icon to make a photo's mask the new default.");
+}
+
 fn develop_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, crate::i18n::tr("Develop loupe"));
     row(ui, t, crate::i18n::tr("Info overlay"), |ui| {
@@ -1093,6 +1140,7 @@ fn develop_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         choices(ui, "settingsDevInfo", &[(I::Off, "off."), (I::Basic, "info.1."), (I::Exposure, "info.2.")], &mut app.ui.develop_info_overlay);
     });
     loupe_info_rows(ui, t, &mut app.ui.settings.develop_view.loupe_info, "dev", "settingsDevLoupeDefaults");
+    center_mask_rows(app, ui, t);
     heading(ui, t, crate::i18n::tr("General"));
     check(ui, "settings.devLoadingMessage", &mut app.ui.settings.develop_view.loading_message, "Show message when loading or rendering photos");
     heading(ui, t, crate::i18n::tr("Video"));

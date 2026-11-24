@@ -105,6 +105,9 @@ fn import_rated(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let undo0 = s.undo.len();
+    // photos already here before this import keep what was set in LightCraft: a rating, flag or
+    // label from the camera/card only fills in what is still unset (Bryan, 11-23)
+    let existed: std::collections::HashSet<PhotoId> = s.catalog.photos().map(|ph| ph.id).collect();
     let report = s.execute("library.import", &params)?;
     // the files' photos: imported now, or already in the library (duplicates by path)
     let by_path: std::collections::HashMap<String, PhotoId> = s
@@ -130,13 +133,14 @@ fn import_rated(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let Some(ph) = s.catalog.photo(id) else { continue };
         let before = ops.len();
-        if let Some(r) = e.get("rating").and_then(Value::as_u64) {
+        let keep = existed.contains(&id);
+        if let Some(r) = e.get("rating").and_then(Value::as_u64).filter(|_| !keep || ph.rating == 0) {
             ops.push(Op::SetRating { id, rating: r.min(5) as u8 });
         }
-        if let Some(f) = e.get("flag").and_then(Value::as_str) {
+        if let Some(f) = e.get("flag").and_then(Value::as_str).filter(|_| !keep || ph.flag == Flag::None) {
             ops.push(Op::SetFlag { id, flag: Flag::parse(f).ok_or_else(|| bad(C, format!("flag `{f}`: pick, reject or none")))? });
         }
-        if let Some(l) = e.get("label") {
+        if let Some(l) = e.get("label").filter(|_| !keep || ph.label.is_none()) {
             let label = match l.as_str().map(str::trim) {
                 None | Some("") | Some("none") => None,
                 Some(name) => {

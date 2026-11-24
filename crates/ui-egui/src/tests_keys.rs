@@ -342,6 +342,11 @@ fn wb_selector_picks_from_a_click() {
     h.request("ui.key", json!({"key": "w"}), T);
     h.step();
     assert_eq!(h.app.ui.tool, "wbPicker", "W arms it");
+    h.request("ui.key", json!({"key": "w"}), T);
+    h.step();
+    assert_eq!(h.app.ui.tool, "", "W again puts it away");
+    h.request("ui.key", json!({"key": "w"}), T);
+    h.step();
     let before = h.app.session.develop_of(id).unwrap().wb;
     let img = h.app.image_rect.unwrap();
     h.request("ui.click", json!({"x": img.left() + img.width() * 0.3, "y": img.top() + img.height() * 0.4}), T);
@@ -363,7 +368,11 @@ fn center_mask_and_its_default() {
     h.request("ui.clickWidget", json!({"id": "icon:quick.center"}), T);
     let d = h.app.session.develop_of(id).unwrap();
     let m = d.masks.iter().find(|m| m.name == crate::menus::CENTER_MASK).expect("a Center mask");
-    assert!(m.adjust.exposure > 0.0, "the built-in effect");
+    assert!(m.adjust.exposure < 0.0, "the built-in effect: a darkening vignette");
+    assert!(
+        matches!(m.components[0].shape, lightcraft_develop::MaskShape::Radial { invert: true, .. }),
+        "around the centre, not on it"
+    );
     assert_eq!(h.app.ui.right, RightPanel::Masking);
     let n = d.masks.len();
     exec(&mut h, "mask.center", json!({}));
@@ -389,6 +398,23 @@ fn set_lens_names_the_lens_and_its_focal_length() {
     let m = h.app.session.catalog.photo(id).unwrap().meta.clone();
     assert_eq!((m.lens.as_str(), m.focal_mm), ("Summicron-M 1:2/50", Some(50.0)));
     assert_eq!(h.app.ui.settings.lenses.len(), 1);
+}
+
+/// The window's edge tabs hide and show the left panel, the right panel and the filmstrip.
+#[test]
+fn edge_tabs_hide_and_show_the_panels() {
+    let mut h = demo();
+    h.request("ui.set", json!({"view": "detail", "module": "develop"}), T);
+    h.step();
+    let (l, r, f) = (h.app.ui.left_panel, h.app.ui.right_panel, h.app.ui.filmstrip);
+    for id in ["button:edgeLeft", "button:edgeRight", "button:edgeBottom"] {
+        h.request("ui.clickWidget", json!({"id": id}), T);
+        h.step();
+    }
+    assert_eq!((h.app.ui.left_panel, h.app.ui.right_panel, h.app.ui.filmstrip), (!l, !r, !f));
+    h.request("ui.clickWidget", json!({"id": "button:edgeRight"}), T);
+    h.step();
+    assert_eq!(h.app.ui.right_panel, r, "and back");
 }
 
 /// fav.: a quick tap of H toggles the heart on the selected photos; H held does what H is bound
@@ -431,13 +457,16 @@ fn a_slider_picked_by_its_name_takes_the_arrows_and_the_wheel() {
     h.step();
     assert!(dev(&h).light.shadows > s0, "↑ raises the picked slider");
     assert_eq!(h.app.session.active(), Some(id), "the arrows don't step photos while a slider is picked");
-    // the wheel over the panel: two notches up
-    let label = h.app.widgets.iter().find(|(w, _)| w == "sliderLabel:light.shadows").map(|(_, r)| *r).unwrap();
-    h.request("ui.move", json!({"x": label.center().x, "y": label.center().y}), T);
+    // the wheel with the pointer over the PHOTO (photo-stepping mode on): it turns the picked
+    // slider, never steps photos
+    exec(&mut h, "view.wheelZoom", json!({"mode": "photos"}));
+    let img = h.app.image_rect.unwrap();
+    h.request("ui.move", json!({"x": img.center().x, "y": img.center().y}), T);
     let s1 = dev(&h).light.shadows;
     h.request("ui.scroll", json!({"dy": 2.0, "unit": "line"}), T);
     h.step();
     assert!(dev(&h).light.shadows > s1, "the wheel raises it: {} → {}", s1, dev(&h).light.shadows);
+    assert_eq!(h.app.session.active(), Some(id), "the wheel didn't step photos while a slider is picked");
     // → : the next slider (Whites follows Shadows)
     h.request("ui.key", json!({"key": "right"}), T);
     h.step();

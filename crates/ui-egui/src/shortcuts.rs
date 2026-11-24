@@ -143,6 +143,44 @@ fn record(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     true
 }
 
+/// A keyboard layer that puts Control where ⌘ is (Bryan's NEBULA68B layer 1, 2026-11-23: "cmd z
+/// doesn't work on layer 1"): Ctrl+key runs what ⌘+key runs — when Ctrl+key has no binding of its own.
+/// Returns whether it ran something (the key is used up).
+fn ctrl_as_cmd(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
+    let Some((key, m)) = ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } if modifiers.ctrl && !modifiers.mac_cmd => Some((*key, *modifiers)),
+            _ => None,
+        })
+    }) else {
+        return false;
+    };
+    let mods_match = |p: Modifiers, ctrl: bool| p.alt == m.alt && p.shift == m.shift && if ctrl { p.ctrl && !p.mac_cmd } else { p.mac_cmd || (p.command && !p.ctrl) };
+    let is = |sc: &str, ctrl: bool| parse(sc).is_some_and(|(p, k)| k == key && mods_match(p, ctrl));
+    let ctrl_combo = Combo { cmd: false, ctrl: true, alt: m.alt, shift: m.shift, trigger: Trigger::Key(key) };
+    let overlay = app.keymap.overlay().to_vec();
+    // Ctrl+key of its own (the user's / profile's keys, a menu item, a command): leave it alone
+    if crate::keymap::lookup(&overlay, &ctrl_combo).is_some()
+        || crate::menus::ui_commands().any(|(_, _, sc, _)| sc.is_some_and(|s| is(s, true)))
+        || lightcraft_engine::command_specs().iter().any(|c| c.shortcut.is_some_and(|s| is(s, true)))
+    {
+        return false;
+    }
+    let cmd_combo = Combo { cmd: true, ctrl: false, alt: m.alt, shift: m.shift, trigger: Trigger::Key(key) };
+    let run = match crate::keymap::lookup(&overlay, &cmd_combo) {
+        Some(Some(b)) => Some((b.command.clone(), b.params.clone())),
+        Some(None) => None,
+        None => crate::menus::ui_commands()
+            .find(|(_, _, sc, _)| sc.is_some_and(|s| is(s, false)))
+            .map(|(id, _, _, _)| (id.to_string(), json!({})))
+            .or_else(|| lightcraft_engine::command_specs().iter().find(|c| c.shortcut.is_some_and(|s| is(s, false))).map(|c| (c.id.to_string(), json!({})))),
+    };
+    let Some((cmd, params)) = run else { return false };
+    ctx.input_mut(|i| i.consume_key(m, key));
+    dispatch(app, ctx, &cmd, params);
+    true
+}
+
 /// How long H is held before it does what H is bound to instead of toggling fav.
 pub const H_HOLD: std::time::Duration = std::time::Duration::from_millis(400);
 
@@ -183,6 +221,7 @@ fn tap_or_hold_h(app: &mut LightcraftApp, ctx: &egui::Context) {
 
 
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
+    crate::widgets::take_wheel_for_picked_slider(ctx);
     // Tab hides the panels (Classic) rather than walking the keyboard focus through buttons: a
     // focus egui gave a widget that isn't a text field is let go, so the keys keep working
     if let Some(f) = ctx.memory(|m| m.focused())
@@ -228,6 +267,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     tap_or_hold_h(app, ctx);
+    if ctrl_as_cmd(app, ctx) {
+        return;
+    }
     // the galleries. tab: ⌘A / Esc pick its photos, not the library's
     if app.ui.view == crate::state::ViewMode::Galleries && crate::panels::galleries::keys(app, ctx) {
         return;

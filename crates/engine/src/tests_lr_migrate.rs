@@ -373,6 +373,12 @@ fn shoot_commands() {
     assert_eq!(st["ratings"]["3"], json!(1));
     assert_eq!(st["picks"], json!(1));
     assert_eq!(st["notInLibraryFiles"], json!([f("3.png")]));
+    // sent again (Second Brain's auto-send) with the card's 1 star: the 5 and the pick set here stay,
+    // an unset label still fills in
+    let r = s.execute("library.importRated", &json!({"files": [{"path": f("raw/1.png"), "rating": 1, "flag": "reject", "label": "red"}]})).unwrap();
+    assert_eq!(r["rated"], json!(1), "{r}");
+    let st = s.execute("library.folderStatus", &json!({"folder": format!("{folder}/")})).unwrap();
+    assert_eq!((st["ratings"]["5"].clone(), st["picks"].clone(), st["rejects"].clone()), (json!(1), json!(1), json!(0)), "{st}");
     let flat = s.execute("library.folderStatus", &json!({"folder": folder, "subfolders": false})).unwrap();
     assert_eq!(flat["inLibrary"], json!(0));
     assert!(s.execute("library.folderStatus", &json!({"folder": " "})).is_err());

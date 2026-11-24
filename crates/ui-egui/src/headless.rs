@@ -2133,7 +2133,7 @@ mod tests {
         h.request("ui.move", json!({"x": anchor.x, "y": anchor.y}), t);
         for (tool, expected) in [
             ("", egui::CursorIcon::Grab),
-            ("wbPicker", egui::CursorIcon::Crosshair),
+            ("wbPicker", egui::CursorIcon::None), // the WB dropper is drawn at the pointer
             ("colorRange", egui::CursorIcon::Crosshair),
             ("pointColor", egui::CursorIcon::Crosshair),
             ("tat:curve", egui::CursorIcon::ResizeVertical),

@@ -246,6 +246,38 @@ pub fn picked_slider(ctx: &egui::Context) -> Option<String> {
     ctx.data(|m| m.get_temp::<(String, u64)>(egui::Id::new(PICKED))).filter(|(_, drawn)| drawn + 1 >= pass).map(|(id, _)| id)
 }
 
+/// Memory: wheel movement (points) taken for the picked slider this frame.
+const PICKED_WHEEL: &str = "slider-picked-wheel";
+
+/// While a slider is picked, the scroll wheel anywhere in the window is its (Bryan, 2026-11-23:
+/// "let me have the mouse pointer wherever I want … if I'm using the scroll wheel it will adjust
+/// that"): run before the panels, it takes the wheel's events so the filmstrip, the panels and the
+/// photo don't also scroll / step / zoom. ⌘-scroll (zoom) is left alone.
+pub fn take_wheel_for_picked_slider(ctx: &egui::Context) {
+    if picked_slider(ctx).is_none() {
+        return;
+    }
+    let taken: f32 = ctx.input_mut(|i| {
+        let mut sum = 0.0;
+        i.events.retain(|e| match e {
+            egui::Event::MouseWheel { unit, delta, modifiers, .. } if !modifiers.command => {
+                sum += match unit {
+                    egui::MouseWheelUnit::Line => delta.y * 24.0,
+                    egui::MouseWheelUnit::Page => delta.y * 240.0,
+                    egui::MouseWheelUnit::Point => delta.y,
+                };
+                false
+            }
+            _ => true,
+        });
+        if sum != 0.0 {
+            i.smooth_scroll_delta = egui::Vec2::ZERO;
+        }
+        sum
+    });
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(PICKED_WHEEL), taken));
+}
+
 /// Let go of the picked slider (Esc, a click elsewhere).
 pub fn unpick_slider(ctx: &egui::Context) {
     ctx.data_mut(|m| m.remove::<(String, u64)>(egui::Id::new(PICKED)));
@@ -415,7 +447,7 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         }
         // the picked slider: ↑ / ↓ and the wheel change it, ← / → move the pick along the sliders
         if picked && out.value.is_none() && typing.is_none() && picked_slider(ui.ctx()).is_some() {
-            let (up, down, left, right, shift, wheel) = ui.input_mut(|i| {
+            let (up, down, left, right, shift) = ui.input_mut(|i| {
                 let shift = i.modifiers.shift;
                 let m = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
                 let keys = (
@@ -424,30 +456,11 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
                     i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
                     i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
                 );
-                // only over the picked slider's own row: over the photo the wheel zooms, over the
-                // rest of the panel it scrolls (Bryan, 2026-11-23)
-                let over = i.pointer.hover_pos().is_some_and(|p| row.contains(p) && ui.clip_rect().contains(p));
-                // the wheel's own events (a notch = one line = 24 px; trackpads report points)
-                let wheel = if over {
-                    i.events
-                        .iter()
-                        .map(|e| match e {
-                            egui::Event::MouseWheel { unit, delta, .. } => match unit {
-                                egui::MouseWheelUnit::Line => delta.y * 24.0,
-                                egui::MouseWheelUnit::Page => delta.y * 240.0,
-                                egui::MouseWheelUnit::Point => delta.y,
-                            },
-                            _ => 0.0,
-                        })
-                        .sum()
-                } else {
-                    0.0
-                };
-                if over {
-                    i.smooth_scroll_delta = egui::Vec2::ZERO;
-                }
-                (keys.0, keys.1, keys.2, keys.3, shift, wheel)
+                (keys.0, keys.1, keys.2, keys.3, shift)
             });
+            // the wheel, wherever the pointer is (taken for this slider before the panels; read
+            // outside input_mut — the context's lock isn't re-entrant)
+            let wheel: f32 = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(PICKED_WHEEL))).unwrap_or(0.0);
             if left || right {
                 if let Some(i) = order.iter().position(|o| o == spec.id) {
                     let n = order.len();

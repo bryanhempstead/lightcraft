@@ -1389,7 +1389,9 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
         return;
     }
     let cursor = match app.ui.tool.as_str() {
-        "wbPicker" | "fringePicker" | "colorRange" | "pointColor" | "lensFocus" => egui::CursorIcon::Crosshair,
+        // the White Balance Selector draws its own dropper at the pointer (general_interaction)
+        "wbPicker" => egui::CursorIcon::None,
+        "fringePicker" | "colorRange" | "pointColor" | "lensFocus" => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("lensBrush:") => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
@@ -1428,6 +1430,17 @@ fn general_interaction(
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             app.ui.tool.clear();
             return;
+        }
+        // the pointer is a dropper, its tip on the spot it samples (outlined to show on any photo)
+        if let Some(pos) = resp.hover_pos() {
+            let s = 26.0;
+            let k = s / 20.0;
+            let r = Rect::from_min_size(pos - vec2(4.0 * k, 16.0 * k), vec2(s, s));
+            let fg = ui.painter().clone().with_layer_id(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("wbDropper")));
+            for d in [vec2(-1.0, 0.0), vec2(1.0, 0.0), vec2(0.0, -1.0), vec2(0.0, 1.0)] {
+                crate::icons::paint(&fg, r.translate(d), crate::icons::Icon::Picker, egui::Color32::from_black_alpha(200));
+            }
+            crate::icons::paint(&fg, r, crate::icons::Icon::Picker, egui::Color32::WHITE);
         }
         if resp.clicked()
             && let Some(q) = resp.interact_pointer_pos()

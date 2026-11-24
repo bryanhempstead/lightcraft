@@ -76,10 +76,14 @@ fn modules_switch_by_key_and_picker_and_keep_the_photo() {
     click(&mut h, "module:library");
     assert_eq!((h.app.ui.module, h.app.ui.view), (Module::Library, ViewMode::Detail), "back to the Library view it came from");
     assert_eq!(h.app.session.active(), Some(third));
-    // Esc in Develop goes back to the Library grid
+    // Esc in Develop only lets go of what's selected — it stays in Develop (Bryan, 2026-11-23)
     exec(&mut h, "view.develop", json!({}));
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    exec(&mut h, "library.select", json!({"ids": ids, "active": ids[0]}));
     key(&mut h, "Escape", json!({}));
-    assert_eq!((h.app.ui.module, h.app.ui.view), (Module::Library, ViewMode::PhotoGrid));
+    assert_eq!(h.app.ui.module, Module::Develop, "Esc stays in Develop");
+    assert_eq!(h.app.session.selection.ids.len(), 1, "and deselects the others");
+    exec(&mut h, "view.library", json!({}));
     // Develop tools (R) and the picker's menu item check marks
     key(&mut h, "r", json!({}));
     assert_eq!((h.app.ui.module, h.app.ui.right), (Module::Develop, RightPanel::Crop));
