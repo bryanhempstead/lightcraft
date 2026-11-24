@@ -208,12 +208,8 @@ fn a_collection_opens_into_its_folders_and_a_click_shows_one_camera() {
     assert_eq!(shown(&mut h).len(), 6);
     assert_eq!(crumb(&h), "Collection: Erika and Connor › 3 folders");
     assert_eq!(crate::panels::left::album_parts_scans(&h.view.ctx), scans, "clicks read the cached rows: no rescan");
-    // none.: the whole collection again; all.: every row
-    click(&mut h, &format!("button:albumPartsNone-{}", erika.0));
-    assert_eq!(shown(&mut h).len(), 8);
-    assert!(h.app.session.active_album_part().is_none());
-    click(&mut h, &format!("button:albumPartsAll-{}", erika.0));
-    assert_eq!(h.app.session.active_album_part().map(|p| p.keys.len()), Some(4));
+    // no all. / none. under the rows (Bryan 11-24): the collection row itself shows all of it
+    assert!(!has(&h, &format!("button:albumPartsAll-{}", erika.0)) && !has(&h, &format!("button:albumPartsNone-{}", erika.0)));
     // another source and back: the whole collection, not the folders picked before
     h.request("engine.execute", json!({"id": "library.source", "params": {"kind": "all"}}), T);
     h.request("engine.execute", json!({"id": "library.source", "params": {"kind": "album", "id": erika.0}}), T);
@@ -248,7 +244,7 @@ fn smart_collections_and_collections_in_sets_open_too() {
     assert_eq!(shown(&mut h), vec!["jpg/g.jpg"]);
     click(&mut h, &format!("albumPartsToggle:{}", nested.0));
     assert_eq!(part_rows(&h, nested), vec![folder("raw/M262")]);
-    assert!(!has(&h, &format!("button:albumPartsAll-{}", nested.0)), "one row: no all. / none.");
+    assert!(!has(&h, &format!("button:albumPartsAll-{}", nested.0)), "no all. / none.");
     shot(&mut h, "parts-4-smart-and-set.png");
 }
 

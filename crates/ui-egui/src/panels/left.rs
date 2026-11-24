@@ -1040,30 +1040,7 @@ fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, owner: Owner, indent: f
     if by == PartBy::Folder && !matches!(owner, Owner::Album(a) if a.is_smart()) {
         beside_rows(app, ui, owner, indent);
     }
-    if rows.len() > 1 {
-        // all. / none.: every row picked, or none (both show all of it)
-        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
-        let mut bar = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(Rect::from_min_max(pos2(r.left() + 42.0 + indent, r.top() + 3.0), pos2(r.right() - 8.0, r.bottom() - 3.0)))
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        );
-        bar.spacing_mut().item_spacing.x = 8.0;
-        let all = picked.len() == rows.len();
-        if crate::widgets::text_button(&mut bar, &format!("{prefix}PartsAll-{tag}"), "all.", all)
-            .on_hover_text(crate::i18n::tr("Pick every row"))
-            .clicked()
-        {
-            let keys: Vec<String> = rows.iter().map(|r| r.key.clone()).collect();
-            show_parts(app, ui.ctx(), &of, by, &keys);
-        }
-        if crate::widgets::text_button(&mut bar, &format!("{prefix}PartsNone-{tag}"), "none.", false)
-            .on_hover_text(crate::i18n::tr("Pick no row: all of it"))
-            .clicked()
-        {
-            show_parts(app, ui.ctx(), &of, by, &[]);
-        }
-    }
+    // (no all. / none. here: the shoot or collection row itself shows all of it — Bryan 11-24)
 }
 
 /// Folders beside a shoot's or collection's folders on disk (`<shoot>/raw/GR3` next to
