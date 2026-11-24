@@ -70,6 +70,8 @@ mod tests_filmstrip;
 #[cfg(test)]
 mod tests_fixnotes;
 #[cfg(test)]
+mod tests_folds;
+#[cfg(test)]
 mod tests_galleries;
 #[cfg(test)]
 mod tests_grid;

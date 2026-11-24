@@ -155,3 +155,38 @@ fn unloaded_thumbnails_show_their_selection() {
     }
     assert!(checked >= 3, "checked {checked}");
 }
+
+/// A date group folds by the triangle at its header's left (remembered): its photos leave the
+/// grid, the next day's header moves up under it, and a click on the rest of the header still
+/// picks the group's photos.
+#[test]
+fn grid_groups_fold_by_their_triangle() {
+    let mut h = grid(ViewMode::PhotoGrid);
+    let vis = h.app.session.visible().to_vec();
+    let head = widget(&h, "group:2026-12-28").expect("the newest day's header");
+    let fold = widget(&h, "fold:grid.group:2026-12-28").expect("its triangle");
+    assert!(fold.left() >= head.left() && fold.right() < head.center().x, "the triangle at the header's left: {fold:?} in {head:?}");
+    assert!(on_screen(&h, vis[0]));
+    let next_before =
+        h.app.widgets.iter().filter(|(w, _)| w.starts_with("group:") && w != "group:2026-12-28").map(|(_, r)| r.top()).fold(f32::MAX, f32::min);
+    let r = h.request("ui.clickWidget", json!({"id": "fold:grid.group:2026-12-28"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.folds.get("grid.group:2026-12-28"), Some(&false), "remembered");
+    assert!(h.app.session.selection.ids.is_empty() || h.app.session.selection.ids.len() == 1, "the triangle doesn't pick the group");
+    assert!(!on_screen(&h, vis[0]), "its photos are folded away");
+    assert!(widget(&h, "group:2026-12-28").is_some(), "its header stays");
+    let next_after =
+        h.app.widgets.iter().filter(|(w, _)| w.starts_with("group:") && w != "group:2026-12-28").map(|(_, r)| r.top()).fold(f32::MAX, f32::min);
+    assert!(next_after < next_before, "the next header moves up: {next_before} → {next_after}");
+    // the header's title still picks the photos
+    let r = h.request("ui.clickWidget", json!({"id": "group:2026-12-28", "fx": 0.6}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.session.selection.ids.contains(&vis[0]), "the group's photos are picked");
+    // unfolded again
+    let r = h.request("engine.execute", json!({"command": "ui.fold", "params": {"id": "grid.group:2026-12-28", "open": true}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(on_screen(&h, vis[0]));
+}

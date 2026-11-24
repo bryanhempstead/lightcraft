@@ -244,14 +244,19 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Dialog::WhatsNew => {
                     egui::ScrollArea::vertical().max_height(460.0).auto_shrink([false, true]).show(ui, |ui| {
+                        // each release (## heading) folds (remembered, crate::folds)
+                        let mut open = true;
                         for line in WHATS_NEW.lines() {
                             let l = line.trim_end();
-                            if let Some(h) = l.strip_prefix("### ") {
+                            if !open && !l.starts_with("## ") {
+                                continue;
+                            }
+                            if let Some(h) = l.strip_prefix("## ") {
+                                ui.add_space(8.0);
+                                open = crate::folds::header_sized(ui, &format!("whatsNew.{}", super::right::fold_slug(h)), h, 14.0, 26.0);
+                            } else if let Some(h) = l.strip_prefix("### ") {
                                 ui.add_space(6.0);
                                 ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
-                            } else if let Some(h) = l.strip_prefix("## ") {
-                                ui.add_space(8.0);
-                                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
                             } else if l.starts_with("# ") || l.is_empty() {
                             } else if let Some(b) = l.strip_prefix("- ") {
                                 ui.label(egui::RichText::new(format!("•  {}", crate::i18n::tr(b).replace('`', ""))).color(t.text_label));
