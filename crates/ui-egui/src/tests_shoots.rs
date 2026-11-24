@@ -240,3 +240,23 @@ fn folders_list_only_imported_folders_named_by_their_shoot() {
     let _ = here;
     shot(&mut h, "shoots-6-folders.png");
 }
+
+/// color. on a shoot: a solid band behind the whole row; the dot keeps its own color.
+#[test]
+fn a_color_label_is_a_band_behind_the_shoot_row() {
+    let mut f = fixture("band");
+    let h = &mut f.h;
+    let first = shoot_order(h).remove(0);
+    assert!(!has(h, &format!("fill:shoot:{first}")));
+    h.app.run("folder.label", json!({"path": first, "label": "red"})).unwrap();
+    h.step();
+    h.step();
+    let band = widget(h, &format!("fill:shoot:{first}"));
+    let row = widget(h, &format!("source:shoot:{first}"));
+    assert!(band.width() > 200.0 && (band.height() - row.height()).abs() < 1.0 && band.left() < row.left() + 10.0, "the whole row: {band:?} {row:?}");
+    shot(h, "shoot-band.png");
+    h.app.run("folder.label", json!({"path": first, "label": null})).unwrap();
+    h.step();
+    h.step();
+    assert!(!has(h, &format!("fill:shoot:{first}")), "none. takes it off");
+}

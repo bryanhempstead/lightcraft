@@ -70,6 +70,8 @@ struct RowExtra {
     accent: bool,
     /// Room kept free at the right edge for a control the caller puts there (a folder's add.).
     reserve: f32,
+    /// A solid band behind the whole row: the shoot's color label (color.).
+    fill: Option<egui::Color32>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -107,7 +109,15 @@ fn row_ex(
     if extra.dim {
         register(ui.ctx(), format!("dim:{id}"), inner);
     }
-    if selected {
+    if let Some(fill) = extra.fill {
+        // the color label: a solid band (darkened so the light text stays readable); picked = an outline
+        ui.painter().rect_filled(inner, 4.0, fill.gamma_multiply(if resp.hovered() { 0.7 } else { 0.55 }));
+        register(ui.ctx(), format!("fill:{id}"), inner);
+        if selected {
+            ui.painter().rect_stroke(inner, 4.0, egui::Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
+            register(ui.ctx(), format!("highlight:{id}"), inner);
+        }
+    } else if selected {
         ui.painter().rect_filled(inner, 4.0, t.canvas);
         register(ui.ctx(), format!("highlight:{id}"), inner);
     } else if resp.hovered() {
@@ -1997,9 +2007,9 @@ fn shoots_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
         let sel = chosen.as_deref().is_some_and(|c| same_folder(c, &s.path))
             && app.session.library_folder_subfolders == Some(s.deep)
             && app.session.active_album_part().is_none();
-        // the dot: the shoot's own color. when it has one, else its disk's
-        let dot = app.session.catalog.folder_record(&s.path).and_then(|f| f.label).map(crate::theme::label_color).unwrap_or_else(|| disk_color(&tree, &s.disk));
-        let extra = RowExtra { dim: gone, badge: None, dot: Some(dot), accent: r.pinned, reserve: 0.0 };
+        // the dot stays the disk's; the shoot's color. label is a band behind the whole row
+        let fill = app.session.catalog.folder_record(&s.path).and_then(|f| f.label).map(crate::theme::label_color);
+        let extra = RowExtra { dim: gone, badge: None, dot: Some(disk_color(&tree, &s.disk)), accent: r.pinned, reserve: 0.0, fill };
         let resp = row_ex(app, ui, &format!("shoot:{}", s.path), Icon::GridPhoto, &s.name, Some(&s.name), Some(s.count), sel, 0.0, &extra);
         let disk = disk_label(ui, &s.disk, &s.disk_name);
         let mut tip = format!("{}\n{disk} · {} photo{}", s.name, s.count, if s.count == 1 { "" } else { "s" });
@@ -2089,7 +2099,7 @@ fn shoot_menu(app: &mut LightcraftApp, resp: &egui::Response, r: &lightcraft_eng
         }
         ui.menu_button("color.", |ui| {
             for (key, label) in [("red", "red."), ("yellow", "yellow."), ("green", "green."), ("blue", "blue."), ("purple", "purple."), ("none", "none.")] {
-                if ui.button(label).on_hover_text("The dot by this shoot (none.: its disk's color)").clicked() {
+                if ui.button(label).on_hover_text("A band of this color behind the shoot (none.: no band)").clicked() {
                     let _ = app.run("folder.label", json!({"path": path, "label": if key == "none" { serde_json::Value::Null } else { json!(key) }}));
                     ui.close();
                 }
@@ -2247,7 +2257,7 @@ fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, tree: &[FolderNode], 
                     .flatten()
                     .map(|(tot, av)| lightcraft_engine::disks::space_label(tot, av))
             };
-            (Icon::Disk, name, RowExtra { dim: gone, badge, dot: Some(disk_color(tree, &n.path)), accent: false, reserve: 0.0 }, Some(n.count))
+            (Icon::Disk, name, RowExtra { dim: gone, badge, dot: Some(disk_color(tree, &n.path)), accent: false, reserve: 0.0, fill: None }, Some(n.count))
         } else {
             // a root folder (right under its disk) named only by its camera carries its shoot's name
             let first = if indent <= 16.0 { lightcraft_catalog::shoots::context_label(&n.path, &n.name) } else { n.name.clone() };
