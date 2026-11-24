@@ -351,7 +351,10 @@ fn basic(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, raw: b
         let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(12.5), t.text);
         // the selector as a chip too (the eyedropper alone was easy to miss): click, then click the photo
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::widgets::text_button(ui, "wbPick", "pick.", active).on_hover_text(crate::i18n::tr("White Balance Selector (W): click something white or neutral grey")).clicked() {
+            if crate::widgets::text_button(ui, "wbPick", "pick.", active)
+                .on_hover_text(crate::i18n::tr("White Balance Selector (W): click something white or neutral grey"))
+                .clicked()
+            {
                 app.ui.tool = if active { String::new() } else { "wbPicker".into() };
             }
         });

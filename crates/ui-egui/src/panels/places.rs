@@ -536,10 +536,12 @@ pub fn open(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 
 /// The automatic parts, for Settings ▸ Import.
 pub fn settings_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
     let d = app.session.import_defaults.clone();
     ui.add_space(4.0);
-    ui.label(egui::RichText::new(crate::i18n::tr("Places and keywords")).font(t.semibold(12.5)).color(t.text));
+    // folds like every Settings group (remembered, crate::folds)
+    if !crate::folds::header(ui, "settings.import.places.and.keywords", "Places and keywords") {
+        return;
+    }
     let mut rows: [(&str, bool, &str); 3] = [
         ("autoPlace", d.auto_place, "Photos imported into an album or folder with a place get it"),
         ("placeKeywords", d.place_keywords, "… with the place's keywords (venue, city, state, country)"),

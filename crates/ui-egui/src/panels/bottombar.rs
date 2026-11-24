@@ -154,7 +154,13 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     let fav = active.as_ref().is_some_and(|p| p.favorite);
     let (r, resp) = pill_ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
     register(pill_ui.ctx(), "flag:fav", r);
-    let c = if fav { t.fav } else if resp.hovered() { t.text } else { t.icon };
+    let c = if fav {
+        t.fav
+    } else if resp.hovered() {
+        t.text
+    } else {
+        t.icon
+    };
     paint(pill_ui.painter(), r.shrink(3.0), if fav { Icon::HeartFilled } else { Icon::Heart }, c);
     if resp.on_hover_text(crate::i18n::tr("fav. (tap H)")).clicked() {
         let mut params = json!({"favorite": !fav});

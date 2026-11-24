@@ -307,16 +307,14 @@ fn set_memo_text(ui: &egui::Ui, key: &str, v: String) {
 /// `section:export-{id}`) and, when open, `add` below it. Open states are remembered.
 fn section(ui: &mut egui::Ui, id: &str, title: &str, summary: &str, default_open: bool, add: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get(ui.ctx());
-    let sid = egui::Id::new(("export-section", id));
-    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(sid, default_open));
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
     crate::widgets::register(ui.ctx(), format!("section:export-{id}"), r);
+    // remembered across launches (crate::folds)
+    let fold_id = format!("export.{id}");
+    crate::widgets::register(ui.ctx(), format!("fold:{fold_id}"), r);
+    let open = crate::folds::toggle_on_click_or(ui, &resp, &fold_id, default_open);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
-    if resp.clicked() {
-        open = !open;
-        ui.data_mut(|d| d.insert_persisted(sid, open));
-    }
     let p = ui.painter();
     p.rect_filled(r, 3.0, if resp.hovered() { t.hover } else { t.header });
     let icon = Rect::from_center_size(pos2(r.left() + 14.0, r.center().y), vec2(10.0, 10.0));
@@ -512,14 +510,11 @@ fn presets_pane(app: &mut LightcraftApp, ui: &mut egui::Ui, s: &mut State<'_>, h
             |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (fi, (folder, builtin, presets)) in tree.iter().enumerate() {
-                    let fid = egui::Id::new(("export-preset-folder", folder.as_str()));
-                    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(fid, true));
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
                     crate::widgets::register(ui.ctx(), format!("folder:exportPresets-{fi}"), r);
-                    if resp.clicked() {
-                        open = !open;
-                        ui.data_mut(|d| d.insert_persisted(fid, open));
-                    }
+                    let fold_id = format!("export.presets:{folder}");
+                    crate::widgets::register(ui.ctx(), format!("fold:{fold_id}"), r);
+                    let open = crate::folds::toggle_on_click(ui, &resp, &fold_id);
                     let p = ui.painter();
                     crate::icons::paint(
                         p,

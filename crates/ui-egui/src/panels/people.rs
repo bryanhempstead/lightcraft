@@ -657,7 +657,10 @@ fn person_page(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &lightcraft_e
                     app.ui.people_sel.clear();
                     after(app, ui.ctx(), r);
                 }
-                if text_button(ui, "confirmedRemove", "remove.", false).on_hover_text(crate::i18n::tr("Not a face: remove these face boxes")).clicked() {
+                if text_button(ui, "confirmedRemove", "remove.", false)
+                    .on_hover_text(crate::i18n::tr("Not a face: remove these face boxes"))
+                    .clicked()
+                {
                     let r = app.run("people.removeFaces", json!({"faces": faces_json(&picked)}));
                     app.ui.people_sel.clear();
                     after(app, ui.ctx(), r);

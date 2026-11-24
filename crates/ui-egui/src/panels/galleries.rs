@@ -746,7 +746,9 @@ fn grid_actions(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
         let linked = app.galleries.photos().iter().any(|p| p.get("photo").is_some_and(Value::is_u64) && app.galleries.picked.contains(&s(p, "name")));
-        if linked && text_button(ui, "galleriesDevelop", "develop.", false).on_hover_text(crate::i18n::tr("Open the source photo in Develop")).clicked() {
+        if linked
+            && text_button(ui, "galleriesDevelop", "develop.", false).on_hover_text(crate::i18n::tr("Open the source photo in Develop")).clicked()
+        {
             let r = app.run("galleries.develop", json!({}));
             toast_err(app, &ctx, r);
         }

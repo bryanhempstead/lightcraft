@@ -15,6 +15,7 @@ pub mod enhance;
 pub mod export_dialog;
 pub mod export_task;
 pub mod fixnotes;
+pub mod folds;
 pub mod hdr_view;
 pub mod headless;
 pub mod i18n;
@@ -1139,6 +1140,8 @@ impl LightcraftApp {
             return;
         }
         let t0 = now_ms();
+        // last frame's header folds into the UI state (saved in ui.json); this frame draws from it
+        folds::sync(&ctx, &mut self.ui.folds);
         if std::mem::take(&mut self.ui.quit) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }

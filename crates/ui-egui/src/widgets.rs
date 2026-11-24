@@ -30,7 +30,8 @@ pub fn reveal_in_scroll(ui: &Ui) {
     let ctx = ui.ctx();
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(SCROLL_VIEW), ui.clip_rect()));
     let Some(want) = ctx.data(|d| d.get_temp::<String>(egui::Id::new(REVEAL))) else { return };
-    let rect = ctx.data(|d| d.get_temp::<Registry>(egui::Id::new("lc-registry"))).and_then(|r| r.0.iter().rev().find(|(w, _)| *w == want).map(|(_, r)| *r));
+    let rect =
+        ctx.data(|d| d.get_temp::<Registry>(egui::Id::new("lc-registry"))).and_then(|r| r.0.iter().rev().find(|(w, _)| *w == want).map(|(_, r)| *r));
     if let Some(r) = rect {
         ui.scroll_to_rect_animation(r, Some(egui::Align::Center), egui::style::ScrollAnimation::none());
         ctx.data_mut(|d| d.remove::<String>(egui::Id::new(REVEAL)));
@@ -296,11 +297,7 @@ fn note_order(ctx: &egui::Context, id: &str) -> Vec<String> {
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|m| {
         let (p, mut cur, prev) = m.get_temp::<(u64, Vec<String>, Vec<String>)>(egui::Id::new(ORDER)).unwrap_or_default();
-        let (cur, prev) = if p == pass {
-            (cur, prev)
-        } else {
-            (Vec::new(), std::mem::take(&mut cur))
-        };
+        let (cur, prev) = if p == pass { (cur, prev) } else { (Vec::new(), std::mem::take(&mut cur)) };
         let mut cur = cur;
         if !cur.iter().any(|c| c == id) {
             cur.push(id.to_string());
@@ -795,10 +792,8 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
     for (row_i, row) in items.chunks(per_row).enumerate() {
         // equal widths, unless a label needs more: then each segment as wide as its label needs
         // (the row's width shared by label width)
-        let label_w: Vec<f32> = row
-            .iter()
-            .map(|(l, _)| ui.painter().layout_no_wrap(crate::i18n::tr(l).to_string(), t.semibold(11.5), t.text).size().x + 16.0)
-            .collect();
+        let label_w: Vec<f32> =
+            row.iter().map(|(l, _)| ui.painter().layout_no_wrap(crate::i18n::tr(l).to_string(), t.semibold(11.5), t.text).size().x + 16.0).collect();
         let widths: Vec<f32> = if label_w.iter().all(|lw| *lw <= seg_w) {
             vec![seg_w; row.len()]
         } else {

@@ -336,7 +336,8 @@ fn crop_dial_draws_its_detents_out_of_one_render() {
     exec(&mut h, "crop.set", json!({"rect": [0.15, 0.2, 0.75, 0.8], "angle": 4.0}));
     exec(&mut h, "photo.flipHorizontal", json!({}));
     let sharp = |h: &Headless| {
-        h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.quick.is_none() && Some(t.key) != h.app.reframe_key) && !h.app.renderer.is_pending(Slot::Main)
+        h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.quick.is_none() && Some(t.key) != h.app.reframe_key)
+            && !h.app.renderer.is_pending(Slot::Main)
     };
     assert!(h.step_until(T, sharp), "first render: {}", h.app.renderer.diagnose());
     h.settle(T);
@@ -432,10 +433,7 @@ fn center_mask_and_its_default() {
     let d = h.app.session.develop_of(id).unwrap();
     let m = d.masks.iter().find(|m| m.name == crate::menus::CENTER_MASK).expect("a Center mask");
     assert!(m.adjust.exposure < 0.0, "the built-in effect: a darkening vignette");
-    assert!(
-        matches!(m.components[0].shape, lightcraft_develop::MaskShape::Radial { invert: true, .. }),
-        "around the centre, not on it"
-    );
+    assert!(matches!(m.components[0].shape, lightcraft_develop::MaskShape::Radial { invert: true, .. }), "around the centre, not on it");
     assert_eq!(h.app.ui.right, RightPanel::Masking);
     let n = d.masks.len();
     exec(&mut h, "mask.center", json!({}));
@@ -1311,7 +1309,8 @@ fn console_dial_lag() {
     let p = |q: f64| sorted.get(((sorted.len() as f64 - 1.0) * q).round() as usize).copied().unwrap_or(f64::NAN);
     let dm: Vec<f64> = drafts.iter().map(|d| d.0).collect();
     if trace {
-        let per: Vec<String> = sent.iter().zip(&seen).map(|(a, b)| b.map_or("-".into(), |b| format!("{:.0}", (b - *a).as_secs_f64() * 1e3))).collect();
+        let per: Vec<String> =
+            sent.iter().zip(&seen).map(|(a, b)| b.map_or("-".into(), |b| format!("{:.0}", (b - *a).as_secs_f64() * 1e3))).collect();
         eprintln!("tick → on screen, in order (ms): {}", per.join(" "));
     }
     eprintln!(
@@ -1387,7 +1386,12 @@ fn commit_hitch() {
         let ms = f0.elapsed().as_secs_f64() * 1e3;
         if ms > 15.0 {
             let pf = h.app.perf;
-            eprintln!("slow frame {ms:.1} ms: logic {:.1}, layout {:.1}; sidecars queued {}", pf.logic_ms, pf.frame_ms, h.app.session.sidecars_pending());
+            eprintln!(
+                "slow frame {ms:.1} ms: logic {:.1}, layout {:.1}; sidecars queued {}",
+                pf.logic_ms,
+                pf.frame_ms,
+                h.app.session.sidecars_pending()
+            );
         }
         frames.push(ms);
         std::thread::sleep(Duration::from_millis(8));
@@ -1452,11 +1456,16 @@ fn commit_hitch() {
     );
     // every edit reaches the sidecar (after the debounce / once the app quits)
     let t = Instant::now();
-    let exposure = |p: &std::path::Path| match std::fs::read_to_string(p).ok().and_then(|x| lightcraft_engine::sidecar::parse_sidecar(&x, true).ok()).and_then(|x| x.develop) {
+    let exposure = |p: &std::path::Path| match std::fs::read_to_string(p)
+        .ok()
+        .and_then(|x| lightcraft_engine::sidecar::parse_sidecar(&x, true).ok())
+        .and_then(|x| x.develop)
+    {
         Some(lightcraft_engine::sidecar::DevelopPatch::Full(d)) => Some(d.light.exposure),
         _ => None,
     };
-    while t.elapsed() < Duration::from_secs(10) && (exposure(&sidecar).is_none_or(|e| (e - 0.8).abs() > 1e-6) || h.app.session.sidecars_pending() > 0) {
+    while t.elapsed() < Duration::from_secs(10) && (exposure(&sidecar).is_none_or(|e| (e - 0.8).abs() > 1e-6) || h.app.session.sidecars_pending() > 0)
+    {
         step(&mut h, &mut Vec::new());
     }
     assert_eq!(exposure(&sidecar), Some(0.8), "the last edit reached the sidecar");

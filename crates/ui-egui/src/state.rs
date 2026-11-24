@@ -613,7 +613,9 @@ pub fn installed_editors() -> Vec<String> {
     FOUND
         .get_or_init(|| {
             let mut names: Vec<String> = std::fs::read_dir("/Applications")
-                .map(|d| d.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".app")).map(str::to_string)).collect())
+                .map(|d| {
+                    d.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".app")).map(str::to_string)).collect()
+                })
                 .unwrap_or_default();
             names.retain(|n| n == "PhotoCraft" || n.starts_with("Adobe Photoshop") || n == "Pixelmator Pro" || n.starts_with("Affinity Photo"));
             names.sort_by_key(|n| (n != "PhotoCraft", n.clone()));
@@ -947,6 +949,9 @@ pub struct UiState {
     /// shoots. and Collections rows whose folders / cameras are listed under them (`album:<id>`,
     /// `shoot:<folder key>`); the rest are closed.
     pub parts_open: std::collections::BTreeSet<String>,
+    /// Lists and sections folded by their header (`crate::folds`): section id → open. A section
+    /// not listed is open. Saved in ui.json, so a fold survives quitting.
+    pub folds: std::collections::BTreeMap<String, bool>,
     /// The rows under a collection are its cameras (`cam.`), not its folders (`fldr.`).
     pub collection_parts_by_camera: bool,
     /// Local sidebar locations hidden with “Remove from Local” (folders on disk are untouched).
@@ -1506,6 +1511,7 @@ impl Default for UiState {
             collapsed_sidebar: Vec::new(),
             folders_open: Default::default(),
             parts_open: Default::default(),
+            folds: Default::default(),
             collection_parts_by_camera: false,
             hidden_locations: Vec::new(),
             dragging_control: None,

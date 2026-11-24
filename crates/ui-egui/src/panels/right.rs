@@ -162,11 +162,39 @@ pub struct QuickTool {
 
 /// What the tool strip's quick slots can hold (Settings ▸ Interface ▸ quick tools).
 pub const QUICK_TOOLS: &[QuickTool] = &[
-    QuickTool { id: "quick.center", icon: Icon::Radial, tip: "Center mask — a soft vignette mask on the middle (right-click: make this one the default)", command: "mask.center", params: "{}", label: "center." },
-    QuickTool { id: "quick.dust", icon: Icon::Dust, tip: "Find dust spots — review them in Remove and apply", command: "remove.dust", params: "{}", label: "dust." },
-    QuickTool { id: "quick.wb", icon: Icon::Picker, tip: "White Balance Selector (W)", command: "tool.wbPicker", params: "{}", label: "white.balance." },
+    QuickTool {
+        id: "quick.center",
+        icon: Icon::Radial,
+        tip: "Center mask — a soft vignette mask on the middle (right-click: make this one the default)",
+        command: "mask.center",
+        params: "{}",
+        label: "center.",
+    },
+    QuickTool {
+        id: "quick.dust",
+        icon: Icon::Dust,
+        tip: "Find dust spots — review them in Remove and apply",
+        command: "remove.dust",
+        params: "{}",
+        label: "dust.",
+    },
+    QuickTool {
+        id: "quick.wb",
+        icon: Icon::Picker,
+        tip: "White Balance Selector (W)",
+        command: "tool.wbPicker",
+        params: "{}",
+        label: "white.balance.",
+    },
     QuickTool { id: "quick.auto", icon: Icon::Sliders, tip: "Auto settings", command: "develop.auto", params: "{}", label: "auto." },
-    QuickTool { id: "quick.subject", icon: Icon::Subject, tip: "Select Subject mask", command: "mask.add", params: r#"{"kind": "subject"}"#, label: "subject." },
+    QuickTool {
+        id: "quick.subject",
+        icon: Icon::Subject,
+        tip: "Select Subject mask",
+        command: "mask.add",
+        params: r#"{"kind": "subject"}"#,
+        label: "subject.",
+    },
     QuickTool { id: "quick.sky", icon: Icon::Sky, tip: "Select Sky mask", command: "mask.add", params: r#"{"kind": "sky"}"#, label: "sky." },
 ];
 

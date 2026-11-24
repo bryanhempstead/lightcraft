@@ -94,10 +94,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ("depthRange", "depth.", Icon::Sliders),
         ];
         // four 52 pt tiles a row when they fit, else as many as fit (at least three, shrunk)
-        let label_w = tiles
-            .iter()
-            .map(|(_, l, _)| ui.painter().layout_no_wrap(l.to_string(), t.font(10.5), t.text_dim).size().x)
-            .fold(0.0, f32::max);
+        let label_w = tiles.iter().map(|(_, l, _)| ui.painter().layout_no_wrap(l.to_string(), t.font(10.5), t.text_dim).size().x).fold(0.0, f32::max);
         let (cols, tile) = tile_layout(ui.available_width(), label_w);
         egui::Grid::new("mask-tiles").spacing(vec2(TILE_GAP, TILE_GAP)).show(ui, |ui| {
             for (i, (kind, label, icon)) in tiles.iter().enumerate() {

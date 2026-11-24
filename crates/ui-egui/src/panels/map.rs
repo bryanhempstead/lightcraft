@@ -446,7 +446,9 @@ fn canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, area: Rect, pins: &[(u64, 
         register(ui.ctx(), "map:unplaced", cr);
         chip_top = cr.top();
         if cresp
-            .on_hover_text(crate::i18n::tr("Not on the map: no GPS position. Click to show just them, then drag them onto the map or use Place & Tags in the Library"))
+            .on_hover_text(crate::i18n::tr(
+                "Not on the map: no GPS position. Click to show just them, then drag them onto the map or use Place & Tags in the Library",
+            ))
             .clicked()
             && let Err(e) = app.run("map.locationFilter", json!({"mode": "untagged"}))
         {

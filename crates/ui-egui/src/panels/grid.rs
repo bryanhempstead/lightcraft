@@ -747,7 +747,10 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     }
     // not a raw: its file type at the top left (JPG, PNG, TIF, HEIC, PSD…), so rendered files stand
     // apart from raws at a glance (Bryan, 2026-11-23)
-    if photo.kind == lightcraft_catalog::MediaKind::Image && !photo.format.trim().is_empty() && matches!(photo.source, lightcraft_catalog::Source::File { .. }) {
+    if photo.kind == lightcraft_catalog::MediaKind::Image
+        && !photo.format.trim().is_empty()
+        && matches!(photo.source, lightcraft_catalog::Source::File { .. })
+    {
         let g = p.layout_no_wrap(photo.format.trim().to_uppercase(), t.semibold(9.5), Color32::WHITE);
         let at = img_rect.left_top() + vec2(6.0, 6.0);
         let tag = Rect::from_min_size(at, g.size() + vec2(12.0, 6.0));
