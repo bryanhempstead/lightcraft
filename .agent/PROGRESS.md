@@ -7,6 +7,23 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
 
 ## Open
 
+- [ ] (mergewave agent, 2026-11-24, branch `agent-mergewave`, worktree ~/crafts/lc-mergewave, NOT merged) **LC-MERGE-WAVE:
+  merges. found in three steps + the stacked-wave view** (Bryan: "a stacked wave that shows all the photos", "most of
+  what I shoot is panoramas", one pool per shoot folder). Engine `merge_find.rs`: runs by time (body / lens / focal;
+  exposure never splits a run) → `decide` compares every run's 64 px thumbnails (`link`: coarse-to-fine shift
+  search, peak check) → positions (bracket / focus stack / burst) linked by shifts = panorama / hdr.panorama.; a
+  drifting-shutter handheld pano and a shifted "bracket" are panoramas, bursts nothing; `Confidence` sure / likely /
+  maybe + plain-word `reasons`; `MergeGroup.found_frames` (frames taken out stay listed). Commands: `merge.candidates`
+  adds confidence, reasons, frames[], cameras, subfolders (the Second Brain contract); new `merge.thumbs`,
+  `merge.restore`, `merge.setFrames`; UI `merge.cardSize`. `MergeType::Stack` tag = `focus.stack.`. App
+  `merges.rs::view`: a panel per group (kind menu, confidence, camera / subfolder chips, reasons, merge. /
+  send.back.), cards fanned on a wave, hover / click spreads them, card click = frame out / back, double-click =
+  loupe, header click / ⌘ / ⇧ picks groups, `sent back.` section with restore.; sidebar `merges.` row on the shoot
+  folder only (`left.rs::merges_pool`, from `lightcraft_catalog::shoots`). Tests: engine `tests_merges.rs` (+5),
+  `merge_find` unit tests (+2), ui `tests_merges.rs::the_merges_view_is_a_stacked_wave_per_group`. Docs: merge.md,
+  control-protocol.md, parity.md. Left: thresholds still only from synthetic scenes — try on Bryan's real panoramas
+  (needs.you test.); merge.thumbs only serves cached thumbnails unless `render: true`; a long run (> 60 frames) is cut.
+
 - [ ] (Claude fix session, 2026-11-24) **Everything from 11-22 / 11-23 is merged** (every agent branch is 0 ahead of
   main; their entries moved to ## Done with their "Left:" lines). Real leftovers worth picking up: (done 11-24: filter-bar
   heart `filter:favorite`); merges. thresholds not tried on Bryan's real brackets/panoramas; edit-stall

@@ -222,3 +222,229 @@ fn the_automatic_finder_looks_once_per_change() {
     assert_eq!(r["found"], 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Panorama frames as PNGs in `dir` (`yaws` degrees apart), each `ev` stops brighter.
+fn pano_files(dir: &std::path::Path, prefix: &str, yaws: &[f64], evs: &[f32]) -> Vec<String> {
+    let mut paths = Vec::new();
+    for (i, v) in lightcraft_merge::synth::pano_views(480, 360, 420.0, yaws).unwrap().into_iter().enumerate() {
+        let k = 2f32.powf(evs.get(i).copied().unwrap_or(0.0));
+        let v = lightcraft_raster::Rgb32f::from_fn(v.width, v.height, |x, y| v.data[y * v.width + x].map(|c| (c * k).min(1.0)));
+        let img = v.to_srgb8();
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let p = dir.join(format!("{prefix}{i}.png"));
+        std::fs::write(&p, png).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    paths
+}
+
+/// Bryan shoots handheld panoramas in aperture priority: the shutter drifts between frames. They
+/// are found as one panorama (not an HDR), with its confidence, its reasons and its frames.
+#[test]
+fn a_drifting_handheld_panorama_is_a_panorama_not_an_hdr() {
+    let dir = temp_dir("drift");
+    let mut s = Session::new().with_fs();
+    // the shutter steps a whole stop per frame: in the metadata alone, a bracket
+    let shutters = ["1/500", "1/250", "1/125"];
+    let ids = import(&mut s, pano_files(&dir, "D_", &[-25.0, 0.0, 25.0], &[-1.0, 0.0, 1.0]));
+    for (i, id) in ids.iter().enumerate() {
+        exif(&mut s, *id, &format!("2026-11-20T12:00:0{}", i * 2), shutters[i], None);
+    }
+    let r = s.execute("merge.find", &json!({"path": dir.to_string_lossy()})).unwrap();
+    assert_eq!(r["found"], 1, "{r}");
+    let g = &r["groups"][0];
+    assert_eq!(g["kind"], "pano", "{g}");
+    assert_eq!(g["tag"], "panorama.");
+    assert_eq!(ids_of(&g["photos"]), ids);
+    assert!(["sure", "likely", "maybe"].contains(&g["confidence"].as_str().unwrap()), "{g}");
+    let reasons: Vec<&str> = g["reasons"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(reasons.iter().any(|r| r.starts_with("3 frames in 4 s")), "{reasons:?}");
+    assert!(reasons.iter().any(|r| r.starts_with("each frame overlaps the last by ~")), "{reasons:?}");
+    assert!(reasons.iter().any(|r| r.starts_with("exposure drifts by")), "{reasons:?}");
+    // a small drift (1/250, 1/320, 1/200) too
+    let dir2 = temp_dir("drift2");
+    let ids2 = import(&mut s, pano_files(&dir2, "E_", &[-20.0, 0.0, 20.0], &[0.0, -0.33, 0.33]));
+    for (i, (id, sh)) in ids2.iter().zip(["1/250", "1/320", "1/200"]).enumerate() {
+        exif(&mut s, *id, &format!("2026-11-20T13:00:0{}", i * 2), sh, None);
+    }
+    let r = s.execute("merge.find", &json!({"path": dir2.to_string_lossy()})).unwrap();
+    assert_eq!(r["found"], 1, "{r}");
+    assert_eq!(r["groups"][0]["kind"], "pano");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&dir2);
+}
+
+/// A bracket at one framing whose camera stepped only the shutter (manual mode) is an HDR; a burst
+/// (same framing, same exposure) is nothing.
+#[test]
+fn a_shutter_bracket_is_hdr_and_a_burst_is_nothing() {
+    let (mut s, dir, ids, _, _) = brackets("shutter");
+    // no exposure compensation recorded: the pixels say it is one framing
+    for (i, (id, sh)) in ids.iter().zip(["1/500", "1/125", "1/30"]).enumerate() {
+        exif(&mut s, *id, &format!("2026-11-20T09:30:0{i}"), sh, None);
+    }
+    let r = s.execute("merge.find", &json!({"path": dir.to_string_lossy()})).unwrap();
+    assert_eq!(r["found"], 1, "{r}");
+    assert_eq!(r["groups"][0]["kind"], "hdr");
+    assert_eq!(r["groups"][0]["confidence"], "sure", "{r}");
+    // a burst: the same picture three times at one exposure
+    let burst = temp_dir("burst");
+    let mut paths = Vec::new();
+    for i in 0..3 {
+        let p = burst.join(format!("B_{i}.dng"));
+        std::fs::write(&p, lightcraft_merge::synth::bracket_dngs(240, 160, &[0.0]).unwrap().remove(0)).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let bids = import(&mut s, paths);
+    for (i, id) in bids.iter().enumerate() {
+        exif(&mut s, *id, &format!("2026-11-20T15:00:0{i}"), "1/250", None);
+    }
+    let r = s.execute("merge.find", &json!({"path": burst.to_string_lossy()})).unwrap();
+    assert_eq!(r["found"], 0, "a burst is not a merge: {r}");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&burst);
+}
+
+/// A shoot folder with camera subfolders is one pool: found together, listed together, counted
+/// together; a group never mixes two cameras, and each says which camera and subfolder it is from.
+#[test]
+fn a_shoot_folder_with_camera_subfolders_is_one_pool() {
+    let shoot = temp_dir("pool");
+    let mut s = Session::new().with_fs();
+    let mut by_cam = Vec::new();
+    for (cam, sub, w) in [("LEICA M (Typ 262)", "M262", 240), ("RICOH GR III", "GR3", 200)] {
+        let d = shoot.join(sub);
+        std::fs::create_dir_all(&d).unwrap();
+        let mut paths = Vec::new();
+        // (another size: the same bytes would be one photo imported twice)
+        for (i, b) in lightcraft_merge::synth::bracket_dngs(w, 160, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+            let p = d.join(format!("IMG_{i}.dng"));
+            std::fs::write(&p, b).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+        let ids = import(&mut s, paths);
+        assert_eq!(ids.len(), 3);
+        // both cameras fire at the same moment
+        for (i, (id, (sh, b))) in ids.iter().zip([("1/500", -2.0), ("1/125", 0.0), ("1/30", 2.0)]).enumerate() {
+            exif(&mut s, *id, &format!("2026-11-20T09:30:0{i}"), sh, Some(b));
+            let mut m = s.catalog.photo(*id).unwrap().meta.clone();
+            m.camera = cam.into();
+            s.catalog.apply(Op::SetMeta { id: *id, meta: Box::new(m) }).unwrap();
+        }
+        by_cam.push((cam, sub, ids));
+    }
+    let root = shoot.to_string_lossy().to_string();
+    let r = s.execute("merge.find", &json!({"path": root, "deep": true})).unwrap();
+    assert_eq!(r["found"], 2, "{r}");
+    let c = s.execute("merge.candidates", &json!({"path": root, "deep": true})).unwrap();
+    let gs = c["groups"].as_array().unwrap();
+    assert_eq!(gs.len(), 2, "{c}");
+    for g in gs {
+        assert_eq!(g["cameras"].as_array().unwrap().len(), 1, "never two cameras in a group: {g}");
+        let cam = g["cameras"][0].as_str().unwrap();
+        let (_, sub, ids) = by_cam.iter().find(|(c, _, _)| *c == cam).unwrap();
+        assert_eq!(g["subfolders"], json!([sub]));
+        assert_eq!(ids_of(&g["photos"]), *ids);
+        assert_eq!(g["frames"][0]["subfolder"], *sub);
+    }
+    // the shoot folder's own (not deep) pool is empty; the deep one holds both
+    let counts = crate::merge_find::counts(&s.catalog);
+    assert_eq!(counts.folder(&root, true), 2);
+    assert_eq!(counts.folder(&root, false), 0);
+    s.execute("library.source", &json!({"kind": "merges", "path": root, "deep": true})).unwrap();
+    assert_eq!(s.visible_cloned().len(), 6);
+    let _ = std::fs::remove_dir_all(&shoot);
+}
+
+/// merge.setFrames takes frames out and puts them back (they stay listed, inGroup false);
+/// merge.dismiss sends a group back, merge.restore brings it back open.
+#[test]
+fn frames_can_be_taken_out_and_groups_sent_back_and_restored() {
+    let (mut s, dir, ids, other, _) = brackets("frames");
+    let folder = dir.to_string_lossy().to_string();
+    let gid = s.execute("merge.find", &json!({"path": folder})).unwrap()["groups"][0]["id"].as_str().unwrap().to_string();
+    let r = s.execute("merge.setFrames", &json!({"id": gid, "photos": [ids[2].0, ids[0].0]})).unwrap();
+    assert_eq!(ids_of(&r["photos"]), vec![ids[0], ids[2]], "capture order");
+    assert_eq!(ids_of(&r["out"]), vec![ids[1]]);
+    let c = s.execute("merge.candidates", &json!({"path": folder})).unwrap();
+    let g = &c["groups"][0];
+    assert_eq!(ids_of(&g["photos"]), vec![ids[0], ids[2]]);
+    let frames = g["frames"].as_array().unwrap();
+    assert_eq!(frames.len(), 3, "a frame taken out is still listed");
+    assert_eq!(frames.iter().map(|f| f["inGroup"].as_bool().unwrap()).collect::<Vec<_>>(), vec![true, false, true]);
+    // still in the view, to be put back
+    s.execute("library.source", &json!({"kind": "merges", "path": folder})).unwrap();
+    assert_eq!(s.visible_cloned(), ids);
+    // only found frames; one undo step
+    assert!(s.execute("merge.setFrames", &json!({"id": gid, "photos": [other.0]})).is_err());
+    assert!(s.execute("merge.setFrames", &json!({"id": "nope", "photos": []})).is_err());
+    assert!(s.execute("merge.setFrames", &json!({"id": gid})).is_err());
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(crate::merge_find::group(&s.catalog, &gid).unwrap().photos, ids);
+    s.execute("merge.setFrames", &json!({"id": gid, "photos": [ids[0].0]})).unwrap();
+    s.execute("merge.setFrames", &json!({"id": gid, "photos": ids.iter().map(|i| i.0).collect::<Vec<_>>()})).unwrap();
+    assert_eq!(crate::merge_find::group(&s.catalog, &gid).unwrap().photos, ids);
+    // send.back. → restore.
+    assert_eq!(s.execute("merge.dismiss", &json!({"ids": [gid]})).unwrap()["dismissed"], 1);
+    assert_eq!(s.execute("merge.candidates", &json!({"path": folder})).unwrap()["groups"], json!([]));
+    let sent = crate::merge_find::sent_back(&s.catalog, &crate::merge_find::Scope::Folder { path: folder.clone(), deep: false });
+    assert_eq!(sent.len(), 1);
+    assert!(s.execute("merge.setFrames", &json!({"id": gid, "photos": [ids[0].0]})).is_err(), "only an open group");
+    assert_eq!(s.execute("merge.restore", &json!({"ids": [gid]})).unwrap()["restored"], 1);
+    assert_eq!(s.execute("merge.restore", &json!({"ids": [gid]})).unwrap()["restored"], 0);
+    let c = s.execute("merge.candidates", &json!({"path": folder})).unwrap();
+    assert_eq!(c["groups"][0]["state"], "open");
+    assert!(s.execute("merge.restore", &json!({})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The JSON Second Brain reads (the shared contract, 2026-11-24): merge.candidates and
+/// merge.thumbs.
+#[test]
+fn candidates_and_thumbs_json_shape() {
+    let (mut s, dir, ids, _, _) = brackets("shape");
+    let folder = dir.to_string_lossy().to_string();
+    s.execute("merge.find", &json!({"path": folder})).unwrap();
+    let c = s.execute("merge.candidates", &json!({"path": folder, "deep": true, "state": "all"})).unwrap();
+    assert_eq!(c["running"], false);
+    let g = &c["groups"][0];
+    for k in ["id", "kind", "tag", "photos", "state", "result", "folder", "found", "confidence", "reasons", "frames", "cameras", "subfolders"] {
+        assert!(g.get(k).is_some(), "{k} in {g}");
+    }
+    assert_eq!(g["confidence"], "sure");
+    assert_eq!(g["reasons"][1], "exposures \u{2212}2 / 0 / +2");
+    assert_eq!(g["cameras"], json!(["LEICA M (Typ 262)"]));
+    assert_eq!(g["subfolders"], json!([""]), "the pool's own folder");
+    let f = &g["frames"][0];
+    let keys: Vec<&String> = f.as_object().unwrap().keys().collect();
+    assert_eq!(keys.len(), 8, "{f}");
+    assert_eq!(f["id"], ids[0].0);
+    assert!(f["file"].as_str().unwrap().ends_with("IMG_0.dng") && f["file"].as_str().unwrap().starts_with('/'));
+    assert_eq!(f["folder"], g["folder"]);
+    assert_eq!(f["camera"], "LEICA M (Typ 262)");
+    assert_eq!(f["captured"], "2026-11-20T09:30:00");
+    assert_eq!(f["exposure"], "1/500 f/8 ISO 200");
+    assert_eq!(f["inGroup"], true);
+    // an old group (stored before confidence and reasons): it still reads, with reasons from its
+    // frames' metadata
+    let gid = g["id"].as_str().unwrap().to_string();
+    let mut old = s.catalog.record(&format!("merge.group.{gid}")).unwrap().clone();
+    for k in ["confidence", "reasons", "foundFrames"] {
+        old.as_object_mut().unwrap().remove(k);
+    }
+    s.catalog.apply(Op::SetRecord { key: format!("merge.group.{gid}"), value: Some(old) }).unwrap();
+    let c = s.execute("merge.candidates", &json!({"path": folder})).unwrap();
+    assert_eq!(c["groups"][0]["confidence"], "likely");
+    assert_eq!(c["groups"][0]["reasons"], json!(["3 frames in 2 s", "exposures \u{2212}2 / 0 / +2"]));
+    // thumbnails: none cached yet → left out; rendered on request
+    let t = s.execute("merge.thumbs", &json!({"ids": [ids[0].0, 999_999]})).unwrap();
+    assert_eq!(t, json!({"thumbs": {}}));
+    let t = s.execute("merge.thumbs", &json!({"ids": [ids[0].0], "size": 160, "render": true})).unwrap();
+    let p = t["thumbs"][ids[0].0.to_string()].as_str().unwrap().to_string();
+    assert!(p.ends_with(".jpg") && std::path::Path::new(&p).exists(), "{t}");
+    let jpg = std::fs::read(&p).unwrap();
+    let img = lightcraft_preview::decode_jpeg(&jpg).unwrap();
+    assert!(img.width.max(img.height) <= 160, "{}x{}", img.width, img.height);
+    assert!(s.execute("merge.thumbs", &json!({})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}

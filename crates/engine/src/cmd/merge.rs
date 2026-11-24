@@ -71,7 +71,7 @@ fn merges_specs() -> Vec<CommandSpec> {
             "Find Merges",
             [],
             None,
-            "{scope?: {kind: all|folder|album, path?, deep?, id?} | path?, deep?, album?, background?: bool} — merges.: look for photo merges (brackets → hdr., shifted frames at one exposure → pano., one framing with the focus moving → stack., brackets at shifted framings → hdr.pano.) among the photos of a folder, a collection or the library, and keep them as open groups to review (frames already in a group, skipped ones too, are never suggested again); background: true looks on a worker thread in the app (→ {queued}) → {found, groups: [{id, kind, tag, photos, state, result, folder, found}]}",
+            "{scope?: {kind: all|folder|album, path?, deep?, id?} | path?, deep?: bool (a shoot folder with its camera subfolders: one pool), album?, background?: bool} — merges.: look for photo merges in three steps (frames fired close together by one body and lens; their thumbnails compared; classified and scored): frames overlapping after a shift → panorama. (exposure drift allowed), one framing at stepped exposures → hdr., one framing with the focus moving → focus.stack., brackets at shifted framings → hdr.panorama.; bursts are left out. Kept as open groups to review (frames already in a group, sent-back ones too, are never suggested again); background: true looks on a worker thread in the app (→ {queued}) → {found, groups: [{id, kind, tag, photos, state, result, folder, found, confidence, reasons}]}",
             always,
             |s, p| {
                 let scope = Scope::from_params(p).map_err(|e| bad("merge.find", e))?;
@@ -84,12 +84,13 @@ fn merges_specs() -> Vec<CommandSpec> {
             "Merge Groups",
             [],
             None,
-            "{scope? | path?, deep?, album?, state?: open|merged|dismissed|all (default: open and merged)} → {groups: [{id, kind, tag, photos, state, result, folder, found}], running: bool} the merges found (merges.)",
+            "{scope? | path?, deep?: bool (a shoot folder with its camera subfolders as one pool), album?, state?: open|merged|dismissed|all (default: open and merged)} → {groups: [{id, kind, tag, photos (the frames merge. merges), state, result, folder, found, confidence: sure|likely|maybe, reasons: [plain words], frames: [{id, file, folder, subfolder (relative to the pool's folder, \"\" if none), camera, captured, exposure, inGroup}], cameras, subfolders}], running: bool} the merges found (merges.)",
             always,
             |s, p| {
                 let scope = Scope::from_params(p).map_err(|e| bad("merge.candidates", e))?;
                 let want = str_param(p, "state").unwrap_or("live");
-                let list: Vec<Value> = groups(&s.catalog)
+                let root = scope.root();
+                let mut list: Vec<(String, Value)> = groups(&s.catalog)
                     .into_iter()
                     .filter(|g| scope.holds(&s.catalog, g))
                     .filter(|g| match want {
@@ -99,9 +100,34 @@ fn merges_specs() -> Vec<CommandSpec> {
                         "dismissed" => g.state == GroupState::Dismissed,
                         _ => g.state != GroupState::Dismissed,
                     })
-                    .map(|g| g.to_json())
+                    .map(|g| {
+                        let date = g.all_frames().first().and_then(|id| s.catalog.photo(*id)).and_then(|p| p.captured.clone()).unwrap_or_default();
+                        (date, g.to_json_full(&s.catalog, root))
+                    })
                     .collect();
-                Ok(json!({"groups": list, "running": s.merge_find_running()}))
+                // capture order, the oldest first
+                list.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1["id"].as_str().cmp(&b.1["id"].as_str())));
+                Ok(json!({"groups": list.into_iter().map(|(_, v)| v).collect::<Vec<_>>(), "running": s.merge_find_running()}))
+            }
+        ),
+        cmd!(
+            query "merge.thumbs",
+            "Merge Thumbnails",
+            [],
+            None,
+            "{ids: [photo id], size?: 320 (px, long edge; 64–1024), render?: bool (false)} → {thumbs: {\"<id>\": \"/abs/path.jpg\"}} small JPEGs from the thumbnail cache, written to merges-thumbs/ in the library; photos without a cached thumbnail yet are left out (render: true renders them now)",
+            always,
+            |s, p| {
+                let ids: Vec<PhotoId> = p
+                    .get("ids")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| bad("merge.thumbs", "`ids`: photo ids"))?
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .map(PhotoId)
+                    .collect();
+                let size = p.get("size").and_then(Value::as_u64).unwrap_or(320) as usize;
+                s.merge_thumbs(&ids, size, bool_or(p, "render", false))
             }
         ),
         cmd!(
@@ -121,14 +147,46 @@ fn merges_specs() -> Vec<CommandSpec> {
         ),
         cmd!(
             "merge.dismiss",
-            "Skip Merge",
+            "Send Back",
             [],
             None,
-            "{ids: [group id]} — merges. skip.: the open groups are never suggested again (⌘Z brings them back) → {dismissed}",
+            "{ids: [group id]} — merges. send.back.: not a merge; the frames stay in their folder and the groups are never suggested again (merge.restore or ⌘Z brings them back) → {dismissed}",
             always,
             |s, p| {
                 let ids = group_ids("merge.dismiss", p)?;
                 s.merge_dismiss(&ids)
+            }
+        ),
+        cmd!(
+            "merge.restore",
+            "Restore Merge",
+            [],
+            None,
+            "{ids: [group id]} — merges. restore.: sent-back groups are open again → {restored}",
+            always,
+            |s, p| {
+                let ids = group_ids("merge.restore", p)?;
+                s.merge_restore(&ids)
+            }
+        ),
+        cmd!(
+            "merge.setFrames",
+            "Merge Frames",
+            [],
+            None,
+            "{id: group id, photos: [photo id]} — which of the frames found with an open group it merges; the others stay with it, taken out (inGroup: false), to be put back → {id, photos, out}",
+            always,
+            |s, p| {
+                let id = str_param(p, "id").ok_or_else(|| bad("merge.setFrames", "`id`: a merge group id"))?;
+                let photos: Vec<PhotoId> = p
+                    .get("photos")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| bad("merge.setFrames", "`photos`: the photo ids the group merges"))?
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .map(PhotoId)
+                    .collect();
+                s.merge_set_frames(id, &photos)
             }
         ),
         cmd!(

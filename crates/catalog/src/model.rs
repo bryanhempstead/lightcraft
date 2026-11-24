@@ -160,7 +160,10 @@ impl CopyrightStatus {
 pub fn trusted_aperture(camera: &str, lens: &str, aperture: Option<f32>) -> Option<f32> {
     let a = aperture.filter(|a| a.is_finite() && *a > 0.0)?;
     let c = camera.to_ascii_lowercase();
-    let leica_m = c.contains("leica") && c.split_whitespace().any(|w| w == "m" || (w.starts_with('m') && w[1..].chars().all(|ch| ch.is_ascii_digit()) && w.len() > 1) || w.starts_with("m-") || w == "m-p");
+    let leica_m = c.contains("leica")
+        && c.split_whitespace().any(|w| {
+            w == "m" || (w.starts_with('m') && w[1..].chars().all(|ch| ch.is_ascii_digit()) && w.len() > 1) || w.starts_with("m-") || w == "m-p"
+        });
     if !leica_m {
         return Some(a);
     }
@@ -169,7 +172,12 @@ pub fn trusted_aperture(camera: &str, lens: &str, aperture: Option<f32>) -> Opti
         return None;
     }
     // "1:2.8/21" → 2.8 (Leica's names); otherwise "f/2.8" or "2.8/90"
-    let fastest = l.split("1:").nth(1).or_else(|| l.split("f/").nth(1)).and_then(|r| r.split(['/', ' ']).next()).and_then(|v| v.replace(',', ".").parse::<f32>().ok());
+    let fastest = l
+        .split("1:")
+        .nth(1)
+        .or_else(|| l.split("f/").nth(1))
+        .and_then(|r| r.split(['/', ' ']).next())
+        .and_then(|v| v.replace(',', ".").parse::<f32>().ok());
     match fastest {
         Some(f) if a + 0.05 < f => None,
         _ => Some(a),
@@ -427,12 +435,12 @@ impl MergeType {
             MergeType::HdrPano => "hdrPano",
         }
     }
-    /// The label on thumbnails and buttons: `hdr.`, `pano.`, `stack.`, `hdr.pano.`.
+    /// The label on thumbnails and buttons: `hdr.`, `panorama.`, `focus.stack.`, `hdr.panorama.`.
     pub fn tag(self) -> &'static str {
         match self {
             MergeType::Hdr => "hdr.",
             MergeType::Pano => "panorama.",
-            MergeType::Stack => "stack.",
+            MergeType::Stack => "focus.stack.",
             MergeType::HdrPano => "hdr.panorama.",
         }
     }

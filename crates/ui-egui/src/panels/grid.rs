@@ -111,7 +111,7 @@ impl GridCache {
 }
 
 /// Width / height of each photo's cell: its cropped, oriented shape.
-fn aspects(cat: &Catalog, ids: &[PhotoId]) -> Vec<f32> {
+pub(crate) fn aspects(cat: &Catalog, ids: &[PhotoId]) -> Vec<f32> {
     ids.iter()
         .map(|id| {
             let p = cat.photo(*id);
@@ -165,12 +165,15 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     }
-    let merges = app.session.source == lightcraft_engine::LibrarySource::Merges;
-    if merges {
-        // merges.: its own bar (find., all. / none., merge. / skip., both. / merges.only. / unmerge.);
-        // the filter bar doesn't apply to it
+    if app.session.source == lightcraft_engine::LibrarySource::Merges {
+        // merges.: its own bar and its own view (each group a stacked wave of its frames); the
+        // filter bar doesn't apply to it
         crate::merges::bar(app, ui);
-    } else {
+        app.canvas_rect = Some(ui.max_rect());
+        crate::merges::view(app, ui);
+        return;
+    }
+    {
         super::chips::show(app, ui, &chips);
         if app.ui.filter_bar {
             super::filterbar::show(app, ui);
@@ -180,15 +183,6 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     app.canvas_rect = Some(ui.max_rect());
-    if ids.is_empty() && merges {
-        let body = if app.ui.settings.merge_find == crate::merges::FindMode::Auto {
-            "Brackets, panoramas and focus stacks show up here as LightCraft finds them. find. looks now"
-        } else {
-            "Click find. to look here for brackets (hdr.), panoramas (pano.) and focus stacks (stack.)"
-        };
-        super::empty_message(ui, ui.max_rect(), "No merges here", body);
-        return;
-    }
     if ids.is_empty() {
         if !chips.is_empty() {
             let body = match total {
@@ -227,8 +221,6 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let runs = match app.session.source {
         // a published collection: New / Modified / Published / Deleted, not dates
         lightcraft_engine::LibrarySource::Published(c) => publish_runs(ui, &app.session.catalog, c, &ids, generation),
-        // merges.: one block per found group, then the merged photos
-        lightcraft_engine::LibrarySource::Merges => merges_runs(ui, &app.session, &ids, generation),
         _ => app.caches.grid.runs(stats, &app.session.catalog, &ids, runs_key),
     };
     // the layout only changes with the photos (and their shapes), the grouping, the width and
@@ -468,31 +460,6 @@ fn publish_runs(ui: &egui::Ui, cat: &Catalog, c: u64, ids: &[PhotoId], generatio
     runs
 }
 
-/// The blocks of a merges. view ([`lightcraft_engine::merge_find::view`]), once per view generation.
-fn merges_runs(ui: &egui::Ui, session: &lightcraft_engine::Session, ids: &[PhotoId], generation: u64) -> Arc<Vec<DateRun>> {
-    let key = egui::Id::new("merges-runs");
-    if let Some((g, r)) = ui.data(|d| d.get_temp::<(u64, Arc<Vec<DateRun>>)>(key))
-        && g == generation
-    {
-        return r;
-    }
-    let scope = session.merges_scope.clone().unwrap_or_default();
-    let mut start = 0;
-    let mut runs = Vec::new();
-    for v in lightcraft_engine::merge_find::view(&session.catalog, &scope) {
-        // the view the grid shows is the engine's list: stop where they part (never mislabel)
-        let n = v.ids.len();
-        if ids.get(start..start + n) != Some(&v.ids[..]) {
-            break;
-        }
-        runs.push(DateRun { key: v.key, label: v.label, start, count: n });
-        start += n;
-    }
-    let runs = Arc::new(runs);
-    ui.data_mut(|d| d.insert_temp(key, (generation, runs.clone())));
-    runs
-}
-
 /// The fold id of a grid group (`grid.group:<key>`: a date, `publish:new`, `merges:…`).
 fn group_fold_id(run: &DateRun) -> String {
     format!("grid.group:{}", if run.key.is_empty() { "unknown" } else { &run.key })
@@ -527,14 +494,6 @@ fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: 
     // the triangle folds; a click on the rest of the header still picks the group's photos
     let r = group_fold(ui, run, full, pinned);
     let p = ui.painter();
-    if run.key.starts_with("merges:") {
-        // merges.: the kind (a menu), the count, merge. / skip.; a click on the rest picks the group
-        crate::merges::group_header(app, ui, &run.key, run.count, r, pinned);
-        if resp.clicked() {
-            select_run(app, ui, run, ids);
-        }
-        return;
-    }
     let title =
         if run.key.starts_with("publish:") { crate::i18n::tr(&run.label).to_string() } else { crate::i18n::date_group_label(&run.key, false) };
     let g = p.layout_no_wrap(title, t.semibold(15.0), if resp.hovered() { t.text } else { t.text_label });
