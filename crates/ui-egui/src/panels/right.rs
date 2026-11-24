@@ -540,7 +540,7 @@ pub(crate) fn transform(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &lightcra
 }
 
 /// Remove ▸ Detect (⌥⇧O, `det.`): what was found, as chips to pick (click, ⌘-click, ⇧-click, `all.` / `none.`),
-/// hovered ones highlighted on the photo; `rem.` removes the picked ones (generatively when the model is there).
+/// hovered ones highlighted on the photo; `remove.` removes the picked ones (generatively when the model is there).
 fn detect_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     app.ui.remove_hover_chip = None;
     let t = Tokens::get(ui.ctx());
@@ -600,7 +600,7 @@ fn detect_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             app.ui.remove_picked.clear();
         }
         let k = app.ui.remove_picked.len();
-        let r = text_button(ui, "removeApply", &format!("rem.{k}"), false)
+        let r = text_button(ui, "removeApply", &format!("remove.{k}"), false)
             .on_hover_text(crate::i18n::tr("Remove the picked objects (generatively when the model is installed)"));
         if r.clicked() && k > 0 {
             let picked = std::mem::take(&mut app.ui.remove_picked);

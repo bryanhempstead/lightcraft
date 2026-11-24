@@ -32,8 +32,8 @@ Shifted number keys also use the physical number key when the keyboard reports p
 `Shift+P` picks and advances in the two library grids. In other views it retains LightCraft's
 Presets-panel binding. `Shift+Z` remains an alternative pick-and-advance key in all views.
 
-Settings ▸ shrt. ▸ `lr.z.picks.` switches to Lightroom desktop's own keys: `Z` picks, `P` shows or hides the
-photos (left) panel and `Space` toggles zoom; `lr.p.picks.` (the default) and `lr.classic.` keep `P` = pick.
+Settings ▸ shortcuts. ▸ `lightroom.z.picks.` switches to Lightroom desktop's own keys: `Z` picks, `P` shows or hides the
+photos (left) panel and `Space` toggles zoom; `lightroom.p.picks.` (the default) and `lr.classic.` keep `P` = pick.
 
 The macOS native menu displays plain-key bindings but leaves execution to egui; only shortcuts
 AppKit delivers to the menu (Command, Control or function keys) are skipped by egui. The native

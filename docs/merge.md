@@ -72,9 +72,9 @@ their folder and their collections; nothing is merged until he says so.
   frames from one body / lens / focal length taken a few seconds apart (plus the exposure) form a
   run. Exposure steps at one aperture and ISO (shutter or compensation, ≥ 0.9 EV in all) →
   `hdr.`; frames at one exposure are compared as 64 px grey thumbnails: shifted ≥ 10 % with a
-  good match there (NCC ≥ 0.6, 0.15 better than unshifted) → `pano.`; the same framing with the
+  good match there (NCC ≥ 0.6, 0.15 better than unshifted) → `panorama.`; the same framing with the
   sharp 4 × 4 tiles moving (or a recorded focus distance stepping) → `stack.`; brackets of one
-  pattern at shifted framings → `hdr.pano.`. Missing metadata or pixels just mean nothing is found.
+  pattern at shifted framings → `hdr.panorama.`. Missing metadata or pixels just mean nothing is found.
 - **When**: Settings ▸ General ▸ find merges: `auto.` (default) looks in the background at folders
   whose photos changed (fingerprints in the `merge.scanned` record; all folders the first time);
   `find.` only when find. is clicked in a merges. view.

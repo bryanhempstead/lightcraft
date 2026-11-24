@@ -9,7 +9,7 @@ choose where the result goes:
   reduction set to 0 after Denoise) and stacked on top of the original.
 - **in.place.**: the photo itself renders from the enhanced picture (kept in `~/Library/Caches/LightCraft/Enhance`,
   never next to your files). Detail ▸ Denoise then shows the in-place amount; changing it makes the result again in
-  the background. Undo or **rem.** goes back to the plain raw. If the cache file is gone (cleared caches, another
+  the background. Undo or **remove.** goes back to the plain raw. If the cache file is gone (cleared caches, another
   Mac), the photo renders from the raw until it is made again (automatically for the photo being edited;
   `enhance.status` reports it).
 
@@ -28,7 +28,7 @@ rawDetails, superResolution, inPlace, stack}`, `enhance.preview {…, beforePath
 
 The models live in `~/Library/Application Support/LightCraft/Models/Enhance/<model>/` (override:
 `LIGHTCRAFT_ENHANCE_MODELS`). The dialog and the Lens Blur panel offer each missing model with its size and licence
-(**dl.**); `enhance.model.download {model, acknowledged: true}` does the same. Each download is size- and
+(**download.**); `enhance.model.download {model, acknowledged: true}` does the same. Each download is size- and
 SHA-256-pinned (`crates/enhance/src/models.rs`).
 
 Denoise and Raw Details need a Bayer raw (X-Trans, Foveon and already-demosaiced files such as iPhone ProRAW are
@@ -71,7 +71,7 @@ defaults (Blur Amount 50, focused on the nearest subject). Blur Amount, **Bokeh*
 Boost (bright highlights become bright discs), the **Focal Range** over the depth histogram (Focal Distance and
 Range sliders, or **focus.** and click the photo), **depth.** (Visualize Depth: near warm, far cool), **redo.**
 (estimate the depth again), and **Refine** brushes (**focus.brush.** paints sharp, **blur.brush.** paints fully
-out of focus; **clr.** removes them). It renders in the scene-linear stage at output resolution with a circle of
+out of focus; **clear.** removes them). It renders in the scene-linear stage at output resolution with a circle of
 confusion relative to the long edge, so previews and exports match.
 
 Masking ▸ **Depth** adds a **Depth Range** mask (Near, Far, Smoothness over 0 nearest … 100 farthest), estimating

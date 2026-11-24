@@ -5,20 +5,20 @@ section I). This page is about its AI side.
 
 ## Generative Remove (Use Generative AI)
 
-**gen.ai.** in the Remove panel (Lightroom: *Use Generative AI*, ⌥⇧G) makes every new Remove or Fill stroke a
+**generative.ai.** in the Remove panel (Lightroom: *Use Generative AI*, ⌥⇧G) makes every new Remove or Fill stroke a
 *generative* spot. Like Lightroom's Generative Remove it is a **diffusion model** that repaints the area under the
 stroke with what belongs there — grass with blades, water with ripples, a path that carries on — in a few different
 ways to pick from. Two engines, both open models downloaded on request, never part of LightCraft:
 
 | engine | model | licence | download | a variation (M3 Pro, measured) |
 |---|---|---|---|---|
-| **gen.ai.** (default) | Stable Diffusion 1.5 Inpainting (RunwayML), on LaMa's first guess | CreativeML OpenRAIL-M | `gen-fill`, 2.13 GB | ~10 s for a crop of 512 px, ~18 s for 1024 px |
+| **generative.ai.** (default) | Stable Diffusion 1.5 Inpainting (RunwayML), on LaMa's first guess | CreativeML OpenRAIL-M | `gen-fill`, 2.13 GB | ~10 s for a crop of 512 px, ~18 s for 1024 px |
 | **quick.** | LaMa big-lama ("Resolution-robust Large Mask Inpainting with Fourier Convolutions", Samsung Research) | Apache-2.0 | `inpaint`, 204 MB | ~1 s for 512 px, ~4.5 s for 1024 px |
 
-**quick.** (beside gen.ai.) makes new spots LaMa-only; on a selected spot **quick.** switches that spot's engine
+**quick.** (beside generative.ai.) makes new spots LaMa-only; on a selected spot **quick.** switches that spot's engine
 (`spot.update {quick}`; each engine keeps its own fills, so switching back finds them again).
 
-### How gen.ai. fills (`crates/enhance/src/genfill.rs`)
+### How generative.ai. fills (`crates/enhance/src/genfill.rs`)
 
 1. **The crop.** The model looks at the spot plus its own size of surroundings on each side, rendered at the
    photo's own resolution up to 3072 px across (`LIGHTCRAFT_GENAI_EDGE`, 256…8192; a larger crop is scaled down).
@@ -44,7 +44,7 @@ ways to pick from. Two engines, both open models downloaded on request, never pa
 ### Variations, cache, fallbacks
 
 - **Variations:** each spot gets three. Pick with **<** / **>** in the panel, ⌥← / ⌥→ (Lightroom) or Shift+, /
-  Shift+. ; **more.** adds three more (up to eight). gen.ai.'s variations are seeds (truly different fills); LaMa
+  Shift+. ; **more.** adds three more (up to eight). generative.ai.'s variations are seeds (truly different fills); LaMa
   (quick.) is deterministic, so its variations come from showing it the spot differently: as it is, mirrored, with
   more of the surroundings, and at a coarser scale.
 - **Progress and stop:** in the app fills are made in the background (**making… 40%**, **stop.** = `remove.cancel`,
@@ -59,12 +59,12 @@ ways to pick from. Two engines, both open models downloaded on request, never pa
   later white balance and tone edits apply to them like to the rest of the photo. Missing pixels (cleared caches,
   another Mac) are made again from the photo. Moving or resizing the spot, or editing a spot before it, makes new
   ones.
-- **Never a crash on model or memory failure.** Without the diffusion model a gen.ai. spot is filled by LaMa and
-  the panel says so (with the model's **dl.**); the fill is marked, and remade by the diffusion model once it is
+- **Never a crash on model or memory failure.** Without the diffusion model a generative.ai. spot is filled by LaMa and
+  the panel says so (with the model's **download.**); the fill is marked, and remade by the diffusion model once it is
   installed (when the download finishes, for the photo on screen). If the diffusion model fails (memory, a damaged
   file) LaMa fills the spot with a notice, and **remake.** (`remove.generate {remake: "fallbacks"}`) tries again.
   Without any model the spot is filled content-aware (PatchMatch, like Fill).
-- **Downloads:** each model is downloaded on request (**dl.**, whose hover states size and licence; or
+- **Downloads:** each model is downloaded on request (**download.**, whose hover states size and licence; or
   `enhance.model.download {model: "gen-fill" | "inpaint", acknowledged: true}`) from a pinned Hugging Face commit,
   size- and SHA-256-checked (`crates/enhance/src/models.rs`), into the Enhance models folder (`docs/enhance.md`).
   gen-fill is three files (the half-precision UNet, VAE and CLIP text encoder of
@@ -76,7 +76,7 @@ ways to pick from. Two engines, both open models downloaded on request, never pa
 
 `genfill_speed` on a public-domain photo (two hikers in a meadow, the hole over them; release build, model loaded):
 
-| crop (px) | LaMa | gen.ai. variation | where the time goes |
+| crop (px) | LaMa | generative.ai. variation | where the time goes |
 |---|---|---|---|
 | 391 × 512 | 1.1 s | 9.3–10.6 s | VAE encode 2.1 s, 12 UNet passes 5.0 s, decode 2.0 s |
 | 782 × 1024 | 4.1 s | 17.4–18.5 s | the 512 px pass ~9.5 s + one 512 px refining tile ~8 s |
@@ -126,19 +126,19 @@ Candidates weighed for a local model on an M3 Pro (18 GB) whose licence Bryan's 
 
 ## Detect (⌥⇧O)
 
-**det.** (Lightroom: *Detect*) finds **people** (SAM 3, else the Scene parser of `docs/ai-masks.md`), **wires and
+**detect.** (Lightroom: *Detect*) finds **people** (SAM 3, else the Scene parser of `docs/ai-masks.md`), **wires and
 cables** (SAM 3) and **sensor dust**, and offers them: each person is a chip (**1.**, **2.**, …), the wires one
 (**wires.**), all the dust one (**dust.N**). Hovering a chip or the object on the photo highlights it; click a chip
 or the object to pick it, ⌘-click to add or remove one, ⇧-click for the run from the last one, **all.** / **none.**.
-**rem.N** removes the picked ones in one undo step — each object as one Generative Remove spot when the model is
-installed (else content-aware Fill rows), dust with heal spots — and **clr.** forgets what was found.
+**remove.N** removes the picked ones in one undo step — each object as one Generative Remove spot when the model is
+installed (else content-aware Fill rows), dust with heal spots — and **clear.** forgets what was found.
 
 Commands: `remove.detect {people?, wires?, dust?}` → candidates, `remove.candidates`, `remove.apply {indices | all,
 generative?}`, `remove.clearCandidates`; `remove.detect {add: true}` keeps the old behaviour (every object at once).
 
 ## Remove Reflections
 
-**refl.** in the Remove panel (Lightroom Classic's Reflection Removal) splits the photo into the scene behind a
+**reflections.** in the Remove panel (Lightroom Classic's Reflection Removal) splits the photo into the scene behind a
 window and the reflection on it with **DSRNet** ("Single Image Reflection Separation via Component Synergy", Hu & Guo,
 ICCV 2023, Apache-2.0; the authors' `dsrnet_l` checkpoint trained with real-world pairs), on top of VGG-19's
 ImageNet features (torchvision's weights, BSD-3-Clause). **rmv.** takes the reflection away, **keep.** shows only the

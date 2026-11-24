@@ -25,10 +25,10 @@ they live; LightCraft is a second door into them, plus what only a photo editor 
   ⌘A and Esc (Esc again closes the gallery). With photos picked: `hide.` / `show.` (out of / back into the client's
   gallery; files untouched), `dev.` (double-click also) opens the source photo in Develop.
 - **Right panel**: settings (title, client, email, password, expiry `YYYY-MM-DD`, downloads, print store) with
-  `save.` / `undo.`; the link (`copy.`, `open.`, `pub.` / `unpub.`); **client picks** (`flag.` = Pick flag, `star.` =
-  4 stars, `show.` = the "client picks" collection in the Library); `re.exp.` / `all.` for galleries made here;
+  `save.` / `undo.`; the link (`copy.`, `open.`, `publish.` / `unpublish.`); **client picks** (`flag.` = Pick flag, `star.` =
+  4 stars, `show.` = the "client picks" collection in the Library); `re.export.` / `all.` for galleries made here;
   `slide.` makes a slideshow film of the picked photos (or all) in Second Brain.
-- **Left panel**: **new gallery from** the selection (`sel.`) or what the grid shows (`view.`: a collection, a shoot,
+- **Left panel**: **new gallery from** the selection (`selected.`) or what the grid shows (`view.`: a collection, a shoot,
   one camera-folder part of a collection, a filter), with a name, client and watermark (text or a watermark
   preset's name); the **client book** (a click fills the new gallery's client).
 
@@ -88,7 +88,7 @@ LOT48.
 | PATCH | `/v1/galleries/:id` | any of `name, clientName, clientEmail, password, expires, allowDownload, allowPrints, layout, cover, highlights, lightcraft` | `{gallery}` (another key: 422) |
 | DELETE | `/v1/galleries/:id` | | `{ok}` — the record only; folder and photos untouched |
 | POST | `/v1/galleries/:id/folder` | `{folder}` | `{gallery}` (re-counted) |
-| POST | `/v1/galleries/:id/publish` · `/unpublish` | | as the Client tab's pub. / unpub. |
+| POST | `/v1/galleries/:id/publish` · `/unpublish` | | as the Client tab's publish. / unpublish. |
 | GET | `/v1/galleries/:id/link` | | `{url, public, permanent, links: [per recipient]}` |
 | POST | `/v1/galleries/:id/hidden` | `{names, hide}` | `{hidden, cover, synced}` |
 | GET | `/v1/galleries/:id/picks` | | `{selected, highlights, hidden, arrange, comments: [{who, note, at, photos}]}` |
