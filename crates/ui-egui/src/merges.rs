@@ -171,6 +171,9 @@ fn queue(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
             app.session.set_group_kind(&g.id, k).map_err(|e| e.to_string())?;
         }
         let frames = app.session.merge_group_frames(&g, &only);
+        if frames.len() < 2 {
+            return Err(format!("{}: put two frames or more in the group to merge it", g.kind.tag()));
+        }
         app.merge.group_queue.push_back(crate::merge::GroupMerge { group: g.id.clone(), kind: k, frames });
         queued += 1;
     }
@@ -498,7 +501,8 @@ fn block(open: bool, reasons_h: f32, wave: &Wave, t: f32) -> Block {
         return Block { height: PAD + HEAD_H + PAD, reasons_top, wave_top: 0.0, wave_h: 0.0, t };
     }
     let wave_top = reasons_top + reasons_h + BLOCK_GAP;
-    let wave_h = wave.stack_h + (wave.spread_h - wave.stack_h) * t;
+    // spreading never shrinks it (a pointer near its bottom would leave, and it would fold back)
+    let wave_h = (wave.stack_h + (wave.spread_h - wave.stack_h) * t).max(wave.stack_h);
     Block { height: wave_top + wave_h + PAD + 2.0, reasons_top, wave_top, wave_h, t }
 }
 

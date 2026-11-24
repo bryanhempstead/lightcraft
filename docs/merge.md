@@ -63,25 +63,59 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
 - Panorama output is limited to `maxMegapixels` (default 40) — blending memory is ~25 bytes/pixel.
 - The browser build has no file access for merges yet.
 
-## merges. — found merges (Bryan's request, 2026-11-23)
+## merges. — found merges (Bryan's request, 2026-11-23; 2026-11-24)
 
 LightCraft looks for photos that belong together and lists them under a `merges.` row beneath
-their folder and their collections; nothing is merged until he says so.
+their shoot folder and their collections; nothing is merged until he says so. Most of what he
+shoots is panoramas (handheld, aperture priority), so finding them readily comes first.
 
-- **Finding** (`crates/engine/src/merge_find.rs`, `merge.find`): per folder, in capture order,
-  frames from one body / lens / focal length taken a few seconds apart (plus the exposure) form a
-  run. Exposure steps at one aperture and ISO (shutter or compensation, ≥ 0.9 EV in all) →
-  `hdr.`; frames at one exposure are compared as 64 px grey thumbnails: shifted ≥ 10 % with a
-  good match there (NCC ≥ 0.6, 0.15 better than unshifted) → `panorama.`; the same framing with the
-  sharp 4 × 4 tiles moving (or a recorded focus distance stepping) → `stack.`; brackets of one
-  pattern at shifted framings → `hdr.panorama.`. Missing metadata or pixels just mean nothing is found.
+- **Finding** (`crates/engine/src/merge_find.rs`, `merge.find`) — three steps:
+  1. *Time* (`plan`): per folder and camera, in capture order, frames from one body / lens / focal
+     length taken a few seconds apart (5 s plus the exposure) form a run. Exposure never splits a
+     run: a handheld panorama's shutter drifts.
+  2. *Similarity* (`decide`, `link`): every run's frames are compared as 64 px grey thumbnails —
+     best shift (coarse then fine, up to 75 % of the frame, ≥ 20 % overlap, the correlation
+     normalized so exposure doesn't matter, a peak check so a smooth sky matches nothing). Frames
+     of one framing (shift < 6 %) make a *position*: a bracket when the exposures step (≥ 0.9 EV
+     in all), a focus stack when the sharp 4 × 4 tiles move (or a recorded focus distance steps),
+     else a burst. Positions linked by shifts are a `panorama.` — `hdr.panorama.` when most of
+     them are brackets. So a "bracket" whose frames are shifted is a panorama, and bursts are
+     nothing. Where the pixels can't tell (no thumbnail, heavy clipping) a bracket fired quickly
+     with distinct exposures still counts, as `maybe.` / `likely.`.
+  3. *Classify + score*: each group gets `confidence` — `sure.` (every overlap a clear match moving
+     one way; a bracket at one framing whose camera stepped the compensation or that spans ≥ 1.5
+     EV), `likely.`, `maybe.` (a borderline panorama is `maybe.` rather than missed) — and its
+     `reasons` in plain words ("5 frames in 2.1 s", "each frame overlaps the last by ~40 %",
+     "frames move left → right", "exposure drifts by 0.7 stop (auto exposure): still one
+     panorama", "exposures −2 / 0 / +2", "same framing", "focus moves near → far").
+  Metadata alone settles two cases without pixels: a lone bracket whose camera stepped the
+  exposure compensation, and one framing at three or more recorded focus distances.
+- **One pool per shoot**: a shoot folder with camera subfolders (M262, GR3, X-T2 …) is one
+  merges. pool (`Scope::Folder {deep: true}`, the shoots of `lightcraft_catalog::shoots`); the
+  sidebar's `merges.` row sits on the shoot folder and its subfolders get none. A group never
+  mixes two cameras; each shows its camera and subfolder.
 - **When**: Settings ▸ General ▸ find merges: `auto.` (default) looks in the background at folders
   whose photos changed (fingerprints in the `merge.scanned` record; all folders the first time);
   `find.` only when find. is clicked in a merges. view.
-- **Groups**: `merge.group.<id>` library records (kind, frames, open / merged / dismissed, merged
-  photo). A group sharing a frame with an earlier one — skipped ones too — is never suggested again.
-- **Merging** (`merge.mergeGroups`; in the app one group at a time on the merge worker): the merged
-  DNG is written and imported as usual; its frames get `Photo.merge.into` and leave every view and
-  count (catalog v12; never deleted, files untouched); the merged photo goes into each collection
-  they were in, at the first frame's place, keeps their capture time, and shows its kind on the
-  thumbnail. `merge.showIn` both. / merges.only., `merge.unmerge` brings the frames back.
+- **Groups**: `merge.group.<id>` library records (kind, frames in the group, every frame found
+  with it (`foundFrames`), open / merged / dismissed, merged photo, confidence, reasons). Records
+  from before 2026-11-24 still load (likely., reasons worked out from the frames' metadata). A
+  group sharing a frame with an earlier one — sent-back ones too — is never suggested again.
+  `merge.setFrames` takes frames out of a group or puts them back; `merge.dismiss` (send.back.)
+  marks it not a merge, `merge.restore` brings it back.
+- **The view** (`crates/ui-egui/src/merges.rs`): not the grid. Each group is a panel — kind
+  (a menu), confidence, camera and subfolder chips, frame count, reasons, merge. / send.back. — with
+  its frames as overlapping cards fanned on a gentle wave. Hover spreads them side by side
+  (animated); a click on the group's empty area keeps them spread; the triangle folds the group.
+  A click on a card takes that frame out (dimmed, with a mark, still clickable) or puts it back; a
+  double-click opens it in the loupe. Groups are picked by their header (click, ⌘-click, ⇧-click,
+  all. / none., ⌘A). Then the `merged.` photos, then a foldable `sent back.` section with
+  restore. Bar: find. all. none. merge. send.back. both. merges.only. unmerge. smaller. bigger.
+- **Merging** (`merge.mergeGroups`; in the app one group at a time on the merge worker): the frames
+  in the group are merged into a DNG, imported as usual; its frames get `Photo.merge.into` and
+  leave every view and count (catalog v12; never deleted, files untouched); the merged photo goes
+  into each collection they were in, at the first frame's place, keeps their capture time, and
+  shows its kind on the thumbnail. `merge.showIn` both. / merges.only., `merge.unmerge` brings the
+  frames back.
+- **Second Brain** reads and acts through the same commands (`merge.candidates`, `merge.thumbs`,
+  …; see `docs/control-protocol.md` → merges.), so both apps always show the same groups.

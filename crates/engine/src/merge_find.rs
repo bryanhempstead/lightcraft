@@ -1559,6 +1559,10 @@ impl Session {
                 continue;
             };
             let frames = self.merge_group_frames(&g, only);
+            if frames.len() < 2 {
+                failed.push(json!({"group": id, "error": "fewer than two frames in the group (merge.setFrames)"}));
+                continue;
+            }
             let k = kind.unwrap_or(g.kind);
             let params = json!({"autoSettings": auto_settings, "stack": false, "autoCrop": true});
             let r = crate::merge::parse(k.command(), &params).and_then(|(mk, finish)| self.merge_now(mk, finish, &frames)).and_then(|info| {
