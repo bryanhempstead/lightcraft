@@ -137,6 +137,22 @@ fn locate(s: &mut Session, p: &Value) -> Result<Value> {
             still += 1;
         }
     }
+    // favorites kept safe: photos showing their kept copy since this folder went missing go back
+    // to their originals at the new place
+    let homes: Vec<(lightcraft_catalog::PhotoId, String)> = s
+        .catalog
+        .photos()
+        .filter(|ph| crate::fav_keep::uses_kept(&s.catalog, ph.id))
+        .filter_map(|ph| crate::fav_keep::kept(&s.catalog, ph.id).map(|k| (ph.id, k.from)))
+        .collect();
+    for (id, home) in homes {
+        let Ok(rel) = Path::new(&home).strip_prefix(src) else { continue };
+        let np = Path::new(&to).join(rel);
+        if np.is_file() {
+            let file_name = np.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            ops.push(Op::Relink { id, file_name, source: Source::File { path: np.to_string_lossy().to_string() }, format: None });
+        }
+    }
     let n = ops.len();
     if n == 0 {
         return Err(bad(C, format!("none of the photos from {from} are in {to}")));

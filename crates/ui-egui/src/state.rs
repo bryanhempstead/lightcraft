@@ -466,6 +466,11 @@ pub struct AppSettings {
     /// Up to four accent colours and the areas they colour (Settings ▸ Interface ▸ accents.,
     /// `app.accents`).
     pub accents: crate::accents::Accents,
+    /// Favorites kept safe: a hearted photo's original + its edits' sidecar are copied to
+    /// `fav_keep_dir` (Settings ▸ General ▸ Favorites ▸ keep:; on by default, Bryan 2026-11-24).
+    pub fav_keep: bool,
+    /// Where favorites are kept ([`lightcraft_engine::fav_keep::DEFAULT_ROOT`]: LOT48).
+    pub fav_keep_dir: String,
 }
 
 /// Develop View Options (LRC-DEV-VIEWOPTIONS): Develop's loupe has its own Info 1 / Info 2 lines,
@@ -544,6 +549,8 @@ impl Default for AppSettings {
             panel_order: Default::default(),
             panel_default_open: Default::default(),
             accents: crate::accents::Accents::default(),
+            fav_keep: true,
+            fav_keep_dir: lightcraft_engine::fav_keep::DEFAULT_ROOT.into(),
         }
     }
 }
@@ -1133,6 +1140,13 @@ pub struct UiState {
     /// while that toast does.
     #[serde(skip)]
     pub toast_undo: Option<String>,
+    /// The answer to "delete the kept copies too?" for the delete under way (favorites kept safe;
+    /// `None`: not asked, the copies stay).
+    #[serde(skip)]
+    pub delete_kept: Option<bool>,
+    /// "LOT48 is offline" was said for this stretch offline.
+    #[serde(skip)]
+    pub fav_offline_told: bool,
     /// The result of the last Find Missing Photos (it searches in the background).
     #[serde(skip)]
     pub last_find_missing: Option<serde_json::Value>,
@@ -1407,6 +1421,13 @@ pub enum Dialog {
         #[serde(default)]
         error: Option<String>,
     },
+    /// Favorites kept safe: some of the photos being deleted have a kept copy — delete those too?
+    /// keep. (OK, the default) or delete.too.; then the delete goes on as the Delete key says.
+    DeleteKept {
+        count: usize,
+        kept: usize,
+        rejected: bool,
+    },
     /// Settings ▸ Confirm first: ask before Delete does what the Delete key setting says (OK runs
     /// [`crate::menus::delete_now`]); `rejected`: Delete Rejected Photos.
     ConfirmDelete {
@@ -1598,6 +1619,8 @@ impl Default for UiState {
             map: MapUi::default(),
             toast: None,
             toast_undo: None,
+            delete_kept: None,
+            fav_offline_told: false,
             last_find_missing: None,
             rechecked_library: None,
             status: String::new(),

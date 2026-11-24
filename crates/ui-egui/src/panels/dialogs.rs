@@ -156,6 +156,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::Enhance { .. } => "Enhance",
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
+        Dialog::DeleteKept { .. } => "Kept Favorites",
         Dialog::DeletePhotos { rejected: true, .. } => "Delete Rejected Photos",
         Dialog::DeletePhotos { count, copies, .. } if count == copies => "Remove Virtual Copies",
         Dialog::DeletePhotos { .. } => "Delete Photos",
@@ -660,6 +661,21 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
                     ui.label(egui::RichText::new(crate::i18n::tr("Settings ▸ General ▸ Confirm first turns this question off.")).color(t.text_dim));
                 }
+                Dialog::DeleteKept { count, kept, .. } => {
+                    let disk = app.session.fav_keep.root.as_deref().map(lightcraft_engine::fav_keep::disk_name).unwrap_or_else(|| "the keep folder".into());
+                    let of = if *count == *kept { String::new() } else { format!(" of the {count}") };
+                    ui.label(if *kept == 1 && count == kept {
+                        format!("This favorite has a kept copy on {disk}. Delete the kept copy too?")
+                    } else {
+                        format!("{kept}{of} photos have a kept copy on {disk}. Delete the kept copies too?")
+                    });
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            "keep. leaves them safe in the keep folder (the usual choice); delete.too. moves them to the Trash with the photos (⌘Z brings them back).",
+                        ))
+                        .color(t.text_dim),
+                    );
+                }
                 Dialog::DeletePhotos { count, copies, rejected } => {
                     let (count, copies) = (*count, *copies);
                     let masters = count - copies.min(count);
@@ -820,6 +836,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         close = true;
                     }
                 }
+                // favorites kept safe: the kept copies go too
+                if let Dialog::DeleteKept { .. } = &dlg {
+                    let r = ui.button("delete.too.");
+                    crate::widgets::register(ui.ctx(), "button:dialogDeleteKept", r.rect);
+                    if r.clicked() {
+                        app.ui.delete_kept = Some(true);
+                        confirm = true;
+                    }
+                }
                 // Lightroom's middle choice: out of the library, files kept
                 if let Dialog::DeletePhotos { count, copies, rejected } = &dlg
                     && count > copies
@@ -827,7 +852,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let r = ui.button("remove.");
                     crate::widgets::register(ui.ctx(), "button:dialogRemove", r.rect);
                     if r.clicked() {
-                        let res = if *rejected { app.run("library.deleteRejected", json!({})) } else { app.run("photo.removeFromLibrary", json!({})) };
+                        let kept = json!({"keptCopies": app.ui.delete_kept.take().unwrap_or(false)});
+                        let res = if *rejected { app.run("library.deleteRejected", kept) } else { app.run("photo.removeFromLibrary", kept) };
                         if let Err(e) = res {
                             app.toast(ui.ctx(), e);
                         }
@@ -844,6 +870,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                     Dialog::Merge { .. } => "Merge",
                     Dialog::ConfirmDelete { .. } => "delete.",
+                    Dialog::DeleteKept { .. } => "keep.",
                     Dialog::DeletePhotos { count, copies, .. } if count == copies => "remove.",
                     Dialog::DeletePhotos { .. } => "delete.from.disk.",
                     Dialog::Backups { pick: Some(_) } => "restore.",
@@ -941,7 +968,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
             }
             // a delete that failed says why (its photos stay)
-            Err(e) if matches!(dlg, Dialog::ConfirmDelete { .. } | Dialog::DeletePhotos { .. }) => {
+            Err(e) if matches!(dlg, Dialog::ConfirmDelete { .. } | Dialog::DeletePhotos { .. } | Dialog::DeleteKept { .. }) => {
                 app.toast_error(ctx, e);
                 close = true;
             }
@@ -1194,11 +1221,19 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::Enhance { opts } => crate::enhance::start_final(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { rejected, .. } => crate::menus::delete_now(app, *rejected),
+        Dialog::DeleteKept { rejected, .. } => {
+            // keep. (OK, Return) unless delete.too. said otherwise; then the delete goes on
+            if app.ui.delete_kept.is_none() {
+                app.ui.delete_kept = Some(false);
+            }
+            crate::menus::delete_continue(app, *rejected)
+        }
         Dialog::DeletePhotos { count, copies, rejected } => {
+            let kept = app.ui.delete_kept.take().unwrap_or(false);
             let r = match (*rejected, count == copies) {
-                (true, _) => app.run("library.deleteRejected", json!({"fromDisk": true})),
-                (false, true) => app.run("photo.removeFromLibrary", json!({})),
-                (false, false) => app.run("photo.deleteFromDisk", json!({})),
+                (true, _) => app.run("library.deleteRejected", json!({"fromDisk": true, "keptCopies": kept})),
+                (false, true) => app.run("photo.removeFromLibrary", json!({"keptCopies": kept})),
+                (false, false) => app.run("photo.deleteFromDisk", json!({"keptCopies": kept})),
             }?;
             // what went (· undo.), and files that couldn't go to the Trash keep their photos: say so
             let text = crate::menus::trash_message(&r);

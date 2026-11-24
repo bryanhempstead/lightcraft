@@ -14,6 +14,7 @@ pub mod display_p3;
 pub mod enhance;
 pub mod export_dialog;
 pub mod export_task;
+pub mod fav_keep_ui;
 pub mod fixnotes;
 pub mod folds;
 pub mod hdr_view;
@@ -65,6 +66,8 @@ mod tests_curve;
 mod tests_enhance_view;
 #[cfg(test)]
 mod tests_export_dialog;
+#[cfg(test)]
+mod tests_fav_keep;
 #[cfg(test)]
 mod tests_filmstrip;
 #[cfg(test)]
@@ -382,6 +385,10 @@ pub struct LightcraftApp {
     pub left_off: leftoff::Tracker,
     /// The notes. panel: notes about what isn't working, sent to Claude with fix. ([`fixnotes`]).
     pub fix_notes: fixnotes::FixNotes,
+    /// Favorites kept safe may copy to the keep folder Settings names (the desktop app with its
+    /// saved settings turns this on; tests and `--memory` / `LIGHTCRAFT_NO_PREFS` runs never write
+    /// to a real drive unless they set it). See [`fav_keep_ui`].
+    pub fav_keep_live: bool,
 }
 
 impl LightcraftApp {
@@ -395,6 +402,8 @@ impl LightcraftApp {
         // XMP auto-write on a worker, a moment after the edits stop (never on the frame that
         // commits them: the photo's drive may be a slow external volume); written on quit
         session.set_xmp_deferred(true);
+        // favorites kept safe: copies on a worker thread (only once a keep folder is set)
+        session.fav_keep.background = true;
         Self {
             session,
             ui: UiState::default(),
@@ -462,6 +471,7 @@ impl LightcraftApp {
             midi_status: String::new(),
             left_off: leftoff::Tracker::default(),
             fix_notes: fixnotes::FixNotes::default(),
+            fav_keep_live: false,
         }
     }
 
@@ -1012,6 +1022,7 @@ impl LightcraftApp {
             }
             ctx.request_repaint_after(std::time::Duration::from_secs(3));
         }
+        fav_keep_ui::tick(self, ctx);
         self.session.persist_if_dirty();
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);

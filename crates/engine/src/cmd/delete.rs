@@ -35,6 +35,28 @@ fn with_copies(s: &Session, ids: &[PhotoId]) -> Vec<PhotoId> {
     out
 }
 
+/// Favorites kept safe: photos that just left the library take their kept copies (and sidecars)
+/// to the Trash too — only when the delete says so (`keptCopies: true`; the app asks, default
+/// no). The same undo step puts them back.
+fn forget_kept(s: &mut Session, ids: &[PhotoId]) {
+    let (trashed, _, _) = s.fav_forget(ids, false);
+    if !trashed.is_empty()
+        && let Some(step) = s.undo.last_mut()
+    {
+        step.trashed.extend(trashed);
+    }
+}
+
+/// [`remove`], then [`forget_kept`] with `keptCopies`.
+fn remove_keeping(s: &mut Session, label: &str, ids: &[PhotoId], p: &Value) -> Result<usize> {
+    let all = with_copies(s, ids);
+    let n = remove(s, label, ids)?;
+    if n > 0 && bool_or(p, "keptCopies", false) {
+        forget_kept(s, &all);
+    }
+    Ok(n)
+}
+
 /// Remove `ids` (and their virtual copies) from the library as one undo step.
 fn remove(s: &mut Session, label: &str, ids: &[PhotoId]) -> Result<usize> {
     let all = with_copies(s, ids);
@@ -84,7 +106,7 @@ fn owned_files(s: &Session, id: PhotoId, leaving: &HashSet<PhotoId>) -> Vec<Path
 /// Move the photos' files to the Trash, then remove from the library those whose files went (or
 /// that have none), as one undo step that remembers where the files went. Returns `{trashed,
 /// removed, failed}`.
-fn delete_from_disk(s: &mut Session, label: &str, ids: &[PhotoId]) -> Result<Value> {
+fn delete_from_disk(s: &mut Session, label: &str, ids: &[PhotoId], kept_copies: bool) -> Result<Value> {
     let all = with_copies(s, ids);
     let leaving: HashSet<PhotoId> = all.iter().copied().collect();
     let mut ok_ids = Vec::new();
@@ -94,7 +116,9 @@ fn delete_from_disk(s: &mut Session, label: &str, ids: &[PhotoId]) -> Result<Val
     let masters: Vec<PhotoId> = all.iter().copied().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.copy_of.is_none())).collect();
     let mut gone_masters: HashSet<PhotoId> = HashSet::new();
     for id in &masters {
-        let files = owned_files(s, *id, &leaving);
+        // favorites kept safe: a photo showing its kept copy (its original is gone) leaves the
+        // library, but the copy stays unless the delete says so (`keptCopies`)
+        let files = if !kept_copies && crate::fav_keep::uses_kept(&s.catalog, *id) { Vec::new() } else { owned_files(s, *id, &leaving) };
         let missing_original = files.first().is_some_and(|f| !f.exists());
         // a photo whose original is already gone (offline, deleted elsewhere): just remove it
         let to_trash: Vec<PathBuf> = files.into_iter().filter(|f| f.exists()).collect();
@@ -141,6 +165,9 @@ fn delete_from_disk(s: &mut Session, label: &str, ids: &[PhotoId]) -> Result<Val
         && let Some(step) = s.undo.last_mut()
     {
         step.trashed = trashed.clone();
+    }
+    if removed > 0 && kept_copies {
+        forget_kept(s, &ok_ids);
     }
     if gone.is_some() {
         remember_last_delete(s, gone);
@@ -261,7 +288,7 @@ fn remove_from_album(s: &mut Session, p: &Value) -> Result<Value> {
         s.selection = crate::view::next_after_removal(&before, &t, active).map(Selection::single).unwrap_or_default();
         return Ok(json!({"album": id.0, "name": name, "removed": n}));
     }
-    Ok(json!({"removed": remove(s, "Remove from Library", &t)?, "fromLibrary": true}))
+    Ok(json!({"removed": remove_keeping(s, "Remove from Library", &t, p)?, "fromLibrary": true}))
 }
 
 /// The rejected photos of the current view (source + filter), Lightroom's Delete Rejected Photos.
@@ -285,11 +312,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Remove from Library",
             ["Photo"],
             None,
-            "{ids?} — takes the photos (and their virtual copies) out of the library; the files stay on disk (Lightroom's Remove) → {removed}",
+            "{ids?, keptCopies?: bool (default false)} — takes the photos (and their virtual copies) out of the library; the files stay on disk (Lightroom's Remove); keptCopies: their favorites' kept copies go to the Trash too → {removed}",
             has_selection,
             |s, p| {
                 let t = targets_or_none(s, p, "photo.removeFromLibrary")?;
-                Ok(json!({"removed": remove(s, "Remove from Library", &t)?}))
+                Ok(json!({"removed": remove_keeping(s, "Remove from Library", &t, p)?}))
             }
         ),
         cmd!(
@@ -297,11 +324,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Remove and Trash Photo",
             ["Photo"],
             Some("Alt+Cmd+Shift+Delete"),
-            "{ids?} — moves each original and its XMP sidecar to the system Trash, then removes the photo (and its virtual copies) from the library; a virtual copy is only removed; a photo whose file can't be trashed stays → {trashed: [{path, trash}], removed, failed: [{id, path, error}]}",
+            "{ids?, keptCopies?: bool (default false: a favorite's kept copy stays, and a photo showing its kept copy only leaves the library)} — moves each original and its XMP sidecar to the system Trash, then removes the photo (and its virtual copies) from the library; a virtual copy is only removed; a photo whose file can't be trashed stays → {trashed: [{path, trash}], removed, failed: [{id, path, error}]}",
             has_selection,
             |s, p| {
                 let t = targets_or_none(s, p, "photo.deleteFromDisk")?;
-                delete_from_disk(s, "Delete from Disk", &t)
+                delete_from_disk(s, "Delete from Disk", &t, bool_or(p, "keptCopies", false))
             }
         ),
         cmd!(
@@ -318,7 +345,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Remove from This Album",
             ["Photo"],
             None,
-            "{ids?} — in an album: the photos leave that album only (files and library untouched) → {album, name, removed}; elsewhere (All Photographs, folders, shoots, smart albums): Remove from Library, files kept → {removed, fromLibrary: true}",
+            "{ids?, keptCopies?: bool} — in an album: the photos leave that album only (files and library untouched) → {album, name, removed}; elsewhere (All Photographs, folders, shoots, smart albums): Remove from Library, files kept → {removed, fromLibrary: true}",
             has_selection,
             remove_from_album
         ),
@@ -340,7 +367,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Rejected Photos",
             ["Photo"],
             None,
-            "{fromDisk?: bool (default false = Remove)} — the rejected photos of the current view: removed from the library, or with fromDisk their files go to the Trash too → {removed, trashed?, failed?}",
+            "{fromDisk?: bool (default false = Remove), keptCopies?: bool (default false)} — the rejected photos of the current view: removed from the library, or with fromDisk their files go to the Trash too → {removed, trashed?, failed?}",
             always,
             |s, p| {
                 let ids = rejected(s);
@@ -348,9 +375,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Ok(json!({"removed": 0}));
                 }
                 if bool_or(p, "fromDisk", false) {
-                    delete_from_disk(s, "Delete Rejected Photos", &ids)
+                    delete_from_disk(s, "Delete Rejected Photos", &ids, bool_or(p, "keptCopies", false))
                 } else {
-                    Ok(json!({"removed": remove(s, "Remove Rejected Photos", &ids)?}))
+                    Ok(json!({"removed": remove_keeping(s, "Remove Rejected Photos", &ids, p)?}))
                 }
             }
         ),

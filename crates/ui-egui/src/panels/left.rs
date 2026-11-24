@@ -1403,7 +1403,10 @@ fn catalog_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, total: usize, picks:
     // favorites.: every hearted photo (fav. / H), across the library
     let favs = app.session.catalog.photos().filter(|p| p.favorite && p.in_library()).count();
     let on = src == LibrarySource::All && app.session.filter.favorite;
-    if row(app, ui, "favorites", Icon::HeartFilled, "favorites.", Some(favs), on, 0.0).clicked() {
+    let fav_row = row(app, ui, "favorites", Icon::HeartFilled, "favorites.", Some(favs), on, 0.0);
+    // favorites kept safe: how many have their original kept, how many wait (only while hovered)
+    let fav_row = if fav_row.hovered() { fav_row.on_hover_text(crate::fav_keep_ui::summary(app)) } else { fav_row };
+    if fav_row.clicked() {
         let _ = app.run("library.source", json!({"kind": "all"}));
         let _ = app.run("library.filter", json!({"favorite": true}));
     }

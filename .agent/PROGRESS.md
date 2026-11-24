@@ -7,6 +7,25 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
 
 ## Open
 
+- [ ] (favkeep agent, 2026-11-24, branch `agent-favkeep`, worktree ~/crafts/lc-favkeep, NOT merged) **work order item 6:
+  favorites kept safe** (Bryan: a deleted folder keeps its hearted photos "unless I manually delete them", "the original
+  photos tied with the edits"). Engine `fav_keep.rs`: a heart (and once, at open, every existing heart) copies the original
+  + a fresh XMP sidecar with the current edits (`SidecarWrite::beside`) to `<keep folder>/<shoot>/<file>` (shoot = nearest
+  non-generic folder name; never over another file → `-1`, same bytes reused; temp name + rename) on a worker thread, 24
+  per run; journaled as library records `fav.kept.<id>` (**no catalog version bump**; a heart without a record is the
+  queue, so crash / quit / offline LOT48 = next pass: at open, every 3 min, every 1 min while offline). Edits to a kept
+  photo rewrite the kept sidecar (packet hash). Original gone → bookkeeping `Relink` to the kept copy (edits stay, not
+  Missing); original back → relinked home (+ its sidecar queued); Find Missing Folder follows too. Commands `fav.keep
+  {ids?}`, `fav.keepStatus {ids?}`, `fav.forget {ids}` (to the Trash; skips a photo living on its copy; hearted ones stay
+  forgotten until re-hearted); deletes take `keptCopies` (default false; Delete from Disk of a photo on its kept copy
+  then only removes it). App: Settings ▸ General ▸ Favorites (keep: on./off., folder: + choose. / lot48., keep.now.,
+  counts), `kept.` check on grid / filmstrip hearts, favorites. row tooltip (kept / waiting / shown from copy / failed),
+  toast when the disk is offline with copies waiting, ⌫ on kept favorites asks keep. (default) / delete.too.
+  `AppSettings.favKeep` (true) + `favKeepDir` (LOT48); only the desktop app with saved settings writes
+  (`LightcraftApp::fav_keep_live`, off with --memory / LIGHTCRAFT_NO_PREFS and in every test). Tests: engine
+  `tests_fav_keep.rs` (11), ui `tests_fav_keep.rs` (2). Left: not tried on the real LOT48 / Bryan's library (first
+  launch copies every existing heart — check the log `favorites:` lines); no Info-panel "kept at" line yet.
+
 - [ ] (WORK ORDER — Bryan 2026-11-24, for the next build; he is low on credits) **merge. tab, sequences, merge settings**
   Landed 11-24: `merge.` tab after develop. (`view.merges` → every group in the merges. view); ⌘⇧M = Merge… for the picked
   photos; auto finder skips shoots in Second Brain's pipeline (only find. looks there); near-duplicates (> 75 % overlap,

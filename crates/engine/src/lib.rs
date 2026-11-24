@@ -32,6 +32,7 @@ pub mod enhance;
 pub mod export;
 pub mod export_lrtemplate;
 pub mod faces;
+pub mod fav_keep;
 pub mod files;
 pub mod fonts;
 pub mod galleries;
@@ -381,6 +382,8 @@ pub struct Session {
     pub merge_scanned: std::collections::BTreeMap<String, u64>,
     /// LR-MAP-PLACES: place search (geocoder, answer cache) and keyword suggestions.
     pub places: places::Places,
+    /// Favorites kept safe: hearted photos' originals copied to the keep folder ([`fav_keep`]).
+    pub fav_keep: fav_keep::FavKeep,
 }
 
 impl Default for Session {
@@ -519,6 +522,7 @@ impl Session {
             merge_find_job: None,
             merge_scanned: Default::default(),
             places: Default::default(),
+            fav_keep: Default::default(),
         }
     }
 
@@ -597,6 +601,10 @@ impl Session {
                     }
                 }
             }
+        }
+        if self.depth == 0 && r.is_ok() && self.pending_log.len() > log_start {
+            // favorites kept safe: hearts to copy, kept photos' sidecars to write again
+            self.fav_keep_note(log_start);
         }
         let (t_xmp, t_persist) = (t_xmp.elapsed(), web_time::Instant::now());
         let _report = Profiled(self.depth == 0 && profiling(), id, t0, [t_run, t_xmp], t_persist);
@@ -1249,6 +1257,8 @@ mod tests_export_icc;
 mod tests_export_lr;
 #[cfg(test)]
 mod tests_faces_auto;
+#[cfg(test)]
+mod tests_fav_keep;
 #[cfg(test)]
 mod tests_folders;
 #[cfg(test)]
