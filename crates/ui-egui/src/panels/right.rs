@@ -1239,7 +1239,7 @@ pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if let Some(day) = p.captured.as_deref().and_then(|c| c.get(..10)) {
                 field_arrow(app, ui, "date", "day. →", "Show the photos taken that day", json!({"date": day}));
             }
-            let cap = p.captured.as_deref().map(crate::i18n::display_time).unwrap_or_else(|| "—".into());
+            let cap = p.captured.as_deref().map(lightcraft_catalog::dates::display_time).unwrap_or_else(|| "—".into());
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.add(egui::Label::new(egui::RichText::new(cap).size(12.5).color(t.text)).truncate());
             });
@@ -1315,7 +1315,7 @@ fn exif_rows(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
     let m = &p.meta;
     let rows = [
         ("Dimensions", Some(format!("{} × {}", p.width, p.height))),
-        ("Date Time Original", p.captured.as_deref().map(crate::i18n::display_time)),
+        ("Date Time Original", p.captured.as_deref().map(lightcraft_catalog::dates::display_time)),
         ("Exposure", (!m.shutter.is_empty()).then(|| format!("{} sec", m.shutter))),
         ("F-stop", m.aperture.map(|f| format!("f / {f:.1}"))),
         ("ISO Speed Rating", m.iso.map(|i| format!("ISO {i}"))),
@@ -1912,10 +1912,6 @@ pub(crate) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
 
 /// "Sep 30, 2026, 12:00 PM" from an ISO time.
 fn short_time(iso: &str) -> String {
-    // Other languages use their own date patterns (`i18n::display_time`).
-    if crate::i18n::language() != crate::i18n::Locale::En {
-        return crate::i18n::display_time(iso);
-    }
     let long = lightcraft_catalog::dates::display_time(iso);
     // "September 30, 2026 at 12:00:00 PM" → month abbreviated, seconds dropped
     let (date, time) = long.split_once(" at ").map_or((long.as_str(), None), |(d, t)| (d, Some(t)));
@@ -1946,13 +1942,7 @@ pub(crate) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                 ui.painter().rect_filled(r, 3.0, t.hover);
             }
             paint(ui.painter(), Rect::from_min_size(r.min + vec2(0.0, 4.0), vec2(16.0, 16.0)), Icon::Clock, t.icon);
-            ui.painter().text(
-                pos2(r.left() + 24.0, r.center().y),
-                Align2::LEFT_CENTER,
-                crate::i18n::history_label(&h.label, &app.session.presets),
-                t.font(12.5),
-                t.text_label,
-            );
+            ui.painter().text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, &h.label, t.font(12.5), t.text_label);
             if resp.clicked() {
                 let _ = app.run("history.restore", json!({"index": i}));
             }

@@ -782,8 +782,6 @@ impl Default for MapUi {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
-    #[serde(default = "crate::i18n::default_language")]
-    pub language: crate::i18n::Locale,
     /// The Build Previews run last announced (its identity, finished?).
     #[serde(skip)]
     pub preview_build_seen: Option<(usize, bool)>,
@@ -1417,7 +1415,6 @@ pub enum Dialog {
 impl Default for UiState {
     fn default() -> Self {
         UiState {
-            language: crate::i18n::default_language(),
             preview_build_seen: None,
             unsaved_seen: false,
             luminance_map_restore: None,

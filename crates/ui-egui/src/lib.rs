@@ -287,9 +287,6 @@ pub struct LightcraftApp {
     /// Clear `synthetic_mods` on the next frame.
     synthetic_mods_release: bool,
     styled: bool,
-    /// The language the installed fonts were built for: the CJK fallback order follows the UI
-    /// language's script, so switching language reinstalls them.
-    font_language: i18n::Locale,
     fonts_ready: bool,
     last_time: f64,
     /// Rect of the photo canvas and the displayed image (screen points) from the last frame.
@@ -396,7 +393,6 @@ impl LightcraftApp {
             synthetic_mods: egui::Modifiers::NONE,
             synthetic_mods_release: false,
             styled: false,
-            font_language: i18n::Locale::En,
             fonts_ready: false,
             last_time: 0.0,
             map: Default::default(),
@@ -884,7 +880,6 @@ impl LightcraftApp {
         let repaint = ctx.clone();
         self.session.media.availability.run_in_background(std::sync::Arc::new(move || repaint.request_repaint()));
         self.styled = true;
-        self.font_language = self.ui.language;
     }
 
     /// Get ready to draw: install the fonts and theme now, so the very first frame shows the
@@ -897,7 +892,6 @@ impl LightcraftApp {
 
     /// Per-frame logic before layout (control channel, renders, shortcuts, drops).
     pub fn logic(&mut self, ctx: &egui::Context) {
-        i18n::set_language(self.ui.language);
         let t0 = now_ms();
         panels::library_problem::logic(self);
         self.logic_inner(ctx);
@@ -907,11 +901,6 @@ impl LightcraftApp {
     fn logic_inner(&mut self, ctx: &egui::Context) {
         if !self.styled {
             self.style(ctx);
-        } else if self.font_language != self.ui.language {
-            // Shared Han characters take the active language's forms (Japanese faces for 日本語,
-            // the Simplified Chinese face for 简体中文): rebuild the fallback order.
-            theme::install_fonts(ctx);
-            self.font_language = self.ui.language;
         } else {
             self.fonts_ready = true;
         }
@@ -1108,7 +1097,6 @@ impl LightcraftApp {
 
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
-        i18n::set_language(self.ui.language);
         let ctx = ui.ctx().clone();
         if !self.fonts_ready {
             // never a blank (grey) first frame: the app's own dark chrome until the UI draws

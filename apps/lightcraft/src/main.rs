@@ -643,7 +643,6 @@ fn main() -> eframe::Result {
             if let Some(ui) = prefs {
                 app.ui = ui;
             }
-            lightcraft_ui_egui::i18n::set_language(app.ui.language);
             // identity-plate images are copied here (not with --memory / LIGHTCRAFT_NO_PREFS: nothing is written)
             app.identity_dir =
                 (!in_memory && std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none()).then(lightcraft_ui_egui::identity::default_dir).flatten();
