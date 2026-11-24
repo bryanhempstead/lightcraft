@@ -513,3 +513,20 @@ fn resuming_goes_back_to_a_merges_view() {
     h.app.run("view.resumeLastLeftOff", json!({})).unwrap();
     assert!(matches!(h.app.session.source, lightcraft_engine::LibrarySource::Merges), "{:?}", h.app.session.source);
 }
+
+/// The merge. tab (after develop.): every group of the library in the merges. view, lit while there.
+#[test]
+fn the_merge_tab_opens_every_merge() {
+    let mut f = fixture("tab");
+    let h = &mut f.h;
+    assert!(h.step_until(T, |h| merge_find::groups(&h.app.session.catalog).len() == 1));
+    h.settle(SETTLE);
+    let (develop, merge) = (widget(h, "module:develop"), widget(h, "module:merge"));
+    assert!(merge.left() > develop.right() + 8.0, "right after develop.: {develop:?} {merge:?}");
+    let r = h.request("ui.clickWidget", json!({"id": "module:merge"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(matches!(h.app.session.source, lightcraft_engine::LibrarySource::Merges));
+    assert_eq!(h.app.session.merges_scope.clone().unwrap_or_default(), lightcraft_engine::merge_find::Scope::All);
+    assert!(has(h, "merges:bar"), "the merges. view");
+}

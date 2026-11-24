@@ -186,6 +186,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("mask.centerDefault", "Set Center Mask as Default", None, ""),
     ("dialog.enhance", "Enhance…", Some("Ctrl+Alt+I"), "Photo"),
     ("view.hideDenoiseHint", "Hide the Denoise Prompt", None, ""),
+    ("view.merges", "Merge", None, "Window"),
     // frame the Enhance / Merge previews (what dragging and the wheel do over them)
     ("enhance.view", "Frame Enhance Preview", None, ""),
     ("merge.view", "Frame Merge Preview", None, ""),
@@ -1572,6 +1573,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 opts.denoise = true;
             }
             r
+        }
+        // the merge. tab: every merges. group of the library, in the merges. view
+        "view.merges" => {
+            enter_library(app, Some(ViewMode::PhotoGrid));
+            app.run("library.source", json!({"kind": "merges"}))
         }
         "view.hideDenoiseHint" => match p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or(app.session.active()) {
             Some(id) => {

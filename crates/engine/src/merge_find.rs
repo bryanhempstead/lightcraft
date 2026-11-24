@@ -1143,8 +1143,12 @@ pub fn decide(look: &Look, thumbs: &HashMap<PhotoId, Thumb>) -> Vec<Candidate> {
                 _ => break,
             }
         }
-        if j > i {
+        // frames that overlap nearly all the way (> 75 %, or > 60 % for just two) are the same
+        // picture nudged — a wedding's back-to-back shots, a sequence — not a panorama
+        let nudged = chain.iter().any(|l| l.overlap > 0.75) || (j == i + 1 && chain.iter().any(|l| l.overlap > 0.6));
+        if j > i && !nudged {
             out.push(panorama(look, pos.get(i..=j).unwrap_or(&[]), kinds.get(i..=j).unwrap_or(&[]), &chain));
+        } else if j > i {
         } else if let (Some(p), Some(k)) = (pos.get(i), kinds.get(i)) {
             let shots: Vec<Shot> = p.frames.iter().filter_map(|f| s.get(*f).cloned()).collect();
             let photos: Vec<PhotoId> = shots.iter().map(|x| x.id).collect();
@@ -1466,10 +1470,14 @@ impl Session {
         if changed.is_empty() {
             return None;
         }
+        // shoots in Second Brain's pipeline had their merges handled there: never looked at by
+        // themselves, only on find. (Bryan 11-24); their folders still count as looked at
+        let pipe = crate::sb_pipeline::sb_dir(None).map(|d| crate::sb_pipeline::read(&d));
+        let in_pipeline = |f: &str| pipe.as_ref().is_some_and(|p| p.shoot_for(f).is_some());
         let ids: Vec<PhotoId> = self
             .catalog
             .photos()
-            .filter(|p| p.in_library() && lightcraft_catalog::local::folder_of(p).is_some_and(|f| changed.contains_key(&f)))
+            .filter(|p| p.in_library() && lightcraft_catalog::local::folder_of(p).is_some_and(|f| changed.contains_key(&f) && !in_pipeline(&f)))
             .map(|p| p.id)
             .collect();
         Some(self.merge_find_ids(&ids, true, changed))

@@ -7,6 +7,28 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
 
 ## Open
 
+- [ ] (WORK ORDER — Bryan 2026-11-24, for the next build; he is low on credits) **merge. tab, sequences, merge settings**
+  Landed 11-24: `merge.` tab after develop. (`view.merges` → every group in the merges. view); ⌘⇧M = Merge… for the picked
+  photos; auto finder skips shoots in Second Brain's pipeline (only find. looks there); near-duplicates (> 75 % overlap,
+  > 60 % for two frames) are no longer called panoramas (the 11-24 re-check had found 1,333 "panoramas", 316 at one
+  wedding — mostly back-to-back candids). To do, in order:
+  1. **Check the finder on his real shoots** (he said yes): `scratchpad mgcheck.py` style — sample ~24 groups across kind ×
+     confidence, contact sheets of their thumbnails, judge each by eye, tune thresholds; re-run `merge.recheck` after.
+  2. **merge. page built out** (now it is the merges. view with scope all): its own layout — left: shoots / folders with
+     counts (one pool per shoot), filters kind. / confidence. / camera.; centre: the waves bigger; right: the picked group's
+     frames large + merge options (the Merge dialog's, inline) + `merge.` `send.back.`; keyboard: ←/→ groups, M merge, S send back.
+  3. **Settings ▸ merge.** (Bryan: "pick and choose by default for the different types of merges"): per kind (panorama. /
+     hdr. / hdr.panorama. / focus.stack.): where the merged photo shows (both. = folder + develop / merges.only.), stack with
+     its frames, auto settings, auto crop, panorama projection default, deghost default, hide the originals or keep them
+     visible, find automatically (per kind on/off), minimum confidence shown (sure. / likely. / maybe.), skip pipeline shoots
+     (on), denoise merged raws.
+  4. **Sequences** (Bryan: wedding shots fired back to back, > 2 frames, slight movement): a new group kind `sequence.`
+     (never merged; grouped): found = the near-duplicate runs step 2 now drops; shown grouped in every area (grid / filmstrip
+     stack-like badge `sequence.`, merges page, Second Brain); preview as a loop with a speed control (fps / hold last frame /
+     ping-pong); export as animated GIF / MP4 / WebP (the export pipeline + ffmpeg if present); "mark as sequence" by hand
+     (picked photos → `sequence.`), sync settings across a sequence in one click. Second Brain merges. panel shows them too.
+  5. Second Brain: a `merge.` page of its own matching LightCraft's (today: the shoot pop-out ▸ merges. dialog).
+
 - [ ] (mergewave agent, 2026-11-24, branch `agent-mergewave`, worktree ~/crafts/lc-mergewave, NOT merged) **LC-MERGE-WAVE:
   merges. found in three steps + the stacked-wave view** (Bryan: "a stacked wave that shows all the photos", "most of
   what I shoot is panoramas", one pool per shoot folder). Engine `merge_find.rs`: runs by time (body / lens / focal;
