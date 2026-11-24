@@ -461,7 +461,19 @@ fn open_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_demo: boo
     };
     let t0 = std::time::Instant::now();
     let mut s = Session::new().with_fs().with_adobe_presets().with_system_clock();
-    match s.open_library(&dir, seed_demo) {
+    let mut opened = s.open_library(&dir, seed_demo);
+    // Second Brain runs short headless `lightcraft-cli --library` commands while the app is
+    // closed (merges., pipeline): opened right then, wait for it to let go instead of refusing
+    for _ in 0..120 {
+        match &opened {
+            Err(lightcraft_engine::EngineError::LibraryInUse(why)) if why.contains("lightcraft-cli") => {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                opened = s.open_library(&dir, seed_demo);
+            }
+            _ => break,
+        }
+    }
+    match opened {
         Ok(r) => {
             let (replayed, torn) = (r.replayed, r.torn_bytes);
             log::info!(
