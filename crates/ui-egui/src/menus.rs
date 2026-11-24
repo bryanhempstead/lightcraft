@@ -305,6 +305,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("map.zoomIn", "Zoom In on Map", None, ""),
     ("map.zoomOut", "Zoom Out of Map", None, ""),
     ("dialog.mapSaveLocation", "Save Map Location…", None, ""),
+    // LR-MAP-PLACES: the Library's Place & Tags section ({q?} starts a search, {selection?: bool})
+    ("view.places", "Set Location and Tags…", None, "Library"),
     ("view.colorMixer", "Color Mixer", None, ""),
     ("view.resumeLastLeftOff", "Go to Where I Left Off", None, "View"),
     ("preset.applyByName", "Apply Preset by Name", None, ""),
@@ -756,6 +758,12 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             let d = if id == "map.zoomIn" { 1.0 } else { -1.0 };
             app.ui.map.zoom = (app.ui.map.zoom.round() + d).clamp(1.0, lightcraft_engine::map::MAX_ZOOM);
             Ok(json!({"zoom": app.ui.map.zoom}))
+        }
+        "view.places" => {
+            if app.ui.module != Module::Library || matches!(app.ui.view, ViewMode::Map | ViewMode::Galleries) {
+                let _ = app.run("view.library", json!({}));
+            }
+            crate::panels::places::open(app, p)
         }
         "dialog.mapSaveLocation" => {
             // name the place at the map's centre (radius: a sixth of the view's width)

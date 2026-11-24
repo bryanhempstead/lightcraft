@@ -104,15 +104,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.map.width = area.width();
     app.map.area = Some(area);
     app.map.frame += 1;
-    let pins: Vec<(u64, f64, f64)> = app
-        .session
-        .execute("map.pins", &json!({}))
-        .ok()
-        .and_then(|v| v["pins"].as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|p| Some((p["id"].as_u64()?, p["lat"].as_f64()?, p["lon"].as_f64()?)))
-        .collect();
+    // photos without a position (or at 0, 0) get no pin: they are counted on the map (bottom left) instead
+    let all = app.session.execute("map.pins", &json!({})).unwrap_or_default();
+    let without = all["withoutGps"].as_u64().unwrap_or(0) as usize;
+    let pins: Vec<(u64, f64, f64)> =
+        all["pins"].as_array().into_iter().flatten().filter_map(|p| Some((p["id"].as_u64()?, p["lat"].as_f64()?, p["lon"].as_f64()?))).collect();
     if app.ui.map.fit_pending {
         app.ui.map.fit_pending = false;
         let pts: Vec<(f64, f64)> = pins.iter().map(|p| (p.1, p.2)).collect();
@@ -121,7 +117,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     toolbar(app, ui, bar, &pins);
-    canvas(app, ui, area, &pins, &t);
+    canvas(app, ui, area, &pins, without, &t);
     follow_view(app, area);
 }
 
@@ -168,8 +164,7 @@ fn toolbar(app: &mut LightcraftApp, ui: &mut egui::Ui, bar: Rect, pins: &[(u64, 
     let ids: Vec<u64> = pins.iter().map(|p| p.0).collect();
     run(app, &mut child, "mapAll", "all.", "library.select", json!({"ids": ids, "mode": "replace"}), "Select every photo on the map");
     run(app, &mut child, "mapNone", "none.", "library.selectNone", json!({}), "Select none");
-    let total = app.session.visible_unlocated().len();
-    let text = format!("{} of {total} placed", pins.len());
+    let text = format!("{} placed", pins.len());
     if child.available_width() > 40.0 {
         child.add(egui::Label::new(egui::RichText::new(text).font(t.font(12.0)).color(t.text_dim)).truncate());
     }
@@ -238,7 +233,7 @@ fn zoom_at(app: &mut LightcraftApp, area: Rect, anchor: egui::Pos2, z: f64) {
     (app.ui.map.lat, app.ui.map.lon) = (lat, lon);
 }
 
-fn canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, area: Rect, pins: &[(u64, f64, f64)], t: &Tokens) {
+fn canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, area: Rect, pins: &[(u64, f64, f64)], without: usize, t: &Tokens) {
     let p3 = app.renderer.display_p3;
     let resp = ui.interact(area, egui::Id::new("map-canvas"), Sense::click_and_drag());
     register(ui.ctx(), "map:canvas", area);
@@ -438,10 +433,31 @@ fn canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, area: Rect, pins: &[(u64, 
         painter.galley(nr.min + vec2(10.0, 7.0), g, t.text);
         register(ui.ctx(), "map:notice", nr);
     }
+    // the photos left off the map (no position, or 0, 0): counted bottom left, a click shows
+    // just them (untagged.) so they can be dragged onto the map or given a place
+    let mut chip_top = area.bottom();
+    if without > 0 {
+        let text = format!("{without} without a location");
+        let g = painter.layout_no_wrap(text, t.semibold(12.0), t.text);
+        let cr = Rect::from_min_size(pos2(area.left() + 12.0, area.bottom() - 12.0 - 28.0), vec2(g.size().x + 24.0, 28.0));
+        let cresp = ui.interact(cr, egui::Id::new("map-unplaced"), Sense::click());
+        painter.rect(cr, 14.0, if cresp.hovered() { t.hover } else { t.chrome }, Stroke::new(1.0, t.divider), StrokeKind::Inside);
+        painter.galley(cr.center() - g.size() / 2.0, g, t.text);
+        register(ui.ctx(), "map:unplaced", cr);
+        chip_top = cr.top();
+        if cresp
+            .on_hover_text(crate::i18n::tr("Not on the map: no GPS position. Click to show just them, then drag them onto the map or use Place & Tags in the Library"))
+            .clicked()
+            && let Err(e) = app.run("map.locationFilter", json!({"mode": "untagged"}))
+        {
+            app.toast(ui.ctx(), e);
+        }
+    }
     if pins.is_empty() {
         let text = crate::i18n::tr("No photos in view have a GPS position: drag photos from the filmstrip onto the map to place them.");
         let g = painter.layout(text.to_string(), t.font(12.5), t.text, (area.width() - 80.0).clamp(160.0, 460.0));
-        let nr = Rect::from_center_size(pos2(area.center().x, area.bottom() - 56.0), g.size() + vec2(24.0, 16.0));
+        let size = g.size() + vec2(24.0, 16.0);
+        let nr = Rect::from_center_size(pos2(area.center().x, (area.bottom() - 56.0).min(chip_top - 12.0 - size.y / 2.0)), size);
         painter.rect(nr, 6.0, t.chrome, Stroke::new(1.0, t.divider), StrokeKind::Inside);
         painter.galley(nr.min + vec2(12.0, 8.0), g, t.text);
     }

@@ -1158,7 +1158,7 @@ impl Session {
             ids.iter().filter_map(|id| self.catalog.photo(*id)).filter_map(|p| idx.get(&crate::media::content_key(p)).map(|e| e.0.clone())).collect()
         };
         if embs.is_empty() {
-            return Err("not indexed for AI search yet (Library ▸ Index for AI Search)".into());
+            return Err("not indexed for AI search yet (Library menu: Index for AI Search)".into());
         }
         let labels = self.label_vectors()?;
         let per: Vec<Vec<(String, f32)>> = embs.iter().map(|e| content_scores(e, &labels)).collect();

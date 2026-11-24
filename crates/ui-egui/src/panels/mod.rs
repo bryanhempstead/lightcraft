@@ -23,6 +23,7 @@ pub mod mask_effects;
 pub mod masking;
 pub mod notices;
 pub mod people;
+pub mod places;
 pub mod presets;
 pub mod profiles;
 pub mod right;
