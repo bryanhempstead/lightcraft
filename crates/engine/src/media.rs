@@ -1288,6 +1288,40 @@ impl crate::Session {
         Some(job)
     }
 
+    /// A crop / straighten dial's draft of photo `id` (a console turn moving `crop.x` / `crop.y`
+    /// / `crop.scale` / `crop.angle`): the photo uncropped — crop, flips and Constrain Crop left
+    /// out of its settings — at a size that gives its crop about `crop_long_edge` pixels (≤ 2560
+    /// in all), from the view's own decoded source when that one is loaded. The job (and its key)
+    /// is the same for every detent of the turn, so it renders once and the loupe draws each
+    /// detent's crop out of it (`panels::detail`); every crop detent used to be a whole-pipeline
+    /// render (~100 ms for an edited 24 MP raw, ~8 a second at best).
+    pub fn reframe_draft_job(&mut self, id: PhotoId, crop_long_edge: usize, view_long_edge: usize) -> Option<RenderJob> {
+        let p = self.catalog.photo(id)?.clone();
+        let (pw, ph) = (p.width.max(1) as usize, p.height.max(1) as usize);
+        let (cw, ch) = lightcraft_pipeline::native_output_size(pw, ph, &p.develop);
+        let mut s = (*p.develop).clone();
+        s.crop.geometry = lightcraft_geom::CropGeometry::default();
+        s.crop.flip_h = false;
+        s.crop.flip_v = false;
+        s.geometry.constrain_crop = false;
+        let (fw, fh) = lightcraft_pipeline::native_output_size(pw, ph, &s);
+        let ratio = (fw.max(fh) / cw.max(ch).max(1.0)).clamp(1.0, 16.0);
+        let ratio = if ratio.is_finite() { ratio } else { 1.0 };
+        let edge = ((crop_long_edge as f64 * ratio).ceil() as usize).clamp(8, SourceLevel::Preview.max_edge());
+        let mut job = self.preview_job(id, edge, edge, false, &s)?.draft();
+        let want = SourceLevel::for_size(source_edge_needed(&p, &p.develop, view_long_edge, true));
+        if want != job.level
+            && let r @ SourceRef::Loaded(_) = self.media.source_ref(&p, want)
+        {
+            job.source = r;
+            job.key ^= ((job.level as u64) << 60) ^ ((want as u64) << 60);
+            job.level = want;
+        }
+        // (a reframing draft of this photo, nothing else: `preview_job`'s key leaves the photo out)
+        job.key ^= id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x7265_6672_616d_6521;
+        Some(job)
+    }
+
     /// The embedded preview of an unedited raw (path, loader), when the app installed a loader.
     fn embedded_of(&self, p: &Photo) -> Option<(String, PreviewLoader)> {
         match (&p.source, &self.media.preview_loader) {

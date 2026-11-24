@@ -63,6 +63,8 @@ pub struct Library {
     /// What forgetting untouched Local records did when the library opened.
     pub forgot_local: Option<lightcraft_catalog::ForgetPlan>,
     presets_written: String,
+    /// What `presets_written` was built from (to skip building it when nothing changed).
+    presets_seen: Option<PresetsSeen>,
     view_written: Vec<u8>,
     /// Settings files that were unreadable or damaged when the library opened (`library.info` →
     /// `settingsWarnings`; shown by the UI once, see [`Session::take_library_warnings`]).
@@ -98,6 +100,35 @@ struct PresetsFile {
     /// Profile groups hidden with Manage Profiles, and the profile browser's view.
     profile_hidden_groups: Vec<String>,
     profile_view: String,
+}
+
+/// The session state `presets.json` is made of, as last written ([`Session::persist`]).
+struct PresetsSeen {
+    presets: Vec<lightcraft_develop::Preset>,
+    profile_favorites: Vec<String>,
+    profile_recent: Vec<String>,
+    profile_hidden_groups: Vec<String>,
+    profile_view: String,
+}
+
+impl PresetsSeen {
+    fn of(s: &Session) -> PresetsSeen {
+        PresetsSeen {
+            presets: s.presets.clone(),
+            profile_favorites: s.profile_favorites.clone(),
+            profile_recent: s.profile_recent.clone(),
+            profile_hidden_groups: s.profile_hidden_groups.clone(),
+            profile_view: s.profile_view.clone(),
+        }
+    }
+
+    fn matches(&self, s: &Session) -> bool {
+        self.presets == s.presets
+            && self.profile_favorites == s.profile_favorites
+            && self.profile_recent == s.profile_recent
+            && self.profile_hidden_groups == s.profile_hidden_groups
+            && self.profile_view == s.profile_view
+    }
 }
 
 /// `exports.json`: when each photo was last exported (L31).
@@ -332,6 +363,13 @@ impl Session {
     /// Open `stores`; the new library takes `lock` once nothing can fail any more.
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
         let LibraryStores { dir, catalog, mut files, on_disk } = stores;
+        // the current library's queued XMP sidecars (its photo ids are about to change meaning)
+        if self.sidecars_pending() > 0 {
+            self.flush_sidecars();
+            if let Err(e) = self.persist() {
+                log::error!("library: {e}");
+            }
+        }
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // the current library may be these same files: let its background snapshot land first
         if let Some(old) = self.library.as_mut()
@@ -462,12 +500,15 @@ impl Session {
             retry_at: None,
             forgot_local: None,
             presets_written,
+            presets_seen: None,
             view_written,
             settings_warnings: settings.warnings,
             warnings_reported: 0,
             blocked: settings.blocked,
             lock: lock.take(),
         });
+        // sidecars a crashed run left unwritten (deferred auto-write, `xmp_queue`)
+        self.requeue_pending_sidecars();
         // forget untouched Local records of folders not browsed for a while (journaled at once)
         if self.forget_local_days > 0 {
             let plan = self.forget_local(false, None);
@@ -487,6 +528,15 @@ impl Session {
     /// Called after every top-level command; cheap when nothing changed. Fails (with
     /// [`EngineError::NotSaved`]) only when the queued ops couldn't be written; they stay queued.
     pub fn persist(&mut self) -> Result<()> {
+        let t0 = web_time::Instant::now();
+        let r = self.persist_inner();
+        if crate::profiling() && t0.elapsed().as_secs_f64() > 2e-3 {
+            eprintln!("engine: persist {:.1} ms", t0.elapsed().as_secs_f64() * 1e3);
+        }
+        r
+    }
+
+    fn persist_inner(&mut self) -> Result<()> {
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         if !self.pending_log.is_empty() {
             if let Err(e) = lib.journal.append(&self.pending_log) {
@@ -505,7 +555,11 @@ impl Session {
             self.pending_log.clear();
             lib.last_error = None;
         }
+        let tc = web_time::Instant::now();
         poll_compaction(lib);
+        if crate::profiling() && tc.elapsed().as_secs_f64() > 1e-3 {
+            eprintln!("engine: persist: compaction poll {:.1} ms", tc.elapsed().as_secs_f64() * 1e3);
+        }
         // Never snapshot mid-interaction: the catalog then holds an uncommitted preview value.
         // The snapshot is written by a worker thread (natively); appends go on meanwhile.
         // A failed compaction loses nothing (the log is kept whole and compacted later): it is
@@ -517,21 +571,36 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        if self.interaction.is_some() {
+            // a drag / console turn changes no presets: no 0.5 MB presets.json built per tick
+            // (checked again by the command that ends it)
+            return Ok(());
+        }
+        // unchanged since the last look (compared field by field): no presets.json built — that
+        // was 2–8 ms of every command with Bryan's 0.5 MB of presets
+        if self.library.as_ref().and_then(|l| l.presets_seen.as_ref()).is_some_and(|seen| seen.matches(self)) {
+            return Ok(());
+        }
         let presets = presets_json(self);
+        let seen = PresetsSeen::of(self);
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         if presets != lib.presets_written && !lib.blocked.contains(&"presets.json") {
             if let Err(e) = lib.files.write_atomic("presets.json", presets.as_bytes()) {
+                // (not seen: retried by the next save)
                 log::error!("library: presets: {e}");
-            } else {
-                lib.presets_written = presets;
+                return Ok(());
             }
+            lib.presets_written = presets;
         }
+        lib.presets_seen = Some(seen);
         Ok(())
     }
 
     /// Persist if commands left ops pending (cheap; frontends call it once per frame for state
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
+        // deferred XMP auto-write: finished writes in, due ones out (records the sync status)
+        self.poll_sidecars();
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
         if self.library.is_some() && !self.pending_log.is_empty() && !backing_off {
             let _ = self.persist();
@@ -558,6 +627,8 @@ impl Session {
             return Ok(());
         }
         let _ = self.end_interaction();
+        // queued XMP sidecars first: their sync records go in with the rest
+        self.flush_sidecars();
         let persisted = self.persist();
         self.save_view();
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };

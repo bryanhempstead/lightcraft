@@ -17,6 +17,11 @@ pub fn logic(app: &mut LightcraftApp) {
 /// The window may close now (`true`), or the quit prompt is shown (`false`): changes that
 /// couldn't be written are retried first — the log, then a snapshot of everything in memory.
 pub fn may_close(app: &mut LightcraftApp) -> bool {
+    // the XMP sidecars still queued (deferred auto-write) before anything else
+    if app.session.sidecars_pending() > 0 {
+        app.session.flush_sidecars();
+        let _ = app.session.persist();
+    }
     if app.quit_confirmed || app.session.unsaved().is_none() {
         return backup_answered(app);
     }

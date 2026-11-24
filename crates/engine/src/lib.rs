@@ -70,6 +70,7 @@ pub mod trash;
 pub mod video;
 mod view;
 pub mod vision;
+pub mod xmp_queue;
 
 use std::sync::Arc;
 
@@ -362,6 +363,8 @@ pub struct Session {
     pub metadata_status: std::collections::HashMap<PhotoId, sidecar::MetadataStatus>,
     /// Photos whose sidecar the running command wrote or read (they match it now).
     xmp_synced_now: Vec<PhotoId>,
+    /// Deferred XMP auto-write ([`xmp_queue`]).
+    xmp_queue: xmp_queue::XmpQueue,
     /// L33: the running tethered capture, if any.
     pub tether: Option<cmd::tether::Tether>,
     /// merges.: the folder or collection a [`LibrarySource::Merges`] view shows.
@@ -377,6 +380,32 @@ pub struct Session {
 impl Default for Session {
     fn default() -> Self {
         Session::new()
+    }
+}
+
+/// `LIGHTCRAFT_PROFILE` is set: print where a slow command's time went (stderr).
+pub fn profiling() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LIGHTCRAFT_PROFILE").is_some())
+}
+
+/// Prints a top-level command's stages when it is dropped (under [`profiling`], when slow):
+/// the command itself, the XMP auto-write, the durable save.
+struct Profiled<'a>(bool, &'a str, web_time::Instant, [std::time::Duration; 2], web_time::Instant);
+
+impl Drop for Profiled<'_> {
+    fn drop(&mut self) {
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+        let total = ms(self.2.elapsed());
+        if self.0 && total >= 2.0 {
+            eprintln!(
+                "engine: {} {total:.1} ms (run {:.1}, xmp {:.1}, persist {:.1})",
+                self.1,
+                ms(self.3[0]),
+                ms(self.3[1]),
+                ms(self.4.elapsed())
+            );
+        }
     }
 }
 
@@ -476,6 +505,7 @@ impl Session {
             cameras_mem: Vec::new(),
             metadata_status: Default::default(),
             xmp_synced_now: Vec::new(),
+            xmp_queue: Default::default(),
             tether: None,
             merges_scope: None,
             merge_find_job: None,
@@ -510,14 +540,17 @@ impl Session {
     fn run_command(&mut self, id: &str, journal: Option<&Value>, f: impl FnOnce(&mut Session) -> Result<Value>) -> Result<Value> {
         let log_start = self.pending_log.len();
         let was_active = self.active();
+        let t0 = web_time::Instant::now();
         self.depth += 1;
         // last-resort guard: a panic in a command is that command's error, not a crash
         let r = guard::catch(&format!("`{id}`"), || f(self)).unwrap_or_else(|e| Err(EngineError::Other(e)));
         self.depth -= 1;
+        let t_run = t0.elapsed();
         if self.depth == 0 && was_active.is_some() && self.active() != was_active {
             self.previous_active = was_active;
             if let Some(left) = was_active {
                 self.auto_version(left);
+                self.sidecar_due_now(left);
             }
         }
         if r.is_ok()
@@ -529,12 +562,19 @@ impl Session {
                 self.journal.drain(..1000);
             }
         }
+        let t_xmp = web_time::Instant::now();
         if self.depth == 0 {
             let skip = std::mem::take(&mut self.skip_auto_write);
             let synced_now = std::mem::take(&mut self.xmp_synced_now);
             if r.is_ok() && !skip && self.xmp.auto_write && self.interaction.is_none() && self.pending_log.len() > log_start {
-                let synced = self.auto_write_sidecars(&self.pending_log[log_start..]);
-                self.record_xmp_sync(synced);
+                if self.xmp_queue.on {
+                    let mut ids = Vec::new();
+                    self.pending_log[log_start..].iter().for_each(|o| sidecar::op_photos(o, &mut ids));
+                    self.queue_sidecars(ids);
+                } else {
+                    let synced = self.auto_write_sidecars(&self.pending_log[log_start..]);
+                    self.record_xmp_sync(synced);
+                }
             } else if r.is_ok() && !self.metadata_status.is_empty() && self.pending_log.len() > log_start {
                 // L22: photos changed in the library since the last scan say so in the grid
                 let mut ids = Vec::new();
@@ -550,6 +590,8 @@ impl Session {
                 }
             }
         }
+        let (t_xmp, t_persist) = (t_xmp.elapsed(), web_time::Instant::now());
+        let _report = Profiled(self.depth == 0 && profiling(), id, t0, [t_run, t_xmp], t_persist);
         if self.depth == 0 && self.library.is_some() {
             // Make the command durable before reporting success. When the command's own records
             // can't be appended, it fails with `NotSaved`: the change stays applied in memory and

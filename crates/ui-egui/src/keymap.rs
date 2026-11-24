@@ -1584,8 +1584,7 @@ pub fn console_begin(app: &mut crate::LightcraftApp, control: &str) {
     match &app.console_drag {
         Some((_, c)) if c == control && app.session.interaction.is_some() => {}
         Some(_) => {
-            let _ = app.session.end_interaction();
-            app.console_drag = None;
+            end_console_move(app);
         }
         None if app.session.interaction.is_some() => return, // a mouse drag owns it
         None => {}
@@ -1599,13 +1598,24 @@ pub fn console_begin(app: &mut crate::LightcraftApp, control: &str) {
     app.console_drag = Some((now, control.to_string()));
 }
 
+/// Commit the console's move as one history step — as a command, like a mouse drag's release,
+/// so it is saved and its XMP sidecar queued with it (a bare `end_interaction` left both to
+/// whatever command came next: the sidecar was never written for a console edit).
+fn end_console_move(app: &mut crate::LightcraftApp) {
+    if app.session.interaction.is_some()
+        && let Err(e) = app.session.execute("develop.endInteraction", &json!({}))
+    {
+        log::warn!("console: {e}");
+    }
+    app.console_drag = None;
+}
+
 /// Once a frame: the console has been still long enough — commit its move as one history step.
 pub fn console_tick(app: &mut crate::LightcraftApp, ctx: &egui::Context) {
     let Some((at, _)) = &app.console_drag else { return };
     let idle = at.elapsed();
     if idle >= CONSOLE_SETTLE || app.session.interaction.is_none() {
-        let _ = app.session.end_interaction();
-        app.console_drag = None;
+        end_console_move(app);
         ctx.request_repaint();
     } else {
         ctx.request_repaint_after(CONSOLE_SETTLE - idle);

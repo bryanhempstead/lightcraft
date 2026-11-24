@@ -997,3 +997,86 @@ fn raw_jpeg_pairs_import_their_own_sidecars() {
     assert!(std::fs::read_to_string(src.join("IMG_1.xmp")).unwrap().contains(r#"xmp:Rating="5""#), "the raw's sidecar is untouched");
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// Deferred auto-write (the app's way, `xmp_queue`): an edit leaves the UI thread without
+/// touching the photo's drive; the sidecar is written once the photo has been still for the
+/// debounce (several edits as one write, on a worker), and quit / closing the library writes
+/// whatever is still queued.
+#[test]
+fn deferred_auto_write_is_written_after_the_debounce_and_on_close() {
+    let src = temp_dir("deferred");
+    let lib = temp_dir("deferred-lib");
+    write_png(&src.join("a.png"), 4);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.set_xmp_deferred(true);
+    let sidecar = src.join("a.xmp");
+    let rating = |p: &Path| std::fs::read_to_string(p).ok().and_then(|x| crate::sidecar::parse_sidecar(&x, false).ok()).and_then(|x| x.rating);
+    s.execute("photo.rate", &json!({"rating": 2})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 3})).unwrap();
+    assert!(!sidecar.exists(), "queued, not written by the command");
+    assert_eq!(s.sidecars_pending(), 1, "two edits, one photo queued");
+    s.poll_sidecars();
+    assert!(!sidecar.exists(), "not before the debounce");
+    // after the debounce, the frame loop's poll writes it on a worker and takes the result in
+    let t = std::time::Instant::now();
+    while s.sidecars_pending() > 0 && t.elapsed() < std::time::Duration::from_secs(20) {
+        s.persist_if_dirty();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(s.sidecars_pending(), 0);
+    assert_eq!(rating(&sidecar), Some(3));
+    let id = only(&s);
+    assert_eq!(s.metadata_status(id), crate::sidecar::MetadataStatus::UpToDate, "the sync record is kept");
+    // quit (close the library) right after an edit: written then, no waiting
+    s.execute("photo.rate", &json!({"rating": 5})).unwrap();
+    assert_eq!(rating(&sidecar), Some(3));
+    s.close_library().unwrap();
+    assert_eq!(rating(&sidecar), Some(5), "close writes what is queued");
+    assert_eq!(s.sidecars_pending(), 0);
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// A crash with a sidecar still queued loses nothing: the queue is in the journal with the edit,
+/// and the next open writes it. Leaving the photo writes its sidecar without the debounce.
+#[test]
+fn deferred_auto_write_survives_a_crash_and_leaving_the_photo() {
+    let src = temp_dir("deferred-crash");
+    let lib = temp_dir("deferred-crash-lib");
+    write_png(&src.join("a.png"), 5);
+    write_png(&src.join("b.png"), 6);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.set_xmp_deferred(true);
+    let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).collect();
+    let (a, b) = (ids[0], ids[1]);
+    let path = |id: PhotoId| src.join(&s.catalog.photo(id).unwrap().file_name).with_extension("xmp");
+    let (pa, pb) = (path(a), path(b));
+    s.execute("library.select", &json!({"ids": [a.0]})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 4})).unwrap();
+    // leaving the photo: due now
+    s.execute("library.select", &json!({"ids": [b.0]})).unwrap();
+    let t = std::time::Instant::now();
+    while !pa.is_file() && t.elapsed() < std::time::Duration::from_millis(1000) {
+        s.persist_if_dirty();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(pa.is_file(), "written on leaving the photo, before the debounce");
+    s.execute("photo.rate", &json!({"rating": 1})).unwrap();
+    assert!(!pb.exists());
+    // crash: the session is gone without closing the library (nothing is flushed on drop)
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let x = std::fs::read_to_string(&pb).expect("written by the next open");
+    assert!(x.contains("<xmp:Rating>1</xmp:Rating>"), "{x}");
+    assert_eq!(s.sidecars_pending(), 0);
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}

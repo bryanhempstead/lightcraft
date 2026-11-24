@@ -419,7 +419,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
     // the long edge of the sharp render (what source a draft shares with it)
     let view_edge = (target_rect.width().max(target_rect.height()) * ppp).min(max_edge) as usize;
-    let job = if interacting && !reframing && !legacy {
+    let job = if interacting && reframing {
+        // one uncropped render for the whole turn; each detent's crop is drawn out of it (`draw`)
+        let job = app.session.reframe_draft_job(id, want.max(8), view_edge);
+        app.reframe_key = job.as_ref().map(|j| j.key);
+        job
+    } else if interacting && !legacy {
         app.session.view_draft_job(id, rw.max(8), rh.max(8), !crop_tool, view_edge)
     } else {
         app.session.loupe_job(id, rw.max(8), rh.max(8), !crop_tool).map(|j| if interacting { j.draft() } else { j })
@@ -513,6 +518,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             (Some(px), Some(view)) => view.texture(&format!("{slot:?}"), px).unwrap_or(tex.tex.id()),
             _ => tex.tex.id(),
         };
+        if slot == Slot::Main && app.reframe_key == Some(tex.key) {
+            // a crop dial's uncropped draft: this detent's crop out of it
+            p.add(egui::Shape::mesh(crop_mesh(id, r, &frame)));
+            return what;
+        }
         p.image(id, image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         what
     };
@@ -1321,6 +1331,26 @@ const PREFETCH_PRIORITY: u32 = 4;
 const DRAFT_SCALE: f32 = 0.6;
 /// … and while a console dial moves the crop (every draft re-renders the whole pipeline).
 const DRAFT_SCALE_REFRAME: f32 = 0.35;
+
+/// The crop of `frame` drawn into `r` out of a texture of the whole uncropped frame
+/// ([`lightcraft_engine::Session::reframe_draft_job`]): each corner of `r` takes the texture
+/// coordinate of the crop corner it shows (straighten, flips and Constrain Crop included).
+fn crop_mesh(tex: egui::TextureId, r: Rect, frame: &Frame) -> egui::Mesh {
+    let to_src = frame.crop.output_to_source(frame.ow, frame.oh, 1.0, 1.0);
+    let (ow, oh) = (frame.ow.max(1.0), frame.oh.max(1.0));
+    let uv = |u: f64, v: f64| {
+        let u = if frame.flip_h { 1.0 - u } else { u };
+        let v = if frame.flip_v { 1.0 - v } else { v };
+        let q = to_src.apply(lightcraft_geom::Point::new(u, v));
+        pos2((q.x / ow) as f32, (q.y / oh) as f32)
+    };
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (corner, (u, v)) in [(r.left_top(), (0.0, 0.0)), (r.right_top(), (1.0, 0.0)), (r.right_bottom(), (1.0, 1.0)), (r.left_bottom(), (0.0, 1.0))] {
+        mesh.vertices.push(egui::epaint::Vertex { pos: corner, uv: uv(u, v), color: Color32::WHITE });
+    }
+    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+    mesh
+}
 
 fn quick_name(q: lightcraft_engine::media::QuickSource) -> &'static str {
     use lightcraft_engine::media::QuickSource;

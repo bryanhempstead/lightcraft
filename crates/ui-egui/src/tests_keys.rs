@@ -325,6 +325,69 @@ fn crop_dial_turns_are_one_drag() {
     assert_eq!(steps(&h), before + 1);
 }
 
+/// A crop dial's drafts are cut out of one uncropped render of the photo: the whole turn asks
+/// for one render (every detent used to be a whole-pipeline render: ~5 a second on Bryan's
+/// edited M262 DNG), and the cut shows what the sharp render of the same crop shows.
+#[test]
+fn crop_dial_draws_its_detents_out_of_one_render() {
+    use crate::render::Slot;
+    let mut h = demo();
+    h.request("ui.set", json!({"view": "detail", "module": "develop", "right": "edit"}), T);
+    exec(&mut h, "crop.set", json!({"rect": [0.15, 0.2, 0.75, 0.8], "angle": 4.0}));
+    exec(&mut h, "photo.flipHorizontal", json!({}));
+    let sharp = |h: &Headless| {
+        h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.quick.is_none() && Some(t.key) != h.app.reframe_key) && !h.app.renderer.is_pending(Slot::Main)
+    };
+    assert!(h.step_until(T, sharp), "first render: {}", h.app.renderer.diagnose());
+    h.settle(T);
+    let ref_shot = h.paint();
+    let cut = |h: &Headless| h.app.reframe_key.is_some() && h.app.renderer.textures.get(&Slot::Main).map(|t| t.key) == h.app.reframe_key;
+    // turn (back and forth, ending where it started) until the uncropped draft is on screen
+    let t0 = std::time::Instant::now();
+    let mut k = 0;
+    while !cut(&h) && t0.elapsed() < T {
+        let line = if k % 2 == 0 { "CropPositionX = ^0.5,-100,100" } else { "CropPositionX = v0.5,-100,100" };
+        exec(&mut h, "keys.lrinput", json!({"line": line}));
+        k += 1;
+        for _ in 0..5 {
+            h.step();
+        }
+    }
+    assert!(cut(&h), "the uncropped draft: {}", h.app.renderer.diagnose());
+    if k % 2 == 1 {
+        exec(&mut h, "keys.lrinput", json!({"line": "CropPositionX = v0.5,-100,100"}));
+    }
+    let asked = h.app.renderer.wanted(Slot::Main);
+    for k in 0..8 {
+        let line = if k % 2 == 0 { "CropPositionX = ^0.5,-100,100" } else { "CropPositionX = v0.5,-100,100" };
+        exec(&mut h, "keys.lrinput", json!({"line": line}));
+        h.step();
+        assert!(cut(&h), "detent {k}: still the cut");
+        assert_eq!(h.app.renderer.wanted(Slot::Main), asked, "detent {k}: no render asked for");
+    }
+    assert!(h.app.session.interaction.is_some(), "still turning");
+    let mid = h.paint();
+    // let go: the sharp render of the same crop
+    assert!(h.step_until(T, |h| h.app.session.interaction.is_none() && sharp(h)), "sharp after: {}", h.app.renderer.diagnose());
+    let after = h.paint();
+    let img = h.app.image_rect.unwrap().shrink(6.0);
+    let diff = |a: &egui::ColorImage, b: &egui::ColorImage| {
+        let (mut sum, mut n) = (0u64, 0u64);
+        for y in img.top() as usize..img.bottom() as usize {
+            for x in img.left() as usize..img.right() as usize {
+                let (p, q) = (a.pixels[y * a.size[0] + x], b.pixels[y * b.size[0] + x]);
+                sum += u64::from(p.r().abs_diff(q.r())) + u64::from(p.g().abs_diff(q.g())) + u64::from(p.b().abs_diff(q.b()));
+                n += 3;
+            }
+        }
+        sum as f64 / n.max(1) as f64
+    };
+    let (d, same) = (diff(&mid, &after), diff(&ref_shot, &after));
+    eprintln!("cut vs sharp: mean |Δ| {d:.2}; sharp before vs after the turn {same:.2}");
+    assert!(same < 1.0, "the turn came back to the same crop ({same:.2})");
+    assert!(d < 6.0, "the cut shows the crop the sharp render shows (mean |Δ| {d:.2})");
+}
+
 /// The White Balance Selector: W (or the `pick.` chip) arms it, a click on the photo sets a Custom
 /// white balance from that spot, Esc puts it away without picking.
 #[test]
@@ -1103,6 +1166,7 @@ fn lens_corrections_show_the_profile_pickers() {
 #[ignore]
 fn console_dial_lag() {
     use crate::render::Slot;
+    use lightcraft_catalog::PhotoId;
     use std::time::Instant;
     let Some(path) = std::env::var_os("LC_BENCH_RAW") else { return eprintln!("skipped: set LC_BENCH_RAW") };
     let mut s = lightcraft_engine::Session::new().with_fs();
@@ -1140,6 +1204,14 @@ fn console_dial_lag() {
     }
     h.settle(Duration::from_secs(60));
     assert!(h.step_until(Duration::from_secs(180), sharp), "edited render");
+    // LC_BENCH_GAP=<ms>: wait that long after the photo is sharp before turning (default 0: the
+    // turn starts while the draft size is still being warmed)
+    let pause = std::env::var("LC_BENCH_GAP").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let t = Instant::now();
+    while t.elapsed() < Duration::from_millis(pause) {
+        h.step();
+        std::thread::sleep(Duration::from_millis(8));
+    }
     let line = std::env::var("LC_BENCH_LINE").unwrap_or_else(|_| "Exposure = ^0.02,-5,5".into());
     let ticks_n = std::env::var("LC_BENCH_TICKS").ok().and_then(|v| v.parse().ok()).unwrap_or(90);
     let gap = Duration::from_millis(33);
@@ -1155,10 +1227,15 @@ fn console_dial_lag() {
     let mut seen: Vec<Option<Instant>> = Vec::new();
     let mut frame_ms: Vec<f64> = Vec::new();
     let mut last = 0usize;
+    let mut unchanged: Vec<bool> = Vec::new();
+    let trace = std::env::var_os("LC_BENCH_TRACE").is_some();
     loop {
         let now = Instant::now();
         if ticks < ticks_n && now >= start + gap * ticks as u32 {
+            let before = h.app.session.develop_of(PhotoId(id));
             crate::keymap::lr_input(&mut h.app, &line).unwrap();
+            // a detent past the end of the slider changes nothing: on screen with the one before
+            unchanged.push(h.app.session.develop_of(PhotoId(id)) == before);
             ticks += 1;
             sent.push(now);
             seen.push(None);
@@ -1187,8 +1264,25 @@ fn console_dial_lag() {
                 last = t;
             }
         }
+        // a crop dial's uncropped draft on screen: this frame drew every detent so far
+        if ticks > 0 && h.app.reframe_key.is_some() && h.app.renderer.textures.get(&Slot::Main).map(|t| t.key) == h.app.reframe_key {
+            for s in seen.iter_mut().take(ticks) {
+                s.get_or_insert(Instant::now());
+            }
+            last = ticks;
+        }
         if ticks > 0 && ticks <= ticks_n && h.app.session.interaction.is_some() {
             lags.push(ticks - last.min(ticks));
+        }
+        // LC_BENCH_TRACE=1: what the renderer is doing, frame by frame, for the first second
+        if trace && start.elapsed() < Duration::from_millis(400) {
+            eprintln!(
+                "trace {:>5.0} ms tick {ticks:>2} shows {last:>2} frame {:>5.1} ms pending {:?} queued {}",
+                start.elapsed().as_secs_f64() * 1e3,
+                frame_ms.last().copied().unwrap_or(0.0),
+                h.app.renderer.pending_slots(),
+                h.app.renderer.queued()
+            );
         }
         let full_size = h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.size[0] >= full.0[0]);
         if ticks == ticks_n && h.app.session.interaction.is_none() && sharp(&h) && full_size {
@@ -1203,11 +1297,23 @@ fn console_dial_lag() {
     }
     let after = sent.last().map(|t| t.elapsed().as_secs_f64() * 1e3).unwrap_or(0.0);
     let avg = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
+    for i in 1..seen.len() {
+        if unchanged[i] && seen[i].is_none_or(|t| seen[i - 1].is_some_and(|p| p < t)) {
+            seen[i] = seen[i - 1].map(|p| p.max(sent[i]));
+        }
+    }
+    if unchanged.iter().any(|u| *u) {
+        eprintln!("({} detents past the slider's end: counted as shown with the one before)", unchanged.iter().filter(|u| **u).count());
+    }
     let latency: Vec<f64> = sent.iter().zip(&seen).filter_map(|(a, b)| b.map(|b| (b - *a).as_secs_f64() * 1e3)).collect();
     let mut sorted = latency.clone();
     sorted.sort_by(f64::total_cmp);
     let p = |q: f64| sorted.get(((sorted.len() as f64 - 1.0) * q).round() as usize).copied().unwrap_or(f64::NAN);
     let dm: Vec<f64> = drafts.iter().map(|d| d.0).collect();
+    if trace {
+        let per: Vec<String> = sent.iter().zip(&seen).map(|(a, b)| b.map_or("-".into(), |b| format!("{:.0}", (b - *a).as_secs_f64() * 1e3))).collect();
+        eprintln!("tick → on screen, in order (ms): {}", per.join(" "));
+    }
     eprintln!(
         "{ticks} ticks at 30/s: {} drafts shown ({:.0} ms each on average, max {:.0}, first ones {:?}, size {:?}); ticks behind while turning: mean {:.1}, max {}; tick → on screen: median {:.0} ms, p90 {:.0} ms (= {:.1} / {:.1} frames at 60 Hz); UI frame: mean {:.1} ms, max {:.1} ms; sharp {:.0} ms after the last tick",
         drafts.len(),
@@ -1225,4 +1331,132 @@ fn console_dial_lag() {
         frame_ms.iter().copied().fold(0.0, f64::max),
         after,
     );
+}
+
+/// What committed edits cost the UI thread on a library the size of Bryan's (ignored:
+/// `LC_BENCH_RAW=/path/to.dng [LC_BENCH_PHOTOS=16000] [LC_BENCH_PRESETS=/path/to/presets.json]
+/// [LIGHTCRAFT_PROFILE=1] cargo test --release -p lightcraft-ui-egui --lib -- --ignored commit_hitch
+/// --nocapture`). An on-disk library with XMP auto-write on; console dial turns (each ends in a
+/// commit once the dial is still) and slider-click edits (one committed command each). Prints the
+/// frame times around each commit and checks that every edit reaches the photo's sidecar.
+#[test]
+#[ignore]
+fn commit_hitch() {
+    use crate::render::Slot;
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+    use std::time::Instant;
+    let Some(raw) = std::env::var_os("LC_BENCH_RAW") else { return eprintln!("skipped: set LC_BENCH_RAW") };
+    let dir = std::env::temp_dir().join(format!("lc-commit-hitch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::create_dir_all(dir.join("drive")).unwrap();
+    let _t = crate::tests_library2::TempDir(dir.clone());
+    let photo = dir.join("drive/L1005121.DNG");
+    std::fs::copy(&raw, &photo).unwrap();
+    if let Some(p) = std::env::var_os("LC_BENCH_PRESETS") {
+        std::fs::copy(p, dir.join("lib/presets.json")).unwrap();
+    }
+    let mut s = lightcraft_engine::Session::new().with_fs();
+    s.open_library(dir.join("lib"), false).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [photo.to_string_lossy()]})).unwrap();
+    let id = r["imported"][0].as_u64().expect("imported");
+    let n: u64 = std::env::var("LC_BENCH_PHOTOS").ok().and_then(|v| v.parse().ok()).unwrap_or(16_000);
+    let drive = dir.join("drive").to_string_lossy().to_string();
+    let ops: Vec<Op> = (0..n)
+        .map(|i| {
+            let pid = s.catalog.alloc_photo_id();
+            let src = Source::File { path: format!("{drive}/F{:03}/L{i:07}.DNG", i / 500) };
+            Op::AddPhoto { photo: Box::new(Photo::new(pid, src, &format!("L{i:07}.DNG"), "DNG", 6000, 4000, "2026-01-01T00:00:00")) }
+        })
+        .collect();
+    s.commit("bench photos", Op::Batch { ops }).unwrap();
+    s.persist().unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    s.execute("library.select", &json!({"ids": [id]})).unwrap();
+    let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1800.0, 1100.0], 2.0);
+    let r = h.request("ui.set", json!({"view": "detail", "module": "develop", "right": "edit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let sharp = |h: &Headless| h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.quick.is_none()) && !h.app.renderer.is_pending(Slot::Main);
+    assert!(h.step_until(Duration::from_secs(180), sharp), "first render");
+    h.settle(Duration::from_secs(60));
+    let sidecar = photo.with_extension("xmp");
+    let step = |h: &mut Headless, frames: &mut Vec<f64>| {
+        let f0 = Instant::now();
+        h.step();
+        let ms = f0.elapsed().as_secs_f64() * 1e3;
+        if ms > 15.0 {
+            let pf = h.app.perf;
+            eprintln!("slow frame {ms:.1} ms: logic {:.1}, layout {:.1}; sidecars queued {}", pf.logic_ms, pf.frame_ms, h.app.session.sidecars_pending());
+        }
+        frames.push(ms);
+        std::thread::sleep(Duration::from_millis(8));
+    };
+    let pct = |v: &[f64], q: f64| {
+        let mut s = v.to_vec();
+        s.sort_by(f64::total_cmp);
+        s.get(((s.len() as f64 - 1.0) * q).round() as usize).copied().unwrap_or(f64::NAN)
+    };
+    // console dial turns: 6 detents at 30/s, then still until the move is committed
+    let mut commit_frames = Vec::new();
+    let mut all = Vec::new();
+    for turn in 0..8 {
+        let line = if turn % 2 == 0 { "Shadows = ^1,-100,100" } else { "Shadows = v1,-100,100" };
+        let mut frames = Vec::new();
+        for _ in 0..6 {
+            crate::keymap::lr_input(&mut h.app, line).unwrap();
+            let t = Instant::now();
+            while t.elapsed() < Duration::from_millis(33) {
+                step(&mut h, &mut frames);
+            }
+        }
+        let t = Instant::now();
+        while h.app.session.interaction.is_some() && t.elapsed() < Duration::from_secs(5) {
+            step(&mut h, &mut frames);
+        }
+        // the commit frame and the second after it
+        let c0 = frames.len();
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_millis(1000) {
+            step(&mut h, &mut frames);
+        }
+        let after = frames.get(c0.saturating_sub(1)..).unwrap_or_default();
+        commit_frames.push(after.iter().copied().fold(0.0, f64::max));
+        all.extend(frames);
+    }
+    eprintln!(
+        "dial turns: worst frame in the second after each commit {:?} ms; all frames median {:.1}, p99 {:.1}, max {:.1}",
+        commit_frames.iter().map(|m| m.round()).collect::<Vec<_>>(),
+        pct(&all, 0.5),
+        pct(&all, 0.99),
+        all.iter().copied().fold(0.0, f64::max)
+    );
+    // slider clicks: one committed command each
+    let mut cmd_ms = Vec::new();
+    let mut frames = Vec::new();
+    for k in 0..8 {
+        let t = Instant::now();
+        h.app.run("develop.set", json!({"control": "light.exposure", "value": 0.1 * f64::from(k + 1)})).unwrap();
+        cmd_ms.push(t.elapsed().as_secs_f64() * 1e3);
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_millis(500) {
+            step(&mut h, &mut frames);
+        }
+    }
+    eprintln!(
+        "slider clicks: command {:?} ms; frames after: median {:.1}, p99 {:.1}, max {:.1}",
+        cmd_ms.iter().map(|m| (m * 10.0).round() / 10.0).collect::<Vec<_>>(),
+        pct(&frames, 0.5),
+        pct(&frames, 0.99),
+        frames.iter().copied().fold(0.0, f64::max)
+    );
+    // every edit reaches the sidecar (after the debounce / once the app quits)
+    let t = Instant::now();
+    let want = "0.8";
+    while t.elapsed() < Duration::from_secs(10) && !std::fs::read_to_string(&sidecar).is_ok_and(|x| x.contains("Exposure2012=\"+0.80\"") || x.contains(want)) {
+        h.step();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = PhotoId(id);
+    assert!(sidecar.is_file(), "sidecar written");
 }
