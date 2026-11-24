@@ -28,6 +28,19 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
      ping-pong); export as animated GIF / MP4 / WebP (the export pipeline + ffmpeg if present); "mark as sequence" by hand
      (picked photos → `sequence.`), sync settings across a sequence in one click. Second Brain merges. panel shows them too.
   5. Second Brain: a `merge.` page of its own matching LightCraft's (today: the shoot pop-out ▸ merges. dialog).
+  6. **Favorites kept safe** (Bryan: a deleted folder keeps its hearted photos in LightCraft unless he deletes them by
+     hand, "the original photos tied with the edits"): on heart (and once over existing ones) copy the original + its
+     sidecar to `/Volumes/LOT48/LightCraft Favorites/<shoot name>/` (LOT48 offline → queue, copy when it mounts); when the
+     original's folder disappears, relink the photo to the LOT48 copy (edits are the catalog record, so they stay);
+     never delete the copy except by his explicit delete; a `kept.` badge + Catalog ▸ favorites. shows where each lives.
+  7. **Devices macro area** (~/.hammerspoon dev. page, LightCraft actions — coordinate with the sessions working there):
+     add today's commands as pickable actions: `develop.copy` (⌘C copy all), `dialog.pasteSettings` (⌘V paste box),
+     `develop.paste`, `dialog.export`, `dialog.merge` (⌘⇧M), `view.merges` (merge. tab), `merge.find` / `merge.recheck`,
+     `photo.toggleFavorite`, favorites. view (`library.source all` + `library.filter {favorite:true}`),
+     `dialog.enhance {denoise:true}`, `shoot.sort`. They are all control-protocol commands (`engine.execute`).
+  Done 11-24 since: merge. tab follows the sidebar (folder + its folders / collection / all); shoots. sort imported. /
+  taken. / name. + newest/oldest; shoot right-click color. + find./recheck.merges.; Catalog ▸ favorites.; auto finder =
+  weddings only (re-check 1,368 → 341 groups, Ciara+Logan 327 → 73); `docs/LightCraft-shortcuts.pdf` (also on Desktop).
 
 - [ ] (mergewave agent, 2026-11-24, branch `agent-mergewave`, worktree ~/crafts/lc-mergewave, NOT merged) **LC-MERGE-WAVE:
   merges. found in three steps + the stacked-wave view** (Bryan: "a stacked wave that shows all the photos", "most of
