@@ -8,8 +8,8 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
 ## Open
 
 - [ ] (Claude fix session, 2026-11-24) **Everything from 11-22 / 11-23 is merged** (every agent branch is 0 ahead of
-  main; their entries moved to ## Done with their "Left:" lines). Real leftovers worth picking up: Library filter-bar
-  heart toggle (only `fav:yes` search today); merges. thresholds not tried on Bryan's real brackets/panoramas; edit-stall
+  main; their entries moved to ## Done with their "Left:" lines). Real leftovers worth picking up: (done 11-24: filter-bar
+  heart `filter:favorite`); merges. thresholds not tried on Bryan's real brackets/panoramas; edit-stall
   (XMP queue) not tried on an external drive; HDR loupe renders on the CPU; Monogram profile not tried on the console.
 
 - [x] (Claude fix session, 2026-11-23 13:00) **Sharp views + exports, console as a drag, fav., picked sliders** —

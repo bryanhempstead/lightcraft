@@ -167,6 +167,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             filter(app, json!({"flag": if on { Value::Null } else { json!(id) }}));
         }
     }
+    // fav.: only the hearted photos (click again for all)
+    let fav = f.favorite;
+    let resp = toggle(ui, "favorite", fav, "Favorites only", |p, r, c| paint(p, r, if fav { Icon::HeartFilled } else { Icon::Heart }, if fav { t.fav } else { c }));
+    if resp.clicked() {
+        filter(app, json!({"favorite": !fav}));
+    }
     ui.add_space(14.0);
 
     // colour labels

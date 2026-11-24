@@ -405,3 +405,20 @@ fn grid_view_options() {
     assert!(h.app.ui.settings.grid_index);
     shot(&mut h, "grid-options.png");
 }
+
+/// fav. in the filter bar: only the hearted photos, click again for all.
+#[test]
+fn filter_bar_heart_shows_only_favorites() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let all = s.visible_cloned();
+    assert!(all.len() > 1);
+    s.execute("photo.favorite", &json!({"favorite": true, "ids": [all[0].0]})).unwrap();
+    let mut h = headless(s);
+    h.app.run("view.library", json!({})).ok();
+    h.app.ui.view = crate::state::ViewMode::PhotoGrid;
+    h.app.ui.filter_bar = true;
+    click(&mut h, "filter:favorite");
+    assert_eq!(h.app.session.visible_cloned(), vec![all[0]]);
+    click(&mut h, "filter:favorite");
+    assert_eq!(h.app.session.visible_cloned().len(), all.len());
+}
