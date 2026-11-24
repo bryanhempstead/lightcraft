@@ -1532,13 +1532,9 @@ fn hdr_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
             let _ = app.run("view.sdrPreview", json!({"on": !sdr}));
         }
     });
-    if app.ui.hdr_sdr_preview {
-        if sub_fold(ui, "develop.hdr.sdr.settings", "SDR Settings") {
-            for c in
-                ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrClarity", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites", "hdr.sdrBlend"]
-            {
-                control(app, ui, d, c, true);
-            }
+    if app.ui.hdr_sdr_preview && sub_fold(ui, "develop.hdr.sdr.settings", "SDR Settings") {
+        for c in ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrClarity", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites", "hdr.sdrBlend"] {
+            control(app, ui, d, c, true);
         }
     }
 }

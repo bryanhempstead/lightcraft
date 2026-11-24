@@ -471,45 +471,39 @@ fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
         });
     }
-    if !cfg!(target_arch = "wasm32") {
-        if heading(ui, t, "settings.import.auto.import", crate::i18n::tr("Auto Import")) {
-            hint(
-                ui,
-                t,
-                crate::i18n::tr("Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete."),
-            );
-            row(ui, t, crate::i18n::tr("Watched folder"), |ui| {
-                ui.label(RichText::new(d.auto_folder.clone().unwrap_or_else(|| crate::i18n::tr("Off").into())).color(t.text));
-                let can = app.services.pick_folder.is_some();
-                let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose…")));
-                register(ui.ctx(), "button:settingsAutoFolder", r.rect);
-                if r.clicked()
-                    && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
-                    && let Err(e) = app.run("library.autoImport", json!({"folder": f}))
-                {
-                    app.toast(ui.ctx(), e);
-                }
-                if d.auto_folder.is_some() && ui.button(crate::i18n::tr("Turn Off")).clicked() {
-                    let _ = app.run("library.autoImport", json!({"folder": null}));
+    if !cfg!(target_arch = "wasm32") && heading(ui, t, "settings.import.auto.import", crate::i18n::tr("Auto Import")) {
+        hint(ui, t, crate::i18n::tr("Photos that arrive in this folder (tethering, a scanner, a sync app) are added as soon as they're complete."));
+        row(ui, t, crate::i18n::tr("Watched folder"), |ui| {
+            ui.label(RichText::new(d.auto_folder.clone().unwrap_or_else(|| crate::i18n::tr("Off").into())).color(t.text));
+            let can = app.services.pick_folder.is_some();
+            let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Choose…")));
+            register(ui.ctx(), "button:settingsAutoFolder", r.rect);
+            if r.clicked()
+                && let Some(f) = app.services.pick_folder.as_mut().and_then(|f| f())
+                && let Err(e) = app.run("library.autoImport", json!({"folder": f}))
+            {
+                app.toast(ui.ctx(), e);
+            }
+            if d.auto_folder.is_some() && ui.button(crate::i18n::tr("Turn Off")).clicked() {
+                let _ = app.run("library.autoImport", json!({"folder": null}));
+            }
+        });
+        if d.auto_folder.is_some() {
+            row(ui, t, "", |ui| {
+                let mut copy = d.auto_copy;
+                if ui.checkbox(&mut copy, crate::i18n::tr("Copy into the library (else use the files where they are)")).changed() {
+                    let _ = app.run("library.autoImport", json!({"copy": copy}));
                 }
             });
-            if d.auto_folder.is_some() {
-                row(ui, t, "", |ui| {
-                    let mut copy = d.auto_copy;
-                    if ui.checkbox(&mut copy, crate::i18n::tr("Copy into the library (else use the files where they are)")).changed() {
-                        let _ = app.run("library.autoImport", json!({"copy": copy}));
-                    }
-                });
-                row(ui, t, crate::i18n::tr("Album"), |ui| {
-                    let id = egui::Id::new("auto-album");
-                    let mut name = ui.data(|m| m.get_temp::<String>(id)).unwrap_or_else(|| d.auto_album.clone().unwrap_or_default());
-                    let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("None")).desired_width(180.0));
-                    if r.lost_focus() {
-                        let _ = app.run("library.autoImport", json!({"album": name.trim()}));
-                    }
-                    ui.data_mut(|m| m.insert_temp(id, name));
-                });
-            }
+            row(ui, t, crate::i18n::tr("Album"), |ui| {
+                let id = egui::Id::new("auto-album");
+                let mut name = ui.data(|m| m.get_temp::<String>(id)).unwrap_or_else(|| d.auto_album.clone().unwrap_or_default());
+                let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(crate::i18n::tr("None")).desired_width(180.0));
+                if r.lost_focus() {
+                    let _ = app.run("library.autoImport", json!({"album": name.trim()}));
+                }
+                ui.data_mut(|m| m.insert_temp(id, name));
+            });
         }
     }
     super::places::settings_rows(app, ui);
