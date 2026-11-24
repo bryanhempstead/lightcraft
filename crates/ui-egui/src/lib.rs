@@ -36,6 +36,7 @@ pub mod panels;
 pub mod publish_ui;
 pub mod recheck;
 pub mod render;
+pub mod sb_pipeline;
 pub mod shortcuts;
 pub mod softpaint;
 pub mod state;
@@ -115,6 +116,8 @@ mod tests_quit_unsaved;
 mod tests_recheck;
 #[cfg(test)]
 mod tests_reorder;
+#[cfg(test)]
+mod tests_sb_pipeline;
 #[cfg(test)]
 mod tests_scroll;
 #[cfg(test)]
