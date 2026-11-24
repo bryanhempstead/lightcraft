@@ -6,6 +6,27 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (folds agent, 2026-11-23, branch `agent-folds` in ~/crafts/lc-folds, not merged) **Every list / section folds,
+  remembered** (Bryan's rule, SOUL 11-23). One map `UiState.folds` (section id → open, ui.json, `#[serde(default)]`),
+  mirrored into the egui context each frame (`crate::folds::sync` at the top of `ui()`); helpers `folds::header` /
+  `header_sized` / `label` / `triangle` / `toggle_on_click(_or)`; commands `ui.fold {id, open?}` (no open = toggle) and
+  `ui.folds` (folded, saved, onScreen); every header registers `fold:<id>`. Default open (export's closed sections
+  keep their default). Made remembered: Collections album sets, profile browser groups, Import window sections and
+  folder tree, Export dialog sections + preset folders, Local folder tree, Publish services/sets, keyword tree rows.
+  Made foldable: every Settings group (all tabs, incl. accents., Places and keywords, Cameras), Shortcuts groups +
+  unmatched Classic keys, tool drawers (Crop, Remove, Red Eye, Masking, Info, Keywords, Versions, History when not in
+  a Classic panel), Masks list, People/Landscape picker, Develop sub-groups (Sharpening, Noise Reduction, Post-Crop
+  Vignetting, Grain, Calibration primaries, lens Amount/Distortion/Defringe/CA/Vignetting, mixer Hue/Sat/Lum in all.,
+  Point Color Range, SDR Settings, Lens Blur Focal Range/Refine), Keyword Set + Suggestions, Metadata EXIF/IPTC
+  Extension/DNG/Video, History "In Lightroom Classic", People view (Named, Unnamed, Faces, Similar, Confirmed),
+  Galleries side sections, Places tags:, Map Saved Locations, grid date/publish/merges groups (▾ at the header's left;
+  the rest of the header still picks the group), Library Filter column browser (folds to one line), Copy/Sync/Paste/
+  New Preset checklist headings, All Metadata groups, What's New releases. Checked, nothing to fold: compare,
+  rules editor, capture-time calendar, enhance, mask effect combo. Tests: `tests_folds` (command + ui.json round trip,
+  folded sections hidden, layout_faults clean), `tests_grid::grid_groups_fold_by_their_triangle`. Verified: ui-egui
+  --lib 417 green, clippy -D warnings green, headless screenshots looked at (Settings, Develop). Left: merge; not tried
+  in the running app; grid keyboard navigation still walks through a folded group's photos.
+
 - [ ] (labels agent, 2026-11-23, branch `agent-labels` in ~/crafts/lc-labels, not merged) **Whole-word labels +
   color.** Bryan's rule (SOUL 11-23): labels spell every word out, lowercase, periods for spaces, "color" never
   "colour". ~90 labels renamed (clr. → clear./color., del. → delete., rem./rm./rmv. → remove., bkup. → backup., shrt. →
