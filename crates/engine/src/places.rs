@@ -1342,7 +1342,15 @@ mod tests {
     }
 
     fn pike_like() -> Place {
-        Place { name: "Pike Place Market".into(), location: "Pike Place Market".into(), city: "Seattle".into(), kind: "marketplace".into(), lat: 47.6, lon: -122.3, ..Default::default() }
+        Place {
+            name: "Pike Place Market".into(),
+            location: "Pike Place Market".into(),
+            city: "Seattle".into(),
+            kind: "marketplace".into(),
+            lat: 47.6,
+            lon: -122.3,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1376,7 +1384,15 @@ mod tests {
         assert_eq!(p.location, "1600 Pennsylvania Avenue Northwest");
         assert_eq!(p.keywords(), vec!["Washington", "District of Columbia", "United States"]);
         // a reverse lookup's nearest building is no place to name; a venue is
-        let flat = Place { name: "5th and Madison Condos".into(), location: "5th and Madison Condos".into(), city: "Seattle".into(), kind: "apartments".into(), lat: 47.6, lon: -122.3, ..Default::default() };
+        let flat = Place {
+            name: "5th and Madison Condos".into(),
+            location: "5th and Madison Condos".into(),
+            city: "Seattle".into(),
+            kind: "apartments".into(),
+            lat: 47.6,
+            lon: -122.3,
+            ..Default::default()
+        };
         let a = named_area(flat);
         assert_eq!((a.name.as_str(), a.location.as_str()), ("Seattle", ""));
         assert_eq!(named_area(pike_like()).location, "Pike Place Market");
