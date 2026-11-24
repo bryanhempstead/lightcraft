@@ -101,6 +101,10 @@ fn hdr_render_matches_the_cpu() {
     v.vignette.amount = 40.0;
     v.vignette.style = VignetteStyle::ColorPriority;
     check("hdr vignette +40", &src, &raw, &v, 360, 240);
+    // a display with less headroom than the HDR Limit (the loupe's `RenderJob::with_hdr_view`)
+    let mut d = hdr_on(3.0);
+    d.hdr.view_ev = 1.5;
+    check("hdr on a 1.5-stop display", &src, &raw, &d, 360, 240);
     // a rendered file (display tone map)
     check("hdr rendered file", &src, &SourceInfo::default(), &hdr_on(2.0), 360, 240);
     // a camera tone curve
