@@ -6,6 +6,35 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (hitch agent, 2026-11-23, branch `agent-hitch`, worktree ~/crafts/lc-hitch, not merged) **Preview lag: commits off
+  the UI thread, crop dials cut one render.** Measured first (probes below, Bryan's M262 DNG, 16k-photo on-disk library
+  with his presets.json, XMP auto-write on, load 20–45). (1) Every committed edit wrote the XMP sidecar on the UI
+  thread: `StemOwners::of` over the whole catalog (6–15 ms) + read/merge/fsync-write on the photo's drive (~10 ms on
+  the internal SSD; an external HDD's fsync is the likely 479 ms frame) — now `xmp_queue`: the app
+  (`Session::set_xmp_deferred(true)`) queues the photo, writes it on an `xmp-writer` thread once still for 1.5 s (at
+  once when the photo is left), several edits = one write; the queue is library record `xmp.pending` journaled with
+  the edit, so a crash re-writes it on the next open; quit (`notices::may_close`), `close_library` and a library
+  switch flush it. CLI/MCP/tests keep writing at once. `StemOwners::for_photos` = one prefix pass for the written
+  photos. (2) `persist()` rebuilt the 0.5 MB presets.json on EVERY command (2–8 ms, also each console tick): now
+  only when presets / profile lists changed (`PresetsSeen`, field-by-field compare), never mid-drag. Slider-click
+  commit on the UI thread: 22–34 ms → 0.3–1.7 ms. (3) Console moves ended with a bare `end_interaction`: never
+  auto-wrote the sidecar — now `develop.endInteraction` (`keymap::end_console_move`). (4) The "700 ms start-of-turn
+  stall" on Shadows was the probe: LC_BENCH_EDIT sets Shadows +30, so detents 71–90 were past +100 and counted as
+  unseen until the sharp render (p90). Probe fixed (unchanged detents count as shown); going the other way: median
+  16–29 ms, p90 30 ms, no stall (a turn started within ~250 ms of a new edit's sharp render still waits for the
+  draft-size warm-up, by design). (5) Crop X/Y dial: every detent was a whole-pipeline render (~80–120 ms at 849 px,
+  ~8/s); the "1.1 s median" was the same probe artifact (the crop hit the photo's edge). Now one uncropped draft per
+  turn (`Session::reframe_draft_job`, settings minus crop/flips/constrain, the view's decoded source, ≤ 2560 px) and
+  the loupe cuts each detent's crop out of it (`detail::crop_mesh`, straighten + flips; `app.reframe_key`): tick →
+  screen median 117–133 → 1–2 ms, p90 149–169 → 38 ms (first detent ~150–200 ms), sharper drafts (1415 vs 849 px).
+  Tests: engine `deferred_auto_write_is_written_after_the_debounce_and_on_close`,
+  `deferred_auto_write_survives_a_crash_and_leaving_the_photo`; ui `crop_dial_draws_its_detents_out_of_one_render`
+  (cut vs sharp mean |Δ| 2.5; a 5% wrong cut fails at 8.6). Probes (ignored): `commit_hitch` (new: LC_BENCH_RAW,
+  LC_BENCH_PHOTOS, LC_BENCH_PRESETS), `console_dial_lag` + LC_BENCH_GAP / LC_BENCH_TRACE; LIGHTCRAFT_PROFILE=1 prints
+  slow commands' stages (`engine: <cmd> … (run, xmp, persist)`). Left: not tried in Bryan's running app or on an
+  external drive (worktree builds have no DNG SDK / LibRaw: vendor/ isn't in worktrees); crop.scale turns zoom into
+  the uncropped draft (softer while turning); the sharp render after a crop turn is still a whole-pipeline render
+  (~250–300 ms after the 350 ms settle); a sharp texture upload is ~15 ms of one frame.
 - [ ] (pipeline agent, 2026-11-23, branch `agent-pipeline` in ~/crafts/lc-pipeline, not merged) **LC-SB-PIPELINE: Second
   Brain shoot pipeline marks + send.to.pipeline.** (Bryan: "add an area that marks that it came from the 2nd brain
   pipeline … if it's not then I can retroactively put it there … mark or ask if I want it backed up and then put it in

@@ -311,16 +311,22 @@ impl SidecarData {
 /// label names included, as other editors do). What is compared to tell whether the catalog
 /// changed since the last write; the file gets [`sidecar_packet_for_file`].
 pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
-    packet_with(p, cat, Vec::new())
+    packet_with(p, p.label.map(|l| cat.label_name(l)), Vec::new())
 }
 
 /// [`sidecar_packet`] as it is written into a file (a sidecar, an exported original): plus the
 /// crop as Camera Raw's fields ([`lightroom_crop_props`]), so Lightroom shows LightCraft's crop.
 /// Reads the photo's own EXIF orientation from `original` (only for a cropped photo).
 pub fn sidecar_packet_for_file(p: &Photo, cat: &lightcraft_catalog::Catalog, original: &str) -> String {
+    file_packet(p, p.label.map(|l| cat.label_name(l)), original)
+}
+
+/// [`sidecar_packet_for_file`] with the colour label's name already looked up (no catalog: runs
+/// on the sidecar writer's thread).
+fn file_packet(p: &Photo, label: Option<String>, original: &str) -> String {
     let crop =
         if p.develop.crop.geometry.is_identity() { Vec::new() } else { lightroom_crop_props(p, crate::lr_migrate::file_orientation(original)) };
-    packet_with(p, cat, crop)
+    packet_with(p, label, crop)
 }
 
 /// The photo's crop as Camera Raw's `crs:Crop…` fields ([`crate::crs::crop_props`]). Ours is in
@@ -341,7 +347,7 @@ pub fn lightroom_crop_props(p: &Photo, file: lightcraft_geom::Orientation) -> Ve
     crate::crs::crop_props(&lightcraft_geom::CropGeometry { rect, angle }, aspect)
 }
 
-fn packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, crop: Vec<(&'static str, String)>) -> String {
+fn packet_with(p: &Photo, label: Option<String>, crop: Vec<(&'static str, String)>) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     let meta = lightcraft_meta::Metadata {
         software: Some("LightCraft".into()),
@@ -360,7 +366,7 @@ fn packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, crop: Vec<(&'static
         artist: nz(&p.meta.creator),
         keywords: p.meta.keywords.clone(),
         rating: Some(p.rating.min(5) as i8),
-        label: p.label.map(|l| cat.label_name(l)),
+        label,
         capture_time: p.captured.as_deref().and_then(lightcraft_meta::DateTime::parse_iso),
         gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
         iptc_ext: p.meta.iptc_ext.clone(),
@@ -601,10 +607,34 @@ pub(crate) struct StemOwners(HashMap<String, PhotoId>);
 
 impl StemOwners {
     pub(crate) fn of(cat: &lightcraft_catalog::Catalog) -> StemOwners {
+        Self::among(cat, |_| true)
+    }
+
+    /// [`StemOwners::of`] for the stems of photos `ids` only: one pass over the catalog comparing
+    /// path prefixes, without building every photo's stem (a slider commit on a 16k-photo library
+    /// spent 10+ ms here). Many photos, or a non-ASCII path, take the whole-catalog way.
+    pub(crate) fn for_photos(cat: &lightcraft_catalog::Catalog, ids: &[PhotoId]) -> StemOwners {
+        let stems: Option<Vec<String>> = ids
+            .iter()
+            .filter_map(|id| cat.photo(*id))
+            .filter_map(|p| file_path(p))
+            .map(|path| stem_key(path).strip_suffix(".xmp").filter(|s| s.is_ascii()).map(str::to_string))
+            .collect();
+        match stems {
+            Some(stems) if ids.len() <= 32 => Self::among(cat, |path| {
+                stems.iter().any(|s| path.as_bytes().get(..s.len()).is_some_and(|b| b.eq_ignore_ascii_case(s.as_bytes())))
+            }),
+            _ => Self::of(cat),
+        }
+    }
+
+    /// The owners among the catalogued files whose path passes `maybe` (a cheap pre-filter: files
+    /// that can't share a wanted stem).
+    fn among(cat: &lightcraft_catalog::Catalog, maybe: impl Fn(&str) -> bool) -> StemOwners {
         // per stem: (raw first, then file name, then id) of the best candidate; and how many
         let mut best: HashMap<String, ((bool, String, u64), PhotoId, usize)> = HashMap::new();
         for p in cat.photos().filter(|p| p.copy_of.is_none()) {
-            let Some(path) = file_path(p) else { continue };
+            let Some(path) = file_path(p).filter(|path| maybe(path)) else { continue };
             let rank = (p.kind != MediaKind::Raw, path.to_lowercase(), p.id.0);
             let e = best.entry(stem_key(path)).or_insert_with(|| (rank.clone(), p.id, 0));
             e.2 += 1;
@@ -617,12 +647,52 @@ impl StemOwners {
 
     /// `naming` for photo `p`, except that a stem sidecar another file owns becomes Full.
     fn naming(&self, p: &Photo, naming: SidecarNaming) -> SidecarNaming {
+        let naming = self.catalog_naming(p, naming);
         match (naming, file_path(p)) {
-            (SidecarNaming::Stem, Some(path)) if self.0.get(&stem_key(path)).is_some_and(|owner| *owner != p.id) => SidecarNaming::Full,
             // a raw next to it on disk owns the stem sidecar even when it isn't catalogued
             (SidecarNaming::Stem, Some(path)) if p.kind != MediaKind::Raw && has_raw_sibling(path) => SidecarNaming::Full,
             _ => naming,
         }
+    }
+
+    /// [`StemOwners::naming`] as far as the catalog says (no look at the disk).
+    fn catalog_naming(&self, p: &Photo, naming: SidecarNaming) -> SidecarNaming {
+        match (naming, file_path(p)) {
+            (SidecarNaming::Stem, Some(path)) if self.0.get(&stem_key(path)).is_some_and(|owner| *owner != p.id) => SidecarNaming::Full,
+            _ => naming,
+        }
+    }
+}
+
+/// Everything writing one photo's sidecar needs, taken from the session ([`Session::prepare_sidecar`],
+/// in memory only), so the disk part ([`SidecarWrite::run`]: the folder listing for a raw sibling,
+/// the original's orientation, reading + merging the old sidecar, the atomic write) can run on
+/// another thread — the photo's drive may be a slow external volume.
+pub(crate) struct SidecarWrite {
+    pub(crate) id: PhotoId,
+    photo: Arc<Photo>,
+    label: Option<String>,
+    original: String,
+    naming: SidecarNaming,
+    stamp: String,
+}
+
+impl SidecarWrite {
+    pub(crate) fn run(self) -> Result<SidecarSaved> {
+        let p = &*self.photo;
+        let naming = match self.naming {
+            SidecarNaming::Stem if p.kind != MediaKind::Raw && has_raw_sibling(&self.original) => SidecarNaming::Full,
+            n => n,
+        };
+        let path = sidecar_path(&self.original, naming);
+        let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
+        // (the catalog side of the sync record is the plain packet, as `current_sync` compares it)
+        let plain = lightcraft_catalog::fnv64(packet_with(p, self.label.clone(), Vec::new()).as_bytes());
+        let packet = file_packet(p, self.label, &self.original);
+        let (data, merged, backup) = sidecar_contents(&path, packet, &self.stamp).map_err(err)?;
+        write_atomic(&path, data.as_bytes()).map_err(err)?;
+        let sync = lightcraft_catalog::XmpSync { packet: plain, file: lightcraft_catalog::fnv64(data.as_bytes()) };
+        Ok(SidecarSaved { path, merged, backup, sync })
     }
 }
 
@@ -633,31 +703,35 @@ impl Session {
     /// (`IMG_0001.JPG.xmp`), so their metadata never overwrites each other.
     pub fn sidecar_naming(&self, id: PhotoId) -> SidecarNaming {
         match self.catalog.photo(id) {
-            Some(p) if self.xmp.naming == SidecarNaming::Stem => StemOwners::of(&self.catalog).naming(p, self.xmp.naming),
+            Some(p) if self.xmp.naming == SidecarNaming::Stem => StemOwners::for_photos(&self.catalog, &[id]).naming(p, self.xmp.naming),
             _ => self.xmp.naming,
         }
     }
 
     /// Write the photo's XMP sidecar, merged into an existing one (see the module docs).
     pub fn save_sidecar(&self, id: PhotoId) -> Result<SidecarSaved> {
-        self.save_sidecar_with(id, &StemOwners::of(&self.catalog))
+        self.save_sidecar_with(id, &StemOwners::for_photos(&self.catalog, &[id]))
     }
 
     pub(crate) fn save_sidecar_with(&self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
+        self.prepare_sidecar(id, owners)?.run()
+    }
+
+    /// The in-memory half of writing photo `id`'s sidecar (see [`SidecarWrite`]).
+    pub(crate) fn prepare_sidecar(&self, id: PhotoId, owners: &StemOwners) -> Result<SidecarWrite> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         if p.copy_of.is_some() {
             return Err(EngineError::Other(format!("{} is a virtual copy: its settings live only in the library", p.file_name)));
         }
         let orig = file_path(p).ok_or_else(|| EngineError::Other(format!("{} is not a file on disk", p.file_name)))?;
-        let path = sidecar_path(orig, owners.naming(p, self.xmp.naming));
-        let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        // (the catalog side of the sync record is the plain packet, as `current_sync` compares it)
-        let sync = lightcraft_catalog::XmpSync { packet: lightcraft_catalog::fnv64(sidecar_packet(p, &self.catalog).as_bytes()), file: 0 };
-        let packet = sidecar_packet_for_file(p, &self.catalog, orig);
-        let (data, merged, backup) = sidecar_contents(&path, packet, &(self.clock)()).map_err(err)?;
-        write_atomic(&path, data.as_bytes()).map_err(err)?;
-        let sync = lightcraft_catalog::XmpSync { file: lightcraft_catalog::fnv64(data.as_bytes()), ..sync };
-        Ok(SidecarSaved { path, merged, backup, sync })
+        Ok(SidecarWrite {
+            id,
+            photo: p.clone(),
+            label: p.label.map(|l| self.catalog.label_name(l)),
+            original: orig.to_string(),
+            naming: owners.catalog_naming(p, self.xmp.naming),
+            stamp: (self.clock)(),
+        })
     }
 
     /// The op that applies a photo's sidecar (or embedded XMP) to the catalog, if there is one.
@@ -694,7 +768,11 @@ impl Session {
         if ids.is_empty() {
             return out;
         }
-        let owners = StemOwners::of(&self.catalog);
+        let t0 = web_time::Instant::now();
+        let owners = StemOwners::for_photos(&self.catalog, &ids);
+        if crate::profiling() {
+            eprintln!("engine: auto-write: stem owners ({} photos) in {:.1} ms", self.catalog.len(), t0.elapsed().as_secs_f64() * 1e3);
+        }
         for id in ids {
             if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none()) {
                 match self.save_sidecar_with(id, &owners) {

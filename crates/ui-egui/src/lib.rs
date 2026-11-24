@@ -364,6 +364,9 @@ pub struct LightcraftApp {
     /// When the crop was last adjusted (a handle drag, a crop dial): its thirds grid shows until
     /// [`CROP_GRID_HOLD`] after (Lightroom's Auto crop overlay).
     pub crop_touch: Option<std::time::Instant>,
+    /// The key of the loupe's uncropped crop-dial draft ([`lightcraft_engine::Session::reframe_draft_job`]):
+    /// a Main texture with it is drawn cropped to the current crop.
+    pub reframe_key: Option<u64>,
     /// Control requests to handle again next frame (`control::Outcome::Retry`) and how often they were.
     pub control_retry: Vec<(ControlRequest, u8)>,
     /// The host's MIDI input status for the ctrl. page ("2 inputs: Monogram…", an error).
@@ -382,6 +385,9 @@ impl LightcraftApp {
         session.genremove.background = true;
         // face finding and AI search indexing run on worker threads; frames apply what they found
         session.vision.background = true;
+        // XMP auto-write on a worker, a moment after the edits stop (never on the frame that
+        // commits them: the photo's drive may be a slow external volume); written on quit
+        session.set_xmp_deferred(true);
         Self {
             session,
             ui: UiState::default(),
@@ -442,6 +448,7 @@ impl LightcraftApp {
             h_down: None,
             h_replay: false,
             crop_touch: None,
+            reframe_key: None,
             control_retry: Vec::new(),
             midi_status: String::new(),
             left_off: leftoff::Tracker::default(),
