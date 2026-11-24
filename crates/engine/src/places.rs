@@ -360,7 +360,7 @@ impl Geocoder for Nominatim {
         if v.get("error").is_some() {
             return Ok(None);
         }
-        Ok(place_from_nominatim(&v))
+        Ok(place_from_nominatim(&v).map(named_area))
     }
     fn name(&self) -> &str {
         "OpenStreetMap Nominatim"
@@ -419,6 +419,17 @@ pub fn place_from_nominatim(v: &Value) -> Option<Place> {
     };
     let name = if name.is_empty() { Place::at(lat, lon).name } else { name };
     Some(Place { name, address, lat, lon, location, city, state, country, kind: if area { String::new() } else { kind } })
+}
+
+/// A reverse lookup lands on whatever building is nearest ("5th and Madison Condos"): unless it
+/// is a venue worth naming (a restaurant, a park …), the place is its town.
+pub fn named_area(mut p: Place) -> Place {
+    if kind_keyword(&p.kind).is_none() {
+        p.location.clear();
+        p.kind.clear();
+        p.name = [&p.city, &p.state, &p.country].iter().find(|s| !s.is_empty()).map(|s| s.to_string()).unwrap_or(p.name);
+    }
+    p
 }
 
 /// The geocoder the app starts with: Nominatim natively, unless `LIGHTCRAFT_GEOCODE_OFFLINE` is set.
@@ -1330,6 +1341,10 @@ mod tests {
         let _ = parse_coordinates("°°°'''\"\"\",,,,");
     }
 
+    fn pike_like() -> Place {
+        Place { name: "Pike Place Market".into(), location: "Pike Place Market".into(), city: "Seattle".into(), kind: "marketplace".into(), lat: 47.6, lon: -122.3, ..Default::default() }
+    }
+
     #[test]
     fn nominatim_results_become_places() {
         let v: Value = serde_json::from_str(
@@ -1360,6 +1375,11 @@ mod tests {
         let p = place_from_nominatim(&v).unwrap();
         assert_eq!(p.location, "1600 Pennsylvania Avenue Northwest");
         assert_eq!(p.keywords(), vec!["Washington", "District of Columbia", "United States"]);
+        // a reverse lookup's nearest building is no place to name; a venue is
+        let flat = Place { name: "5th and Madison Condos".into(), location: "5th and Madison Condos".into(), city: "Seattle".into(), kind: "apartments".into(), lat: 47.6, lon: -122.3, ..Default::default() };
+        let a = named_area(flat);
+        assert_eq!((a.name.as_str(), a.location.as_str()), ("Seattle", ""));
+        assert_eq!(named_area(pike_like()).location, "Pike Place Market");
         // nonsense is skipped
         for bad in [json!({}), json!({"lat": "x", "lon": "1"}), json!({"lat": "0", "lon": "0"}), json!({"lat": "95", "lon": "1"}), json!(null)] {
             assert_eq!(place_from_nominatim(&bad), None, "{bad}");
@@ -1397,6 +1417,21 @@ mod tests {
             vec![],
         ];
         assert_eq!(content_keywords(&per), vec![("wedding".to_string(), 0.75)]);
+    }
+
+    /// Live (needs the network): one search and one reverse lookup against Nominatim
+    /// (`cargo test -p lightcraft-engine nominatim_live -- --ignored`).
+    #[test]
+    #[ignore]
+    fn nominatim_live() {
+        let n = Nominatim::default();
+        let r = n.search("Pike Place Market, Seattle", 3).unwrap();
+        let p = r.first().unwrap();
+        assert_eq!(p.city, "Seattle", "{r:?}");
+        assert!(p.keywords().iter().any(|k| k == "Seattle"));
+        let back = n.reverse(47.6062, -122.3321).unwrap().unwrap();
+        assert_eq!((back.city.as_str(), back.name.as_str()), ("Seattle", "Seattle"), "{back:?}");
+        eprintln!("{p:?}\n{back:?}");
     }
 
     #[test]
