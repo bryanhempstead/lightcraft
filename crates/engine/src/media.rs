@@ -1268,6 +1268,26 @@ impl crate::Session {
         Some(job)
     }
 
+    /// A draft of the view `id` shows at `view_long_edge` pixels (a slider drag or console turn
+    /// in the loupe), at `max_w × max_h`: drawn from the same decoded source as the view's sharp
+    /// render when that one is loaded, rather than the smaller one its own size would pick.
+    /// Switching sources between drafts and the sharp render threw away the GPU's uploaded source
+    /// (a 288 MB upload of a 24 MP raw each way) and every cached stage, both at the drag's first
+    /// draft and at the sharp render after it.
+    pub fn view_draft_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool, view_long_edge: usize) -> Option<RenderJob> {
+        let mut job = self.loupe_job(id, max_w, max_h, apply_crop)?.draft();
+        let p = self.catalog.photo(id)?.clone();
+        let want = SourceLevel::for_size(source_edge_needed(&p, &p.develop, view_long_edge, apply_crop));
+        if want != job.level
+            && let r @ SourceRef::Loaded(_) = self.media.source_ref(&p, want)
+        {
+            job.source = r;
+            job.key ^= ((job.level as u64) << 60) ^ ((want as u64) << 60);
+            job.level = want;
+        }
+        Some(job)
+    }
+
     /// The embedded preview of an unedited raw (path, loader), when the app installed a loader.
     fn embedded_of(&self, p: &Photo) -> Option<(String, PreviewLoader)> {
         match (&p.source, &self.media.preview_loader) {

@@ -26,11 +26,18 @@ struct Entry<S, R> {
 /// Called by a worker once a finished job's result can be received.
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
 
+/// The group a slot's jobs run one at a time in, if any ([`JobPool::set_exclusive`]).
+pub type Exclusive<S> = Arc<dyn Fn(&S) -> Option<u32> + Send + Sync>;
+
 struct Shared<S, R> {
     queue: Mutex<Vec<Entry<S, R>>>,
     cv: Condvar,
     shutdown: AtomicBool,
     on_done: Mutex<Option<Waker>>,
+    /// The groups whose jobs never run side by side, and the jobs running now with their group
+    /// (both read under `queue`'s lock).
+    exclusive: Mutex<Option<Exclusive<S>>>,
+    running: Mutex<Vec<(S, Option<u32>)>>,
 }
 
 /// A finished job.
@@ -63,6 +70,8 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                 cv: Condvar::new(),
                 shutdown: AtomicBool::new(false),
                 on_done: Mutex::new(None),
+                exclusive: Mutex::new(None),
+                running: Mutex::new(Vec::new()),
             }),
             tx,
             rx,
@@ -98,6 +107,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                     let t0 = std::time::Instant::now();
                     let result = (e.job)();
                     let done = Done { slot: e.slot, key: e.key, result, ms: t0.elapsed().as_secs_f64() * 1000.0 };
+                    finished(&shared, e.slot);
                     if tx.send(done).is_err() {
                         break;
                     }
@@ -144,6 +154,15 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         self.shared.queue.lock().map(|q| q.len()).unwrap_or(0)
     }
 
+    /// Slots `f` puts in a group run one job of that group at a time: a newer job waits (and is
+    /// replaced by an even newer one for its slot) until the running one is done. An interactive view (the loupe during a
+    /// slider drag or a console turn) then renders the newest settings next instead of starting
+    /// a render per change side by side — three or four drafts sharing the GPU each took three or
+    /// four times as long, and the picture fell further behind with every detent.
+    pub fn set_exclusive(&self, f: Option<Exclusive<S>>) {
+        *self.shared.exclusive.lock().unwrap_or_else(|e| e.into_inner()) = f;
+    }
+
     /// Is a job for `slot` queued?
     pub fn is_queued(&self, slot: S) -> bool {
         self.shared.queue.lock().map(|q| q.iter().any(|e| e.slot == slot)).unwrap_or(false)
@@ -171,6 +190,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         while ran < n {
             let Some(e) = take(&self.shared, false) else { break };
             let result = (e.job)();
+            finished(&self.shared, e.slot);
             let _ = self.tx.send(Done { slot: e.slot, key: e.key, result, ms: 0.0 });
             ran += 1;
         }
@@ -180,20 +200,37 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
 
 /// Pop the best job (highest priority, newest first). Blocks when `wait` until one is queued or
 /// the pool shuts down.
-fn take<S, R>(shared: &Shared<S, R>, wait: bool) -> Option<Entry<S, R>> {
+fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<Entry<S, R>> {
     let mut q = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
     loop {
         if shared.shutdown.load(Ordering::Relaxed) {
             return None;
         }
-        if let Some(i) = q.iter().enumerate().max_by_key(|(_, e)| (e.priority, e.seq)).map(|(i, _)| i) {
-            return Some(q.swap_remove(i));
+        let exclusive = shared.exclusive.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut running = shared.running.lock().unwrap_or_else(|e| e.into_inner());
+        let group = |s: &S| exclusive.as_ref().and_then(|f| f(s));
+        let blocked = |e: &Entry<S, R>| group(&e.slot).is_some_and(|g| running.iter().any(|(_, r)| *r == Some(g)));
+        if let Some(i) = q.iter().enumerate().filter(|(_, e)| !blocked(e)).max_by_key(|(_, e)| (e.priority, e.seq)).map(|(i, _)| i) {
+            let e = q.swap_remove(i);
+            running.push((e.slot, group(&e.slot)));
+            return Some(e);
         }
+        drop(running);
         if !wait {
             return None;
         }
         q = shared.cv.wait(q).unwrap_or_else(|e| e.into_inner());
     }
+}
+
+/// A job for `slot` is done: a job of an exclusive slot waiting for it can start.
+fn finished<S: PartialEq, R>(shared: &Shared<S, R>, slot: S) {
+    let _q = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
+    let mut running = shared.running.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(i) = running.iter().position(|(s, _)| *s == slot) {
+        running.swap_remove(i);
+    }
+    shared.cv.notify_all();
 }
 
 impl<S, R> Drop for JobPool<S, R> {

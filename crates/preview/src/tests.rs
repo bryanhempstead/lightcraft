@@ -264,3 +264,67 @@ fn disk_cache_never_touches_foreign_files() {
     assert!(!disk::is_cache_file("01", "0123456789abcdef0123456789abcdef.jpg.bak"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An exclusive slot (the loupe) never runs two jobs at once: a job submitted while one runs
+/// waits, is replaced by a newer one, and starts when the running one is done — the newest
+/// settings render next, the older in-between ones never.
+#[test]
+fn exclusive_slots_run_one_job_at_a_time() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut p: JobPool<u32, u32> = JobPool::new(4);
+    // slots 7 and 9 share a group: never side by side either
+    p.set_exclusive(Some(Arc::new(|s: &u32| matches!(s, 7 | 9).then_some(0))));
+    let (now, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let go_rx = Arc::new(std::sync::Mutex::new(go_rx));
+    let job = |v: u32, gate: bool| {
+        let (now, most, go_rx) = (now.clone(), most.clone(), go_rx.clone());
+        Box::new(move || {
+            // (counts the group's jobs only)
+            let mine = v != 4;
+            if mine {
+                let n = now.fetch_add(1, Ordering::SeqCst) + 1;
+                most.fetch_max(n, Ordering::SeqCst);
+            }
+            if gate {
+                let _ = go_rx.lock().unwrap().recv_timeout(std::time::Duration::from_secs(30));
+            }
+            if mine {
+                now.fetch_sub(1, Ordering::SeqCst);
+            }
+            v
+        }) as Box<dyn FnOnce() -> u32 + Send>
+    };
+    p.submit(7, 1, 100, job(1, true));
+    // the first one is running (holding the gate); these wait and replace each other
+    let t0 = std::time::Instant::now();
+    while now.load(Ordering::SeqCst) == 0 && t0.elapsed().as_secs() < 30 {
+        std::thread::yield_now();
+    }
+    p.submit(7, 2, 100, job(2, false));
+    p.submit(7, 3, 100, job(3, false));
+    // its group partner waits too (counted with slot 7's); another slot is not held back
+    p.submit(9, 5, 1, job(5, false));
+    p.submit(8, 4, 1, job(4, false));
+    let mut got = Vec::new();
+    let t0 = std::time::Instant::now();
+    while got.len() < 1 && t0.elapsed().as_secs() < 30 {
+        if let Some(d) = p.try_recv() {
+            got.push(d.result);
+        }
+    }
+    assert_eq!(got, vec![4], "slot 8 ran while slot 7 was busy");
+    go_tx.send(()).unwrap();
+    while got.len() < 3 && t0.elapsed().as_secs() < 30 {
+        if let Some(d) = p.try_recv() {
+            got.push(d.result);
+        }
+    }
+    while got.len() < 4 && t0.elapsed().as_secs() < 30 {
+        if let Some(d) = p.try_recv() {
+            got.push(d.result);
+        }
+    }
+    assert_eq!(got, vec![4, 1, 3, 5], "the newest waiting job ran next (priority first); the replaced one never");
+    assert_eq!(most.load(Ordering::SeqCst), 1, "never two of the group at once");
+}

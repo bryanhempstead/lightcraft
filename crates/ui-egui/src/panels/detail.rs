@@ -403,12 +403,28 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.image_rect = Some(img_rect);
     // request renders: the loupe at display resolution (drafts during drags)
     let interacting = app.session.interaction.is_some();
-    let scale = if interacting { 0.6 } else { 1.0 };
+    // a crop / straighten dial changes the geometry: every draft is a whole-pipeline render (no
+    // stage can be kept), so it is made smaller to keep up with the detents
+    let legacy = app.renderer.legacy();
+    let reframing = !legacy && !crop_tool && app.console_drag.as_ref().is_some_and(|(_, c)| c.starts_with("crop."));
+    let scale = if !interacting {
+        1.0
+    } else if reframing {
+        DRAFT_SCALE_REFRAME
+    } else {
+        DRAFT_SCALE
+    };
     // render at the final size: a click-zoom animation only changes how the result is drawn
     let want = (target_rect.width().max(target_rect.height()) * ppp * scale).min(max_edge) as usize;
     let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
-    if let Some(job) = app.session.loupe_job(id, rw.max(8), rh.max(8), !crop_tool) {
-        let job = if interacting { job.draft() } else { job };
+    // the long edge of the sharp render (what source a draft shares with it)
+    let view_edge = (target_rect.width().max(target_rect.height()) * ppp).min(max_edge) as usize;
+    let job = if interacting && !reframing && !legacy {
+        app.session.view_draft_job(id, rw.max(8), rh.max(8), !crop_tool, view_edge)
+    } else {
+        app.session.loupe_job(id, rw.max(8), rh.max(8), !crop_tool).map(|j| if interacting { j.draft() } else { j })
+    };
+    if let Some(job) = job {
         app.ui.alt_down = ui.input(|i| i.modifiers.alt);
         let job = job.with_overlay(view_overlay(app, &d)).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         // an HDR edit on an HDR display: its HDR rendition (unless previewing the SDR one)
@@ -428,6 +444,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }),
         _ => None,
     };
+    // the sharp render is on screen: get the draft size's stages ready for the next drag / dial
+    // turn ([`crate::render::Renderer::warm`])
+    if !interacting
+        && !legacy
+        && !app.renderer.is_pending(Slot::Main)
+        && app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id && t.quick.is_none())
+    {
+        let dw = (target_rect.width().max(target_rect.height()) * ppp * DRAFT_SCALE).min(max_edge) as usize;
+        let (ww, wh) = if aspect >= 1.0 { (dw, (dw as f32 / aspect) as usize) } else { ((dw as f32 * aspect) as usize, dw) };
+        if let Some(job) = app.session.view_draft_job(id, ww.max(8), wh.max(8), !crop_tool, view_edge) {
+            let job = job.with_overlay(view_overlay(app, &d)).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
+            app.renderer.warm(Slot::Main, job, PREFETCH_PRIORITY + 1);
+        }
+    }
     // once this photo is on screen: prepare its neighbours in filmstrip order (source decoded and
     // kept, view render cached) so stepping to them is instant
     if !interacting && !app.renderer.is_pending(Slot::Main) && app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id) {
@@ -1287,6 +1317,10 @@ fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, img: Rect
 
 /// Neighbour prefetch: below on-screen thumbnails, above background thumbnail refreshes.
 const PREFETCH_PRIORITY: u32 = 4;
+/// Loupe drafts (slider drags, console turns) at this share of the view's pixel size.
+const DRAFT_SCALE: f32 = 0.6;
+/// … and while a console dial moves the crop (every draft re-renders the whole pipeline).
+const DRAFT_SCALE_REFRAME: f32 = 0.35;
 
 fn quick_name(q: lightcraft_engine::media::QuickSource) -> &'static str {
     use lightcraft_engine::media::QuickSource;

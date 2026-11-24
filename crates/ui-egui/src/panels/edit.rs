@@ -434,20 +434,15 @@ fn lens_corrections(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
             }
             let mut lp = d.optics.lens_profile;
             if ui.checkbox(&mut lp, crate::i18n::tr("Enable Profile Corrections")).changed() {
-                let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
-            }
-            if lp && !has_lens {
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr("No lens data embedded in this file (DNG lens opcodes only)."))
-                        .size(11.0)
-                        .color(Tokens::get(ui.ctx()).text_dim),
-                );
+                // turning it on picks the installed profile for the photo's lens (Set Lens) when it can
+                let _ = app.run("lens.profileCorrections", json!({"on": lp}));
             }
         });
         if d.optics.lens_profile {
+            let in_use = lens_profile_picker(app, ui, d, has_lens);
             sub_title(ui, crate::i18n::tr("Amount"));
             for c in ["optics.profileDistortion", "optics.profileVignetting"] {
-                control(app, ui, d, c, has_lens);
+                control(app, ui, d, c, has_lens || in_use);
             }
         }
     } else {
@@ -477,6 +472,106 @@ fn lens_corrections(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
         control(app, ui, d, "optics.vignettingMidpoint", d.optics.vignetting != 0.0);
     }
     ui.add_space(6.0);
+}
+
+/// Lightroom's Profile ▸ Make / Model / Profile pickers over the lens profiles installed on this
+/// Mac, for a lens the file doesn't name (a manual Leica M lens): shows which profile is in use;
+/// `auto.` takes the one for the photo's lens (Set Lens), `none.` the file's own data. True when a
+/// profile is in use.
+fn lens_profile_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, has_lens: bool) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let r = d.optics.lens_profile_ref.clone();
+    // where the profile in use is listed (cached per profile: the lookup reads the folder index)
+    let key = egui::Id::new(("lens-profile-listed", r.as_ref().map(|r| (r.filename.clone(), r.digest.clone(), r.name.clone()))));
+    let listed: Option<Option<(String, String)>> = ui.data(|m| m.get_temp(key));
+    let listed = listed.unwrap_or_else(|| {
+        let v = r.as_ref().and_then(lightcraft_engine::lcp::listed).map(|i| (i.make, i.model));
+        ui.data_mut(|m| m.insert_temp(key, v.clone()));
+        v
+    });
+    let in_use = listed.is_some();
+    let status = match (&r, in_use) {
+        (Some(r), true) => format!("{}{}", r.name, if r.custom { "" } else { " · auto." }),
+        (Some(r), false) => format!("{} · not installed", r.name),
+        (None, _) if has_lens => crate::i18n::tr("the file's own lens data").to_string(),
+        (None, _) => crate::i18n::tr("no profile: pick the lens below").to_string(),
+    };
+    // the profile's name is long ("Adobe (Leica SUMMICRON-M 50 mm f/2)"): its own wrapped line
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 20, top: 3, bottom: 3 }).show(ui, |ui| {
+        ui.label(RichText::new(crate::i18n::tr("in use:")).size(11.5).color(t.text_label));
+        ui.add_space(2.0);
+        ui.add(egui::Label::new(RichText::new(status).size(11.5).color(if in_use || has_lens { t.text } else { t.text_dim })).wrap());
+    });
+    // the make picked before a model is (remembered per photo view)
+    let make_key = egui::Id::new("lens-profile-make");
+    let picked_make: Option<String> = ui.data(|m| m.get_temp(make_key));
+    let make = listed.as_ref().map(|(m, _)| m.clone()).or(picked_make).unwrap_or_default();
+    let model = listed.as_ref().map(|(_, l)| l.clone()).unwrap_or_default();
+    let row = |ui: &mut egui::Ui, label: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
+        padded_row(ui, |ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(44.0, 22.0), Sense::hover());
+            ui.painter().text(rect.right_center(), Align2::RIGHT_CENTER, crate::i18n::tr(label), t.font(12.0), t.text_label);
+            add(ui);
+        });
+    };
+    let mut run: Option<Value> = None;
+    row(ui, "make.", &mut |ui| {
+        let shown = if make.is_empty() { "—" } else { make.as_str() };
+        let w = ui.available_width().max(60.0);
+        egui::ComboBox::from_id_salt("lens-profile-make").width(w).truncate().selected_text(shown).show_ui(ui, |ui| {
+            for m in lightcraft_engine::lcp::makes() {
+                if ui.selectable_label(m.eq_ignore_ascii_case(&make), &m).clicked() {
+                    ui.data_mut(|d| d.insert_temp(make_key, m.clone()));
+                }
+            }
+        });
+    });
+    row(ui, "model.", &mut |ui| {
+        let text = if model.is_empty() || !listed.as_ref().is_some_and(|(m, _)| m.eq_ignore_ascii_case(&make)) { "—" } else { model.as_str() };
+        let w = ui.available_width().max(60.0);
+        egui::ComboBox::from_id_salt("lens-profile-model").width(w).truncate().selected_text(text).show_ui(ui, |ui| {
+            for l in lightcraft_engine::lcp::models(&make) {
+                if ui.selectable_label(l.eq_ignore_ascii_case(&model), &l).clicked() {
+                    run = Some(json!({"make": make, "model": l}));
+                }
+            }
+        });
+    });
+    row(ui, "profile.", &mut |ui| {
+        let current = r.as_ref().filter(|_| in_use).map(|r| r.name.clone()).unwrap_or_else(|| "—".into());
+        let w = ui.available_width().max(60.0);
+        egui::ComboBox::from_id_salt("lens-profile-profile").width(w).truncate().selected_text(current).show_ui(ui, |ui| {
+            for (name, path) in lightcraft_engine::lcp::profiles(&make, &model) {
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let on = r.as_ref().is_some_and(|r| r.filename.eq_ignore_ascii_case(&file));
+                if ui.selectable_label(on, name).clicked() {
+                    run = Some(json!({"make": make, "model": model, "file": file}));
+                }
+            }
+        });
+    });
+    padded_row(ui, |ui| {
+        ui.add_space(52.0);
+        let auto = ui.button(crate::i18n::tr("auto.")).on_hover_text(crate::i18n::tr("The installed profile for this photo's lens (Set Lens)"));
+        register(ui.ctx(), "button:lensProfileAuto", auto.rect);
+        if auto.clicked() {
+            run = Some(json!({"auto": true}));
+        }
+        let none = ui.button(crate::i18n::tr("none.")).on_hover_text(crate::i18n::tr("No profile: only the file's own lens data"));
+        register(ui.ctx(), "button:lensProfileNone", none.rect);
+        if none.clicked() {
+            run = Some(json!({"clear": true}));
+        }
+    });
+    if let Some(p) = run {
+        let auto = p["auto"] == true;
+        match app.run("lens.setProfile", p) {
+            Ok(v) if auto && v["profile"].is_null() => app.toast_soon(crate::i18n::tr("No installed profile for this lens").to_string(), 2.0),
+            Ok(_) => {}
+            Err(e) => app.toast_soon(e, 2.5),
+        }
+    }
+    in_use
 }
 
 /// The profile dropdown: Favorites, Recent, one submenu per group, then favourite toggle and

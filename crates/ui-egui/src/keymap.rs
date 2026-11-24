@@ -111,7 +111,7 @@ pub const SUPER_ACTIONS: &[(&str, &str, &str, &str)] = &[
 
 /// Lightroom Classic develop parameter names (LrKeys `param?name=`, LrSuperKeys `lrParam`,
 /// Monogram's Lightroom integration inputs) → LightCraft develop control ids. `crop.x`, `crop.y`
-/// and `crop.scale` are nudge-only pseudo controls ([`crate::menus`] `crop.nudge`).
+/// and `crop.scale` are nudge-only pseudo controls (the engine's `crop.nudge`).
 pub const LR_PARAMS: &[(&str, &str)] = &[
     ("Exposure", "light.exposure"),
     ("Exposure2012", "light.exposure"),
@@ -1615,9 +1615,13 @@ pub fn console_tick(app: &mut crate::LightcraftApp, ctx: &egui::Context) {
 pub fn nudge(app: &mut crate::LightcraftApp, control: &str, delta: f64) -> Result<Value, String> {
     // every dial turn (the crop's move / scale too: Bryan, 2026-11-23 "super laggy") is one drag
     console_begin(app, control);
+    // the Crop tool shows the whole photo unstraightened with the crop as a tilted frame: move it
+    // along the screen's axes there, along the cropped photo's elsewhere (Bryan, 2026-11-23: "the
+    // crop adjustment horizontal is … going both vertical and horizontal")
+    let axes = if app.ui.right == crate::state::RightPanel::Crop && !app.ui.fullscreen { "image" } else { "crop" };
     let r = match control {
-        "crop.x" => app.run("crop.nudge", json!({"x": delta})),
-        "crop.y" => app.run("crop.nudge", json!({"y": delta})),
+        "crop.x" => app.run("crop.nudge", json!({"x": delta, "axes": axes})),
+        "crop.y" => app.run("crop.nudge", json!({"y": delta, "axes": axes})),
         "crop.scale" => app.run("crop.nudge", json!({"scale": delta})),
         _ => app.run("develop.adjust", json!({"control": control, "delta": delta})),
     };

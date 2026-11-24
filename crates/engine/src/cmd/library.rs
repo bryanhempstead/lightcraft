@@ -776,18 +776,40 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let lens = str_param(p, "lens").ok_or_else(|| bad("photo.setLens", "missing `lens`"))?.trim().to_string();
                 let focal = p.get("focal").and_then(Value::as_f64).filter(|f| f.is_finite() && *f > 0.0 && *f < 5000.0);
-                let metas: std::collections::HashMap<PhotoId, lightcraft_catalog::Meta> =
-                    s.targets(p).iter().filter_map(|id| s.catalog.photo(*id).map(|ph| (*id, ph.meta.clone()))).collect();
-                for_targets(s, p, "Set Lens", |id| {
-                    let old = metas.get(&id)?;
-                    let mut m = old.clone();
+                let mut ops = Vec::new();
+                for id in s.targets(p) {
+                    let Some(ph) = s.catalog.photo(id) else { continue };
+                    let mut m = ph.meta.clone();
                     m.lens = lens.clone();
                     if let Some(f) = focal {
                         m.focal_mm = Some(f as f32);
                     }
                     m.aperture = lightcraft_catalog::trusted_aperture(&m.camera, &m.lens, m.aperture);
-                    (m != *old).then(|| Op::SetMeta { id, meta: Box::new(m) })
-                })
+                    if m == ph.meta {
+                        continue;
+                    }
+                    // Profile Corrections already on with a profile it picked itself: follow the new
+                    // lens (a profile picked by hand stays; nothing changes while it is off)
+                    let o = &ph.develop.optics;
+                    let follow = o.lens_profile && !o.lens_profile_ref.as_ref().is_some_and(|r| r.custom) && ph.embedded_lens.is_none();
+                    let mut next = (**ph).clone();
+                    next.meta = m.clone();
+                    let want = if follow { crate::lcp::auto_for(&next) } else { o.lens_profile_ref.clone() };
+                    let dev = (want != o.lens_profile_ref)
+                        .then(|| {
+                            let mut d = (*ph.develop).clone();
+                            d.optics.lens_profile_ref = want;
+                            s.develop_op(id, d, "Set Lens")
+                        })
+                        .flatten();
+                    ops.push(Op::SetMeta { id, meta: Box::new(m) });
+                    ops.extend(dev);
+                }
+                let n = ops.iter().filter(|o| matches!(o, Op::SetMeta { .. })).count();
+                if n > 0 {
+                    s.commit("Set Lens", Op::Batch { ops })?;
+                }
+                Ok(json!({"changed": n}))
             }
         ),
         // Leica M estimated apertures (catalog::trusted_aperture) out of photos already imported

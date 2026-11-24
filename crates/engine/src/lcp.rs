@@ -22,6 +22,10 @@ const MAX_LCP: u64 = 16 << 20;
 
 /// Folders holding lens profiles: Camera Raw's (system, user) and Lightroom Classic's own.
 fn dirs() -> Vec<PathBuf> {
+    #[cfg(test)]
+    if let Some(v) = TEST_ROOTS.with(|r| r.borrow().clone()) {
+        return v;
+    }
     let mut v: Vec<PathBuf> = crate::adobe::camera_raw_dirs().into_iter().map(|d| d.join("LensProfiles/1.0")).collect();
     if std::env::var_os("LIGHTCRAFT_ADOBE_CAMERARAW").is_none() && cfg!(target_os = "macos") {
         v.push(PathBuf::from("/Applications/Adobe Lightroom Classic/Adobe Lightroom Classic.app/Contents/Resources/LensProfiles/1.0"));
@@ -34,10 +38,40 @@ fn norm(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect()
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test's own profile folders (each test runs on its own thread).
+    static TEST_ROOTS: std::cell::RefCell<Option<Vec<PathBuf>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Look for profiles in `roots` instead of Adobe's folders, on this thread (tests).
+#[cfg(test)]
+pub(crate) fn use_test_roots(roots: Option<Vec<PathBuf>>) {
+    TEST_ROOTS.with(|r| *r.borrow_mut() = roots);
+}
+
+type Scanned = (Arc<Vec<(String, PathBuf)>>, Arc<Vec<Installed>>);
+
+/// The scan of [`dirs`] (once per set of folders).
+fn scanned() -> Scanned {
+    static CACHE: OnceLock<Mutex<Vec<(Vec<PathBuf>, Scanned)>>> = OnceLock::new();
+    let roots = dirs();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some((_, hit)) = cache.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(r, _)| *r == roots) {
+        return hit.clone();
+    }
+    let v: Scanned = (Arc::new(scan(&roots)), Arc::new(listing(&roots)));
+    let mut c = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    if c.len() > 16 {
+        c.clear();
+    }
+    c.push((roots, v.clone()));
+    v
+}
+
 /// Every `.lcp` by its lens part (the file name's last parenthesis), normalised.
-fn index() -> &'static Vec<(String, PathBuf)> {
-    static I: OnceLock<Vec<(String, PathBuf)>> = OnceLock::new();
-    I.get_or_init(|| scan(&dirs()))
+fn index() -> Arc<Vec<(String, PathBuf)>> {
+    scanned().0
 }
 
 /// The `.lcp` files under `roots` (four folders deep at most), by their normalised lens part.
@@ -133,11 +167,50 @@ fn without(block: &str, names: &[&str]) -> String {
     s
 }
 
+/// The profile entries (the top-level `rdf:li`s) of an `.lcp`, each without its opening tag's
+/// `<rdf:li`. An entry holds lists of its own (`AlternateLensNames`, `AlternateLensIDs`,
+/// `VignetteModelPiecewiseParam`): their `rdf:li`s are part of it, not ends of it — Leica's
+/// profiles list the lens's other names before its model, which a plain split cut off.
+fn profile_items(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut start, mut at) = (0usize, 0usize, 0usize);
+    while at < text.len() {
+        let rest = text.get(at..).unwrap_or("");
+        let open = rest.find("<rdf:li");
+        let close = rest.find("</rdf:li>");
+        match (open, close) {
+            (Some(o), c) if c.is_none_or(|c| o < c) => {
+                if depth == 0 {
+                    start = at + o + "<rdf:li".len();
+                }
+                depth += 1;
+                at += o + "<rdf:li".len();
+            }
+            (_, Some(c)) => {
+                if depth == 1
+                    && let Some(item) = text.get(start..at + c)
+                {
+                    out.push(item);
+                }
+                depth = depth.saturating_sub(1);
+                at += c + "</rdf:li>".len();
+            }
+            _ => break,
+        }
+    }
+    // an entry never closed (a cut-off file): what there is of it
+    if depth > 0
+        && let Some(item) = text.get(start..)
+    {
+        out.push(item);
+    }
+    out
+}
+
 /// Parse an `.lcp` (XMP) into its entries; entries without a usable model are skipped.
 pub fn parse(text: &str) -> Vec<Entry> {
     let mut out = Vec::new();
-    for li in text.split("<rdf:li").skip(1).take(10_000) {
-        let li = li.split("</rdf:li>").next().unwrap_or(li);
+    for li in profile_items(text).into_iter().take(10_000) {
         let mut e = Entry {
             make: field(li, "Make").unwrap_or_default(),
             model: field(li, "Model").unwrap_or_default(),
@@ -241,7 +314,7 @@ pub fn find(make: Option<&str>, model: Option<&str>, lens: &str) -> Option<(Path
     }
     let (make_n, model_n) = (make.map(norm).unwrap_or_default(), model.map(norm).unwrap_or_default());
     let mut best: Option<(i32, PathBuf, Arc<Vec<Entry>>)> = None;
-    for (key, path) in index() {
+    for (key, path) in index().iter() {
         if !(key.ends_with(&want) || key.contains(&want)) {
             continue;
         }
@@ -452,10 +525,253 @@ fn defish(g: [f64; 7], w: f64, h: f64, cx: f64, cy: f64, far: f64) -> Option<Emb
     })
 }
 
+/// One installed lens profile file, as the Lens Corrections panel's Make / Model / Profile
+/// pickers list it (Lightroom's Profile tab when the lens isn't recognised).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Installed {
+    /// The lens maker: Camera Raw's folder (`LensProfiles/1.0/<Make>/…`).
+    pub make: String,
+    /// The lens: the file name's parenthesis ("Leica SUMMICRON-M 50 mm f2").
+    pub model: String,
+    pub path: PathBuf,
+}
+
+/// The `.lcp` files under `roots` by lens maker and lens; one per file name and maker (Camera
+/// Raw's folder and Lightroom's own hold copies: the first root wins), sorted.
+fn listing(roots: &[PathBuf]) -> Vec<Installed> {
+    let mut out: Vec<Installed> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for root in roots {
+        for (_, path) in scan(std::slice::from_ref(root)) {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let stem = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let rel = path.strip_prefix(root).ok().map(|r| r.components().count()).unwrap_or(0);
+            let folder = path.strip_prefix(root).ok().and_then(|r| r.components().next()).map(|c| c.as_os_str().to_string_lossy().into_owned());
+            let make = match folder {
+                Some(f) if rel > 1 => f,
+                _ => stem.split_whitespace().next().unwrap_or("").to_string(),
+            };
+            let model = match (name.find('('), name.rfind(')')) {
+                (Some(a), Some(b)) if b > a + 1 => name.get(a + 1..b).unwrap_or("").trim().to_string(),
+                _ => stem.trim_end_matches(" - RAW").trim().to_string(),
+            };
+            if make.is_empty() || model.is_empty() || !seen.insert((make.to_lowercase(), name.to_lowercase())) {
+                continue;
+            }
+            out.push(Installed { make, model, path });
+        }
+    }
+    out.sort_by(|a, b| {
+        (a.make.to_lowercase(), a.model.to_lowercase(), a.path.file_name()).cmp(&(b.make.to_lowercase(), b.model.to_lowercase(), b.path.file_name()))
+    });
+    out
+}
+
+/// Every installed lens profile file ([`Installed`]).
+pub fn installed() -> Arc<Vec<Installed>> {
+    scanned().1
+}
+
+/// The lens makers that have installed profiles.
+pub fn makes() -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    for i in installed().iter() {
+        if !v.iter().any(|m| m.eq_ignore_ascii_case(&i.make)) {
+            v.push(i.make.clone());
+        }
+    }
+    v
+}
+
+/// The lenses of a maker that have installed profiles.
+pub fn models(make: &str) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    for i in installed().iter().filter(|i| i.make.eq_ignore_ascii_case(make)) {
+        if !v.iter().any(|m| m.eq_ignore_ascii_case(&i.model)) {
+            v.push(i.model.clone());
+        }
+    }
+    v
+}
+
+/// The profiles of a lens: (the name the panel shows, its file).
+pub fn profiles(make: &str, model: &str) -> Vec<(String, PathBuf)> {
+    let files: Vec<PathBuf> =
+        installed().iter().filter(|i| i.make.eq_ignore_ascii_case(make) && i.model.eq_ignore_ascii_case(model)).map(|i| i.path.clone()).collect();
+    let mut out: Vec<(String, PathBuf)> = files.into_iter().filter_map(|p| Some((reference(&p)?.name, p))).collect();
+    // two files with one profile name (a raw and a JPEG profile): tell them apart by file
+    let names: Vec<String> = out.iter().map(|(n, _)| n.clone()).collect();
+    for (n, p) in &mut out {
+        if names.iter().filter(|x| *x == n).count() > 1 {
+            let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            *n = format!("{n} · {stem}");
+        }
+    }
+    out
+}
+
+/// The develop-settings reference to the profile in `path` (Lightroom's `LensProfileName`,
+/// `LensProfileFilename`, `LensProfileDigest`): `None` when it isn't a readable profile.
+pub fn reference(path: &Path) -> Option<LensProfileRef> {
+    let entries = parsed(path)?;
+    let name = entries.iter().map(|e| e.profile_name.trim()).find(|n| !n.is_empty()).map(str::to_string);
+    let name = name.unwrap_or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+    Some(LensProfileRef {
+        name,
+        filename: path.file_name()?.to_string_lossy().into_owned(),
+        digest: file_md5(path).map(|d| d.to_ascii_uppercase()).unwrap_or_default(),
+        custom: false,
+    })
+}
+
+/// Where the profile `r` names is listed ([`installed`]), if it is installed.
+pub fn listed(r: &LensProfileRef) -> Option<Installed> {
+    let (path, _) = find_ref(r)?;
+    let all = installed();
+    let hit = all.iter().find(|i| i.path == path).or_else(|| all.iter().find(|i| i.path.file_name() == path.file_name()));
+    hit.cloned()
+}
+
+/// A lens name taken apart: focal length, fastest aperture and its words ("Leica Summicron-M
+/// 1:2/50" → 50 mm, f/2, `summicron`; "Leica SUMMICRON-M 50 mm f2" → the same).
+#[derive(Debug, Default, PartialEq)]
+struct LensName {
+    focal: Option<f64>,
+    aperture: Option<f64>,
+    /// A zoom (a focal range): never matched by name.
+    zoom: bool,
+    words: Vec<String>,
+}
+
+/// Words that say nothing about which lens it is.
+const PLAIN_WORDS: &[&str] = &["leica", "leitz", "camera", "voigtlander", "cosina", "raw", "lens", "adobe", "wetzlar"];
+
+fn lens_name(s: &str) -> LensName {
+    let s: String = s
+        .chars()
+        .map(|c| match c {
+            'ä' | 'Ä' => 'a',
+            'ö' | 'Ö' => 'o',
+            'ü' | 'Ü' => 'u',
+            'é' | 'è' => 'e',
+            ',' => '.',
+            c => c,
+        })
+        .collect();
+    let lower = s.to_lowercase();
+    let mut n = LensName::default();
+    let num = |t: &str| t.trim_matches('.').parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
+    // Leica's "1:2/50", "1:4.5/15"
+    if let Some(rest) = lower.split("1:").nth(1)
+        && let Some((a, f)) = rest.split_once('/')
+    {
+        n.aperture = num(a);
+        n.focal = num(f.split(|c: char| !(c.is_ascii_digit() || c == '.')).next().unwrap_or(""));
+    }
+    let tokens: Vec<&str> = lower.split(|c: char| c.is_whitespace() || c == '(' || c == ')').filter(|t| !t.is_empty()).collect();
+    for (i, t) in tokens.iter().enumerate() {
+        // "50mm", "50 mm", "16-18-21 mm"
+        let focal_part = if let Some(v) = t.strip_suffix("mm").filter(|v| !v.is_empty()) {
+            Some(v)
+        } else if tokens.get(i + 1) == Some(&"mm") {
+            Some(*t)
+        } else {
+            None
+        };
+        if let Some(v) = focal_part {
+            if v.contains('-') {
+                n.zoom = true;
+            } else if n.focal.is_none() {
+                n.focal = num(v);
+            }
+        }
+        // "f2", "f/2.8", "F4.5" (not a zoom's "f3.5-4")
+        if n.aperture.is_none()
+            && let Some(v) = t.strip_prefix('f').map(|v| v.trim_start_matches('/'))
+            && !v.contains('-')
+        {
+            n.aperture = num(v);
+        }
+    }
+    for token in lower.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',') {
+        for (i, w) in token.split(|c: char| !c.is_ascii_alphanumeric()).enumerate() {
+            let w = if w == "aspherical" { "asph" } else { w };
+            // a word, or the mount letter after a hyphen ("Summicron-M" vs "Summicron-R")
+            let mount = i > 0 && w.len() == 1 && token.contains('-');
+            if (w.len() >= 3 || mount)
+                && w.chars().all(|c| c.is_ascii_alphabetic())
+                && w != "mm"
+                && !PLAIN_WORDS.contains(&w)
+                && !n.words.iter().any(|x| x == w)
+            {
+                n.words.push(w.to_string());
+            }
+        }
+    }
+    n
+}
+
+/// The installed profile for a lens set by hand (right-click ▸ Set Lens: "Leica Summicron-M
+/// 1:2/50") on a `camera` ("LEICA M (Typ 262)"): same focal length and fastest aperture and the
+/// lens's own name ("Summicron"), fewest extra words ("APO", "ASPH."), that camera maker's folder
+/// and raw profiles first. `None` without a confident match.
+pub fn match_lens(lens: &str, camera: &str) -> Option<PathBuf> {
+    match_lens_in(&installed(), lens, camera)
+}
+
+fn match_lens_in(list: &[Installed], lens: &str, camera: &str) -> Option<PathBuf> {
+    let want = lens_name(lens);
+    let focal = want.focal.filter(|_| !want.zoom)?;
+    if want.words.is_empty() {
+        return None;
+    }
+    let brand = norm(camera.split_whitespace().next().unwrap_or(""));
+    let mut best: Option<(i64, &Installed)> = None;
+    for i in list {
+        let have = lens_name(&i.model);
+        if have.zoom || have.focal.is_none_or(|f| (f - focal).abs() > 0.6) {
+            continue;
+        }
+        if let (Some(a), Some(b)) = (want.aperture, have.aperture)
+            && (a - b).abs() > 0.06
+        {
+            continue;
+        }
+        let shared = want.words.iter().filter(|w| have.words.contains(w)).count() as i64;
+        if shared == 0 {
+            continue;
+        }
+        let extra = have.words.iter().filter(|w| !want.words.contains(w)).count() as i64;
+        let mut score = shared * 10 - extra;
+        let folder_brand = brand.len() >= 2 && i.path.components().any(|c| norm(&c.as_os_str().to_string_lossy()) == brand);
+        if folder_brand {
+            score += 3;
+        }
+        if i.path.file_name().is_some_and(|n| n.to_string_lossy().contains("RAW")) {
+            score += 1;
+        }
+        if best.is_none_or(|(b, _)| score > b) {
+            best = Some((score, i));
+        }
+    }
+    best.map(|(_, i)| i.path.clone())
+}
+
+/// The profile "Enable Profile Corrections" picks for a photo by itself when the file carries no
+/// lens corrections of its own: the installed profile for the lens its metadata names (Set Lens on
+/// a Leica M with an uncoded lens), on its camera.
+pub fn auto_for(p: &lightcraft_catalog::Photo) -> Option<LensProfileRef> {
+    if p.embedded_lens.is_some() || p.meta.lens.trim().is_empty() {
+        return None;
+    }
+    let path = find(None, None, p.meta.lens.trim()).map(|(path, _)| path).or_else(|| match_lens(&p.meta.lens, &p.meta.camera))?;
+    reference(&path)
+}
+
 /// The installed profile a develop setting names (Lightroom's `LensProfileFilename`,
 /// `LensProfileName`, `LensProfileDigest`).
 pub fn find_ref(r: &LensProfileRef) -> Option<(PathBuf, Arc<Vec<Entry>>)> {
-    find_ref_in(index(), r)
+    find_ref_in(&index(), r)
 }
 
 /// [`find_ref`] among `index`: the file of that name (the one with that digest when several are
@@ -689,6 +1005,170 @@ mod tests {
         assert!(find_ref_in(&idx, &LensProfileRef { name: "Adobe (Nope)".into(), ..Default::default() }).is_none());
         assert!(find_ref_in(&idx, &LensProfileRef::default()).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Installed profiles laid out like Camera Raw's folder (one synthetic profile per file).
+    fn fake_profiles(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("lc-lcp-{tag}-{}", std::process::id())).join("LensProfiles/1.0");
+        let _ = std::fs::remove_dir_all(&root);
+        for (folder, lens) in [
+            ("Leica", "Leica SUMMICRON-M 50 mm f2"),
+            ("Leica", "Leica APO-SUMMICRON-M 50 mm f2 ASPH."),
+            ("Leica", "Leica SUMMICRON-M 35 mm f2 ASPH."),
+            ("Leica", "LEICA SUMMICRON-R 35 mm f2"),
+            ("Leica", "Leica Apo-Summicron-M 2_35 ASPH."),
+            ("Leica", "Leica APO-TELYT-M 135 mm f3.4"),
+            ("Leica", "Leica TRI-ELMAR-M 16-18-21 mm f4 ASPH."),
+            ("Voigtlander/Leica", "Voigtlander VM 15mm f4.5 Super Wide Heliar II Aspherical"),
+            ("Voigtlander/Leica", "Voigtlander VM 15mm f4.5 Super Wide Heliar III Aspherical"),
+            ("Voigtlander/Sony", "Voigtlander SUPER WIDE-HELIAR 15mm F4.5 III"),
+        ] {
+            let dir = root.join(folder);
+            std::fs::create_dir_all(&dir).unwrap();
+            let body = LCP.replace(
+                "<stCamera:Make>Canon</stCamera:Make>",
+                &format!("<stCamera:Make>Leica Camera AG</stCamera:Make><stCamera:ProfileName>Adobe ({lens})</stCamera:ProfileName>"),
+            );
+            std::fs::write(dir.join(format!("Leica Camera AG ({lens}) - RAW.lcp")), body).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn lens_names_come_apart() {
+        let n = lens_name("Leica Summicron-M 1:2/50");
+        assert_eq!((n.focal, n.aperture, n.zoom, n.words.clone()), (Some(50.0), Some(2.0), false, vec!["summicron".to_string(), "m".to_string()]));
+        let n = lens_name("Voigtländer Heliar 1:4.5/15");
+        assert_eq!((n.focal, n.aperture, n.words.clone()), (Some(15.0), Some(4.5), vec!["heliar".to_string()]));
+        let n = lens_name("Leica SUMMICRON-M 50 mm f2");
+        assert_eq!((n.focal, n.aperture), (Some(50.0), Some(2.0)));
+        assert_eq!(n.words, ["summicron", "m"]);
+        assert_eq!(lens_name("LEICA SUMMICRON-R 35 mm f2").words, ["summicron", "r"], "the mount tells them apart");
+        let n = lens_name("Voigtlander VM 15mm f4.5 Super Wide Heliar II Aspherical");
+        assert_eq!((n.focal, n.aperture), (Some(15.0), Some(4.5)));
+        assert_eq!(n.words, ["super", "wide", "heliar", "asph"]);
+        assert!(lens_name("Leica TRI-ELMAR-M 16-18-21 mm f4 ASPH.").zoom);
+        assert_eq!(lens_name("Leica VARIO-ELMAR-R 21-35 mm f3,5-4 ASPH., 24 mm").aperture, None);
+        assert_eq!(lens_name(""), LensName::default());
+        let _ = lens_name("1:/ f/ mm 1:9999999999999999999999/1e400 f-");
+    }
+
+    /// Bryan's Leica M lenses (AppSettings.lenses) find their installed profiles by name.
+    #[test]
+    fn manual_leica_lenses_match_their_profiles() {
+        let root = fake_profiles("match");
+        let list = listing(std::slice::from_ref(&root));
+        assert_eq!(list.len(), 10);
+        assert!(list.iter().any(|i| i.make == "Voigtlander" && i.model == "Voigtlander VM 15mm f4.5 Super Wide Heliar II Aspherical"));
+        let m = |lens: &str| match_lens_in(&list, lens, "LEICA M (Typ 262)").and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+        assert_eq!(m("Leica Summicron-M 1:2/50").as_deref(), Some("Leica Camera AG (Leica SUMMICRON-M 50 mm f2) - RAW.lcp"), "not the APO");
+        assert_eq!(m("Leica Summicron-M 1:2/35").as_deref(), Some("Leica Camera AG (Leica SUMMICRON-M 35 mm f2 ASPH.) - RAW.lcp"));
+        assert_eq!(
+            m("Voigtländer Heliar 1:4.5/15").as_deref(),
+            Some("Leica Camera AG (Voigtlander VM 15mm f4.5 Super Wide Heliar II Aspherical) - RAW.lcp"),
+            "the Leica-mount one"
+        );
+        assert_eq!(m("Leitz Elmar 1:4/135"), None, "no Elmar 135 installed: not the APO-Telyt");
+        assert_eq!(m("Summicron"), None, "no focal length: no guess");
+        assert_eq!(m(""), None);
+        let _ = std::fs::remove_dir_all(root.parent().unwrap().parent().unwrap());
+    }
+
+    /// Set Lens → Enable Profile Corrections takes that lens's profile; a profile picked by hand
+    /// (Make / Model / Profile) stays; nothing is applied while corrections are off.
+    #[test]
+    fn set_lens_then_profile_corrections_pick_the_installed_profile() {
+        let root = fake_profiles("session");
+        use_test_roots(Some(vec![root.clone()]));
+        let mut s = crate::Session::with_demo();
+        let id = s.active().unwrap();
+        let optics = |s: &crate::Session| s.develop_of(id).unwrap().optics.clone();
+        let name = |s: &crate::Session| optics(s).lens_profile_ref.map(|r| r.name);
+        s.execute("photo.setLens", &serde_json::json!({"lens": "Leica Summicron-M 1:2/50", "focal": 50})).unwrap();
+        assert_eq!(name(&s), None, "corrections off: nothing picked");
+        let facts = crate::media::LensFacts { width: 6000.0, height: 4000.0, focal: Some(50.0), f_number: None };
+        let r = s.execute("lens.profileCorrections", &serde_json::json!({"on": true})).unwrap();
+        assert_eq!(r["profile"], "Adobe (Leica SUMMICRON-M 50 mm f2)", "{r}");
+        assert!(facts.chosen(&s.develop_of(id).unwrap()).is_some(), "the render gets its corrections");
+        // the lens changes: the profile it picked itself follows
+        s.execute("photo.setLens", &serde_json::json!({"lens": "Leica Summicron-M 1:2/35", "focal": 35})).unwrap();
+        assert_eq!(name(&s).as_deref(), Some("Adobe (Leica SUMMICRON-M 35 mm f2 ASPH.)"));
+        // ⌘Z takes the lens and the profile back in one step
+        s.execute("edit.undo", &serde_json::json!({})).unwrap();
+        assert_eq!(name(&s).as_deref(), Some("Adobe (Leica SUMMICRON-M 50 mm f2)"));
+        // the pickers
+        let makes = s.execute("lens.profiles", &serde_json::json!({})).unwrap();
+        assert_eq!(makes["makes"], serde_json::json!(["Leica", "Voigtlander"]));
+        let models = s.execute("lens.profiles", &serde_json::json!({"make": "Voigtlander"})).unwrap();
+        assert_eq!(models["models"].as_array().unwrap().len(), 3, "{models}");
+        let model = "Voigtlander VM 15mm f4.5 Super Wide Heliar III Aspherical";
+        let profs = s.execute("lens.profiles", &serde_json::json!({"make": "Voigtlander", "model": model})).unwrap();
+        assert_eq!(profs["profiles"][0]["name"], format!("Adobe ({model})"));
+        s.execute("lens.setProfile", &serde_json::json!({"make": "Voigtlander", "model": model})).unwrap();
+        assert!(optics(&s).lens_profile_ref.unwrap().custom);
+        s.execute("photo.setLens", &serde_json::json!({"lens": "Leica Summicron-M 1:2/50", "focal": 50})).unwrap();
+        assert_eq!(name(&s), Some(format!("Adobe ({model})")), "picked by hand: it stays");
+        assert!(s.execute("lens.setProfile", &serde_json::json!({"make": "Nope", "model": "x"})).is_err());
+        s.execute("lens.setProfile", &serde_json::json!({"auto": true})).unwrap();
+        assert_eq!(name(&s).as_deref(), Some("Adobe (Leica SUMMICRON-M 50 mm f2)"));
+        // off: the profile is remembered but not applied
+        s.execute("lens.profileCorrections", &serde_json::json!({"on": false})).unwrap();
+        assert!(facts.chosen(&s.develop_of(id).unwrap()).is_none());
+        s.execute("lens.setProfile", &serde_json::json!({"clear": true})).unwrap();
+        assert_eq!(name(&s), None);
+        use_test_roots(None);
+        let _ = std::fs::remove_dir_all(root.parent().unwrap().parent().unwrap());
+    }
+
+    /// What Bryan's lenses match among the profiles installed on this Mac (ignored:
+    /// `cargo test --release -p lightcraft-engine --lib -- --ignored installed_matches --nocapture`).
+    #[test]
+    #[ignore]
+    fn installed_matches() {
+        eprintln!("{} profiles, {} makes", installed().len(), makes().len());
+        for lens in ["Voigtländer Heliar 1:4.5/15", "Leica Summicron-M 1:2/35", "Leica Summicron-M 1:2/50", "Leitz Elmar 1:4/135"] {
+            let m = match_lens(lens, "LEICA M (Typ 262)");
+            eprintln!("{lens} → {:?} {:?}", m.as_deref().and_then(reference).map(|r| r.name), m);
+        }
+    }
+
+    /// Leica's profiles list the lens's other names (and Camera Raw's piecewise vignette) as lists
+    /// inside an entry, before its model: the entry used to be cut off there and the profile
+    /// read as empty (no corrections for any of those lenses).
+    #[test]
+    fn entries_with_lists_inside_keep_their_model() {
+        let leica = r#"<x:xmpmeta><rdf:RDF><rdf:Description><photoshop:CameraProfiles><rdf:Seq>
+     <rdf:li>
+      <rdf:Description stCamera:Make="Leica Camera AG" stCamera:Lens="Leica Summicron-M 50mm f/2 (IV, V)"
+       stCamera:ProfileName="Adobe (Leica SUMMICRON-M 50 mm f/2)" stCamera:SensorFormatFactor="1"
+       stCamera:FocalLength="50" stCamera:FocusDistance="10000" stCamera:ApertureValue="6">
+      <stCamera:AlternateLensNames><rdf:Seq><rdf:li>Summicron-M 1:2/50</rdf:li></rdf:Seq></stCamera:AlternateLensNames>
+      <stCamera:PerspectiveModel stCamera:Version="2" stCamera:RadialDistortParam1="0.032306"
+       stCamera:RadialDistortParam2="-0.13572" stCamera:RadialDistortParam3="-0.149371">
+       <stCamera:VignetteModel stCamera:FocalLengthX="1.4" stCamera:VignetteModelParam1="-0.5">
+        <stCamera:VignetteModelPiecewiseParam><rdf:Seq><rdf:li>0, 1</rdf:li><rdf:li>0.5, 0.8</rdf:li></rdf:Seq></stCamera:VignetteModelPiecewiseParam>
+       </stCamera:VignetteModel>
+      </stCamera:PerspectiveModel>
+      </rdf:Description>
+     </rdf:li>
+     <rdf:li>
+      <rdf:Description stCamera:ProfileName="Adobe (Leica SUMMICRON-M 50 mm f/2)" stCamera:FocalLength="50"
+       stCamera:FocusDistance="10000" stCamera:ApertureValue="2">
+      <stCamera:PerspectiveModel stCamera:RadialDistortParam1="0.03"/>
+      </rdf:Description>
+     </rdf:li>
+    </rdf:Seq></photoshop:CameraProfiles></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let e = parse(leica);
+        assert_eq!(e.len(), 2, "{e:?}");
+        assert_eq!(e[0].profile_name, "Adobe (Leica SUMMICRON-M 50 mm f/2)");
+        assert_eq!(e[0].geom.unwrap()[4], 0.032306);
+        assert_eq!(e[0].vignette.unwrap()[4], -0.5);
+        assert!(corrections(&e, 6000.0, 4000.0, 50.0, Some(2.8), None).is_some_and(|l| l.warp.is_some()));
+        // cut off mid-entry: no panic
+        for n in [10, 200, 600, leica.len() - 40] {
+            let _ = parse(&leica[..n]);
+        }
+        assert!(profile_items("</rdf:li></rdf:li><rdf:li").len() <= 1);
     }
 
     #[test]

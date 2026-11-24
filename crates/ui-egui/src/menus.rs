@@ -294,7 +294,6 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.colorMixer", "Color Mixer", None, ""),
     ("view.resumeLastLeftOff", "Go to Where I Left Off", None, "View"),
     ("preset.applyByName", "Apply Preset by Name", None, ""),
-    ("crop.nudge", "Nudge Crop", None, ""),
     ("keys.nudge", "Nudge Slider", None, ""),
     ("keys.macro", "Run Macro", None, ""),
     ("keys.send", "Send Keys", None, ""),
@@ -589,21 +588,6 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 app.toast_soon(name.clone(), 1.4);
             }
             r
-        })(),
-        "crop.nudge" => (|| {
-            // {x?, y?, scale?} in percent of the image: move the crop / zoom it in (+) or out (-)
-            let id = app.session.active().ok_or("no photo selected")?;
-            let d = app.session.develop_of(id).unwrap_or_default();
-            let r = d.crop.geometry.rect;
-            let f = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0) / 100.0;
-            let (mut x0, mut y0, mut x1, mut y1) = (r.x0, r.y0, r.x1, r.y1);
-            let k = (1.0 - f("scale")).clamp(0.05, 20.0);
-            let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-            let (hw, hh) = (((x1 - x0) * k / 2.0).min(0.5), ((y1 - y0) * k / 2.0).min(0.5));
-            (x0, x1, y0, y1) = (cx - hw + f("x"), cx + hw + f("x"), cy - hh + f("y"), cy + hh + f("y"));
-            // keep it on the photo: slide back inside
-            let (sx, sy) = ((-x0).max(0.0) - (x1 - 1.0).max(0.0), (-y0).max(0.0) - (y1 - 1.0).max(0.0));
-            app.run("crop.set", json!({"rect": [x0 + sx, y0 + sy, x1 + sx, y1 + sy]}))
         })(),
         "view.photoGrid" => {
             app.ui.view = ViewMode::PhotoGrid;
