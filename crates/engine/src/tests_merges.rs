@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::{LibrarySource, Session};
 
 fn temp_dir(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("lc-merges-{tag}-{}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("lc-merges-wedding-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d

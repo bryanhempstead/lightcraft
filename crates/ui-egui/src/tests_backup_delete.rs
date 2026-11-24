@@ -422,3 +422,20 @@ fn filter_bar_heart_shows_only_favorites() {
     click(&mut h, "filter:favorite");
     assert_eq!(h.app.session.visible_cloned().len(), all.len());
 }
+
+/// Catalog ▸ favorites.: every hearted photo; All Photographs shows them all again.
+#[test]
+fn catalog_favorites_row_shows_the_hearted_photos() {
+    let mut s = lightcraft_engine::Session::with_demo();
+    let all = s.visible_cloned();
+    s.execute("photo.favorite", &json!({"favorite": true, "ids": [all[1].0]})).unwrap();
+    let mut h = headless(s);
+    h.app.run("view.library", json!({})).ok();
+    h.step();
+    let id = h.app.widgets.iter().map(|(w, _)| w.clone()).find(|w| w.contains("favorites") && w.starts_with("source:")).expect("a favorites. row");
+    click(&mut h, &id);
+    assert_eq!(h.app.session.visible_cloned(), vec![all[1]]);
+    let all_row = h.app.widgets.iter().map(|(w, _)| w.clone()).find(|w| w == "source:all").expect("All Photographs");
+    click(&mut h, &all_row);
+    assert_eq!(h.app.session.visible_cloned().len(), all.len(), "All Photographs: every photo again");
+}

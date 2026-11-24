@@ -567,7 +567,8 @@ fn a_renamed_folder_keeps_its_place_in_the_tree() {
 /// has its own, the startup disk none.
 #[test]
 fn right_click_opens_a_folders_menu_from_the_triangle_too() {
-    let mut h = folders_app(&["/pics/trip/a.jpg", "/pics/home/b.jpg", "/Volumes/nas/c.jpg"]);
+    // tall enough for the disk row below Catalog (with favorites.), shoots. and Folders
+    let mut h = folders_app_sized(&["/pics/trip/a.jpg", "/pics/home/b.jpg", "/Volumes/nas/c.jpg"], [1400.0, 1100.0]);
     click(&mut h, "libraryFolderToggle:/pics");
     right_click(&mut h, "source:libfolder:/pics/trip");
     assert!(popup_open(&h), "on the row");

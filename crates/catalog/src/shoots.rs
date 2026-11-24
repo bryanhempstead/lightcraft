@@ -49,6 +49,9 @@ pub struct Shoot {
     pub count: usize,
     /// The newest import or edit time among its photos (ISO 8601), empty when unknown.
     pub latest: String,
+    /// The newest capture time among its photos (ISO 8601), empty when unknown.
+    #[serde(default)]
+    pub taken: String,
 }
 
 /// Words that only say how or with what a photo was made, not what it is of.
@@ -343,6 +346,7 @@ pub fn find_shoots(tree: &[FolderNode]) -> Vec<Shoot> {
                 disk_name: v.name.clone(),
                 count: v.own,
                 latest: String::new(),
+                taken: String::new(),
             });
         }
         for c in &v.children {
@@ -361,6 +365,7 @@ fn walk(n: &FolderNode, parent: Option<&str>, disk: &FolderNode, out: &mut Vec<S
         disk_name: disk.name.clone(),
         count,
         latest: String::new(),
+        taken: String::new(),
     };
     if depth >= MAX_DEPTH {
         if n.count > 0 && n.selectable {
@@ -421,16 +426,30 @@ impl Catalog {
         // newest time per folder (its own photos), by identity key
         let mut own: HashMap<String, String> = HashMap::new();
         let mut by_dir: HashMap<&str, &str> = HashMap::new();
+        let mut taken_dir: HashMap<&str, &str> = HashMap::new();
         for p in self.photos().filter(|p| p.in_library()) {
             if let Source::File { path } = &p.source
                 && let Some(i) = path.rfind(['/', '\\'])
                 && let Some(dir) = path.get(..i.max(1))
             {
+                if let Some(c) = p.captured.as_deref() {
+                    let e = taken_dir.entry(dir).or_insert(c);
+                    if c > *e {
+                        *e = c;
+                    }
+                }
                 let t = p.edited.as_deref().filter(|e| *e > p.imported.as_str()).unwrap_or(p.imported.as_str());
                 let e = by_dir.entry(dir).or_insert(t);
                 if t > *e {
                     *e = t;
                 }
+            }
+        }
+        let mut own_taken: HashMap<String, String> = HashMap::new();
+        for (dir, t) in taken_dir {
+            let e = own_taken.entry(folder_key(dir)).or_default();
+            if t > e.as_str() {
+                *e = t.to_string();
             }
         }
         for (dir, t) in by_dir {
@@ -469,6 +488,7 @@ impl Catalog {
         for s in &mut shoots {
             if let Some(n) = find(&tree, &folder_key(&s.path), 0) {
                 s.latest = newest(n, &own, s.deep, 0);
+                s.taken = newest(n, &own_taken, s.deep, 0);
             }
         }
         shoots

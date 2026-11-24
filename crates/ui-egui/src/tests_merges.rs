@@ -54,7 +54,7 @@ impl Drop for Fixture {
 }
 
 fn fixture(tag: &str) -> Fixture {
-    let dir = std::env::temp_dir().join(format!("lc-ui-merges-{tag}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("lc-ui-merges-wedding-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut paths = Vec::new();
@@ -257,7 +257,7 @@ fn manual_mode_waits_for_find() {
 /// A shoot folder with two camera subfolders: a panorama from the GR III (its shutter drifting) and
 /// a bracket from the M262, both in the shoot's one merges. pool.
 fn wave_fixture(tag: &str) -> (Headless, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("lc-ui-mergewave-{tag}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("lc-ui-mergewave-wedding-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let (m262, gr3) = (dir.join("M262"), dir.join("GR3"));
     std::fs::create_dir_all(&m262).unwrap();

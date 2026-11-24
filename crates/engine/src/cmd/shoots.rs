@@ -24,6 +24,8 @@ pub enum ShootSort {
     Date,
     /// By name, A to Z.
     Name,
+    /// By when its photos were taken (newest capture first).
+    Taken,
 }
 
 /// What the photographer made of the list (folders are compared however they are spelled).
@@ -37,6 +39,9 @@ pub struct ShootPrefs {
     /// Names of their own (folder → name); the folder on disk keeps its name.
     pub names: BTreeMap<String, String>,
     pub sort: ShootSort,
+    /// Oldest first (dates) / Z to A (names) — the other way round.
+    #[serde(default)]
+    pub reverse: bool,
 }
 
 impl ShootPrefs {
@@ -107,9 +112,13 @@ pub fn rows(shoots: Vec<Shoot>, prefs: &ShootPrefs, hidden: bool) -> Vec<ShootRo
     v.sort_by(|a, b| {
         let pa = prefs.pinned_at(&a.shoot.path).unwrap_or(usize::MAX);
         let pb = prefs.pinned_at(&b.shoot.path).unwrap_or(usize::MAX);
-        pa.cmp(&pb).then_with(|| match prefs.sort {
-            ShootSort::Date => b.shoot.latest.cmp(&a.shoot.latest).then_with(|| by_name(a, b)),
-            ShootSort::Name => by_name(a, b),
+        pa.cmp(&pb).then_with(|| {
+            let o = match prefs.sort {
+                ShootSort::Date => b.shoot.latest.cmp(&a.shoot.latest).then_with(|| by_name(a, b)),
+                ShootSort::Taken => b.shoot.taken.cmp(&a.shoot.taken).then_with(|| by_name(a, b)),
+                ShootSort::Name => by_name(a, b),
+            };
+            if prefs.reverse { o.reverse() } else { o }
         })
     });
     v
@@ -189,12 +198,17 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
 fn sort(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "shoot.sort";
     s.shoot_prefs.sort = match str_param(p, "by") {
-        Some("date") => ShootSort::Date,
+        Some("date") | Some("imported") => ShootSort::Date,
+        Some("taken") => ShootSort::Taken,
         Some("name") => ShootSort::Name,
-        _ => return Err(bad(C, "`by` is date or name")),
+        None => s.shoot_prefs.sort,
+        _ => return Err(bad(C, "`by` is date (imported), taken or name")),
     };
+    if let Some(r) = p.get("reverse").and_then(Value::as_bool) {
+        s.shoot_prefs.reverse = r;
+    }
     s.save_prefs()?;
-    Ok(json!({"by": s.shoot_prefs.sort}))
+    Ok(json!({"by": s.shoot_prefs.sort, "reverse": s.shoot_prefs.reverse}))
 }
 
 fn show(s: &mut Session, p: &Value) -> Result<Value> {
@@ -297,7 +311,7 @@ mod tests {
     use super::*;
 
     fn shoot(name: &str, path: &str, latest: &str) -> Shoot {
-        Shoot { name: name.into(), path: path.into(), deep: true, disk: "/Volumes/X".into(), disk_name: "X".into(), count: 1, latest: latest.into() }
+        Shoot { name: name.into(), path: path.into(), deep: true, disk: "/Volumes/X".into(), disk_name: "X".into(), count: 1, latest: latest.into(), taken: String::new() }
     }
 
     fn names(v: &[ShootRow]) -> Vec<&str> {

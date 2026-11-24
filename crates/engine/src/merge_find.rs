@@ -1470,14 +1470,13 @@ impl Session {
         if changed.is_empty() {
             return None;
         }
-        // shoots in Second Brain's pipeline had their merges handled there: never looked at by
-        // themselves, only on find. (Bryan 11-24); their folders still count as looked at
-        let pipe = crate::sb_pipeline::sb_dir(None).map(|d| crate::sb_pipeline::read(&d));
-        let in_pipeline = |f: &str| pipe.as_ref().is_some_and(|p| p.shoot_for(f).is_some());
+        // by themselves only weddings are looked at (Bryan 11-24: everything else he rechecks by hand —
+        // a shoot's recheck.merges. / find.); the others still count as looked at
+        let wedding = |f: &str| f.to_lowercase().contains("wedding");
         let ids: Vec<PhotoId> = self
             .catalog
             .photos()
-            .filter(|p| p.in_library() && lightcraft_catalog::local::folder_of(p).is_some_and(|f| changed.contains_key(&f) && !in_pipeline(&f)))
+            .filter(|p| p.in_library() && lightcraft_catalog::local::folder_of(p).is_some_and(|f| changed.contains_key(&f) && wedding(&f)))
             .map(|p| p.id)
             .collect();
         Some(self.merge_find_ids(&ids, true, changed))

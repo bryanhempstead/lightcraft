@@ -1349,8 +1349,12 @@ fn is_within(app: &LightcraftApp, id: lightcraft_catalog::AlbumId, ancestor: lig
 /// Import, Picks, Missing Photographs (when files are gone) and Recently Deleted.
 #[allow(clippy::too_many_arguments)]
 fn catalog_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, total: usize, picks: usize, previous: usize, deleted: usize, src: LibrarySource) {
-    if row(app, ui, "all", Icon::Photos, "All Photographs", Some(total), src == LibrarySource::All, 0.0).clicked() {
+    let favs_on = app.session.filter.favorite;
+    if row(app, ui, "all", Icon::Photos, "All Photographs", Some(total), src == LibrarySource::All && !favs_on, 0.0).clicked() {
         let _ = app.run("library.source", json!({"kind": "all"}));
+        if favs_on {
+            let _ = app.run("library.filter", json!({"favorite": false}));
+        }
     }
     // the Quick Collection: B adds to it ("+" while it is the target, as in Classic)
     let quick = app.session.catalog.quick_collection().and_then(|q| app.session.catalog.album(q)).cloned();
@@ -1385,6 +1389,13 @@ fn catalog_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, total: usize, picks:
     }
     if row(app, ui, "picks", Icon::FlagPick, "Picks", Some(picks), src == LibrarySource::Picks, 0.0).clicked() {
         let _ = app.run("library.source", json!({"kind": "picks"}));
+    }
+    // favorites.: every hearted photo (fav. / H), across the library
+    let favs = app.session.catalog.photos().filter(|p| p.favorite && p.in_library()).count();
+    let on = src == LibrarySource::All && app.session.filter.favorite;
+    if row(app, ui, "favorites", Icon::HeartFilled, "favorites.", Some(favs), on, 0.0).clicked() {
+        let _ = app.run("library.source", json!({"kind": "all"}));
+        let _ = app.run("library.filter", json!({"favorite": true}));
     }
     // photos whose files can't be found (checked every few seconds, not every frame)
     let missing = missing_count(app, ui);
@@ -1927,12 +1938,23 @@ fn shoots_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
     let removed: Vec<&lightcraft_engine::cmd::shoots::ShootRow> = all.iter().filter(|r| r.hidden).collect();
     egui::Popup::menu(&sort).show(|ui| {
         let by = app.session.shoot_prefs.sort;
+        let reverse = app.session.shoot_prefs.reverse;
         use lightcraft_engine::cmd::shoots::ShootSort;
-        for (key, label, tip, on) in
-            [("date", "date.", "Newest import or edit first", by == ShootSort::Date), ("name", "name.", "By name, A to Z", by == ShootSort::Name)]
-        {
+        for (key, label, tip, on) in [
+            ("date", "imported.", "By when its photos were imported or last edited", by == ShootSort::Date),
+            ("taken", "taken.", "By when its photos were taken (their capture dates)", by == ShootSort::Taken),
+            ("name", "name.", "By name", by == ShootSort::Name),
+        ] {
             if ui.selectable_label(on, label).on_hover_text(tip).clicked() {
                 let _ = app.run("shoot.sort", json!({"by": key}));
+                ui.close();
+            }
+        }
+        ui.separator();
+        let (first, then) = if by == ShootSort::Name { ("a.to.z.", "z.to.a.") } else { ("newest.first.", "oldest.first.") };
+        for (label, rev) in [(first, false), (then, true)] {
+            if ui.selectable_label(reverse == rev, label).clicked() {
+                let _ = app.run("shoot.sort", json!({"reverse": rev}));
                 ui.close();
             }
         }
@@ -1975,7 +1997,9 @@ fn shoots_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
         let sel = chosen.as_deref().is_some_and(|c| same_folder(c, &s.path))
             && app.session.library_folder_subfolders == Some(s.deep)
             && app.session.active_album_part().is_none();
-        let extra = RowExtra { dim: gone, badge: None, dot: Some(disk_color(&tree, &s.disk)), accent: r.pinned, reserve: 0.0 };
+        // the dot: the shoot's own color. when it has one, else its disk's
+        let dot = app.session.catalog.folder_record(&s.path).and_then(|f| f.label).map(crate::theme::label_color).unwrap_or_else(|| disk_color(&tree, &s.disk));
+        let extra = RowExtra { dim: gone, badge: None, dot: Some(dot), accent: r.pinned, reserve: 0.0 };
         let resp = row_ex(app, ui, &format!("shoot:{}", s.path), Icon::GridPhoto, &s.name, Some(&s.name), Some(s.count), sel, 0.0, &extra);
         let disk = disk_label(ui, &s.disk, &s.disk_name);
         let mut tip = format!("{}\n{disk} · {} photo{}", s.name, s.count, if s.count == 1 { "" } else { "s" });
@@ -2061,6 +2085,30 @@ fn shoot_menu(app: &mut LightcraftApp, resp: &egui::Response, r: &lightcraft_eng
                 params: json!({"path": path}),
                 key: "name".into(),
             });
+            ui.close();
+        }
+        ui.menu_button("color.", |ui| {
+            for (key, label) in [("red", "red."), ("yellow", "yellow."), ("green", "green."), ("blue", "blue."), ("purple", "purple."), ("none", "none.")] {
+                if ui.button(label).on_hover_text("The dot by this shoot (none.: its disk's color)").clicked() {
+                    let _ = app.run("folder.label", json!({"path": path, "label": if key == "none" { serde_json::Value::Null } else { json!(key) }}));
+                    ui.close();
+                }
+            }
+        });
+        // merges.: look for merges in this shoot (and its folders); looked at before → look again
+        let scanned = app.session.catalog.record(lightcraft_engine::merge_find::SCANNED).and_then(|v| v.as_object()).is_some_and(|m| {
+            m.keys().any(|k| same_folder(k, path) || lightcraft_catalog::query::folder_within(k, path))
+        });
+        let (cmd, label, tip) = if scanned {
+            ("merge.recheck", "recheck.merges.", "Look again for panoramas, brackets and focus stacks here (groups you haven't touched are replaced)")
+        } else {
+            ("merge.find", "find.merges.", "Look for panoramas, brackets and focus stacks in this shoot")
+        };
+        if menu_item(ui, "shootMerges", label, tip).clicked() {
+            match app.run(cmd, json!({"path": path, "deep": true, "background": true})) {
+                Ok(_) => app.toast_soon("merges.: looking…".to_string(), 3.0),
+                Err(e) => app.toast_soon(e.to_string(), 4.0),
+            }
             ui.close();
         }
         let (label, tip) = if r.pinned { ("unpin.", "Back among the other shoots") } else { ("pin.", "Pin to top") };
