@@ -244,14 +244,19 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Dialog::WhatsNew => {
                     egui::ScrollArea::vertical().max_height(460.0).auto_shrink([false, true]).show(ui, |ui| {
+                        // each release (## heading) folds (remembered, crate::folds)
+                        let mut open = true;
                         for line in WHATS_NEW.lines() {
                             let l = line.trim_end();
-                            if let Some(h) = l.strip_prefix("### ") {
+                            if !open && !l.starts_with("## ") {
+                                continue;
+                            }
+                            if let Some(h) = l.strip_prefix("## ") {
+                                ui.add_space(8.0);
+                                open = crate::folds::header_sized(ui, &format!("whatsNew.{}", super::right::fold_slug(h)), h, 14.0, 26.0);
+                            } else if let Some(h) = l.strip_prefix("### ") {
                                 ui.add_space(6.0);
                                 ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
-                            } else if let Some(h) = l.strip_prefix("## ") {
-                                ui.add_space(8.0);
-                                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
                             } else if l.starts_with("# ") || l.is_empty() {
                             } else if let Some(b) = l.strip_prefix("- ") {
                                 ui.label(egui::RichText::new(format!("•  {}", crate::i18n::tr(b).replace('`', ""))).color(t.text_label));
@@ -307,7 +312,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         }
                         for (g, list) in &groups {
                             ui.add_space(6.0);
-                            ui.label(egui::RichText::new(g).font(t.semibold(12.5)).color(t.text));
+                            // each group folds (remembered, crate::folds)
+                            if !crate::folds::header(ui, &format!("allMetadata.{}", g.to_lowercase()), g) {
+                                continue;
+                            }
                             egui::Grid::new(format!("meta-{g}")).num_columns(2).spacing([16.0, 3.0]).striped(true).show(ui, |ui| {
                                 for (n, v) in list {
                                     ui.label(egui::RichText::new(n).color(t.text_dim));
@@ -1358,34 +1366,52 @@ fn group_checklist(app: &mut LightcraftApp, ui: &mut egui::Ui, tag: &str, groups
                     if let [only] = h.items {
                         let key = only.id();
                         let mut on = on_count == 1;
-                        let r = col.checkbox(&mut on, egui::RichText::new(crate::i18n::tr(only.label())).font(t.semibold(12.5)));
+                        // (in line with the foldable headings' checkboxes)
+                        let r = col
+                            .horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                ui.add_space(crate::folds::TRIANGLE_W);
+                                ui.checkbox(&mut on, egui::RichText::new(crate::i18n::tr(only.label())).font(t.semibold(12.5)))
+                            })
+                            .inner;
                         crate::widgets::register(&r.ctx, format!("{tag}:{key}"), r.rect);
                         if r.changed() {
                             set_on(groups, key, on);
                         }
                     } else {
                         let mut all = on_count == h.items.len();
-                        let r = col.add(
-                            egui::Checkbox::new(&mut all, egui::RichText::new(crate::i18n::tr(h.label)).font(t.semibold(12.5)))
-                                .indeterminate(on_count > 0 && on_count < h.items.len()),
-                        );
+                        // the triangle folds the heading's settings (remembered, crate::folds; the
+                        // same fold in Copy, Synchronize, Paste Selected and New Preset)
+                        let (open, r) = col
+                            .horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                let open = crate::folds::triangle(ui, &format!("checklist.{}", h.id), 20.0);
+                                let r = ui.add(
+                                    egui::Checkbox::new(&mut all, egui::RichText::new(crate::i18n::tr(h.label)).font(t.semibold(12.5)))
+                                        .indeterminate(on_count > 0 && on_count < h.items.len()),
+                                );
+                                (open, r)
+                            })
+                            .inner;
                         crate::widgets::register(&r.ctx, format!("{tag}:{}", h.id), r.rect);
                         if r.changed() {
                             for g in h.items {
                                 set_on(groups, g.id(), all);
                             }
                         }
-                        col.indent(("checklist", h.id), |col| {
-                            for g in h.items {
-                                let key = g.id();
-                                let mut on = groups.contains(&key);
-                                let r = col.checkbox(&mut on, crate::i18n::tr(g.label()));
-                                crate::widgets::register(&r.ctx, format!("{tag}:{key}"), r.rect);
-                                if r.changed() {
-                                    set_on(groups, key, on);
+                        if open {
+                            col.indent(("checklist", h.id), |col| {
+                                for g in h.items {
+                                    let key = g.id();
+                                    let mut on = groups.contains(&key);
+                                    let r = col.checkbox(&mut on, crate::i18n::tr(g.label()));
+                                    crate::widgets::register(&r.ctx, format!("{tag}:{key}"), r.rect);
+                                    if r.changed() {
+                                        set_on(groups, key, on);
+                                    }
                                 }
-                            }
-                        });
+                            });
+                        }
                     }
                     // Masking: which of this photo's masks go along
                     if h.id == "masks"

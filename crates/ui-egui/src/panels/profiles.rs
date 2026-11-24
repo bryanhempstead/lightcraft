@@ -49,7 +49,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let tools = Rect::from_min_max(pos2(hr.left() + 140.0, hr.top() + 11.0), pos2(hr.right() - MARGIN_R, hr.bottom() - 11.0));
     let mut right = ui.new_child(egui::UiBuilder::new().max_rect(tools).layout(egui::Layout::right_to_left(egui::Align::Center)));
     right.spacing_mut().item_spacing.x = 8.0;
-    if text_button(&mut right, "profileImport", "import.", false).on_hover_text(crate::i18n::tr("Import Profiles (.xmp, .dcp, .cube, .zip)")).clicked() {
+    if text_button(&mut right, "profileImport", "import.", false)
+        .on_hover_text(crate::i18n::tr("Import Profiles (.xmp, .dcp, .cube, .zip)"))
+        .clicked()
+    {
         let _ = app.run("file.importPresets", json!({}));
     }
     if text_button(&mut right, "profileManage", "manage.", manage).on_hover_text(crate::i18n::tr("Manage Profiles: show or hide groups")).clicked() {
@@ -146,8 +149,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             continue;
         }
         // an imported folder named like a built-in group still opens and closes on its own
-        let open_id = egui::Id::new(("profile-group", imported, title.as_str()));
-        let open: bool = ui.data(|m| m.get_temp(open_id)).unwrap_or(true);
+        let fold_id = if imported { format!("profiles.group.imported:{title}") } else { format!("profiles.group:{title}") };
+        let open = crate::folds::is_open(ui.ctx(), &fold_id);
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
         register(ui.ctx(), if imported { format!("profileGroup:lut:{title}") } else { format!("profileGroup:{title}") }, r);
         paint(
@@ -164,8 +167,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             t.text_label,
         );
         ui.painter().text(pos2(r.right() - MARGIN_R, r.center().y), Align2::RIGHT_CENTER, list.len().to_string(), t.font(12.0), t.text_dim);
+        register(ui.ctx(), format!("fold:{fold_id}"), r);
         if resp.clicked() {
-            ui.data_mut(|m| m.insert_temp(open_id, !open));
+            crate::folds::set(ui.ctx(), &fold_id, !open);
         }
         if !open {
             continue;

@@ -746,7 +746,9 @@ fn grid_actions(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
         let linked = app.galleries.photos().iter().any(|p| p.get("photo").is_some_and(Value::is_u64) && app.galleries.picked.contains(&s(p, "name")));
-        if linked && text_button(ui, "galleriesDevelop", "develop.", false).on_hover_text(crate::i18n::tr("Open the source photo in Develop")).clicked() {
+        if linked
+            && text_button(ui, "galleriesDevelop", "develop.", false).on_hover_text(crate::i18n::tr("Open the source photo in Develop")).clicked()
+        {
             let r = app.run("galleries.develop", json!({}));
             toast_err(app, &ctx, r);
         }
@@ -975,10 +977,19 @@ fn photos(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 // ---------- side panels
 
-fn side_title(ui: &mut egui::Ui, title: &str, t: &Tokens) {
-    let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
-    ui.painter().text(pos2(hr.left() + 18.0, hr.center().y), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(13.5), t.text_label);
+/// A side panel's section title, foldable: a click folds the section to its title (remembered,
+/// `crate::folds`, id `galleries.<title>`). Returns whether the section is open.
+fn side_title(ui: &mut egui::Ui, title: &str, t: &Tokens) -> bool {
+    let (hr, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
+    let id = format!("galleries.{}", super::right::fold_slug(title));
+    let open = crate::folds::toggle_on_click(ui, &resp, &id);
+    crate::widgets::register(ui.ctx(), format!("fold:{id}"), hr);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
+    let hover = ui.rect_contains_pointer(hr);
+    crate::folds::paint_triangle(ui, pos2(hr.left() + 18.0, hr.center().y), open, if hover { t.text } else { t.text_dim });
+    ui.painter().text(pos2(hr.left() + 30.0, hr.center().y), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(13.5), t.text_label);
     ui.painter().hline(hr.x_range(), hr.bottom(), Stroke::new(1.0, t.divider));
+    open
 }
 
 fn field(ui: &mut egui::Ui, id: &str, label: &str, value: &mut String, hint: &str, password: bool, enabled: bool) {
@@ -998,89 +1009,93 @@ pub fn left(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let width = app.ui.left_width;
     let resized = super::resizable_side(ui, true, "left_panel", frame, width, crate::state::LEFT_WIDTH, 0.0, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
-        side_title(ui, "New Gallery", &t);
+        let open = side_title(ui, "New Gallery", &t);
         let ctx = ui.ctx().clone();
-        egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 4)).show(ui, |ui| {
-            let online = app.galleries.online;
-            let nf = &mut app.galleries.new;
-            field(ui, "galleryNewName", "Name", &mut nf.name, "the collection's name", false, online);
-            field(ui, "galleryNewClient", "Client", &mut nf.client, "who it's for", false, online);
-            field(ui, "galleryNewWatermark", "Watermark", &mut nf.watermark, "none (text or a watermark preset)", false, online);
-            ui.add_space(12.0);
-            let sel = app.session.selection.ids.len().max(usize::from(app.session.selection.active.is_some()));
-            let view = app.session.visible().len();
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                let busy = app.tasks.is_running(MAKING);
-                if text_button(ui, "galleryFromSelection", "selected.", false)
-                    .on_hover_text(format!("{} ({sel})", crate::i18n::tr("Make a gallery of the selected photos, with their edits")))
-                    .clicked()
-                {
-                    let r = if busy {
-                        Err("a gallery is being exported already".into())
-                    } else {
-                        app.run("galleries.newFrom", json!({"source": "selection"}))
-                    };
-                    toast_err(app, &ctx, r);
-                }
-                if text_button(ui, "galleryFromView", "view.", false)
-                    .on_hover_text(format!(
-                        "{} ({view})",
-                        crate::i18n::tr("Make a gallery of what the grid shows: a collection, a shoot or one camera folder of it")
-                    ))
-                    .clicked()
-                {
-                    let r = if busy {
-                        Err("a gallery is being exported already".into())
-                    } else {
-                        app.run("galleries.newFrom", json!({"source": "view"}))
-                    };
-                    toast_err(app, &ctx, r);
-                }
-            });
-            ui.add_space(8.0);
-            let how = if online {
-                format!("{sel} selected · {view} in view. Exported as web JPEGs (2048 px, sRGB) into <shoot>/gallery/<name>.")
-            } else {
-                "Second Brain isn't running: galleries can't be made now.".to_string()
-            };
-            ui.add(egui::Label::new(egui::RichText::new(how).font(t.font(11.5)).color(t.text_dim)).wrap());
-            ui.add_space(12.0);
-        });
-        side_title(ui, "Client Book", &t);
-        egui::ScrollArea::vertical().id_salt("galleries-clients").auto_shrink([false, false]).show(ui, |ui| {
-            ui.add_space(6.0);
-            let clients = app.galleries.clients.as_ref().and_then(|c| c.get("clients")).and_then(Value::as_array).cloned().unwrap_or_default();
-            if clients.is_empty() {
-                let msg = if app.galleries.online {
-                    "No clients in the book yet: add them in Second Brain (client tab, book)."
-                } else {
-                    "The client book shows while Second Brain runs."
-                };
-                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 8)).show(ui, |ui| {
-                    ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(msg)).font(t.font(12.0)).color(t.text_dim)).wrap());
+        if open {
+            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 4)).show(ui, |ui| {
+                let online = app.galleries.online;
+                let nf = &mut app.galleries.new;
+                field(ui, "galleryNewName", "Name", &mut nf.name, "the collection's name", false, online);
+                field(ui, "galleryNewClient", "Client", &mut nf.client, "who it's for", false, online);
+                field(ui, "galleryNewWatermark", "Watermark", &mut nf.watermark, "none (text or a watermark preset)", false, online);
+                ui.add_space(12.0);
+                let sel = app.session.selection.ids.len().max(usize::from(app.session.selection.active.is_some()));
+                let view = app.session.visible().len();
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let busy = app.tasks.is_running(MAKING);
+                    if text_button(ui, "galleryFromSelection", "selected.", false)
+                        .on_hover_text(format!("{} ({sel})", crate::i18n::tr("Make a gallery of the selected photos, with their edits")))
+                        .clicked()
+                    {
+                        let r = if busy {
+                            Err("a gallery is being exported already".into())
+                        } else {
+                            app.run("galleries.newFrom", json!({"source": "selection"}))
+                        };
+                        toast_err(app, &ctx, r);
+                    }
+                    if text_button(ui, "galleryFromView", "view.", false)
+                        .on_hover_text(format!(
+                            "{} ({view})",
+                            crate::i18n::tr("Make a gallery of what the grid shows: a collection, a shoot or one camera folder of it")
+                        ))
+                        .clicked()
+                    {
+                        let r = if busy {
+                            Err("a gallery is being exported already".into())
+                        } else {
+                            app.run("galleries.newFrom", json!({"source": "view"}))
+                        };
+                        toast_err(app, &ctx, r);
+                    }
                 });
-            }
-            for c in clients.iter().take(500) {
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
-                register(ui.ctx(), format!("client:{}", s(c, "id")), r);
-                if resp.hovered() {
-                    ui.painter().rect_filled(r, 0.0, t.hover);
+                ui.add_space(8.0);
+                let how = if online {
+                    format!("{sel} selected · {view} in view. Exported as web JPEGs (2048 px, sRGB) into <shoot>/gallery/<name>.")
+                } else {
+                    "Second Brain isn't running: galleries can't be made now.".to_string()
+                };
+                ui.add(egui::Label::new(egui::RichText::new(how).font(t.font(11.5)).color(t.text_dim)).wrap());
+                ui.add_space(12.0);
+            });
+        }
+        let open = side_title(ui, "Client Book", &t);
+        if open {
+            egui::ScrollArea::vertical().id_salt("galleries-clients").auto_shrink([false, false]).show(ui, |ui| {
+                ui.add_space(6.0);
+                let clients = app.galleries.clients.as_ref().and_then(|c| c.get("clients")).and_then(Value::as_array).cloned().unwrap_or_default();
+                if clients.is_empty() {
+                    let msg = if app.galleries.online {
+                        "No clients in the book yet: add them in Second Brain (client tab, book)."
+                    } else {
+                        "The client book shows while Second Brain runs."
+                    };
+                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 8)).show(ui, |ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(msg)).font(t.font(12.0)).color(t.text_dim)).wrap());
+                    });
                 }
-                let shoots = n(c, "shoots");
-                ui.painter().text(pos2(r.left() + 18.0, r.top() + 7.0), Align2::LEFT_TOP, s(c, "name"), t.font(13.0), t.text_label);
-                let mut meta = format!("{shoots} shoot{}", if shoots == 1 { "" } else { "s" });
-                if !s(c, "email").is_empty() {
-                    meta.push_str(&format!(" · {}", s(c, "email")));
+                for c in clients.iter().take(500) {
+                    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
+                    register(ui.ctx(), format!("client:{}", s(c, "id")), r);
+                    if resp.hovered() {
+                        ui.painter().rect_filled(r, 0.0, t.hover);
+                    }
+                    let shoots = n(c, "shoots");
+                    ui.painter().text(pos2(r.left() + 18.0, r.top() + 7.0), Align2::LEFT_TOP, s(c, "name"), t.font(13.0), t.text_label);
+                    let mut meta = format!("{shoots} shoot{}", if shoots == 1 { "" } else { "s" });
+                    if !s(c, "email").is_empty() {
+                        meta.push_str(&format!(" · {}", s(c, "email")));
+                    }
+                    ui.painter().text(pos2(r.left() + 18.0, r.top() + 24.0), Align2::LEFT_TOP, meta, t.font(11.0), t.text_dim);
+                    // a click fills the new gallery's client
+                    if resp.clicked() {
+                        app.galleries.new.client = s(c, "name");
+                    }
                 }
-                ui.painter().text(pos2(r.left() + 18.0, r.top() + 24.0), Align2::LEFT_TOP, meta, t.font(11.0), t.text_dim);
-                // a click fills the new gallery's client
-                if resp.clicked() {
-                    app.galleries.new.client = s(c, "name");
-                }
-            }
-            ui.add_space(12.0);
-        });
+                ui.add_space(12.0);
+            });
+        }
     });
     if let Some(w) = resized {
         app.ui.left_width = w;
@@ -1095,178 +1110,197 @@ pub fn right(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let resized = super::resizable_side(ui, false, "right_panel", frame, width, crate::state::RIGHT_WIDTH, 0.0, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         let Some(g) = app.galleries.gallery().cloned() else {
-            side_title(ui, "Gallery", &t);
-            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 12)).show(ui, |ui| {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(crate::i18n::tr("Open a gallery to see its settings, its link and the client's picks."))
-                            .font(t.font(12.0))
-                            .color(t.text_dim),
-                    )
-                    .wrap(),
-                );
-            });
+            let open = side_title(ui, "Gallery", &t);
+            if open {
+                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 12)).show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::i18n::tr("Open a gallery to see its settings, its link and the client's picks."))
+                                .font(t.font(12.0))
+                                .color(t.text_dim),
+                        )
+                        .wrap(),
+                    );
+                });
+            }
             return;
         };
         let ctx = ui.ctx().clone();
         let ro = app.galleries.read_only();
         egui::ScrollArea::vertical().id_salt("gallery-settings").auto_shrink([false, false]).show(ui, |ui| {
-            side_title(ui, "Settings", &t);
-            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 4)).show(ui, |ui| {
-                let f = &mut app.galleries.form;
-                field(ui, "galleryName", "Title", &mut f.name, "", false, !ro);
-                field(ui, "galleryClient", "Client", &mut f.client, "", false, !ro);
-                field(ui, "galleryEmail", "Email", &mut f.email, "", false, !ro);
-                field(ui, "galleryPassword", "Password", &mut f.password, "none", true, !ro);
-                field(ui, "galleryExpires", "Expires", &mut f.expires, "never (YYYY-MM-DD)", false, !ro);
-                ui.add_space(10.0);
-                let r =
-                    ui.add_enabled(!ro, egui::Checkbox::new(&mut f.downloads, egui::RichText::new(crate::i18n::tr("Downloads")).font(t.font(12.0))));
-                register(ui.ctx(), "check:galleryDownloads", r.rect);
-                ui.add_space(8.0);
-                let r =
-                    ui.add_enabled(!ro, egui::Checkbox::new(&mut f.prints, egui::RichText::new(crate::i18n::tr("Print store")).font(t.font(12.0))));
-                register(ui.ctx(), "check:galleryPrints", r.rect);
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    let changed = app.galleries.gallery().map(form_of).is_some_and(|server| server != app.galleries.form);
-                    if !ro && text_button(ui, "gallerySave", "save.", changed).clicked() {
-                        let r = save(app);
-                        toast_err(app, &ctx, r);
-                    }
-                    if !ro
-                        && changed
-                        && text_button(ui, "galleryRevert", "undo.", false).on_hover_text(crate::i18n::tr("Back to the saved settings")).clicked()
-                    {
-                        app.galleries.form = app.galleries.gallery().map(form_of).unwrap_or_default();
-                    }
-                });
-                ui.add_space(12.0);
-            });
-            side_title(ui, "Link", &t);
-            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 10)).show(ui, |ui| {
-                let state = if b(&g, "published") { "live on LOT48: works anywhere" } else { "on this Mac: works at home (pub. puts it on LOT48)" };
-                ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(state)).font(t.font(12.0)).color(t.text_dim)).wrap());
-                if let Some(url) = app.galleries.link.clone() {
-                    ui.add_space(8.0);
-                    ui.add(egui::Label::new(egui::RichText::new(url).font(t.font(11.0)).color(t.text_label)).truncate());
-                }
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    if !ro {
-                        if text_button(ui, "galleryCopyLink", "copy.", false).on_hover_text(crate::i18n::tr("Copy the client's link")).clicked() {
-                            let r = app.run("galleries.copyLink", json!({}));
-                            toast_err(app, &ctx, r);
-                        }
-                        if text_button(ui, "galleryOpenLink", "open.", false)
-                            .on_hover_text(crate::i18n::tr("Open the client's link in the browser"))
-                            .clicked()
-                        {
-                            let r = app.run("galleries.openLink", json!({}));
-                            toast_err(app, &ctx, r);
-                        }
-                        let live = b(&g, "published");
-                        let (label, tip) = if live {
-                            ("unpublish.", "Take it off LOT48 (the link stops working away from home)")
-                        } else {
-                            ("publish.", "Copy the photos to LOT48 so the link works anywhere")
-                        };
-                        if text_button(ui, "galleryPublish", label, false).on_hover_text(crate::i18n::tr(tip)).clicked() {
-                            let r = app.run("galleries.publish", json!({"on": !live}));
-                            toast_err(app, &ctx, r);
-                        }
-                    }
-                });
-                ui.add_space(4.0);
-            });
-            side_title(ui, "Client Picks", &t);
-            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 10)).show(ui, |ui| {
-                let hearts = app.galleries.photos().iter().filter(|p| b(p, "picked")).count();
-                let linked = b(&g, "linked");
-                let msg = if linked {
-                    format!("♥ {hearts} picked by the client. flag. / star. mark their source photos; show. opens the picks collection.")
-                } else {
-                    format!("♥ {hearts} picked by the client. Made outside LightCraft, so they don't map to library photos.")
-                };
-                ui.add(egui::Label::new(egui::RichText::new(msg).font(t.font(12.0)).color(t.text_dim)).wrap());
-                if linked && !ro {
+            let open = side_title(ui, "Settings", &t);
+            if open {
+                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 4)).show(ui, |ui| {
+                    let f = &mut app.galleries.form;
+                    field(ui, "galleryName", "Title", &mut f.name, "", false, !ro);
+                    field(ui, "galleryClient", "Client", &mut f.client, "", false, !ro);
+                    field(ui, "galleryEmail", "Email", &mut f.email, "", false, !ro);
+                    field(ui, "galleryPassword", "Password", &mut f.password, "none", true, !ro);
+                    field(ui, "galleryExpires", "Expires", &mut f.expires, "never (YYYY-MM-DD)", false, !ro);
                     ui.add_space(10.0);
+                    let r = ui.add_enabled(
+                        !ro,
+                        egui::Checkbox::new(&mut f.downloads, egui::RichText::new(crate::i18n::tr("Downloads")).font(t.font(12.0))),
+                    );
+                    register(ui.ctx(), "check:galleryDownloads", r.rect);
+                    ui.add_space(8.0);
+                    let r = ui
+                        .add_enabled(!ro, egui::Checkbox::new(&mut f.prints, egui::RichText::new(crate::i18n::tr("Print store")).font(t.font(12.0))));
+                    register(ui.ctx(), "check:galleryPrints", r.rect);
+                    ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
-                        if text_button(ui, "galleryPicksFlag", "flag.", false)
-                            .on_hover_text(crate::i18n::tr("Flag the client's picks as Picks"))
-                            .clicked()
-                        {
-                            let r = app.run("galleries.applyPicks", json!({"flag": "pick"}));
+                        let changed = app.galleries.gallery().map(form_of).is_some_and(|server| server != app.galleries.form);
+                        if !ro && text_button(ui, "gallerySave", "save.", changed).clicked() {
+                            let r = save(app);
                             toast_err(app, &ctx, r);
                         }
-                        if text_button(ui, "galleryPicksStar", "star.", false)
-                            .on_hover_text(crate::i18n::tr("Give the client's picks 4 stars"))
-                            .clicked()
+                        if !ro
+                            && changed
+                            && text_button(ui, "galleryRevert", "undo.", false).on_hover_text(crate::i18n::tr("Back to the saved settings")).clicked()
                         {
-                            let r = app.run("galleries.applyPicks", json!({"rating": 4}));
-                            toast_err(app, &ctx, r);
-                        }
-                        if text_button(ui, "galleryPicksShow", "show.", false)
-                            .on_hover_text(crate::i18n::tr("Show the client picks collection in the Library"))
-                            .clicked()
-                        {
-                            let r = app.run("galleries.showPicks", json!({}));
-                            toast_err(app, &ctx, r);
+                            app.galleries.form = app.galleries.gallery().map(form_of).unwrap_or_default();
                         }
                     });
-                }
-                ui.add_space(4.0);
-            });
-            if b(&g, "linked") && !ro {
-                side_title(ui, "Photos", &t);
+                    ui.add_space(12.0);
+                });
+            }
+            let open = side_title(ui, "Link", &t);
+            if open {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 10)).show(ui, |ui| {
-                    let msg = format!("{} photos exported from this library. re.exp. writes the ones edited since, in place.", n(&g, "linkedPhotos"));
-                    ui.add(egui::Label::new(egui::RichText::new(msg).font(t.font(12.0)).color(t.text_dim)).wrap());
+                    let state =
+                        if b(&g, "published") { "live on LOT48: works anywhere" } else { "on this Mac: works at home (pub. puts it on LOT48)" };
+                    ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(state)).font(t.font(12.0)).color(t.text_dim)).wrap());
+                    if let Some(url) = app.galleries.link.clone() {
+                        ui.add_space(8.0);
+                        ui.add(egui::Label::new(egui::RichText::new(url).font(t.font(11.0)).color(t.text_label)).truncate());
+                    }
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
-                        if text_button(ui, "galleryReexport", "re.export.", false)
-                            .on_hover_text(crate::i18n::tr("Export the photos edited since again"))
-                            .clicked()
-                        {
-                            let r = app.run("galleries.reexport", json!({}));
-                            toast_err(app, &ctx, r);
-                        }
-                        if text_button(ui, "galleryReexportAll", "all.", false).on_hover_text(crate::i18n::tr("Export every photo again")).clicked() {
-                            let r = app.run("galleries.reexport", json!({"all": true}));
-                            toast_err(app, &ctx, r);
+                        if !ro {
+                            if text_button(ui, "galleryCopyLink", "copy.", false).on_hover_text(crate::i18n::tr("Copy the client's link")).clicked() {
+                                let r = app.run("galleries.copyLink", json!({}));
+                                toast_err(app, &ctx, r);
+                            }
+                            if text_button(ui, "galleryOpenLink", "open.", false)
+                                .on_hover_text(crate::i18n::tr("Open the client's link in the browser"))
+                                .clicked()
+                            {
+                                let r = app.run("galleries.openLink", json!({}));
+                                toast_err(app, &ctx, r);
+                            }
+                            let live = b(&g, "published");
+                            let (label, tip) = if live {
+                                ("unpublish.", "Take it off LOT48 (the link stops working away from home)")
+                            } else {
+                                ("publish.", "Copy the photos to LOT48 so the link works anywhere")
+                            };
+                            if text_button(ui, "galleryPublish", label, false).on_hover_text(crate::i18n::tr(tip)).clicked() {
+                                let r = app.run("galleries.publish", json!({"on": !live}));
+                                toast_err(app, &ctx, r);
+                            }
                         }
                     });
                     ui.add_space(4.0);
                 });
             }
-            if !ro {
-                side_title(ui, "Slideshow", &t);
+            let open = side_title(ui, "Client Picks", &t);
+            if open {
                 egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 10)).show(ui, |ui| {
-                    let what = if app.galleries.picked.is_empty() {
-                        "every photo".to_string()
+                    let hearts = app.galleries.photos().iter().filter(|p| b(p, "picked")).count();
+                    let linked = b(&g, "linked");
+                    let msg = if linked {
+                        format!("♥ {hearts} picked by the client. flag. / star. mark their source photos; show. opens the picks collection.")
                     } else {
-                        format!("the {} picked photos", app.galleries.picked.len())
-                    };
-                    let state = app.galleries.show.as_ref().map(|(_, st)| (s(st, "state"), s(st, "path"), s(st, "error")));
-                    let msg = match &state {
-                        Some((st, _, _)) if st == "running" => "Making the slideshow…".to_string(),
-                        Some((st, path, _)) if st == "done" => format!("Done: {path}"),
-                        Some((_, _, err)) => format!("⚠ {err}"),
-                        None => format!("slide. makes a film of {what} (Second Brain's editor has music and titles)."),
+                        format!("♥ {hearts} picked by the client. Made outside LightCraft, so they don't map to library photos.")
                     };
                     ui.add(egui::Label::new(egui::RichText::new(msg).font(t.font(12.0)).color(t.text_dim)).wrap());
-                    ui.add_space(10.0);
-                    let running = state.as_ref().is_some_and(|(st, _, _)| st == "running");
-                    if !running && text_button(ui, "gallerySlideshow", "slide.", false).clicked() {
-                        let r = app.run("galleries.slideshow", json!({}));
-                        toast_err(app, &ctx, r);
+                    if linked && !ro {
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if text_button(ui, "galleryPicksFlag", "flag.", false)
+                                .on_hover_text(crate::i18n::tr("Flag the client's picks as Picks"))
+                                .clicked()
+                            {
+                                let r = app.run("galleries.applyPicks", json!({"flag": "pick"}));
+                                toast_err(app, &ctx, r);
+                            }
+                            if text_button(ui, "galleryPicksStar", "star.", false)
+                                .on_hover_text(crate::i18n::tr("Give the client's picks 4 stars"))
+                                .clicked()
+                            {
+                                let r = app.run("galleries.applyPicks", json!({"rating": 4}));
+                                toast_err(app, &ctx, r);
+                            }
+                            if text_button(ui, "galleryPicksShow", "show.", false)
+                                .on_hover_text(crate::i18n::tr("Show the client picks collection in the Library"))
+                                .clicked()
+                            {
+                                let r = app.run("galleries.showPicks", json!({}));
+                                toast_err(app, &ctx, r);
+                            }
+                        });
                     }
-                    ui.add_space(12.0);
+                    ui.add_space(4.0);
                 });
+            }
+            if b(&g, "linked") && !ro {
+                let open = side_title(ui, "Photos", &t);
+                if open {
+                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 10)).show(ui, |ui| {
+                        let msg =
+                            format!("{} photos exported from this library. re.exp. writes the ones edited since, in place.", n(&g, "linkedPhotos"));
+                        ui.add(egui::Label::new(egui::RichText::new(msg).font(t.font(12.0)).color(t.text_dim)).wrap());
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if text_button(ui, "galleryReexport", "re.export.", false)
+                                .on_hover_text(crate::i18n::tr("Export the photos edited since again"))
+                                .clicked()
+                            {
+                                let r = app.run("galleries.reexport", json!({}));
+                                toast_err(app, &ctx, r);
+                            }
+                            if text_button(ui, "galleryReexportAll", "all.", false)
+                                .on_hover_text(crate::i18n::tr("Export every photo again"))
+                                .clicked()
+                            {
+                                let r = app.run("galleries.reexport", json!({"all": true}));
+                                toast_err(app, &ctx, r);
+                            }
+                        });
+                        ui.add_space(4.0);
+                    });
+                }
+            }
+            if !ro {
+                let open = side_title(ui, "Slideshow", &t);
+                if open {
+                    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(18, 10)).show(ui, |ui| {
+                        let what = if app.galleries.picked.is_empty() {
+                            "every photo".to_string()
+                        } else {
+                            format!("the {} picked photos", app.galleries.picked.len())
+                        };
+                        let state = app.galleries.show.as_ref().map(|(_, st)| (s(st, "state"), s(st, "path"), s(st, "error")));
+                        let msg = match &state {
+                            Some((st, _, _)) if st == "running" => "Making the slideshow…".to_string(),
+                            Some((st, path, _)) if st == "done" => format!("Done: {path}"),
+                            Some((_, _, err)) => format!("⚠ {err}"),
+                            None => format!("slide. makes a film of {what} (Second Brain's editor has music and titles)."),
+                        };
+                        ui.add(egui::Label::new(egui::RichText::new(msg).font(t.font(12.0)).color(t.text_dim)).wrap());
+                        ui.add_space(10.0);
+                        let running = state.as_ref().is_some_and(|(st, _, _)| st == "running");
+                        if !running && text_button(ui, "gallerySlideshow", "slide.", false).clicked() {
+                            let r = app.run("galleries.slideshow", json!({}));
+                            toast_err(app, &ctx, r);
+                        }
+                        ui.add_space(12.0);
+                    });
+                }
             }
         });
     });

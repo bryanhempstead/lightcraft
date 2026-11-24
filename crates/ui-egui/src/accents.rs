@@ -369,7 +369,11 @@ fn swatch(ui: &mut egui::Ui, t: &Tokens, id: &str, hex: &str, on: bool) -> egui:
 /// Settings ▸ Interface ▸ accents.: the wheel with brightness, hex, use. and save.; the presets and
 /// saved swatches; the four active slots; each role's slot (auto. or pinned).
 pub fn section(app: &mut crate::LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    ui.scope(|ui| section_body(app, ui, t));
+    ui.add_space(4.0);
+    // folds like every Settings group (remembered, crate::folds)
+    if crate::folds::header(ui, "settings.interface.accents", "accents.") {
+        ui.scope(|ui| section_body(app, ui, t));
+    }
 }
 
 fn section_body(app: &mut crate::LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
@@ -384,8 +388,6 @@ fn section_body(app: &mut crate::LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .unwrap_or_else(|| (0..SLOTS).find(|&i| a.slot(i).is_none()).unwrap_or(0));
     let mut put: Option<String> = None;
 
-    ui.add_space(4.0);
-    ui.label(RichText::new("accents.").font(t.semibold(12.5)).color(t.text));
     ui.spacing_mut().item_spacing.y = 10.0;
 
     // the wheel, its brightness, the hex value, use. and save.

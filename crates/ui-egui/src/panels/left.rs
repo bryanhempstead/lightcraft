@@ -645,20 +645,19 @@ fn folder_tree(
     transient: bool,
 ) {
     let t = Tokens::get(ui.ctx());
-    let open_id = egui::Id::new(("folder-open", path.to_string()));
+    // remembered across launches (crate::folds); a folder starts closed
+    let fold_id = format!("local.folder:{path}");
     let sel = current.is_some_and(|c| same_folder(c, path));
     let on_the_way = !sel && current.is_some_and(|c| lightcraft_catalog::query::folder_within(c, path));
-    let mut open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(false);
+    let mut open = crate::folds::is_open_or(ui.ctx(), &fold_id, false);
     if reveal && on_the_way {
         // opened once per browsed folder: collapsing it again afterwards sticks
         let revealed_id = egui::Id::new(("folder-revealed", path.to_string()));
         let target = current.map(str::to_string);
         if ui.data(|d| d.get_temp::<Option<String>>(revealed_id)) != Some(target.clone()) {
             open = true;
-            ui.data_mut(|d| {
-                d.insert_temp(open_id, true);
-                d.insert_temp(revealed_id, target);
-            });
+            crate::folds::set(ui.ctx(), &fold_id, true);
+            ui.data_mut(|d| d.insert_temp(revealed_id, target));
         }
     }
     let resp = row(app, ui, &format!("local:{path}"), Icon::Folder, name, None, sel, indent + 12.0).on_hover_text(path);
@@ -673,9 +672,10 @@ fn folder_tree(
         vec![c + vec2(-2.0, -4.0), c + vec2(3.0, 0.0), c + vec2(-2.0, 4.0)]
     };
     ui.painter().add(egui::Shape::convex_polygon(pts, col, egui::Stroke::NONE));
+    register(ui.ctx(), format!("fold:{fold_id}"), tri);
     if tr.clicked() {
         open = !open;
-        ui.data_mut(|d| d.insert_temp(open_id, open));
+        crate::folds::set(ui.ctx(), &fold_id, open);
     } else if resp.clicked()
         && let Err(e) = app.run("library.browse", json!({"path": path}))
     {
@@ -753,14 +753,16 @@ fn albums_tree_view(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &[Album], p
         let shown = if a.favorite { format!("★ {}", a.name) } else { a.name.clone() };
         let dot = a.label.map(crate::theme::label_color);
         if a.folder {
-            let open_id = egui::Id::new(("folder-open", a.id.0));
-            let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
+            // remembered (crate::folds): a set folded shut stays shut after quitting
+            let fold_id = format!("collections.set:{}", a.id.0);
+            let open = crate::folds::is_open(ui.ctx(), &fold_id);
             let extra = RowExtra { dot, ..Default::default() };
             let resp = row_ex(app, ui, &format!("folder:{}", a.id.0), Icon::CollectionSet, &shown, Some(&a.name), None, false, indent, &extra);
             // a set opens and closes from its triangle (as Folders' rows do) or anywhere on it
             let tri = disclosure(ui, &resp, indent, open, egui::Id::new(("album-set-tri", a.id.0)), &format!("albumSetToggle:{}", a.id.0));
+            register(ui.ctx(), format!("fold:{fold_id}"), resp.rect);
             if resp.clicked() || tri.clicked() {
-                ui.data_mut(|d| d.insert_temp(open_id, !open));
+                crate::folds::set(ui.ctx(), &fold_id, !open);
             }
             folder_menu(app, &tri, a);
             folder_menu(app, &resp, a);
@@ -1565,15 +1567,17 @@ fn publish_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
             ServiceKind::HardDrive => Icon::Disk,
             ServiceKind::Photos => Icon::Photos,
         };
-        let open_id = egui::Id::new(("publish-service-open", svc.id));
-        let is_open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
+        // remembered across launches (crate::folds)
+        let fold_id = format!("publish.service:{}", svc.id);
+        let is_open = crate::folds::is_open(ui.ctx(), &fold_id);
         let resp = row_ex(app, ui, &format!("publishService:{}", svc.id), icon, &svc.name, None, None, false, 0.0, &RowExtra::default());
         let resp = resp.on_hover_text(match svc.kind {
             ServiceKind::HardDrive => format!("Hard Drive: {}", svc.dir),
             ServiceKind::Photos => crate::i18n::tr("Apple Photos: an album per collection").to_string(),
         });
+        register(ui.ctx(), format!("fold:{fold_id}"), resp.rect);
         if resp.clicked() {
-            ui.data_mut(|d| d.insert_temp(open_id, !is_open));
+            crate::folds::set(ui.ctx(), &fold_id, !is_open);
         }
         service_menu(app, &resp, svc);
         if is_open {
@@ -1634,12 +1638,13 @@ fn publish_tree(
     for c in cols.iter().filter(|c| c.service == service && c.parent == parent) {
         let (todo, total) = counts.get(&c.id).copied().unwrap_or((0, 0));
         if c.set {
-            let open_id = egui::Id::new(("publish-set-open", c.id));
-            let open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(true);
+            let fold_id = format!("publish.set:{}", c.id);
+            let open = crate::folds::is_open(ui.ctx(), &fold_id);
             let resp =
                 row_ex(app, ui, &format!("publishSet:{}", c.id), Icon::CollectionSet, &c.name, None, None, false, indent, &RowExtra::default());
+            register(ui.ctx(), format!("fold:{fold_id}"), resp.rect);
             if resp.clicked() {
-                ui.data_mut(|d| d.insert_temp(open_id, !open));
+                crate::folds::set(ui.ctx(), &fold_id, !open);
             }
             collection_menu(app, &resp, c);
             if open {
@@ -2526,8 +2531,9 @@ pub fn keywords_section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode], indent: f32) {
     let t = Tokens::get(ui.ctx());
     for n in nodes {
-        let open_id = egui::Id::new(("kw-open", n.path.to_lowercase()));
-        let mut open: bool = ui.data(|d| d.get_temp(open_id)).unwrap_or(false);
+        // remembered across launches (crate::folds); a keyword starts closed
+        let fold_id = format!("keywords.tree:{}", n.path.to_lowercase());
+        let mut open = crate::folds::is_open_or(ui.ctx(), &fold_id, false);
         let sel = app.session.filter.keyword.as_deref().is_some_and(|k| k.eq_ignore_ascii_case(&n.path));
         let resp = row(app, ui, &format!("keyword:{}", n.path), Icon::Tag, &n.name, Some(n.count), sel, indent);
         if !n.children.is_empty() {
@@ -2543,9 +2549,10 @@ fn keyword_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, nodes: &[KeywordNode
                 vec![c + vec2(-2.0, -4.0), c + vec2(3.0, 0.0), c + vec2(-2.0, 4.0)]
             };
             ui.painter().add(egui::Shape::convex_polygon(pts, col, egui::Stroke::NONE));
+            register(ui.ctx(), format!("fold:{fold_id}"), tri);
             if tr.clicked() {
                 open = !open;
-                ui.data_mut(|d| d.insert_temp(open_id, open));
+                crate::folds::set(ui.ctx(), &fold_id, open);
             }
         }
         let resp = resp.on_hover_text(if n.children.is_empty() { n.path.clone() } else { format!("{} (includes the keywords below it)", n.path) });

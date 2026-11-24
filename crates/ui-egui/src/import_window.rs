@@ -429,11 +429,13 @@ fn top_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, d: &mut ImportDi
 
 /// A Classic section header inside the window; returns whether it is open.
 fn section(ui: &mut egui::Ui, id: &str, title: &str, right: bool) -> bool {
-    let key = egui::Id::new(("import-section", id));
-    let open: bool = ui.data(|m| m.get_temp(key)).unwrap_or(true);
-    let (resp, _) = crate::widgets::classic_header(ui, &format!("import.{id}"), title, open, right, None);
+    // remembered across launches (crate::folds)
+    let fold_id = format!("import.{id}");
+    let open = crate::folds::is_open(ui.ctx(), &fold_id);
+    let (resp, _) = crate::widgets::classic_header(ui, &fold_id, title, open, right, None);
+    register(ui.ctx(), format!("fold:{fold_id}"), resp.rect);
     if resp.clicked() {
-        ui.data_mut(|m| m.insert_temp(key, !open));
+        crate::folds::set(ui.ctx(), &fold_id, !open);
     }
     open
 }
@@ -525,17 +527,18 @@ fn folder_rows(ui: &mut egui::Ui, d: &mut ImportDialog, name: &str, path: &str, 
     if depth > 24 {
         return;
     }
-    let key = egui::Id::new(("import-open", path));
-    let open: bool = ui.data(|m| m.get_temp(key)).unwrap_or(false);
+    // remembered across launches (crate::folds); a folder starts closed
+    let fold_id = format!("import.folder:{path}");
+    let open = crate::folds::is_open_or(ui.ctx(), &fold_id, false);
     let on = d.prefs.source == path;
     let resp = source_row(ui, &format!("folder:{path}"), name, depth, on, Some(open));
     if resp.clicked() {
         let arrow = resp.interact_pointer_pos().is_some_and(|p| p.x < resp.rect.left() + 20.0 + depth as f32 * 14.0);
         if arrow {
-            ui.data_mut(|m| m.insert_temp(key, !open));
+            crate::folds::set(ui.ctx(), &fold_id, !open);
         } else {
             pending_source(ui.ctx(), path);
-            ui.data_mut(|m| m.insert_temp(key, true));
+            crate::folds::set(ui.ctx(), &fold_id, true);
         }
     }
     resp.on_hover_text(path);

@@ -66,7 +66,7 @@ type RunsKey = (u64, Option<SortKey>, GroupBy);
 pub struct GridCache {
     runs: Option<(RunsKey, Arc<Vec<DateRun>>)>,
     /// Layout by (runs key, width, thumbnail size, square).
-    layout: Option<((RunsKey, u32, u32, bool), Arc<GridLayout>)>,
+    layout: Option<((RunsKey, u32, u32, bool, Vec<bool>), Arc<GridLayout>)>,
     /// Stack index by generation.
     stacks: Option<(u64, Arc<StackIndex>)>,
     /// How many of the photos are browsed (Local) ones, by generation.
@@ -233,14 +233,16 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     // the layout only changes with the photos (and their shapes), the grouping, the width and
     // the thumbnail size
-    let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square);
+    // a group folded by its header's triangle keeps only its header (remembered, crate::folds)
+    let folded: Vec<bool> = runs.iter().map(|r| !crate::folds::is_open(ui.ctx(), &group_fold_id(r))).collect();
+    let lay_key = (runs_key, avail_w.to_bits(), target.to_bits(), square, folded.clone());
     let lay = match &app.caches.grid.layout {
         Some((k, l)) if *k == lay_key => l.clone(),
         _ => {
             stats.layout_builds += 1;
             let aspects = if square { vec![1.0; ids.len()] } else { aspects(&app.session.catalog, &ids) };
             let spans: Vec<(usize, usize)> = runs.iter().map(|r| (r.start, r.count)).collect();
-            let l = Arc::new(layout(&aspects, &spans, avail_w, target, square));
+            let l = Arc::new(layout_folded(&aspects, &spans, &folded, avail_w, target, square));
             app.caches.grid.layout = Some((lay_key, l.clone()));
             l
         }
@@ -251,7 +253,7 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // bring the active photo into view when it changes (keyboard, click, command) or the grid
     // comes back on screen; otherwise the scroll position is the user's
     let scroll_to: Option<Rect> = if follow_active(ui.ctx(), egui::Id::new("grid-follow-active"), active) {
-        active.and_then(|a| ids.iter().position(|x| *x == a)).and_then(|i| lay.cells.get(i).copied())
+        active.and_then(|a| ids.iter().position(|x| *x == a)).and_then(|i| lay.cells.get(i).copied()).filter(|r| r.is_positive())
     } else {
         None
     };
@@ -366,19 +368,29 @@ pub fn resolve_group(by: GroupBy, thumb_size: f32) -> GroupBy {
 /// below its header. Justified rows fill the width exactly except a group's last row, which keeps
 /// the target height.
 pub fn layout(aspects: &[f32], groups: &[(usize, usize)], avail_w: f32, target: f32, square: bool) -> GridLayout {
+    layout_folded(aspects, groups, &[], avail_w, target, square)
+}
+
+/// [`layout`] with some groups folded (`folded[g]`): a folded group keeps its header, its photos
+/// get no cells (`Rect::NOTHING`) and no rows.
+pub fn layout_folded(aspects: &[f32], groups: &[(usize, usize)], folded: &[bool], avail_w: f32, target: f32, square: bool) -> GridLayout {
     let n = aspects.len();
     let whole = [(0, n)];
     let (groups, headed) = if groups.is_empty() { (&whole[..], false) } else { (groups, true) };
     let gap = if square { 1.0 } else { 6.0 };
     let mut out = GridLayout { cells: vec![Rect::NOTHING; n], headers: Vec::with_capacity(groups.len()), rows: Vec::new(), height: 0.0 };
     let mut y = 4.0f32;
-    for &(start, count) in groups {
+    for (g, &(start, count)) in groups.iter().enumerate() {
         let end = (start + count).min(n);
         if headed {
             out.headers.push(Rect::from_min_size(pos2(0.0, y), vec2(avail_w + 8.0, HEADER_H)));
             y += HEADER_H;
         }
         if start >= end {
+            continue;
+        }
+        if headed && folded.get(g).copied().unwrap_or(false) {
+            y += 8.0;
             continue;
         }
         if square {
@@ -475,17 +487,40 @@ fn merges_runs(ui: &egui::Ui, session: &lightcraft_engine::Session, ids: &[Photo
     runs
 }
 
-fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: &[PhotoId], r: Rect, pinned: bool) {
+/// The fold id of a grid group (`grid.group:<key>`: a date, `publish:new`, `merges:…`).
+fn group_fold_id(run: &DateRun) -> String {
+    format!("grid.group:{}", if run.key.is_empty() { "unknown" } else { &run.key })
+}
+
+/// The ▾ / ▸ at a group header's left edge: a click folds the group to its header (remembered).
+/// Returns the header rect left for the title.
+fn group_fold(ui: &mut egui::Ui, run: &DateRun, r: Rect, pinned: bool) -> Rect {
     let t = Tokens::get(ui.ctx());
-    let resp = ui.interact(r, egui::Id::new(("group-header", run.start, pinned)), Sense::click());
+    let id = group_fold_id(run);
+    let tri = Rect::from_min_size(r.min, vec2(28.0, r.height()));
+    let resp = ui.interact(tri, egui::Id::new(("group-fold", run.start, pinned)), Sense::click());
     if !pinned {
-        register(ui.ctx(), format!("group:{}", if run.key.is_empty() { "unknown" } else { &run.key }), r);
+        register(ui.ctx(), format!("fold:{id}"), tri);
     }
-    let p = ui.painter();
+    let open = crate::folds::toggle_on_click(ui, &resp, &id);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, "group"));
+    crate::folds::paint_triangle(ui, pos2(tri.left() + 14.0, tri.center().y), open, if resp.hovered() { t.text } else { t.text_dim });
+    Rect::from_min_max(pos2(tri.right() - 8.0, r.top()), r.max)
+}
+
+fn group_header(app: &mut LightcraftApp, ui: &mut egui::Ui, run: &DateRun, ids: &[PhotoId], full: Rect, pinned: bool) {
+    let t = Tokens::get(ui.ctx());
+    let resp = ui.interact(full, egui::Id::new(("group-header", run.start, pinned)), Sense::click());
+    if !pinned {
+        register(ui.ctx(), format!("group:{}", if run.key.is_empty() { "unknown" } else { &run.key }), full);
+    }
     if pinned {
-        p.rect_filled(r, 0.0, t.canvas);
-        p.hline(r.x_range(), r.bottom(), Stroke::new(1.0, t.divider));
+        ui.painter().rect_filled(full, 0.0, t.canvas);
+        ui.painter().hline(full.x_range(), full.bottom(), Stroke::new(1.0, t.divider));
     }
+    // the triangle folds; a click on the rest of the header still picks the group's photos
+    let r = group_fold(ui, run, full, pinned);
+    let p = ui.painter();
     if run.key.starts_with("merges:") {
         // merges.: the kind (a menu), the count, merge. / skip.; a click on the rest picks the group
         crate::merges::group_header(app, ui, &run.key, run.count, r, pinned);
@@ -747,7 +782,10 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     }
     // not a raw: its file type at the top left (JPG, PNG, TIF, HEIC, PSD…), so rendered files stand
     // apart from raws at a glance (Bryan, 2026-11-23)
-    if photo.kind == lightcraft_catalog::MediaKind::Image && !photo.format.trim().is_empty() && matches!(photo.source, lightcraft_catalog::Source::File { .. }) {
+    if photo.kind == lightcraft_catalog::MediaKind::Image
+        && !photo.format.trim().is_empty()
+        && matches!(photo.source, lightcraft_catalog::Source::File { .. })
+    {
         let g = p.layout_no_wrap(photo.format.trim().to_uppercase(), t.semibold(9.5), Color32::WHITE);
         let at = img_rect.left_top() + vec2(6.0, 6.0);
         let tag = Rect::from_min_size(at, g.size() + vec2(12.0, 6.0));

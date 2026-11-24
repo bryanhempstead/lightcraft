@@ -179,9 +179,27 @@ pub fn edge_toggles(app: &mut crate::LightcraftApp, ctx: &egui::Context) {
     let right = if app.ui.right_panel { 1 } else { -1 };
     let bottom = if app.ui.filmstrip { 2 } else { -2 };
     let tabs = [
-        ("edgeLeft", Rect::from_min_size(pos2(w.left(), w.center().y - long / 2.0), vec2(short, long)), left, "view.leftPanel", "Hide / show the left panel"),
-        ("edgeRight", Rect::from_min_size(pos2(w.right() - short, w.center().y - long / 2.0), vec2(short, long)), right, "view.rightPanel", "Hide / show the right panel"),
-        ("edgeBottom", Rect::from_min_size(pos2(w.center().x - long / 2.0, w.bottom() - short), vec2(long, short)), bottom, "view.filmstrip", "Hide / show the filmstrip"),
+        (
+            "edgeLeft",
+            Rect::from_min_size(pos2(w.left(), w.center().y - long / 2.0), vec2(short, long)),
+            left,
+            "view.leftPanel",
+            "Hide / show the left panel",
+        ),
+        (
+            "edgeRight",
+            Rect::from_min_size(pos2(w.right() - short, w.center().y - long / 2.0), vec2(short, long)),
+            right,
+            "view.rightPanel",
+            "Hide / show the right panel",
+        ),
+        (
+            "edgeBottom",
+            Rect::from_min_size(pos2(w.center().x - long / 2.0, w.bottom() - short), vec2(long, short)),
+            bottom,
+            "view.filmstrip",
+            "Hide / show the filmstrip",
+        ),
     ];
     for (id, r, dir, cmd, tip) in tabs {
         let resp = egui::Area::new(egui::Id::new(id))

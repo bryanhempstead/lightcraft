@@ -131,6 +131,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("panel.order", "Panel Order", None, ""),
     ("panel.defaultOpen", "Open Panel by Default", None, ""),
     ("panel.resetOrder", "Reset Panel Order", None, "Window>Panels"),
+    // every foldable list or section (crate::folds): fold / unfold one, list them
+    ("ui.fold", "Fold Section", None, ""),
+    ("ui.folds", "Folded Sections", None, ""),
     // Develop's panels, as Lightroom Classic numbers them (⌘1…⌘9 open one, ⌘-click solo)
     ("section.basic", "Basic", Some("Cmd+1"), "Window>Develop Panels"),
     ("section.toneCurve", "Tone Curve", Some("Cmd+2"), "Window>Develop Panels"),
@@ -464,6 +467,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         return Some(r);
     }
     if let Some(r) = crate::panels::order::run_command(app, id, p) {
+        return Some(r);
+    }
+    if let Some(r) = crate::folds::run_command(app, id, p) {
         return Some(r);
     }
     let ctx = egui::Context::default();

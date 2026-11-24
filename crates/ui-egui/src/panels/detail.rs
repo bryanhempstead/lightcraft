@@ -268,7 +268,11 @@ pub(crate) fn navigate_gesture(app: &mut LightcraftApp, ui: &mut egui::Ui, resp:
             i.events
                 .iter()
                 .filter_map(|e| match e {
-                    egui::Event::MouseWheel { unit, delta, modifiers, .. } if *unit != egui::MouseWheelUnit::Point && !modifiers.command && delta.y != 0.0 => Some(delta.y),
+                    egui::Event::MouseWheel { unit, delta, modifiers, .. }
+                        if *unit != egui::MouseWheelUnit::Point && !modifiers.command && delta.y != 0.0 =>
+                    {
+                        Some(delta.y)
+                    }
                     _ => None,
                 })
                 .collect()
@@ -670,7 +674,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let p = ui.painter_at(main_area.intersect(canvas));
         let guide = Stroke::new(0.8, Color32::from_white_alpha(150));
         for line in super::crop_overlay::paths(crate::state::CropOverlay::Thirds, 0, img_rect.width(), img_rect.height()) {
-            p.add(egui::Shape::line(line.into_iter().map(|(x, y)| img_rect.min + vec2(x * img_rect.width(), y * img_rect.height())).collect(), guide));
+            p.add(egui::Shape::line(
+                line.into_iter().map(|(x, y)| img_rect.min + vec2(x * img_rect.width(), y * img_rect.height())).collect(),
+                guide,
+            ));
         }
     }
     let map = CanvasMap::new(&frame, img_rect);
@@ -1486,7 +1493,8 @@ fn general_interaction(
         // say what the tool wants, on the photo (Bryan couldn't find the selector, 2026-11-23)
         let t = Tokens::get(ui.ctx());
         let p = ui.painter_at(canvas);
-        let g = p.layout_no_wrap(crate::i18n::tr("click something white or neutral grey · Esc to stop").to_string(), t.font(12.5), egui::Color32::WHITE);
+        let g =
+            p.layout_no_wrap(crate::i18n::tr("click something white or neutral grey · Esc to stop").to_string(), t.font(12.5), egui::Color32::WHITE);
         let pill = Rect::from_center_size(egui::pos2(img.center().x, img.top() + 26.0), g.size() + vec2(28.0, 14.0));
         p.rect_filled(pill, pill.height() / 2.0, egui::Color32::from_black_alpha(175));
         p.galley(pill.center() - g.size() / 2.0, g, egui::Color32::WHITE);

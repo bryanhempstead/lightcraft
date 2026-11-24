@@ -100,7 +100,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ("No people yet", "Named faces from Lightroom and XMP show up here. get. downloads the face finder (39 MB) to find everyone else.")
         };
         // the sections are there, empty, as in Lightroom Classic
-        section(ui, "Named People", 0, None, app);
+        let _ = section(ui, "Named People", 0, None, app);
         super::empty_message(ui, ui.available_rect_before_wrap(), title, body);
         return;
     }
@@ -112,35 +112,39 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let row_h = CARD + LABEL_H + GAP;
         // Named People
         let named_rows = people.named.len().div_ceil(cols);
-        section(ui, "Named People", people.named.len(), None, app);
-        if people.named.is_empty() {
-            let t = Tokens::get(ui.ctx());
-            ui.horizontal(|ui| {
-                ui.add_space(PAD);
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr("Nobody is named yet: type a name under a face below and press Return."))
-                        .font(t.font(12.0))
-                        .color(t.text_dim),
-                );
-            });
-            ui.add_space(12.0);
-        }
-        let (area, _) = ui.allocate_exact_size(vec2(width, named_rows as f32 * row_h + 4.0), Sense::hover());
-        for (i, person) in people.named.iter().enumerate() {
-            let (row, col) = (i / cols, i % cols);
-            let min = area.min + vec2(PAD + col as f32 * (CARD + GAP), row as f32 * row_h);
-            let r = Rect::from_min_size(min, vec2(CARD, CARD + LABEL_H));
-            if !ui.clip_rect().intersects(r) {
-                continue;
+        let named_open = section(ui, "Named People", people.named.len(), None, app);
+        if named_open {
+            if people.named.is_empty() {
+                let t = Tokens::get(ui.ctx());
+                ui.horizontal(|ui| {
+                    ui.add_space(PAD);
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr("Nobody is named yet: type a name under a face below and press Return."))
+                            .font(t.font(12.0))
+                            .color(t.text_dim),
+                    );
+                });
+                ui.add_space(12.0);
             }
-            if let Some(target) = named_card(app, ui, person, r, ppp) {
-                drop = Some(target);
+            let (area, _) = ui.allocate_exact_size(vec2(width, named_rows as f32 * row_h + 4.0), Sense::hover());
+            for (i, person) in people.named.iter().enumerate() {
+                let (row, col) = (i / cols, i % cols);
+                let min = area.min + vec2(PAD + col as f32 * (CARD + GAP), row as f32 * row_h);
+                let r = Rect::from_min_size(min, vec2(CARD, CARD + LABEL_H));
+                if !ui.clip_rect().intersects(r) {
+                    continue;
+                }
+                if let Some(target) = named_card(app, ui, person, r, ppp) {
+                    drop = Some(target);
+                }
             }
+            ui.add_space(GAP);
         }
-        ui.add_space(GAP);
         // Unnamed People
         let keys: Vec<Key> = people.unnamed.iter().map(|s| key(&s.cover)).collect();
-        section(ui, "Unnamed People", people.unnamed.len(), Some(&keys), app);
+        if !section(ui, "Unnamed People", people.unnamed.len(), Some(&keys), app) {
+            return;
+        }
         let picked: Vec<Vec<&FaceInfo>> =
             people.unnamed.iter().filter(|s| app.ui.people_sel.contains(&key(&s.cover))).map(|s| s.faces.iter().collect()).collect();
         if !picked.is_empty() {
@@ -295,12 +299,15 @@ fn after(app: &mut LightcraftApp, ctx: &egui::Context, r: Result<serde_json::Val
 }
 
 /// A section title with its count, and `all.` / `none.` for a pickable list.
-fn section(ui: &mut egui::Ui, title: &str, n: usize, keys: Option<&[Key]>, app: &mut LightcraftApp) {
+/// The title folds the section (remembered, `crate::folds`, id `people.<title>`); returns whether
+/// it is open.
+fn section(ui: &mut egui::Ui, title: &str, n: usize, keys: Option<&[Key]>, app: &mut LightcraftApp) -> bool {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), SECTION_H), Sense::hover());
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(PAD, 6.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
     child.spacing_mut().item_spacing.x = 8.0;
-    child.label(egui::RichText::new(crate::i18n::tr(title)).font(t.semibold(13.0)).color(t.text_label));
+    let fold = format!("people.{}", super::right::fold_slug(title));
+    let open = crate::folds::label(&mut child, &fold, title, 13.0, t.text_label);
     child.label(egui::RichText::new(n.to_string()).font(t.font(12.0)).color(t.text_dim));
     if let Some(keys) = keys {
         child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -321,6 +328,7 @@ fn section(ui: &mut egui::Ui, title: &str, n: usize, keys: Option<&[Key]>, app: 
             }
         });
     }
+    open
 }
 
 /// The face picture of a card.
@@ -568,7 +576,9 @@ fn stack_page(app: &mut LightcraftApp, ui: &mut egui::Ui, stack: &lightcraft_eng
         let width = ui.available_width();
         let cell = 112.0;
         let cols = (((width - PAD * 2.0 + GAP) / (cell + GAP)).floor() as usize).max(1);
-        section(ui, "Faces", stack.faces.len(), Some(&keys), app);
+        if !section(ui, "Faces", stack.faces.len(), Some(&keys), app) {
+            return;
+        }
         let picked: Vec<&FaceInfo> = stack.faces.iter().filter(|f| app.ui.people_sel.contains(&key(f))).collect();
         if !picked.is_empty() {
             let groups: Vec<Vec<&FaceInfo>> = picked.iter().map(|f| vec![*f]).collect();
@@ -625,28 +635,36 @@ fn person_page(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &lightcraft_e
         let cell = 112.0;
         let cols = (((width - PAD * 2.0 + GAP) / (cell + GAP)).floor() as usize).max(1);
         // Similar first (what needs an answer), with the picked ones' ✓ / ✗
-        section(ui, "Similar", person.similar.len(), Some(&similar_keys), app);
-        let picked: Vec<&FaceInfo> = person.similar.iter().filter(|f| app.ui.people_sel.contains(&key(f))).collect();
-        if !picked.is_empty() {
-            ui.horizontal(|ui| {
-                ui.add_space(PAD);
-                ui.spacing_mut().item_spacing.x = 8.0;
-                if text_button(ui, "similarYes", "yes.", false).on_hover_text(crate::i18n::tr_format!("These are {n}", n = person.name)).clicked() {
-                    let r = app.run("people.name", json!({"faces": faces_json(&picked), "name": person.name}));
-                    app.ui.people_sel.clear();
-                    after(app, ui.ctx(), r);
-                }
-                if text_button(ui, "similarNo", "no.", false).on_hover_text(crate::i18n::tr_format!("These aren't {n}", n = person.name)).clicked() {
-                    let r = app.run("people.reject", json!({"faces": faces_json(&picked), "name": person.name}));
-                    app.ui.people_sel.clear();
-                    after(app, ui.ctx(), r);
-                }
-            });
-            ui.add_space(12.0);
+        let similar_open = section(ui, "Similar", person.similar.len(), Some(&similar_keys), app);
+        if similar_open {
+            let picked: Vec<&FaceInfo> = person.similar.iter().filter(|f| app.ui.people_sel.contains(&key(f))).collect();
+            if !picked.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add_space(PAD);
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if text_button(ui, "similarYes", "yes.", false).on_hover_text(crate::i18n::tr_format!("These are {n}", n = person.name)).clicked()
+                    {
+                        let r = app.run("people.name", json!({"faces": faces_json(&picked), "name": person.name}));
+                        app.ui.people_sel.clear();
+                        after(app, ui.ctx(), r);
+                    }
+                    if text_button(ui, "similarNo", "no.", false)
+                        .on_hover_text(crate::i18n::tr_format!("These aren't {n}", n = person.name))
+                        .clicked()
+                    {
+                        let r = app.run("people.reject", json!({"faces": faces_json(&picked), "name": person.name}));
+                        app.ui.people_sel.clear();
+                        after(app, ui.ctx(), r);
+                    }
+                });
+                ui.add_space(12.0);
+            }
+            face_grid(app, ui, &person.similar, &similar_keys, cols, cell, ppp, Some(&person.name));
+            ui.add_space(GAP);
         }
-        face_grid(app, ui, &person.similar, &similar_keys, cols, cell, ppp, Some(&person.name));
-        ui.add_space(GAP);
-        section(ui, "Confirmed", person.faces.len(), Some(&confirmed_keys), app);
+        if !section(ui, "Confirmed", person.faces.len(), Some(&confirmed_keys), app) {
+            return;
+        }
         let picked: Vec<&FaceInfo> = person.faces.iter().filter(|f| app.ui.people_sel.contains(&key(f))).collect();
         if !picked.is_empty() {
             ui.horizontal(|ui| {
@@ -657,7 +675,10 @@ fn person_page(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &lightcraft_e
                     app.ui.people_sel.clear();
                     after(app, ui.ctx(), r);
                 }
-                if text_button(ui, "confirmedRemove", "remove.", false).on_hover_text(crate::i18n::tr("Not a face: remove these face boxes")).clicked() {
+                if text_button(ui, "confirmedRemove", "remove.", false)
+                    .on_hover_text(crate::i18n::tr("Not a face: remove these face boxes"))
+                    .clicked()
+                {
                     let r = app.run("people.removeFaces", json!({"faces": faces_json(&picked)}));
                     app.ui.people_sel.clear();
                     after(app, ui.ctx(), r);

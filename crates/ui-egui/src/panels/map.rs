@@ -446,7 +446,9 @@ fn canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, area: Rect, pins: &[(u64, 
         register(ui.ctx(), "map:unplaced", cr);
         chip_top = cr.top();
         if cresp
-            .on_hover_text(crate::i18n::tr("Not on the map: no GPS position. Click to show just them, then drag them onto the map or use Place & Tags in the Library"))
+            .on_hover_text(crate::i18n::tr(
+                "Not on the map: no GPS position. Click to show just them, then drag them onto the map or use Place & Tags in the Library",
+            ))
             .clicked()
             && let Err(e) = app.run("map.locationFilter", json!({"mode": "untagged"}))
         {
@@ -470,9 +472,14 @@ pub fn left(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let width = app.ui.left_width;
     let resized = super::resizable_side(ui, true, "left_panel", frame, width, crate::state::LEFT_WIDTH, 0.0, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
-        let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
+        // the title folds the list of saved locations (remembered, crate::folds); add. and clear.
+        // are drawn over it and keep their clicks
+        let (hr, hresp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
+        let open = crate::folds::toggle_on_click(ui, &hresp, "map.saved.locations");
+        register(ui.ctx(), "fold:map.saved.locations", hr);
+        crate::folds::paint_triangle(ui, pos2(hr.left() + 18.0, hr.center().y), open, t.text_dim);
         ui.painter().text(
-            pos2(hr.left() + 18.0, hr.center().y),
+            pos2(hr.left() + 30.0, hr.center().y),
             Align2::LEFT_CENTER,
             crate::i18n::tr("Saved Locations"),
             t.semibold(13.5),
@@ -497,7 +504,7 @@ pub fn left(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let list = locations(app);
         egui::ScrollArea::vertical().id_salt("map-locations").auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
             ui.add_space(6.0);
-            if list.is_empty() {
+            if open && list.is_empty() {
                 let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 64.0), Sense::hover());
                 let g = ui.painter().layout(
                     crate::i18n::tr("No saved locations yet: move the map to a place and press add.").to_string(),
@@ -507,7 +514,7 @@ pub fn left(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 );
                 ui.painter().galley(r.min + vec2(18.0, 8.0), g, t.text_dim);
             }
-            for l in &list {
+            for l in list.iter().filter(|_| open) {
                 location_row(app, ui, l, &t);
             }
             // Classic's Map module lists Collections under Saved Locations: a click (or one of a

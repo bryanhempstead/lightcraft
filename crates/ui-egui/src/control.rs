@@ -39,7 +39,10 @@ pub enum Outcome {
     Done(Value),
     /// Not yet: handle the same request again on a later frame (a widget being scrolled into view).
     Retry,
-    Screenshot { path: Option<String>, headless: bool },
+    Screenshot {
+        path: Option<String>,
+        headless: bool,
+    },
 }
 
 fn ok(v: Value) -> Outcome {

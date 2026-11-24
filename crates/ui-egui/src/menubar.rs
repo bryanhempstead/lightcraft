@@ -477,8 +477,22 @@ fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>> {
             v.push(item("app.externalEditor", json!({"app": ""}), crate::i18n::tr("System Default"), None, true, Some(current.is_empty())));
             v.push(MenuNode::Separator);
             let s = &app.ui.settings;
-            v.push(item("app.externalEditor", json!({"format": "psd"}), crate::i18n::tr("Edit a PSD Copy"), None, true, Some(s.external_format != "tiff")));
-            v.push(item("app.externalEditor", json!({"format": "tiff"}), crate::i18n::tr("Edit a TIFF Copy"), None, true, Some(s.external_format == "tiff")));
+            v.push(item(
+                "app.externalEditor",
+                json!({"format": "psd"}),
+                crate::i18n::tr("Edit a PSD Copy"),
+                None,
+                true,
+                Some(s.external_format != "tiff"),
+            ));
+            v.push(item(
+                "app.externalEditor",
+                json!({"format": "tiff"}),
+                crate::i18n::tr("Edit a TIFF Copy"),
+                None,
+                true,
+                Some(s.external_format == "tiff"),
+            ));
             v.push(item(
                 "app.externalEditor",
                 json!({"holdGrain": !s.external_hold_grain}),

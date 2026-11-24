@@ -155,7 +155,9 @@ fn ctrl_as_cmd(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     }) else {
         return false;
     };
-    let mods_match = |p: Modifiers, ctrl: bool| p.alt == m.alt && p.shift == m.shift && if ctrl { p.ctrl && !p.mac_cmd } else { p.mac_cmd || (p.command && !p.ctrl) };
+    let mods_match = |p: Modifiers, ctrl: bool| {
+        p.alt == m.alt && p.shift == m.shift && if ctrl { p.ctrl && !p.mac_cmd } else { p.mac_cmd || (p.command && !p.ctrl) }
+    };
     let is = |sc: &str, ctrl: bool| parse(sc).is_some_and(|(p, k)| k == key && mods_match(p, ctrl));
     let ctrl_combo = Combo { cmd: false, ctrl: true, alt: m.alt, shift: m.shift, trigger: Trigger::Key(key) };
     let overlay = app.keymap.overlay().to_vec();
@@ -173,7 +175,9 @@ fn ctrl_as_cmd(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
         None => crate::menus::ui_commands()
             .find(|(_, _, sc, _)| sc.is_some_and(|s| is(s, false)))
             .map(|(id, _, _, _)| (id.to_string(), json!({})))
-            .or_else(|| lightcraft_engine::command_specs().iter().find(|c| c.shortcut.is_some_and(|s| is(s, false))).map(|c| (c.id.to_string(), json!({})))),
+            .or_else(|| {
+                lightcraft_engine::command_specs().iter().find(|c| c.shortcut.is_some_and(|s| is(s, false))).map(|c| (c.id.to_string(), json!({})))
+            }),
     };
     let Some((cmd, params)) = run else { return false };
     ctx.input_mut(|i| i.consume_key(m, key));
@@ -195,7 +199,10 @@ fn tap_or_hold_h(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     let (down, pressed) = ctx.input(|i| {
-        let fresh = i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::H, pressed: true, repeat: false, modifiers, .. } if modifiers.is_none()));
+        let fresh = i
+            .events
+            .iter()
+            .any(|e| matches!(e, egui::Event::Key { key: Key::H, pressed: true, repeat: false, modifiers, .. } if modifiers.is_none()));
         (i.key_down(Key::H) && i.modifiers.is_none(), fresh)
     });
     // every plain H press (and its key repeats) is ours: the old action must not also fire on press
@@ -218,7 +225,6 @@ fn tap_or_hold_h(app: &mut LightcraftApp, ctx: &egui::Context) {
         ctx.request_repaint_after(H_HOLD.saturating_sub(at.elapsed()));
     }
 }
-
 
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     crate::widgets::take_wheel_for_picked_slider(ctx);
@@ -253,7 +259,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             return;
         }
         let arrows = ctx.input(|i| {
-            !i.modifiers.command && !i.modifiers.alt && [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight].iter().any(|k| i.key_pressed(*k))
+            !i.modifiers.command
+                && !i.modifiers.alt
+                && [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight].iter().any(|k| i.key_pressed(*k))
         });
         if arrows {
             return;

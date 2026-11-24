@@ -73,7 +73,9 @@ fn tile_layout(width: f32, label_w: f32) -> (usize, f32) {
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
-    header(ui, "Masking");
+    if !header(ui, "Masking") {
+        return;
+    }
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
         ui.add_space(6.0);
@@ -94,10 +96,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ("depthRange", "depth.", Icon::Sliders),
         ];
         // four 52 pt tiles a row when they fit, else as many as fit (at least three, shrunk)
-        let label_w = tiles
-            .iter()
-            .map(|(_, l, _)| ui.painter().layout_no_wrap(l.to_string(), t.font(10.5), t.text_dim).size().x)
-            .fold(0.0, f32::max);
+        let label_w = tiles.iter().map(|(_, l, _)| ui.painter().layout_no_wrap(l.to_string(), t.font(10.5), t.text_dim).size().x).fold(0.0, f32::max);
         let (cols, tile) = tile_layout(ui.available_width(), label_w);
         egui::Grid::new("mask-tiles").spacing(vec2(TILE_GAP, TILE_GAP)).show(ui, |ui| {
             for (i, (kind, label, icon)) in tiles.iter().enumerate() {
@@ -177,15 +176,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
     // mask list
     egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 8 }).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(crate::i18n::tr("Masks")).font(t.semibold(13.0)).color(t.text_label));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let on = app.ui.mask_overlay;
-                if icon_button(ui, "maskOverlay", Icon::Eye, vec2(24.0, 24.0), on, true, "Show overlay (O)").clicked() {
-                    app.ui.mask_overlay = !on;
-                }
-            });
-        });
+        let open = ui
+            .horizontal(|ui| {
+                // the list folds to its title (remembered, crate::folds)
+                let open = crate::folds::label(ui, "masking.masks", "Masks", 13.0, t.text_label);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let on = app.ui.mask_overlay;
+                    if icon_button(ui, "maskOverlay", Icon::Eye, vec2(24.0, 24.0), on, true, "Show overlay (O)").clicked() {
+                        app.ui.mask_overlay = !on;
+                    }
+                });
+                open
+            })
+            .inner;
+        if !open {
+            return;
+        }
         if d.masks.is_empty() {
             ui.label(egui::RichText::new(crate::i18n::tr("No masks yet. Choose a mask type above.")).color(t.text_dim));
         }
@@ -822,15 +828,20 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     ui.add_space(12.0);
     let people = p.kind == "people";
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::tr(if people { "People" } else { "Landscape" })).font(t.semibold(13.0)).color(t.text_label));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if text_button(ui, "aiPickClose", "close.", false).clicked() {
-                app.ui.ai_pick = None;
-            }
-        });
-    });
-    if app.ui.ai_pick.is_none() {
+    let open = ui
+        .horizontal(|ui| {
+            // folds to its title (remembered, crate::folds)
+            let (fold, title) = if people { ("masking.people", "People") } else { ("masking.landscape", "Landscape") };
+            let open = crate::folds::label(ui, fold, title, 13.0, t.text_label);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if text_button(ui, "aiPickClose", "close.", false).clicked() {
+                    app.ui.ai_pick = None;
+                }
+            });
+            open
+        })
+        .inner;
+    if app.ui.ai_pick.is_none() || !open {
         return;
     }
     ui.add_space(8.0);
