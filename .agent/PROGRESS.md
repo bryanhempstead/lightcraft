@@ -71,6 +71,12 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
     Leica M apertures (6,154 repaired), presets' Look → profile (29 linked), Set Lens + lens list (Heliar 1:4.5/15,
     Summicron-M 1:2/35, 1:2/50, Leitz Elmar 1:4/135), quick tools after `|` (center./dust.), WB pick., file-type
     tags, delete → next photo, crop grid while adjusting, no stale 1:1 tiles, every action bindable + searchable.
+  - 20:15 UPDATE: ALSO merged + pushed + in the running app: `agent-map-tags` (fixVoidGps 6,474 + fixLensNames 7,567
+    APPLIED on Bryan's library), `agent-crop-lens` (Bryan: Heliar II = auto pick OK; his Summicron 35 is the OLD non-ASPH —
+    no Adobe profile exists, ASPH profile is the closest auto pick), `agent-pipeline` (Second Brain side committed
+    d71a66e). PhotoCraft English-only + green icon installed in /Applications. RUNNING: `agent-hitch` (~/crafts/lc-hitch:
+    UI-thread stall per committed edit — XMP/StemOwners/persist; Shadows start stall; crop-dial throughput),
+    `agent-labels` (~/crafts/lc-labels + ~/crafts/pc-labels: full-word labels, list of non-collapsible sections).
   - 18:55 UPDATE: committed + pushed + in the running app: wheel/edge tabs/vignette/Ctrl→⌘/Esc/WB dropper (4190614fb),
     importRated keeps LightCraft stars/flags/labels on photos already in the library, merges of `english-only`
     (+ Settings ▸ Language kept with english. only — Bryan: "I only meant English only as the language options"),
