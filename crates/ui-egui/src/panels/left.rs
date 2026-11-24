@@ -2248,6 +2248,12 @@ fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, tree: &[FolderNode], 
             if found > 0 {
                 merges_row(app, ui, lightcraft_engine::merge_find::Scope::Folder { path: last.path.clone(), deep }, found, indent + 16.0);
             }
+            // pipeline.editing: a shoot in Second Brain's pipeline (on its topmost row only)
+            if let Some(pipe) = crate::sb_pipeline::current(app, ui)
+                && let Some(mark) = crate::sb_pipeline::row_mark(&pipe, &n.path, &last.path)
+            {
+                pipeline_row(app, ui, &last.path, mark, indent + 16.0);
+            }
         }
         if open && !children.is_empty() {
             folder_rows(app, ui, tree, children, indent + 16.0, gone);
@@ -2272,6 +2278,20 @@ fn merges_row(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: lightcraft_engi
     ));
     if resp.clicked()
         && let Err(e) = app.run("library.source", params)
+    {
+        app.toast(ui.ctx(), e);
+    }
+}
+
+/// pipeline.<stage>: a row under a folder that is a shoot in Second Brain's pipeline (its stage, or
+/// `pipeline.pending` when sent from here and not taken yet); a click shows the folder.
+fn pipeline_row(app: &mut LightcraftApp, ui: &mut egui::Ui, folder: &str, mark: lightcraft_engine::sb_pipeline::Mark<'_>, indent: f32) {
+    let tag = mark.tag();
+    let id = format!("pipeline:{folder}");
+    let resp = row_ex(app, ui, &id, Icon::Activity, &tag, Some(&tag), None, false, indent, &RowExtra::default());
+    let resp = resp.on_hover_text(crate::sb_pipeline::describe(mark));
+    if resp.clicked()
+        && let Err(e) = app.run("library.source", json!({"kind": "libraryFolder", "path": folder}))
     {
         app.toast(ui.ctx(), e);
     }
@@ -2444,6 +2464,20 @@ fn folder_menu_for_library(app: &mut LightcraftApp, resp: &egui::Response, n: &F
         }
         if !gone && menu_item(ui, "import", "import.", "Import from here: the Import window, reading this folder").clicked() {
             import_from(app, ui.ctx(), path);
+            ui.close();
+        }
+        // a folder not in Second Brain's shoot pipeline yet can be sent there (it lands in editing)
+        let in_pipeline = crate::sb_pipeline::current(app, ui).is_some_and(|p| p.mark(path).is_some());
+        if !in_pipeline
+            && menu_item(
+                ui,
+                "sendToPipeline",
+                "send.to.pipeline.",
+                "Send this folder to Second Brain's shoot pipeline: asks about its backup, then it lands in editing",
+            )
+            .clicked()
+        {
+            crate::sb_pipeline::open_dialog(app, path);
             ui.close();
         }
         ui.separator();

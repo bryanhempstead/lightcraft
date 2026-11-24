@@ -163,6 +163,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::RemoveFolder { .. } => "Remove Folder from Library",
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
         Dialog::Backups { .. } => "Catalog Backups",
+        Dialog::SendToPipeline { .. } => "send.to.pipeline.",
         Dialog::About => "About LightCraft",
         Dialog::Shortcuts => "Keyboard Shortcuts",
         Dialog::LightroomSync { .. } => "Sync from Lightroom Classic",
@@ -669,6 +670,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                 }
                 Dialog::Backups { pick } => backups_body(app, ui, pick),
+                Dialog::SendToPipeline { path, name, backup } => crate::sb_pipeline::dialog_body(app, ui, path, name, backup),
                 Dialog::RemoveFolder { name, count, path, disk } => {
                     ui.label(crate::i18n::tr_format!(
                         "Remove “{name}” and its {count} photo{} from the library?",
@@ -792,6 +794,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let cancel = match &dlg {
                     Dialog::SamModel { .. } if sam_running || sam_installed || sam_nowhere => "Close",
                     Dialog::SamModel { .. } => "Not Now",
+                    Dialog::SendToPipeline { .. } => "cancel.",
                     _ => "Cancel",
                 };
                 if !informational {
@@ -832,6 +835,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     Dialog::Backups { pick: Some(_) } => "restore.",
                     Dialog::Backups { .. } => "",
                     Dialog::RemoveFolder { .. } => "Remove",
+                    Dialog::SendToPipeline { .. } => "ok.",
                     Dialog::SamModel { then: Some(_), .. } if sam_installed => "Continue",
                     Dialog::SamModel { .. } if sam_installed || sam_running || sam_nowhere => "",
                     Dialog::SamModel { error, .. } if error.is_some() || sam_failed => "Try Again",
@@ -844,7 +848,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     _ => "OK",
                 };
                 ok_button = (!ok.is_empty(), informational);
-                let r = (!ok.is_empty()).then(|| ui.button(crate::i18n::tr(ok)));
+                // the accent ok. (Return presses it)
+                let accent = matches!(dlg, Dialog::SendToPipeline { .. });
+                let r = (!ok.is_empty()).then(|| {
+                    if accent {
+                        ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr(ok)).color(egui::Color32::WHITE)).fill(t.accent))
+                    } else {
+                        ui.button(crate::i18n::tr(ok))
+                    }
+                });
                 if let Some(r) = &r {
                     crate::widgets::register(ui.ctx(), "button:dialogOk", r.rect);
                 }
@@ -1185,6 +1197,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             Ok(r)
         }
         Dialog::Backups { pick: None } => Ok(serde_json::Value::Null),
+        Dialog::SendToPipeline { path, name, backup } => crate::sb_pipeline::confirm(app, path, name, *backup),
         Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. } => Ok(serde_json::Value::Null),
     }
 }

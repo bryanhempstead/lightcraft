@@ -1229,6 +1229,12 @@ pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 );
             });
         }
+        // Second Brain's shoot pipeline: "from the second brain pipeline · editing", or send.to.pipeline.
+        if let lightcraft_catalog::Source::File { path } = &p.source
+            && let Some(dir) = std::path::Path::new(path).parent().map(|d| d.to_string_lossy().to_string())
+        {
+            crate::sb_pipeline::info_line(app, ui, &dir);
+        }
         ui.add_space(4.0);
         small(ui, "Captured");
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {

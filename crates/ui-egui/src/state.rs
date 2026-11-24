@@ -1395,6 +1395,13 @@ pub enum Dialog {
         /// A whole disk or share (`library.removeFolder` takes it only on request).
         disk: bool,
     },
+    /// send.to.pipeline.: a folder into Second Brain's shoot pipeline, with what to do about its
+    /// backup (`pipeline.add`).
+    SendToPipeline {
+        path: String,
+        name: String,
+        backup: lightcraft_engine::sb_pipeline::Backup,
+    },
     /// File ▸ Restore Library from Backup…: the catalog backups, one picked to restore.
     Backups {
         pick: Option<String>,
