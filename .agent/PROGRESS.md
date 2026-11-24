@@ -12,20 +12,15 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
     Leica M apertures (6,154 repaired), presets' Look → profile (29 linked), Set Lens + lens list (Heliar 1:4.5/15,
     Summicron-M 1:2/35, 1:2/50, Leitz Elmar 1:4/135), quick tools after `|` (center./dust.), WB pick., file-type
     tags, delete → next photo, crop grid while adjusting, no stale 1:1 tiles, every action bindable + searchable.
-  - UNCOMMITTED ON MAIN (written, full ui-egui test run was in progress — rerun, fix, commit): picked slider takes
-    the wheel from anywhere (`widgets::take_wheel_for_picked_slider` in shortcuts::handle); edge tabs
-    (`panels::edge_toggles`); centre mask = darkening vignette + Settings ▸ Develop ▸ Center mask
-    (`settings::center_mask_rows`, `menus::default_center_mask` invert:true, −0.6 EV, feather 85); Ctrl+key →
-    ⌘ command when Ctrl+key unbound (`shortcuts::ctrl_as_cmd`, his NEBULA68B layer 1 has LCTL in the ⌘ spot);
-    Esc in Develop deselects (mask/spot, then multi-selection), never leaves Develop (`view.back`); WB dropper
-    cursor drawn at pointer + W toggles (`tool.wbPicker`). Tests updated in tests_keys.rs / tests_classic.rs.
-  - BRANCHES READY TO MERGE (one at a time, test after each): `english-only` (~/crafts/lightcraft-english
-    141cb56a4; PhotoCraft ~/crafts/photocraft-english 501c7f0 — merge there too, rebuild PhotoCraft app with
-    packaging/macos/package.sh --arch aarch64 + MACOS_SIGN_IDENTITY, re-install /Applications/PhotoCraft.app and
-    re-apply the green Ps icon from ~/crafts/photocraft-icon/photocraft-ps.icns, re-sign with --options runtime
-    --entitlements packaging/macos/entitlements.plist); `agent-panels-dialogs` (d21aaa5d0: panel reorder +
-    default-open, Enhance pan/zoom + accent ok., left-off resume at launch; may conflict in panels/edit.rs with lens work).
-  - AGENTS STILL RUNNING (worktrees): `agent-crop-lens` (~/crafts/lc-crop-lens: crop X dial moving Y, lens profile
+  - 18:55 UPDATE: committed + pushed + in the running app: wheel/edge tabs/vignette/Ctrl→⌘/Esc/WB dropper (4190614fb),
+    importRated keeps LightCraft stars/flags/labels on photos already in the library, merges of `english-only`
+    (+ Settings ▸ Language kept with english. only — Bryan: "I only meant English only as the language options"),
+    `agent-panels-dialogs`, `agent-accents` (aae157105). Worktree target/ dirs of those deleted. Second Brain ingest
+    fixes committed (2d53198) + app restarted; photo_app = lc (Bryan). Stale HOLD-REQUEST cleared (Bryan OK).
+    PhotoCraft: english-only merged (eb74db9, PhotoCraft ▸ Language ▸ English kept), green Ps icon now in
+    assets/app-icon (d64757d) — package + install to /Applications pending.
+    Agent builds were SIGSTOPped so merges went first (scratchpad agent-builds.sh stop|cont) — resume them.
+  - AGENTS STILL RUNNING (worktrees; + `agent-pipeline` ~/crafts/lc-pipeline: 2nd-brain pipeline tag + send.to.pipeline.): `agent-crop-lens` (~/crafts/lc-crop-lens: crop X dial moving Y, lens profile
     corrections per lens, preview/console lag — Bryan: "still preview lag"), `agent-accents` (~/crafts/lc-accents:
     up to 4 accent colours, wheel + presets, roles), `agent-map-tags` (~/crafts/lc-map-tags: no-GPS photos off the
     map, void GPS fix (M262 GPSStatus=V → 6,474 photos at 0,0) + repair, lens placeholders "not selected" → none +
