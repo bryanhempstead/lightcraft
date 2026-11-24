@@ -6,6 +6,28 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (pipeline agent, 2026-11-23, branch `agent-pipeline` in ~/crafts/lc-pipeline, not merged) **LC-SB-PIPELINE: Second
+  Brain shoot pipeline marks + send.to.pipeline.** (Bryan: "add an area that marks that it came from the 2nd brain
+  pipeline … if it's not then I can retroactively put it there … mark or ask if I want it backed up and then put it in
+  the currently editing area"). Engine `crates/engine/src/sb_pipeline.rs`: reads `<SB userData>/shootpipe.json`
+  READ-ONLY (Session.second_brain_dir / LIGHTCRAFT_SECOND_BRAIN_DIR / ~/Library/Application Support/second-brain),
+  re-read only when its mtime/size or the inbox changes; bad/missing file = no marks. `cmd:pipeline.status {folder?}`,
+  `cmd:pipeline.add {folder, backup: run|done|skip, name?}` → a request file in `<SB userData>/lightcraft-inbox/<id>.json`
+  (temp + rename; LightCraft NEVER writes shootpipe.json) + a best-effort nudge `POST /v1/pipeline/inbox` on SB's
+  gallery API. UI `crates/ui-egui/src/sb_pipeline.rs`: `pipeline.<stage>` row under the shoot's topmost Folders row
+  (left.rs `pipeline_row`, stage words: imported, backed.up, culling, editing, exporting, delivering, posting,
+  finished; `pipeline.pending` until SB takes a request), Info line "from the second brain pipeline · editing" /
+  `send.to.pipeline.`, folder right-click `send.to.pipeline.` → `Dialog::SendToPipeline` (back.up. /
+  already.backed.up. / skip., cancel. + accent ok., Return = ok.). Tests: engine `tests_sb_pipeline.rs`, ui-egui
+  `tests_sb_pipeline.rs` (rows, info, stage change, dialog layout audit, queue + pending).
+  Second Brain side (in ~/second-brain, see its board): src/shootpipe.js `fromLightCraft` + `drainInbox` + launch /
+  fs.watch / 60 s pickup, src/galleryapi.js route, test/shootpipe-lightcraft.test.js. Live only after SB restarts.
+  Verified: `cargo test --release -p lightcraft-engine -p lightcraft-ui-egui --lib` 635 + 403 green; clippy -D warnings
+  green for ui-egui and for engine with `--features sam,enhance` (engine alone without features fails on 2 dead-code
+  items already on main: genremove.rs Shared::set/current, remove_detect.rs remove_found_add). Not tried in the
+  running app (not restarted). Second Brain part UNCOMMITTED (hold blocked by a stale ask; needs.you #224).
+  Left: merge this branch; restart both apps (ask first); Bryan tries it on a real folder (needs.you #225).
+
 - [ ] (Claude fix session, 2026-11-23 16:20) **Bryan's 11-23 list — HANDOFF STATE (read this first)**
   - DONE + in the running app: sharp loupe/exports, console = one drag, fav. (tap/hold H), picked sliders, sync from
     first pick + Return = OK, Edit In ⌘E → PhotoCraft (PSD, grain held), wheel steps photos, merges. (merged),
