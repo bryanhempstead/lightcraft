@@ -41,6 +41,8 @@ pub fn source_title(session: &lightcraft_engine::Session) -> String {
             Some(p) => format!("{} › {}", source.label(&session.catalog), p.title),
             None => source.label(&session.catalog),
         },
+        // merges.: whose (`Erika › merges.`)
+        (lightcraft_engine::LibrarySource::Merges, _) => session.merges_scope.clone().unwrap_or_default().title(&session.catalog),
         (source, _) => source.label(&session.catalog),
     }
 }

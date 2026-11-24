@@ -125,6 +125,12 @@ fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, options: &[(V, &str
 // ------------------------------------------------------------------------------------- General
 
 fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    // English is the only language installed (Bryan, 11-23: the other languages' files are gone to
+    // save space; the setting stays and shows what is there)
+    row(ui, t, crate::i18n::tr("Language"), |ui| {
+        let mut english = 0u8;
+        choices(ui, "settingsLanguage", &[(0u8, "english.")], &mut english);
+    });
     heading(ui, t, crate::i18n::tr("Library"));
     let location = match &app.session.library {
         Some(l) => l.dir.display().to_string(),
