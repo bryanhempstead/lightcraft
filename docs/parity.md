@@ -25,7 +25,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | B. Library management (LIB) | 24 | 0 | 1 | 2 | 9/9 (100%) | 9/9 (100%) |
 | C. Views & navigation (VIEW) | 17 | 1 | 0 | 0 | 10/10 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 13 | 0 | 0 | 0 | 4/4 (100%) | 4/4 (100%) |
-| E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
+| E. Metadata (META) | 6 | 0 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
 | F. Edit panel — global adjustments (EDIT) | 45 | 5 | 0 | 1 | 24/28 (86%) | 14/15 (93%) |
 | G. Profiles (PROF) | 9 | 2 | 0 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
@@ -47,10 +47,10 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | X. Cross-cutting behaviours (BEHAV) | 17 | 4 | 0 | 2 | 8/8 (100%) | 6/8 (75%) |
 | Y. Menus | 83 | 1 | 1 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 82 | 0 | 0 | 0 | 52/52 (100%) | 24/24 (100%) |
-| Lightroom Classic extras | 81 | 18 | 30 | 9 | — | 38/39 (97%) |
-| **Total** | 496 | 41 | 32 | 36 | 194/201 (97%) | 168/174 (97%) |
+| Lightroom Classic extras | 82 | 19 | 30 | 8 | — | 38/39 (97%) |
+| **Total** | 498 | 41 | 32 | 35 | 194/201 (97%) | 168/174 (97%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.8%** of 569 in-scope rows — P0 98.3% of 201 · P1 98.3% of 174 · P2 76.4% of 193.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **90.8%** of 571 in-scope rows — P0 98.3% of 201 · P1 98.3% of 174 · P2 76.8% of 194.
 <!-- /parity:summary -->
 
 ## Top gaps
