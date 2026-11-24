@@ -27,7 +27,7 @@ fn point_color_pick_and_adjust() {
     assert_eq!(r["index"], 0);
     let d = active_dev(&s);
     assert_eq!(d.point_colors.len(), 1);
-    assert!(d.point_colors[0].chroma > 0.01, "the sky has colour: {r}");
+    assert!(d.point_colors[0].chroma > 0.01, "the sky has color: {r}");
     // the sample's sliders are develop controls (and listed as such)
     s.execute("develop.set", &json!({"control": "pointColor.0.satShift", "value": -100})).unwrap();
     assert_eq!(active_dev(&s).point_colors[0].sat_shift, -100.0);

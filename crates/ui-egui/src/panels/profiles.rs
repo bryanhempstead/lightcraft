@@ -49,16 +49,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let tools = Rect::from_min_max(pos2(hr.left() + 140.0, hr.top() + 11.0), pos2(hr.right() - MARGIN_R, hr.bottom() - 11.0));
     let mut right = ui.new_child(egui::UiBuilder::new().max_rect(tools).layout(egui::Layout::right_to_left(egui::Align::Center)));
     right.spacing_mut().item_spacing.x = 8.0;
-    if text_button(&mut right, "profileImport", "imp.", false).on_hover_text(crate::i18n::tr("Import Profiles (.xmp, .dcp, .cube, .zip)")).clicked() {
+    if text_button(&mut right, "profileImport", "import.", false).on_hover_text(crate::i18n::tr("Import Profiles (.xmp, .dcp, .cube, .zip)")).clicked() {
         let _ = app.run("file.importPresets", json!({}));
     }
-    if text_button(&mut right, "profileManage", "mng.", manage).on_hover_text(crate::i18n::tr("Manage Profiles: show or hide groups")).clicked() {
+    if text_button(&mut right, "profileManage", "manage.", manage).on_hover_text(crate::i18n::tr("Manage Profiles: show or hide groups")).clicked() {
         manage = !manage;
         right.data_mut(|m| m.insert_temp(manage_id, manage));
     }
     if manage
         && !app.session.profile_hidden_groups.is_empty()
-        && text_button(&mut right, "profileReset", "rst.", false).on_hover_text(crate::i18n::tr("Show every group again")).clicked()
+        && text_button(&mut right, "profileReset", "reset.", false).on_hover_text(crate::i18n::tr("Show every group again")).clicked()
     {
         let _ = app.run("profile.groups.reset", json!({}));
     }
@@ -88,27 +88,28 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         _ => 0,
     };
     ui.add_space(12.0);
+    // the filter and the view on rows of their own: whole-word labels (black.and.white.) need
+    // the panel's width
     toolbar_row(ui, |ui| {
-        let half = ((ui.available_width() - 12.0) / 2.0).max(60.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 12.0;
-            ui.allocate_ui(vec2(half, 24.0), |ui| {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 10.0;
+            {
                 let i = match filter {
                     Filter::All => 0,
                     Filter::Color => 1,
                     Filter::Bw => 2,
                 };
-                if let Some(k) = segmented(ui, "profileFilter", &[("all.", "all"), ("clr.", "color"), ("b&w.", "bw")], Some(i), 3) {
+                if let Some(k) = segmented(ui, "profileFilter", &[("all.", "all"), ("color.", "color"), ("black.and.white.", "bw")], Some(i), 3) {
                     filter = [Filter::All, Filter::Color, Filter::Bw].get(k).copied().unwrap_or_default();
                     ui.data_mut(|m| m.insert_temp(filter_id, filter));
                 }
-            });
-            ui.allocate_ui(vec2(half, 24.0), |ui| {
-                if let Some(k) = segmented(ui, "profileView", &[("grid.", "grid"), ("lrg.", "large"), ("lst.", "list")], Some(view), 3) {
+            }
+            {
+                if let Some(k) = segmented(ui, "profileView", &[("grid.", "grid"), ("large.", "large"), ("list.", "list")], Some(view), 3) {
                     let v = ["grid", "large", "list"].get(k).copied().unwrap_or("grid");
                     let _ = app.run("profile.view", json!({"view": v}));
                 }
-            });
+            }
         });
     });
     ui.add_space(12.0);

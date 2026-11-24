@@ -301,7 +301,7 @@ const SELECTION_ACTIONS: &[(&str, &str, &str)] = &[
     ("align.", "develop.autoAlign", "Level every selected photo's horizon (⌘⌥⇧U)"),
     ("merge.", "dialog.merge", "Merge — pick HDR, panorama, HDR panorama, focus stack or best take (⌃⌥M)"),
     ("hdr.", "dialog.mergeHdr", "HDR merge — exposure brackets → one photo (⌃H)"),
-    ("pano.", "dialog.mergePanorama", "Panorama — overlapping photos → one wide photo (⌃M)"),
+    ("panorama.", "dialog.mergePanorama", "Panorama — overlapping photos → one wide photo (⌃M)"),
     ("focus.", "dialog.mergeFocus", "Focus stack — focused near to far → sharp throughout (⌃⌥F)"),
     ("take.", "dialog.mergeTake", "Best take — pick each person's face from the photo you like (⌃⌥T)"),
     ("stack.", "stack.group", "Stack the selected photos (⌘G)"),
@@ -914,7 +914,7 @@ fn parts_by_toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, header: Rect, rig
             .max_rect(Rect::from_min_max(pos2(right - 80.0, header.top()), pos2(right, header.bottom())))
             .layout(egui::Layout::right_to_left(egui::Align::Center)),
     );
-    if crate::widgets::text_button(&mut hdr, id, if by_cam { "cam." } else { "fldr." }, false)
+    if crate::widgets::text_button(&mut hdr, id, if by_cam { "camera." } else { "folder." }, false)
         .on_hover_text(crate::i18n::tr(if by_cam {
             "Under each shoot and collection (its triangle): the cameras that took its photos. Click for its folders"
         } else {
@@ -1480,7 +1480,7 @@ fn collections_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rec
                 {
                     by_kind = !by_kind;
                 }
-                if crate::widgets::text_button(ui, "collectionsFavorites", "fav.", fav_only)
+                if crate::widgets::text_button(ui, "collectionsFavorites", "favorites.", fav_only)
                     .on_hover_text(crate::i18n::tr("Favourites only"))
                     .clicked()
                 {
@@ -1588,7 +1588,7 @@ fn publish_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let busy = app.tasks.is_running(crate::publish_ui::PUBLISHING);
-                let label = if busy { "pub. …" } else { "pub." };
+                let label = if busy { "publish. …" } else { "publish." };
                 if crate::widgets::text_button(ui, "publishNow", label, false)
                     .on_hover_text(crate::i18n::tr("Publish New and Modified photos, remove Deleted ones"))
                     .clicked()
@@ -1606,7 +1606,7 @@ fn publish_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
                         app.toast(ui.ctx(), e);
                     }
                 }
-                if crate::widgets::text_button(ui, "publishRemove", "rem.", false)
+                if crate::widgets::text_button(ui, "publishRemove", "remove.", false)
                     .on_hover_text(crate::i18n::tr("Take the selected photos out (their copies are removed on the next publish)"))
                     .clicked()
                     && let Err(e) = app.run("publish.removePhotos", json!({"id": cid}))

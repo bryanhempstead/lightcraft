@@ -21,13 +21,13 @@ pub const TABS: &[(&str, &str)] = &[
     ("general", "General"),
     ("import", "Import"),
     ("performance", "Performance"),
-    ("backup", "bkup."),
+    ("backup", "backup."),
     ("interface", "Interface"),
     ("identity", "identity."),
-    ("develop", "dev.view."),
-    ("shortcuts", "shrt."),
-    ("controllers", "ctrl."),
-    ("cameras", "cams."),
+    ("develop", "develop.view."),
+    ("shortcuts", "shortcuts."),
+    ("controllers", "controllers."),
+    ("cameras", "cameras."),
 ];
 
 /// Thumbnail cache sizes offered (MB).
@@ -243,7 +243,7 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         if crate::widgets::text_button(ui, "editorFormat-psd", "psd.", psd).clicked() {
             app.ui.settings.external_format = "psd".into();
         }
-        if crate::widgets::text_button(ui, "editorFormat-tiff", "tif.", !psd).clicked() {
+        if crate::widgets::text_button(ui, "editorFormat-tiff", "tiff.", !psd).clicked() {
             app.ui.settings.external_format = "tiff".into();
         }
     });
@@ -525,7 +525,7 @@ fn backup_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, "", |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let can = app.services.pick_folder.is_some();
-        let r = ui.add_enabled(can, egui::Button::new("chg."));
+        let r = ui.add_enabled(can, egui::Button::new("change."));
         register(ui.ctx(), "button:settingsBackupFolder", r.rect);
         if r.clicked()
             && let Some(dir) = app.services.pick_folder.as_mut().and_then(|f| f())
@@ -866,7 +866,7 @@ fn identity_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let p = &mut app.ui.settings.identity_plate;
             check(ui, "identityOn", &mut p.on, "Show an identity plate");
             row(ui, t, "Plate", |ui| {
-                choices(ui, "identityKind", &[(PlateKind::Image, "img."), (PlateKind::Text, "txt.")], &mut p.kind);
+                choices(ui, "identityKind", &[(PlateKind::Image, "image."), (PlateKind::Text, "text.")], &mut p.kind);
             });
             let mut pick = false;
             let mut clear = false;
@@ -898,7 +898,7 @@ fn identity_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 choices(
                     ui,
                     "identityPlace",
-                    &[(Place::Bar, "bar."), (Place::Tl, "tl."), (Place::Tr, "tr."), (Place::Bl, "bl."), (Place::Br, "br.")],
+                    &[(Place::Bar, "bar."), (Place::Tl, "top.left."), (Place::Tr, "top.right."), (Place::Bl, "bottom.left."), (Place::Br, "bottom.right.")],
                     &mut p.place,
                 );
             });
@@ -906,7 +906,7 @@ fn identity_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 choices(
                     ui,
                     "identityCanvas",
-                    &[(Place::CanvasTl, "tl."), (Place::CanvasTr, "tr."), (Place::CanvasBl, "bl."), (Place::CanvasBr, "br.")],
+                    &[(Place::CanvasTl, "top.left."), (Place::CanvasTr, "top.right."), (Place::CanvasBl, "bottom.left."), (Place::CanvasBr, "bottom.right.")],
                     &mut p.place,
                 );
             });
@@ -929,7 +929,7 @@ fn identity_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             row(ui, t, "Show in", |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 for (id, label, on) in
-                    [("identityLibrary", "lib.", &mut p.library), ("identityDevelop", "dev.", &mut p.develop), ("identityMap", "map.", &mut p.map)]
+                    [("identityLibrary", "library.", &mut p.library), ("identityDevelop", "develop.", &mut p.develop), ("identityMap", "map.", &mut p.map)]
                 {
                     if crate::widgets::text_button(ui, id, label, *on).clicked() {
                         *on = !*on;
@@ -1379,7 +1379,7 @@ fn shortcuts_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         });
         register(ui.ctx(), "combo:keysDraftControl", r.response.rect);
         let rec = app.keymap.recording == Some(None);
-        if crate::widgets::text_button(ui, "keysRecord", if rec { "press keys…" } else { "rec." }, rec).clicked() {
+        if crate::widgets::text_button(ui, "keysRecord", if rec { "press.keys…" } else { "record." }, rec).clicked() {
             app.keymap.recording = if rec { None } else { Some(None) };
         }
     });
@@ -1430,10 +1430,10 @@ fn shortcuts_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                         .position(|b| crate::keymap::canonical(&b.keys) == r.keys && b.command == r.command && b.params == r.params);
                     if let Some(i) = idx {
                         let rec = app.keymap.recording == Some(Some(i));
-                        if crate::widgets::text_button(ui, &format!("keysRec-{n}"), if rec { "press…" } else { "rec." }, rec).clicked() {
+                        if crate::widgets::text_button(ui, &format!("keysRec-{n}"), if rec { "press…" } else { "record." }, rec).clicked() {
                             app.keymap.recording = if rec { None } else { Some(Some(i)) };
                         }
-                        if crate::widgets::text_button(ui, &format!("keysDel-{n}"), "del.", false).clicked() {
+                        if crate::widgets::text_button(ui, &format!("keysDel-{n}"), "delete.", false).clicked() {
                             let mut g = app.keymap.file.clone();
                             if i < g.bindings.len() {
                                 g.bindings.remove(i);
@@ -1443,7 +1443,7 @@ fn shortcuts_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     }
                 } else if !r.overridden {
                     // rebind a built-in / profile action to other keys, or switch its keys off
-                    if crate::widgets::text_button(ui, &format!("keysRec-{n}"), "rec.", false).clicked() {
+                    if crate::widgets::text_button(ui, &format!("keysRec-{n}"), "record.", false).clicked() {
                         app.keymap.draft = crate::keymap::Binding::new("", &r.command, r.params.clone(), &r.label);
                         app.keymap.recording = Some(None);
                     }
@@ -1585,7 +1585,7 @@ fn controllers_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 };
                 cell(ui, 280.0, RichText::new(what).color(t.text));
                 cell(ui, 110.0, RichText::new(&b.label).size(10.5).color(t.text_dim));
-                if crate::widgets::text_button(ui, &format!("midiDel-{i}"), "del.", false).clicked() {
+                if crate::widgets::text_button(ui, &format!("midiDel-{i}"), "delete.", false).clicked() {
                     let mut g = app.keymap.file.clone();
                     if i < g.midi.len() {
                         g.midi.remove(i);
@@ -1744,14 +1744,14 @@ fn cameras_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 let count = if photos == 0 { "added by hand".to_string() } else { format!("{photos} photo{}", plural(photos)) };
                 ui.label(RichText::new(count).size(11.0).color(t.text_dim));
                 let lenses = c["lenses"].as_array().map_or(0, Vec::len);
-                if lenses > 0 && crate::widgets::text_button(ui, &format!("settingsCameraLenses-{i}"), "ln.", is_open).clicked() {
+                if lenses > 0 && crate::widgets::text_button(ui, &format!("settingsCameraLenses-{i}"), "lenses.", is_open).clicked() {
                     if is_open {
                         open.retain(|n| n != &name);
                     } else {
                         open.push(name.clone());
                     }
                 }
-                if c["added"] == true && crate::widgets::text_button(ui, &format!("settingsCameraRemove-{i}"), "rem.", false).clicked() {
+                if c["added"] == true && crate::widgets::text_button(ui, &format!("settingsCameraRemove-{i}"), "remove.", false).clicked() {
                     remove = Some(name.clone());
                 }
             });

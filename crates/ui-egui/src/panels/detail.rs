@@ -1201,7 +1201,7 @@ fn missing_banner(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, phot
     let g1 = p.layout_no_wrap(head.to_string(), t.semibold(12.5), Color32::WHITE);
     let g2 = p.layout_no_wrap(format!("· {note}"), t.font(12.0), Color32::from_gray(200));
     let chip = |label: &str| p.layout_no_wrap(label.to_string(), t.semibold(11.5), Color32::WHITE);
-    let (c1, c2) = (chip("loc."), chip("fldr."));
+    let (c1, c2) = (chip("locate."), chip("folder."));
     let chip_w = |g: &std::sync::Arc<egui::Galley>| (g.size().x + 18.0).max(37.0);
     let (w1, w2) = (chip_w(&c1), chip_w(&c2));
     // icon 16 · 8 · head · 8 · note · 12 · chip · 8 · chip, 12 in from each end

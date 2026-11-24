@@ -219,7 +219,7 @@ fn label_param(s: &Session, c: &str, p: &Value) -> Result<Option<lightcraft_cata
             .or_else(|| lightcraft_catalog::ColorLabel::parse(x.trim()))
             .map(Some)
             .ok_or_else(|| bad(c, format!("unknown label `{x}`"))),
-        Some(_) => Err(bad(c, "`label` is a colour name or null")),
+        Some(_) => Err(bad(c, "`label` is a color name or null")),
     }
 }
 
@@ -261,7 +261,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Folder Label",
             [],
             None,
-            "{path, label: red|yellow|green|blue|purple|null} — the folder's colour label in Folders",
+            "{path, label: red|yellow|green|blue|purple|null} — the folder's color label in Folders",
             always,
             |s, p| {
                 let l = label_param(s, "folder.label", p)?;

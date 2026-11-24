@@ -122,7 +122,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
         4 => (Model::Cmyk, 4),
         7 => (Model::Gray, 1),
         9 => return Err(Error::Unsupported(F, "Lab PSD")),
-        _ => return Err(err("unknown colour mode")),
+        _ => return Err(err("unknown color mode")),
     };
     if channels < n_color {
         return Err(err("too few channels"));

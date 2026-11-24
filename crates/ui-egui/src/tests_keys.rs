@@ -744,7 +744,7 @@ fn sync_dialog_remembers_its_checkboxes() {
     let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, auto_align, match_color, .. }) = h.app.ui.dialog.clone() else {
         panic!("no sync dialog")
     };
-    assert!(!match_exposure && !auto_align && !match_color, "match exposure / auto align / match colour start off");
+    assert!(!match_exposure && !auto_align && !match_color, "match exposure / auto align / match color start off");
     // tick Match exposure, untick the first group, then cancel
     let first = groups[0].clone();
     if let Some(crate::state::Dialog::SyncSettings { groups, match_exposure, match_color, .. }) = &mut h.app.ui.dialog {

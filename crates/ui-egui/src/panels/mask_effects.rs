@@ -65,7 +65,7 @@ pub fn effect_row(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask) {
                 crate::panels::dialogs::prompt(app, "Save Effect", "Effect name", "", "mask.saveEffect", json!({"id": mask.id}), "name");
             }
             if let Some(name) = &current {
-                let del = ui.button("del.").on_hover_text(crate::i18n::tr("Delete this effect (the mask keeps its sliders)"));
+                let del = ui.button("delete.").on_hover_text(crate::i18n::tr("Delete this effect (the mask keeps its sliders)"));
                 register(ui.ctx(), "button:maskEffectDelete", del.rect);
                 if del.clicked()
                     && let Err(e) = app.run("mask.deleteEffect", json!({"name": name}))

@@ -322,7 +322,7 @@ fn convert(r: &RawReport, unpacked: bool) -> Result<Info> {
     let desc: Vec<char> = r.cdesc.chars().collect();
     let cfa_colors = match r.filters {
         0 => None,
-        1 => return Err(Error::Unsupported("Leaf 16×16 colour filter".into())),
+        1 => return Err(Error::Unsupported("Leaf 16×16 color filter".into())),
         _ => Some(()),
     };
     if cfa_colors.is_some() {
@@ -333,11 +333,11 @@ fn convert(r: &RawReport, unpacked: bool) -> Result<Info> {
                 Some('B') => 2,
                 // unused slots (3-colour sensors without a 4th index)
                 None if i == 3 => 1,
-                other => return Err(Error::Unsupported(format!("colour filter {:?} ({other:?})", r.cdesc))),
+                other => return Err(Error::Unsupported(format!("color filter {:?} ({other:?})", r.cdesc))),
             };
         }
         if r.colors != 3 {
-            return Err(Error::Unsupported(format!("{}-colour sensor", r.colors)));
+            return Err(Error::Unsupported(format!("{}-color sensor", r.colors)));
         }
     }
     let colors = Colors { r, map };

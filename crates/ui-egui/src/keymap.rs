@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 /// Key profiles: `(id, button label)`. `lightroom`: the built-ins (Lightroom desktop's keys, with
 /// Classic's P = pick and Z = zoom); `desktop`: Lightroom desktop exactly (Z picks, P = photos
 /// panel, [`DESKTOP`]); `classic`: Lightroom Classic ([`CLASSIC`]).
-pub const PROFILES: &[(&str, &str)] = &[("lightroom", "lr.p.picks."), ("desktop", "lr.z.picks."), ("classic", "lr.classic.")];
+pub const PROFILES: &[(&str, &str)] = &[("lightroom", "lightroom.p.picks."), ("desktop", "lightroom.z.picks."), ("classic", "lightroom.classic.")];
 
 /// Lightroom desktop's own keys where the built-ins keep Classic's (KEY-PICK, KEY-PHOTOSPANEL): Z
 /// flags a pick and P shows / hides the left (photos) panel; Space still toggles zoom.

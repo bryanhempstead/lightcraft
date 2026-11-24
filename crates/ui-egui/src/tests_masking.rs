@@ -59,7 +59,7 @@ fn mask_overlay_keys_and_pins() {
     let crop = h.app.ui.crop_overlay;
     let colour = h.app.ui.mask_overlay_color;
     h.request("ui.key", json!({"key": "o", "shift": true}), T);
-    assert_ne!(h.app.ui.mask_overlay_color, colour, "the next overlay colour");
+    assert_ne!(h.app.ui.mask_overlay_color, colour, "the next overlay color");
     assert_eq!(h.app.ui.mask_overlay_mode, "color", "the mode stays");
     assert_eq!(h.app.ui.crop_overlay, crop);
     exec(&mut h, "view.maskOverlayMode", json!({"mode": "whiteOnBlack"}));
@@ -612,7 +612,7 @@ fn soft_proofing_flags_out_of_gamut_colours_and_makes_proof_copies() {
     let st = exec(&mut h, "view.softProof", json!({"space": "srgb", "destWarning": true}));
     assert_eq!(st, json!({"on": true, "space": "srgb", "destWarning": true, "displayWarning": false}));
     h.settle(SETTLE);
-    assert!(red(&h) > before, "out-of-gamut colours are painted red");
+    assert!(red(&h) > before, "out-of-gamut colors are painted red");
     let r = h.request("engine.execute", json!({"command": "view.softProof", "params": {"space": "cmyk"}}), T);
     assert_ne!(r["ok"], true);
     // Create Proof Copy: a virtual copy named after the proof
@@ -716,4 +716,45 @@ fn automatic_masks_without_models() {
         assert!(!h.app.session.segmenter.parsers_download_status().running, "nothing downloads without a click");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Bryan's whole-word labels (11-23): every Create New Mask tile holds its label (`background.`,
+/// `luminance.` …) and the profile browser's segments (`black.and.white.`) hold theirs; neither
+/// has text clipped or overlapping (screenshots with `LIGHTCRAFT_TEST_SHOTS`).
+#[test]
+fn whole_word_labels_fit_mask_tiles_and_profile_segments() {
+    let services = Services {
+        png: Some(Box::new(|img: &lightcraft_raster::Rgba8| {
+            lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+        })),
+        write: Some(Box::new(|p: &str, b: &[u8]| std::fs::write(p, b).map_err(|e| e.to_string()))),
+        ..Default::default()
+    };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let fits = |h: &Headless, prefix: &str, want: usize| {
+        let boxes: Vec<(String, egui::Rect)> = h.app.widgets.iter().filter(|(w, _)| w.starts_with(prefix)).cloned().collect();
+        assert_eq!(boxes.len(), want, "{prefix}: {boxes:?}");
+        let texts = h.view.visible_texts();
+        for (w, r) in &boxes {
+            let (s, tr, _) = texts.iter().find(|(_, tr, _)| r.contains(tr.center())).unwrap_or_else(|| panic!("{w}: no label"));
+            assert!(tr.left() >= r.left() + 2.0 && tr.right() <= r.right() - 2.0, "{w}: {s:?} {tr:?} inside {r:?}");
+        }
+        let area = boxes.iter().fold(egui::Rect::NOTHING, |a, (_, r)| a.union(*r)).expand(4.0);
+        let faults = crate::tests_panels::layout_faults(h, area);
+        assert!(faults.is_empty(), "{prefix}: {faults:#?}");
+    };
+    let r = h.request("engine.execute", json!({"command": "panel.masking"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    fits(&h, "maskNew:", 13);
+    crate::tests_library2::shot(&mut h, "labels-mask-tiles.png");
+    let r = h.request("engine.execute", json!({"command": "panel.profiles"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    fits(&h, "button:profileFilter-", 3);
+    fits(&h, "button:profileView-", 3);
+    crate::tests_library2::shot(&mut h, "labels-profiles.png");
 }

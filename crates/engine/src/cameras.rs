@@ -501,9 +501,9 @@ pub fn notice(r: &Record) -> String {
     let profile = match r.profile_status() {
         "adobe" if r.matching.is_empty() => "Adobe Standard profile found".to_string(),
         "adobe" => format!("Adobe Standard + {} camera matching profile{} found", r.matching.len(), if r.matching.len() == 1 { "" } else { "s" }),
-        "embedded" => "colours from its DNG's own profile".to_string(),
+        "embedded" => "colors from its DNG's own profile".to_string(),
         "own" => "LightCraft's fitted profile".to_string(),
-        _ => "no Adobe profile on this Mac — LightCraft's own colour".to_string(),
+        _ => "no Adobe profile on this Mac — LightCraft's own color".to_string(),
     };
     let with = r.lenses.iter().filter(|l| l.profile.is_some()).count();
     let lenses = if r.lenses.is_empty() {

@@ -234,7 +234,7 @@ fn component(m: &XmpValue, aspect: f64, group: bool) -> Result<Value, String> {
                     let [a, b, c, _] = q[..] else { return Err("depth range".into()) };
                     json!({"kind": "depthRange", "lo": b, "hi": c, "feather": (b - a).max(0.0)})
                 }
-                _ => return Err("colour range".into()),
+                _ => return Err("color range".into()),
             }
         }
         other => return Err(if other.is_empty() { "unknown mask".into() } else { other.trim_start_matches("Mask/").to_string() }),

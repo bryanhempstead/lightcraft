@@ -6,6 +6,21 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (labels agent, 2026-11-23, branch `agent-labels` in ~/crafts/lc-labels, not merged) **Whole-word labels +
+  color.** Bryan's rule (SOUL 11-23): labels spell every word out, lowercase, periods for spaces, "color" never
+  "colour". ~90 labels renamed (clr. → clear./color., del. → delete., rem./rm./rmv. → remove., bkup. → backup., shrt. →
+  shortcuts., dev.view. → develop.view., ctrl. → controllers., cams. → cameras., tl./tr./bl./br. → top.left. …, subj./bg./
+  obj./ppl./desc./lin./rad./lum. → subject./background./… on the mask tiles, veg./mtn./arch./nat.gnd./art.gnd. →
+  vegetation./mountains./architecture./natural.ground./artificial.ground., b&w. → black.and.white., pano. → panorama.,
+  hdr.pano. → hdr.panorama. (catalog `MergeType::tag`), lc. → lightcraft., lr.* → lightroom.*, fav. → favorites., …);
+  widget/command ids untouched; colour → color in every string literal (comments/identifiers untouched).
+  Widths: mask tiles go 3 a row when a label needs it (`tile_layout`), `widgets::segmented` sizes segments by label
+  when equal widths don't fit, profile browser filter. / view. rows stacked, fix-note edit. button 36 pt. Layout
+  audit (`layout_faults`) now ignores text painted over by a later opaque rect (`HeadlessView::visible_texts`: the
+  loupe bar under the Settings window). New test `tests_masking::whole_word_labels_fit_mask_tiles_and_profile_segments`.
+  Verified: ui-egui --lib 413 green, clippy -D warnings green; screenshots looked at (mask tiles, profiles, settings).
+  Left: merge; Settings `choices()` rows keep their old 4 pt gaps (rule says 8); not tried in the running app.
+
 - [ ] (hitch agent, 2026-11-23, branch `agent-hitch`, worktree ~/crafts/lc-hitch, not merged) **Preview lag: commits off
   the UI thread, crop dials cut one render.** Measured first (probes below, Bryan's M262 DNG, 16k-photo on-disk library
   with his presets.json, XMP auto-write on, load 20–45). (1) Every committed edit wrote the XMP sidecar on the UI

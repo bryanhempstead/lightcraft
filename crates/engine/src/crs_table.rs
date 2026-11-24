@@ -36,7 +36,7 @@ const MAX_DIVISIONS: usize = 64;
 pub fn decode_table_text(text: &str) -> Result<Vec<u8>, String> {
     let text: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     if text.len() > MAX_TEXT {
-        return Err(format!("colour table too large ({} characters)", text.len()));
+        return Err(format!("color table too large ({} characters)", text.len()));
     }
     let mut value = [0u8; 256];
     for (i, &d) in DIGITS.iter().enumerate() {
@@ -45,31 +45,31 @@ pub fn decode_table_text(text: &str) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::with_capacity(text.len() / 5 * 4 + 4);
     for group in text.chunks(5) {
         if group.len() < 2 {
-            return Err("colour table text ends in a partial group".into());
+            return Err("color table text ends in a partial group".into());
         }
         let mut v: u64 = 0;
         for (k, &c) in group.iter().enumerate() {
             let d = value[c as usize];
             if d == 0 {
-                return Err(format!("unexpected character `{}` in colour table", c as char));
+                return Err(format!("unexpected character `{}` in color table", c as char));
             }
             v += u64::from(d - 1) * 85u64.pow(k as u32);
         }
         if v > u64::from(u32::MAX) {
-            return Err("colour table text out of range".into());
+            return Err("color table text out of range".into());
         }
         bytes.extend_from_slice(&v.to_le_bytes()[..group.len() - 1]);
     }
     let Some(len) = bytes.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize) else {
-        return Err("colour table too short".into());
+        return Err("color table too short".into());
     };
     if len > MAX_BYTES {
-        return Err(format!("colour table too large ({len} bytes)"));
+        return Err(format!("color table too large ({len} bytes)"));
     }
     let data = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(bytes.get(4..).unwrap_or_default(), MAX_BYTES)
-        .map_err(|e| format!("colour table: bad compressed data ({:?})", e.status))?;
+        .map_err(|e| format!("color table: bad compressed data ({:?})", e.status))?;
     if data.len() != len {
-        return Err(format!("colour table: {} bytes, expected {len}", data.len()));
+        return Err(format!("color table: {} bytes, expected {len}", data.len()));
     }
     Ok(data)
 }
@@ -111,18 +111,18 @@ fn transfer(code: u32) -> Option<LutTransfer> {
 pub fn rgb_table(b: &[u8], amount: f64) -> Result<Lut3d, String> {
     let (kind, dims, n) = (u32_at(b, 0), u32_at(b, 8), u32_at(b, 12));
     let (Some(1), Some(dims), Some(n)) = (kind, dims, n) else {
-        return Err("not an RGB colour table".into());
+        return Err("not an RGB color table".into());
     };
     if dims != 3 {
-        return Err(format!("{dims}-dimensional colour tables are not supported"));
+        return Err(format!("{dims}-dimensional color tables are not supported"));
     }
     let n = n as usize;
     if !(2..=MAX_DIVISIONS).contains(&n) {
-        return Err(format!("colour table with {n} divisions is not supported"));
+        return Err(format!("color table with {n} divisions is not supported"));
     }
     let entries = n * n * n;
     let body = 16 + entries * 6;
-    let samples = b.get(16..body).ok_or("colour table truncated")?;
+    let samples = b.get(16..body).ok_or("color table truncated")?;
     let ident = |i: usize| ((i * 65535 + (n - 1) / 2) / (n - 1)) as u16;
     let mut data = vec![[0.0f32; 3]; entries];
     // stored order: red slowest, blue fastest; ours: red fastest
@@ -130,7 +130,7 @@ pub fn rgb_table(b: &[u8], amount: f64) -> Result<Lut3d, String> {
         for g in 0..n {
             for bl in 0..n {
                 let src = ((r * n + g) * n + bl) * 6;
-                let Some(s) = samples.get(src..src + 6) else { return Err("colour table truncated".into()) };
+                let Some(s) = samples.get(src..src + 6) else { return Err("color table truncated".into()) };
                 let at = |k: usize, i: usize| ident(i).wrapping_add(u16::from_le_bytes([s[2 * k], s[2 * k + 1]])) as f32 / 65535.0;
                 if let Some(d) = data.get_mut(r + n * (g + n * bl)) {
                     *d = [at(0, r), at(1, g), at(2, bl)];
@@ -141,11 +141,11 @@ pub fn rgb_table(b: &[u8], amount: f64) -> Result<Lut3d, String> {
     let (prim, enc, gamut) = (u32_at(b, body), u32_at(b, body + 4), u32_at(b, body + 8));
     let (lo, hi) = (f64_at(b, body + 12), f64_at(b, body + 20));
     let primaries = match prim {
-        Some(p) => primaries(p).ok_or_else(|| format!("colour table in an unknown colour space ({p})"))?,
+        Some(p) => primaries(p).ok_or_else(|| format!("color table in an unknown color space ({p})"))?,
         None => LutPrimaries::Srgb,
     };
     let transfer = match enc {
-        Some(e) => transfer(e).ok_or_else(|| format!("colour table with an unknown encoding ({e})"))?,
+        Some(e) => transfer(e).ok_or_else(|| format!("color table with an unknown encoding ({e})"))?,
         None => LutTransfer::Srgb,
     };
     let fin = |v: Option<f64>, d: f64| v.filter(|v| v.is_finite()).unwrap_or(d).clamp(0.0, 4.0) as f32;
@@ -195,7 +195,7 @@ pub fn profile_from_xmp(xmp: &str) -> Result<Option<CrsProfile>, String> {
     };
     let text = prop(&props, &format!("crs:Table_{digest}"))
         .or_else(|| prop(&props, &format!("{base}Table_{digest}")))
-        .ok_or_else(|| format!("colour table {digest} is referenced but not included"))?;
+        .ok_or_else(|| format!("color table {digest} is referenced but not included"))?;
     let amount = prop(&props, &format!("{base}RGBTableAmount")).and_then(|a| a.parse::<f64>().ok()).unwrap_or(1.0);
     let lut = rgb_table(&decode_table_text(text)?, amount)?;
     let name_key = if look { "crs:Look/crs:Name" } else { "crs:Name" };
@@ -353,7 +353,7 @@ pub(crate) mod tests {
         let mut b = raw.clone();
         let tail = 16 + 64 * 6;
         b[tail..tail + 4].copy_from_slice(&99u32.to_le_bytes());
-        assert!(rgb_table(&b, 1.0).is_err(), "unknown colour space");
+        assert!(rgb_table(&b, 1.0).is_err(), "unknown color space");
         let mut b = raw.clone();
         b[tail + 12..tail + 20].copy_from_slice(&f64::NAN.to_le_bytes());
         b[tail + 20..tail + 28].copy_from_slice(&f64::INFINITY.to_le_bytes());

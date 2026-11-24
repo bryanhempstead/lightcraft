@@ -89,22 +89,22 @@ USAGE:
   lightcraft-cli commands [--json]   list every command id with its parameters
   lightcraft-cli controls [--json]   list every develop control id with its range
   lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
-      Fit a colour profile per camera model from raw files and their embedded camera JPEGs
+      Fit a color profile per camera model from raw files and their embedded camera JPEGs
       (Sony ARW, Nikon NEF, Fujifilm RAF): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
-      take their colour from the profile and only their tone from their own JPEG.
-      --lightroom LIST.json [--min-files N]: instead fit Lightroom-matched profiles (colour, tone
+      take their color from the profile and only their tone from their own JPEG.
+      --lightroom LIST.json [--min-files N]: instead fit Lightroom-matched profiles (color, tone
       and chroma, any raw format) from raws and Lightroom's previews of them rendered at default
       settings: [{\"raw\": path, \"preview\": path to the preview JPEG, \"temp\"/\"tint\": Lightroom's
       as-shot white balance}, …]; items without a preview only feed the white-balance model (tools/lr-compare
       `calibrate` writes the list from a catalog). Raws of a profiled model then start out as
       Lightroom rendered that camera. A camera with no default-setting renders can take another's
-      look on its own colour matrices: {\"raw\": path, \"colorimetric\": true} items for both
+      look on its own color matrices: {\"raw\": path, \"colorimetric\": true} items for both
       cameras and {\"transfer\": {\"from\": model, \"to\": model}}.
   lightcraft-cli migrate-lightroom --library DIR [OPTIONS]
       Migrate from Lightroom Classic into the library DIR (created if needed): the catalog's
-      photos are added in place (never copied or moved), with ratings, flags, colour labels,
+      photos are added in place (never copied or moved), with ratings, flags, color labels,
       keywords, captions, virtual copies, collections (the catalog's own tree) and develop
       settings; every preset folder is imported too. The catalog is read from a copy (with its
       -wal) by the system sqlite3; nothing of Lightroom's is written. Prints the report as JSON.
@@ -266,7 +266,7 @@ fn calibrate_lightroom(list: &str, out: Option<std::path::PathBuf>, min_files: u
                         });
                         match r {
                             Ok(Some(model)) => eprintln!("{raw} ({model})"),
-                            Ok(None) => eprintln!("{raw}: skipped (frame differs from the preview, or too little colour)"),
+                            Ok(None) => eprintln!("{raw}: skipped (frame differs from the preview, or too little color)"),
                             Err(e) => eprintln!("{raw}: {e}"),
                         }
                     }
@@ -292,7 +292,7 @@ fn calibrate_lightroom(list: &str, out: Option<std::path::PathBuf>, min_files: u
                     .as_ref()
                     .map_or("no white-balance model".to_string(), |w| format!("white balance from {} photos (rms {:.3})", w.samples, w.rms));
                 println!(
-                    "{}: {} photos, {} colour pairs (Lightroom-matched), {wb} → {}",
+                    "{}: {} photos, {} color pairs (Lightroom-matched), {wb} → {}",
                     profile.model,
                     profile.files,
                     profile.samples,
@@ -373,7 +373,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
                         let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         match result {
                             Ok(Some(model)) => eprintln!("[{n}/{}] {} ({model})", files.len(), path.display()),
-                            Ok(None) => eprintln!("[{n}/{}] {}: skipped (no usable camera JPEG or colour)", files.len(), path.display()),
+                            Ok(None) => eprintln!("[{n}/{}] {}: skipped (no usable camera JPEG or color)", files.len(), path.display()),
                             Err(e) => eprintln!("[{n}/{}] {}: {e}", files.len(), path.display()),
                         }
                     }
@@ -393,7 +393,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
             Ok(profile) => {
                 let path = lightcraft_engine::camera_profiles::save(&profile, &dir)?;
                 println!(
-                    "{}: {} photos, {} colour pairs, hue/saturation table {} → {}",
+                    "{}: {} photos, {} color pairs, hue/saturation table {} → {}",
                     profile.model,
                     profile.files,
                     profile.samples,

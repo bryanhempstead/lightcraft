@@ -246,7 +246,7 @@ fn label_names_set_undo_and_replay() {
     assert_eq!(names[3]["name"], "Blue");
     assert_eq!(names[3]["custom"], json!(null));
     s.execute("label.setNames", &json!({"names": {"red": "red"}})).unwrap();
-    assert_eq!(s.catalog.label_name(lightcraft_catalog::ColorLabel::Red), "Red", "the colour's own name resets");
+    assert_eq!(s.catalog.label_name(lightcraft_catalog::ColorLabel::Red), "Red", "the color's own name resets");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.catalog.label_name(lightcraft_catalog::ColorLabel::Red), "Reject later");
     assert!(s.execute("label.setNames", &json!({"names": {"orange": "x"}})).is_err());
@@ -358,7 +358,7 @@ fn label_sets_and_xmp_label_names() {
     let sc = crate::sidecar::parse_sidecar(&x, false).unwrap().resolve_label(&s.catalog);
     assert_eq!(sc.label, Some(Some(ColorLabel::Green)));
     let plain = crate::sidecar::parse_sidecar(&x.replace("Approved", "Blue"), false).unwrap().resolve_label(&s.catalog);
-    assert_eq!(plain.label, Some(Some(ColorLabel::Blue)), "colour names still work");
+    assert_eq!(plain.label, Some(Some(ColorLabel::Blue)), "color names still work");
     s.execute("label.deleteSet", &json!({"name": "Studio"})).unwrap();
     assert!(s.execute("label.deleteSet", &json!({"name": "Review"})).is_err(), "built-ins stay");
     let _ = std::fs::remove_dir_all(&dir);

@@ -198,7 +198,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     // No Label: photos without one (with others on: those or none)
-    let resp = toggle(ui, "label-none", f.no_label, "No label (click colours too to show those or none)", |p, r, c| {
+    let resp = toggle(ui, "label-none", f.no_label, "No label (click colors too to show those or none)", |p, r, c| {
         p.circle_stroke(r.center(), 5.0, egui::Stroke::new(1.2, c));
     });
     if resp.clicked() {

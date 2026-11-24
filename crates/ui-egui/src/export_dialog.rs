@@ -1066,7 +1066,7 @@ fn file_settings(app: &mut LightcraftApp, ui: &mut egui::Ui, s: &mut State<'_>) 
             use lightcraft_engine::export::DngPreview as Pv;
             row(ui, "JPEG Preview:", |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                for (i, (v, l)) in [(Pv::None, "none."), (Pv::Medium, "med."), (Pv::Full, "full.")].iter().enumerate() {
+                for (i, (v, l)) in [(Pv::None, "none."), (Pv::Medium, "medium."), (Pv::Full, "full.")].iter().enumerate() {
                     if crate::widgets::text_button(ui, &format!("exportDngPreview-{i}"), l, o.dng_preview == *v).clicked() {
                         o.dng_preview = *v;
                     }

@@ -1061,7 +1061,7 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
     });
     let fav = app.session.catalog.photo(id).is_some_and(|p| p.favorite);
-    if ui.button(crate::i18n::tr(if fav { "Remove fav." } else { "Add fav." })).clicked() {
+    if ui.button(crate::i18n::tr(if fav { "Remove from Favorites" } else { "Add to Favorites" })).clicked() {
         let _ = app.run("photo.toggleFavorite", json!({}));
     }
     ui.menu_button(crate::i18n::tr("Set Color Label"), |ui| label_menu(app, ui));

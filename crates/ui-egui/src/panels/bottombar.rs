@@ -260,7 +260,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
             child.add_space(6.0);
             let o = &app.ui.loupe_overlay;
             let on = o.any() && o.show != crate::state::OverlayShow::Never;
-            let ovl = crate::widgets::dropdown(&mut child, "overlays", "ovl.", t.font(13.0), if on { t.text } else { t.text_label })
+            let ovl = crate::widgets::dropdown(&mut child, "overlays", "overlays.", t.font(13.0), if on { t.text } else { t.text_label })
                 .on_hover_text(crate::i18n::tr("Overlays on the photo: composition guides, frames, grid, guides, layout image"));
             egui::Popup::menu(&ovl)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)

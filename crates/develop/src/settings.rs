@@ -1120,9 +1120,9 @@ impl Bokeh {
     pub const ALL: [Bokeh; 4] = [Bokeh::Circle, Bokeh::Bubble, Bokeh::FiveBlade, Bokeh::Ring];
     pub fn label(self) -> &'static str {
         match self {
-            Bokeh::Circle => "circ.",
-            Bokeh::Bubble => "bubl.",
-            Bokeh::FiveBlade => "5.bld.",
+            Bokeh::Circle => "circle.",
+            Bokeh::Bubble => "bubble.",
+            Bokeh::FiveBlade => "five.blade.",
             Bokeh::Ring => "ring.",
         }
     }

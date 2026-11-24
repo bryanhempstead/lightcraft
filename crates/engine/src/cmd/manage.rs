@@ -263,7 +263,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Color Label Names",
             [],
             None,
-            "{names: {red?: name|null, yellow?, green?, blue?, purple?}} — null or empty restores the colour's name",
+            "{names: {red?: name|null, yellow?, green?, blue?, purple?}} — null or empty restores the color's name",
             always,
             |s, p| {
                 let names = p.get("names").and_then(Value::as_object).ok_or_else(|| bad("label.setNames", "missing `names`"))?;

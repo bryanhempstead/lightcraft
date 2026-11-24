@@ -707,7 +707,7 @@ fn header(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     child.label(egui::RichText::new(sub).font(t.font(12.0)).color(t.text_dim));
     child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        if text_button(ui, "galleriesRefresh", "ref.", false).on_hover_text(crate::i18n::tr("Read the galleries again")).clicked() {
+        if text_button(ui, "galleriesRefresh", "refresh.", false).on_hover_text(crate::i18n::tr("Read the galleries again")).clicked() {
             refresh(app);
         }
         let busy = app.tasks.is_running(LISTING) || app.tasks.is_running(MAKING) || app.tasks.is_running(PUBLISHING);
@@ -746,7 +746,7 @@ fn grid_actions(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
         let linked = app.galleries.photos().iter().any(|p| p.get("photo").is_some_and(Value::is_u64) && app.galleries.picked.contains(&s(p, "name")));
-        if linked && text_button(ui, "galleriesDevelop", "dev.", false).on_hover_text(crate::i18n::tr("Open the source photo in Develop")).clicked() {
+        if linked && text_button(ui, "galleriesDevelop", "develop.", false).on_hover_text(crate::i18n::tr("Open the source photo in Develop")).clicked() {
             let r = app.run("galleries.develop", json!({}));
             toast_err(app, &ctx, r);
         }
@@ -874,7 +874,7 @@ fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, g: &Value, r: Rect, t: &Toke
     p.rect_filled(chip, 4.0, if live { t.pick.gamma_multiply(0.85) } else { Color32::from_black_alpha(170) });
     p.galley(chip.center() - cg.size() / 2.0, cg, t.text);
     if b(g, "linked") {
-        let lg = p.layout_no_wrap("lc.".to_string(), t.semibold(10.5), t.text);
+        let lg = p.layout_no_wrap("lightcraft.".to_string(), t.semibold(10.5), t.text);
         let lchip = Rect::from_min_size(pos2(chip.left() - lg.size().x - 18.0, chip.top()), vec2(lg.size().x + 10.0, 20.0));
         p.rect_filled(lchip, 4.0, Color32::from_black_alpha(170));
         p.galley(lchip.center() - lg.size() / 2.0, lg, t.text);
@@ -955,7 +955,7 @@ fn photos(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 badge("★", Color32::from_black_alpha(170));
             }
             if ph.get("photo").is_some_and(Value::is_u64) {
-                badge("lc.", Color32::from_black_alpha(170));
+                badge("lightcraft.", Color32::from_black_alpha(170));
             }
             if picked {
                 p.rect_stroke(r, 3.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
@@ -1012,7 +1012,7 @@ pub fn left(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let busy = app.tasks.is_running(MAKING);
-                if text_button(ui, "galleryFromSelection", "sel.", false)
+                if text_button(ui, "galleryFromSelection", "selected.", false)
                     .on_hover_text(format!("{} ({sel})", crate::i18n::tr("Make a gallery of the selected photos, with their edits")))
                     .clicked()
                 {
@@ -1169,9 +1169,9 @@ pub fn right(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         }
                         let live = b(&g, "published");
                         let (label, tip) = if live {
-                            ("unpub.", "Take it off LOT48 (the link stops working away from home)")
+                            ("unpublish.", "Take it off LOT48 (the link stops working away from home)")
                         } else {
-                            ("pub.", "Copy the photos to LOT48 so the link works anywhere")
+                            ("publish.", "Copy the photos to LOT48 so the link works anywhere")
                         };
                         if text_button(ui, "galleryPublish", label, false).on_hover_text(crate::i18n::tr(tip)).clicked() {
                             let r = app.run("galleries.publish", json!({"on": !live}));
@@ -1228,7 +1228,7 @@ pub fn right(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
-                        if text_button(ui, "galleryReexport", "re.exp.", false)
+                        if text_button(ui, "galleryReexport", "re.export.", false)
                             .on_hover_text(crate::i18n::tr("Export the photos edited since again"))
                             .clicked()
                         {

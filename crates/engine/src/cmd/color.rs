@@ -166,14 +166,14 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Point Color Sample",
             [],
             None,
-            "{x, y} normalized image coords — samples the colour there (max 8); returns {index, lum, chroma, hue}",
+            "{x, y} normalized image coords — samples the color there (max 8); returns {index, lum, chroma, hue}",
             has_active,
             |s, p| {
                 let c = "pointColor.pick";
                 let (x, y) = (f64_req(p, "x", c)?, f64_req(p, "y", c)?);
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 if s.develop_of(id).is_some_and(|d| d.point_colors.len() >= MAX_POINT_COLORS) {
-                    return Err(bad(c, format!("at most {MAX_POINT_COLORS} point colours")));
+                    return Err(bad(c, format!("at most {MAX_POINT_COLORS} point colors")));
                 }
                 let [l, ch, h] = encoded_to_oklch(probe(s, c, x, y, after_mixer_neutral)?);
                 let sample = PointColor { lum: l as f64, chroma: ch as f64, hue: (h as f64).to_degrees().rem_euclid(360.0), ..Default::default() };
@@ -189,7 +189,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Targeted Adjustment",
             [],
             None,
-            "{target: curve|hue|sat|lum, x, y (normalized image coords), delta (slider units; point curves: output levels 0..255), channel?: parametric|master|red|green|blue (curve)} — adjusts the curve region / colour-mixer bands under the point; returns the changed controls",
+            "{target: curve|hue|sat|lum, x, y (normalized image coords), delta (slider units; point curves: output levels 0..255), channel?: parametric|master|red|green|blue (curve)} — adjusts the curve region / color-mixer bands under the point; returns the changed controls",
             has_active,
             targeted
         ),

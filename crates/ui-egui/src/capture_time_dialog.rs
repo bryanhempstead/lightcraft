@@ -21,12 +21,12 @@ use crate::theme::Tokens;
 
 /// Mode chips: (mode, label, what it does).
 pub const MODES: &[(&str, &str, &str)] = &[
-    ("set", "adj.", "Type this photo's correct time; the others move by the same amount"),
+    ("set", "adjust.", "Type this photo's correct time; the others move by the same amount"),
     ("shift", "shift.", "Move every photo by an amount"),
     ("zone", "zone.", "Time-zone shift (hours)"),
     ("each", "same.time.", "Every photo gets the same time"),
-    ("match", "match.cam.", "Match camera clocks: line this camera up with a photo from another camera taken at the same moment"),
-    ("original", "orig.", "Back to the time each file records"),
+    ("match", "match.camera.", "Match camera clocks: line this camera up with a photo from another camera taken at the same moment"),
+    ("original", "original.", "Back to the time each file records"),
     ("file", "file.date.", "Each file's creation date (UTC)"),
 ];
 
@@ -412,7 +412,7 @@ fn summary(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, plan: &lightcraft
     if plan.stacked > 0 {
         extra.push(crate::i18n::tr_format!("{c} in collapsed stacks", c = plan.stacked));
     }
-    let what = if extra.is_empty() { what } else { format!("{what} ({} {})", crate::i18n::tr("incl."), extra.join(", ")) };
+    let what = if extra.is_empty() { what } else { format!("{what} ({} {})", crate::i18n::tr("including"), extra.join(", ")) };
     let r = ui.label(egui::RichText::new(what).color(t.text_label));
     crate::widgets::register(ui.ctx(), "captureTime:count", r.rect);
     if !plan.skipped.is_empty() {

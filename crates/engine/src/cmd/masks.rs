@@ -431,7 +431,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sample Mask Color",
             [],
             None,
-            "{x, y: normalized image point, add?: bool (⇧: add to the samples, max 5), id?, component?} — the colour range of the selected mask (its first colour-range component) samples the colour there → {samples}",
+            "{x, y: normalized image point, add?: bool (⇧: add to the samples, max 5), id?, component?} — the color range of the selected mask (its first color-range component) samples the color there → {samples}",
             has_active,
             |s, p| {
                 let c = "mask.sampleColor";
@@ -451,9 +451,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     let i = find(masks, mid, c)?;
                     let k = comp
                         .or_else(|| masks[i].components.iter().position(|x| matches!(x.shape, MaskShape::ColorRange { .. })))
-                        .ok_or_else(|| bad(c, "the mask has no colour range"))?;
+                        .ok_or_else(|| bad(c, "the mask has no color range"))?;
                     let Some(MaskShape::ColorRange { samples, .. }) = masks[i].components.get_mut(k).map(|x| &mut x.shape) else {
-                        return Err(bad(c, "not a colour range component"));
+                        return Err(bad(c, "not a color range component"));
                     };
                     if !add {
                         samples.clear();
