@@ -480,9 +480,11 @@ fn lens_profile_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSe
         (None, _) if has_lens => crate::i18n::tr("the file's own lens data").to_string(),
         (None, _) => crate::i18n::tr("no profile: pick the lens below").to_string(),
     };
-    padded_row(ui, |ui| {
+    // the profile's name is long ("Adobe (Leica SUMMICRON-M 50 mm f/2)"): its own wrapped line
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 20, top: 3, bottom: 3 }).show(ui, |ui| {
         ui.label(RichText::new(crate::i18n::tr("in use:")).size(11.5).color(t.text_label));
-        ui.label(RichText::new(status).size(11.5).color(if in_use || has_lens { t.text } else { t.text_dim }));
+        ui.add_space(2.0);
+        ui.add(egui::Label::new(RichText::new(status).size(11.5).color(if in_use || has_lens { t.text } else { t.text_dim })).wrap());
     });
     // the make picked before a model is (remembered per photo view)
     let make_key = egui::Id::new("lens-profile-make");
@@ -499,7 +501,8 @@ fn lens_profile_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSe
     let mut run: Option<Value> = None;
     row(ui, "make.", &mut |ui| {
         let shown = if make.is_empty() { "—" } else { make.as_str() };
-        egui::ComboBox::from_id_salt("lens-profile-make").width(170.0).selected_text(shown).show_ui(ui, |ui| {
+        let w = ui.available_width().max(60.0);
+        egui::ComboBox::from_id_salt("lens-profile-make").width(w).truncate().selected_text(shown).show_ui(ui, |ui| {
             for m in lightcraft_engine::lcp::makes() {
                 if ui.selectable_label(m.eq_ignore_ascii_case(&make), &m).clicked() {
                     ui.data_mut(|d| d.insert_temp(make_key, m.clone()));
@@ -509,7 +512,8 @@ fn lens_profile_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSe
     });
     row(ui, "model.", &mut |ui| {
         let text = if model.is_empty() || !listed.as_ref().is_some_and(|(m, _)| m.eq_ignore_ascii_case(&make)) { "—" } else { model.as_str() };
-        egui::ComboBox::from_id_salt("lens-profile-model").width(170.0).selected_text(text).show_ui(ui, |ui| {
+        let w = ui.available_width().max(60.0);
+        egui::ComboBox::from_id_salt("lens-profile-model").width(w).truncate().selected_text(text).show_ui(ui, |ui| {
             for l in lightcraft_engine::lcp::models(&make) {
                 if ui.selectable_label(l.eq_ignore_ascii_case(&model), &l).clicked() {
                     run = Some(json!({"make": make, "model": l}));
@@ -519,7 +523,8 @@ fn lens_profile_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSe
     });
     row(ui, "prof.", &mut |ui| {
         let current = r.as_ref().filter(|_| in_use).map(|r| r.name.clone()).unwrap_or_else(|| "—".into());
-        egui::ComboBox::from_id_salt("lens-profile-profile").width(170.0).selected_text(current).show_ui(ui, |ui| {
+        let w = ui.available_width().max(60.0);
+        egui::ComboBox::from_id_salt("lens-profile-profile").width(w).truncate().selected_text(current).show_ui(ui, |ui| {
             for (name, path) in lightcraft_engine::lcp::profiles(&make, &model) {
                 let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let on = r.as_ref().is_some_and(|r| r.filename.eq_ignore_ascii_case(&file));
@@ -543,8 +548,9 @@ fn lens_profile_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSe
         }
     });
     if let Some(p) = run {
+        let auto = p["auto"] == true;
         match app.run("lens.setProfile", p) {
-            Ok(v) if v["profile"].is_null() => app.toast_soon(crate::i18n::tr("No installed profile for this lens").to_string(), 2.0),
+            Ok(v) if auto && v["profile"].is_null() => app.toast_soon(crate::i18n::tr("No installed profile for this lens").to_string(), 2.0),
             Ok(_) => {}
             Err(e) => app.toast_soon(e, 2.5),
         }
