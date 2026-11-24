@@ -21,7 +21,7 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   already.backed.up. / skip., cancel. + accent ok., Return = ok.). Tests: engine `tests_sb_pipeline.rs`, ui-egui
   `tests_sb_pipeline.rs` (rows, info, stage change, dialog layout audit, queue + pending).
   Second Brain side (in ~/second-brain, see its board): src/shootpipe.js `fromLightCraft` + `drainInbox` + launch /
-  fs.watch / 60 s pickup, src/galleryapi.js route, test/shootpipe-lightcraft.test.js. Live only after SB restarts.
+  fs.watch / 60 s pickup, src/galleryapi.js route, test/shootpipe-lightcraft.test.js — uncommitted there, but the running SB (restarted 18:05) already has it: the route answers.
   Verified: `cargo test --release -p lightcraft-engine -p lightcraft-ui-egui --lib` 635 + 403 green; clippy -D warnings
   green for ui-egui and for engine with `--features sam,enhance` (engine alone without features fails on 2 dead-code
   items already on main: genremove.rs Shared::set/current, remove_detect.rs remove_found_add). Not tried in the
