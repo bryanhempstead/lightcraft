@@ -448,3 +448,42 @@ fn candidates_and_thumbs_json_shape() {
     assert!(s.execute("merge.thumbs", &json!({})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// re-check.: open groups found by an older finder and never touched are looked at again with
+/// today's (a burst the old one called a panorama goes away); sent-back and changed groups stay;
+/// one undo brings the old ones back.
+#[test]
+fn recheck_replaces_untouched_old_guesses_only() {
+    let mut s = Session::with_demo();
+    let burst = temp_dir("recheck");
+    let mut paths = Vec::new();
+    for i in 0..6 {
+        let p = burst.join(format!("B_{i}.dng"));
+        std::fs::write(&p, lightcraft_merge::synth::bracket_dngs(240, 160, &[0.0]).unwrap().remove(0)).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let b = import(&mut s, paths);
+    for (i, id) in b.iter().enumerate() {
+        exif(&mut s, *id, &format!("2026-11-20T15:00:0{i}"), "1/250", None);
+    }
+    let folder = lightcraft_catalog::query::folder_key(&burst.to_string_lossy());
+    let old = |ids: &[PhotoId], state: &str, found: &[PhotoId]| {
+        let g = json!({"id": crate::merge_find::group_id(ids), "kind": "pano", "photos": ids.iter().map(|p| p.0).collect::<Vec<_>>(), "state": state,
+            "folder": folder, "foundFrames": found.iter().map(|p| p.0).collect::<Vec<_>>()});
+        Op::SetRecord { key: format!("{}{}", crate::merge_find::GROUP_PREFIX, g["id"].as_str().unwrap()), value: Some(g) }
+    };
+    let (a, d, c) = ([b[0], b[1]], [b[2], b[3]], [b[4], b[5]]);
+    s.commit("old finder", Op::Batch { ops: vec![old(&a, "open", &[]), old(&d, "dismissed", &[]), old(&c, "open", &c)] }).unwrap();
+    // C: he took a frame out
+    let cid = crate::merge_find::group_id(&c);
+    s.execute("merge.setFrames", &json!({"id": cid, "photos": [b[4].0]})).unwrap();
+    let r = s.execute("merge.recheck", &json!({"path": burst.to_string_lossy()})).unwrap();
+    assert_eq!(r["removed"], 1, "{r}");
+    assert_eq!(r["find"]["found"], 0, "a burst is not a merge: {r}");
+    let ids: Vec<String> = crate::merge_find::groups(&s.catalog).iter().map(|g| g.id.clone()).collect();
+    assert!(!ids.contains(&crate::merge_find::group_id(&a)), "the untouched old guess is gone");
+    assert!(ids.contains(&crate::merge_find::group_id(&d)) && ids.contains(&cid), "sent back and changed stay: {ids:?}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(crate::merge_find::group(&s.catalog, &crate::merge_find::group_id(&a)).is_some(), "undo brings it back");
+    let _ = std::fs::remove_dir_all(&burst);
+}

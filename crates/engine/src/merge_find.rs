@@ -1620,6 +1620,22 @@ impl Session {
         Ok(json!({"dismissed": n}))
     }
 
+    /// re-check.: open groups he hasn't touched (no frame taken out or put back) in `scope` are
+    /// forgotten and the scope is looked at again with today's finder; merged, sent-back and
+    /// changed groups stay as they are. One undo step brings the old groups back.
+    pub fn merge_recheck(&mut self, scope: &Scope, background: bool) -> Result<Value> {
+        let gone: Vec<MergeGroup> = groups(&self.catalog)
+            .into_iter()
+            .filter(|g| g.state == GroupState::Open && scope.holds(&self.catalog, g) && (g.found_frames.is_empty() || g.found_frames == g.photos))
+            .collect();
+        if !gone.is_empty() {
+            let ops = gone.iter().map(|g| Op::SetRecord { key: g.key(), value: None }).collect();
+            self.commit("Re-check Merges", Op::Batch { ops })?;
+        }
+        let found = self.merge_find(scope, background)?;
+        Ok(json!({"removed": gone.len(), "find": found}))
+    }
+
     /// restore.: sent-back groups are open again (one undo step).
     pub fn merge_restore(&mut self, ids: &[String]) -> Result<Value> {
         let mut ops = Vec::new();

@@ -80,6 +80,19 @@ fn merges_specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "merge.recheck",
+            "Re-check Merges",
+            [],
+            None,
+            "{scope? | path?, deep?, album?, background?: bool} — forget the open groups not touched yet (no frame taken out or put back) in the scope and look again with the current finder; merged, sent-back and changed groups stay (one undo step) → {removed, find}",
+            always,
+            |s, p| {
+                let scope = Scope::from_params(p).map_err(|e| bad("merge.recheck", e))?;
+                let background = bool_or(p, "background", false) && s.vision.background;
+                s.merge_recheck(&scope, background)
+            }
+        ),
+        cmd!(
             query "merge.candidates",
             "Merge Groups",
             [],
