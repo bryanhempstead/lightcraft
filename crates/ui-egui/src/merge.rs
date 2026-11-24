@@ -177,6 +177,8 @@ pub struct MergeState {
     pub last_kind: Option<String>,
     /// merges.: groups waiting for the merge worker, in order.
     pub group_queue: std::collections::VecDeque<GroupMerge>,
+    /// How the dialog's preview is framed (dragged and zoomed; whole picture when it opens).
+    pub view: crate::pan_zoom::PanZoom,
 }
 
 /// The kinds the Merge… dialog switches between: (command, button label, hover text).
@@ -266,6 +268,7 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     app.merge.error = None;
     app.merge.preview = None;
     app.merge.preview_pixels = None;
+    app.merge.view = Default::default();
     if let Some(t) = app.merge.preview_task.take() {
         t.cancel.store(true, Ordering::Relaxed);
     }
@@ -278,6 +281,23 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     }
     app.ui.dialog = Some(crate::state::Dialog::Merge { opts });
     Ok(json!({"photos": app.merge.ids.len()}))
+}
+
+/// `merge.view {zoom?, center?: [x, y]}`: frame the Merge preview (zoom 1 = the whole preview;
+/// `center` the point of it in the middle, 0..1). Without parameters: the current framing.
+pub fn set_view(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let mut v = app.merge.view;
+    if let Some(z) = p.get("zoom").and_then(Value::as_f64) {
+        v.zoom = z as f32;
+    }
+    if let Some(c) = p.get("center").and_then(Value::as_array) {
+        let n = |i: usize| c.get(i).and_then(Value::as_f64).map(|x| x as f32);
+        v.center = egui::vec2(n(0).ok_or("`center` is [x, y]")?, n(1).ok_or("`center` is [x, y]")?);
+    }
+    let pane = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(520.0, 360.0));
+    let size = app.merge.preview.as_ref().map_or([520, 360], |p| p.1);
+    app.merge.view = v.clamped(pane, size);
+    Ok(json!({"zoom": app.merge.view.zoom, "center": [app.merge.view.center.x, app.merge.view.center.y]}))
 }
 
 /// Start the full-resolution merge (the dialog's Merge button / `ui.dialog.confirm`).
@@ -430,10 +450,13 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             let (rect, _) = ui.allocate_exact_size(box_size, egui::Sense::hover());
             ui.painter().rect_filled(rect, 4.0, t.canvas);
             crate::widgets::register(ui.ctx(), "merge.preview", rect);
+            // drag to look around, scroll or pinch to zoom (crate::pan_zoom)
+            let size = app.merge.preview.as_ref().map_or([0, 0], |p| p.1);
+            let mut view = app.merge.view;
+            crate::pan_zoom::interact(ui, rect, "mergePreview", size, &mut view);
+            app.merge.view = view;
             if let Some((tex, size, _, _)) = &app.merge.preview {
-                let s = (box_size.x / size[0] as f32).min(box_size.y / size[1] as f32);
-                let r = egui::Rect::from_center_size(rect.center(), egui::vec2(size[0] as f32 * s, size[1] as f32 * s));
-                ui.painter().image(tex.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                crate::pan_zoom::paint(ui, rect, tex.id(), *size, &view);
             }
             if let Some(task) = &app.merge.preview_task {
                 let (f, stage) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();

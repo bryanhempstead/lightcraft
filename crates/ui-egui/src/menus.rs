@@ -126,6 +126,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("panel.versions", "Versions", Some("Shift+V"), "Window"),
     ("panel.activity", "History", None, "Window"),
     ("panel.close", "Close Panel", None, ""),
+    // the side panels' section order and the sections open at launch (panels::order)
+    ("panel.order", "Panel Order", None, ""),
+    ("panel.defaultOpen", "Open Panel by Default", None, ""),
+    ("panel.resetOrder", "Reset Panel Order", None, "Window>Panels"),
     // Develop's panels, as Lightroom Classic numbers them (⌘1…⌘9 open one, ⌘-click solo)
     ("section.basic", "Basic", Some("Cmd+1"), "Window>Develop Panels"),
     ("section.toneCurve", "Tone Curve", Some("Cmd+2"), "Window>Develop Panels"),
@@ -177,6 +181,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.lenses", "My Lenses", None, ""),
     ("mask.centerDefault", "Set Center Mask as Default", None, ""),
     ("dialog.enhance", "Enhance…", Some("Ctrl+Alt+I"), "Photo"),
+    // frame the Enhance / Merge previews (what dragging and the wheel do over them)
+    ("enhance.view", "Frame Enhance Preview", None, ""),
+    ("merge.view", "Frame Merge Preview", None, ""),
     ("dialog.mergeHdr", "HDR…", Some("Ctrl+H"), "Photo>Photo Merge"),
     ("dialog.mergePanorama", "Panorama…", Some("Ctrl+M"), "Photo>Photo Merge"),
     ("dialog.mergeHdrPanorama", "HDR Panorama…", None, "Photo>Photo Merge"),
@@ -452,6 +459,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         return Some(r);
     }
     if let Some(r) = crate::panels::galleries::run_command(app, id, p) {
+        return Some(r);
+    }
+    if let Some(r) = crate::panels::order::run_command(app, id, p) {
         return Some(r);
     }
     let ctx = egui::Context::default();
@@ -1539,6 +1549,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "merge.hdrLast" => crate::merge::start_last(app, "merge.hdr"),
         "merge.panoramaLast" => crate::merge::start_last(app, "merge.panorama"),
         "merge.hdrPanoramaLast" => crate::merge::start_last(app, "merge.hdrPanorama"),
+        "enhance.view" => crate::enhance::set_view(app, p),
+        "merge.view" => crate::merge::set_view(app, p),
         "dialog.mergeHdr" => crate::merge::open(app, "merge.hdr"),
         "dialog.mergePanorama" => crate::merge::open(app, "merge.panorama"),
         "dialog.mergeHdrPanorama" => crate::merge::open(app, "merge.hdrPanorama"),
@@ -2193,7 +2205,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
 
 pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
-        s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
+        s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => {
+            app.session.active().is_some() || s == "panel.close" || crate::panels::order::COMMANDS.contains(&s)
+        }
         "dialog.syncSettings" => app.session.selection.ids.len() > 1,
         "dialog.publish" => matches!(app.session.source, lightcraft_engine::LibrarySource::Published(_)),
         "dialog.exportToPhotos" => app.session.active().is_some() && lightcraft_engine::apple_photos::available(),

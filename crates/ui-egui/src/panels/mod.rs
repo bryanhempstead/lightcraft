@@ -22,6 +22,7 @@ pub mod map;
 pub mod mask_effects;
 pub mod masking;
 pub mod notices;
+pub mod order;
 pub mod people;
 pub mod presets;
 pub mod profiles;

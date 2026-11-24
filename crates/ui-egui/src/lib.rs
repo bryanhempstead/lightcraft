@@ -30,6 +30,7 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 pub mod merges;
+pub mod pan_zoom;
 pub mod panels;
 pub mod publish_ui;
 pub mod recheck;
@@ -58,6 +59,8 @@ mod tests_collection_parts;
 #[cfg(test)]
 mod tests_curve;
 #[cfg(test)]
+mod tests_enhance_view;
+#[cfg(test)]
 mod tests_export_dialog;
 #[cfg(test)]
 mod tests_filmstrip;
@@ -77,6 +80,8 @@ mod tests_identity;
 mod tests_keys;
 #[cfg(test)]
 mod tests_labels;
+#[cfg(test)]
+mod tests_leftoff_restart;
 #[cfg(test)]
 mod tests_library2;
 #[cfg(test)]
@@ -105,6 +110,8 @@ mod tests_publish;
 mod tests_quit_unsaved;
 #[cfg(test)]
 mod tests_recheck;
+#[cfg(test)]
+mod tests_reorder;
 #[cfg(test)]
 mod tests_scroll;
 #[cfg(test)]
@@ -431,6 +438,12 @@ impl LightcraftApp {
             left_off: leftoff::Tracker::default(),
             fix_notes: fixnotes::FixNotes::default(),
         }
+    }
+
+    /// At launch, once the saved UI state is in place: go back to where the work was left off
+    /// (the last spot's folder or album, the photo and the view) on the first frame.
+    pub fn resume_left_off_at_launch(&mut self) {
+        self.left_off.resume_at_launch = true;
     }
 
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
@@ -987,7 +1000,11 @@ impl LightcraftApp {
         }
         keymap::poll_midi(self, ctx);
         keymap::console_tick(self, ctx);
-        leftoff::tick(self);
+        leftoff::tick(self, now);
+        if self.left_off.unsaved() {
+            // ui.json is written a second after the spot changes (the app's writer asks `save_due`)
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(leftoff::SAVE_DELAY + 0.05));
+        }
         if self.fonts_ready {
             shortcuts::handle(self, ctx);
         }
