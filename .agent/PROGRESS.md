@@ -136,6 +136,12 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
     Leica M apertures (6,154 repaired), presets' Look → profile (29 linked), Set Lens + lens list (Heliar 1:4.5/15,
     Summicron-M 1:2/35, 1:2/50, Leitz Elmar 1:4/135), quick tools after `|` (center./dust.), WB pick., file-type
     tags, delete → next photo, crop grid while adjusting, no stale 1:1 tiles, every action bindable + searchable.
+  - 22:45 UPDATE: ALSO merged + pushed + in the running apps: `agent-hitch` (deferred XMP sidecars, crop dials from
+    one render), `agent-labels` (full-word labels, both apps), `agent-folds` (every list/section folds, remembered —
+    `ui.fold` / `ui.folds`; via the CLI call them as {"method":"engine.execute","params":{"command":"ui.folds"}}, the
+    shorthand treats ui.* as protocol methods), grid ←/→ skip folded groups (91eccc187). PhotoCraft with labels +
+    folds installed in /Applications. Nothing running. Left: Settings `choices()` rows keep 4 pt gaps (<8 px rule);
+    docs still name some old labels (parity.md, merge.md "pano."); hitch fix not tried on an external drive.
   - 20:15 UPDATE: ALSO merged + pushed + in the running app: `agent-map-tags` (fixVoidGps 6,474 + fixLensNames 7,567
     APPLIED on Bryan's library), `agent-crop-lens` (Bryan: Heliar II = auto pick OK; his Summicron 35 is the OLD non-ASPH —
     no Adobe profile exists, ASPH profile is the closest auto pick), `agent-pipeline` (Second Brain side committed
