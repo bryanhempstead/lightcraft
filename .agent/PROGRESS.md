@@ -38,6 +38,14 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
      `develop.paste`, `dialog.export`, `dialog.merge` (⌘⇧M), `view.merges` (merge. tab), `merge.find` / `merge.recheck`,
      `photo.toggleFavorite`, favorites. view (`library.source all` + `library.filter {favorite:true}`),
      `dialog.enhance {denoise:true}`, `shoot.sort`. They are all control-protocol commands (`engine.execute`).
+  8. (docket for 11-27, Bryan) **Multiple exposure** (double exposure): pick 2+ photos → `send.to.merge.` as a new
+     merge kind `multi.exposure.` → a layered editor on the merge page: layer order (drag), per layer blend mode (normal,
+     screen, multiply, overlay, soft light, lighten, darken, difference, add), opacity, position / scale / rotate, a
+     simple brush or gradient mask, live preview; the result is a new photo (DNG/TIFF, non-destructive recipe kept so it
+     can be reopened) shown in its folder WITH its originals (originals stay visible unless he marks otherwise) and in
+     the merge page. Build on open source rather than from scratch: PhotoCraft (~/crafts/photocraft, his Photoshop fork)
+     already has layers + blend modes — reuse its compositing code; or libvips `composite` (PDF blend modes) / the
+     W3C compositing spec formulas. Second Brain shows them too (after 11-27).
   PAUSED until 11-27 (Bryan: LightCraft only until then): Second Brain merge page — branch `agent-mergepage` in
   ~/second-brain-mergepage (8f770c6 page + a WIP commit); still to add there: layout./aspect./per.row. per screen size and
   the merge box (match LightCraft's), then merge into Second Brain + one restart with his OK. Cameras in the library
