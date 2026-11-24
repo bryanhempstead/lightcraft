@@ -644,12 +644,6 @@ impl Renderer {
             // Ignore obsolete pixels, failures and decoded sources, even for the same render key;
             // an interactive view still takes a superseded draft that is newer than what it shows.
             if self.request_ids.get(&slot) != Some(&r.request_id) {
-                // its pixels may be stale, but a source it decoded is the photo's all the same
-                // (`accept` checks): kept, or every draft overtaken by the next detent decoded
-                // the raw again (a crop dial at 30 detents/s with ~200 ms drafts kept none)
-                if r.request_id >= self.epoch {
-                    session.accept(&r);
-                }
                 let newer_draft = matches!(slot, Slot::Main | Slot::Before | Slot::Hover)
                     && self.request_ids.contains_key(&slot)
                     && r.request_id >= self.epoch

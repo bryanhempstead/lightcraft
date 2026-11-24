@@ -1452,11 +1452,14 @@ fn commit_hitch() {
     );
     // every edit reaches the sidecar (after the debounce / once the app quits)
     let t = Instant::now();
-    let want = "0.8";
-    while t.elapsed() < Duration::from_secs(10) && !std::fs::read_to_string(&sidecar).is_ok_and(|x| x.contains("Exposure2012=\"+0.80\"") || x.contains(want)) {
-        h.step();
-        std::thread::sleep(Duration::from_millis(20));
+    let exposure = |p: &std::path::Path| match std::fs::read_to_string(p).ok().and_then(|x| lightcraft_engine::sidecar::parse_sidecar(&x, true).ok()).and_then(|x| x.develop) {
+        Some(lightcraft_engine::sidecar::DevelopPatch::Full(d)) => Some(d.light.exposure),
+        _ => None,
+    };
+    while t.elapsed() < Duration::from_secs(10) && (exposure(&sidecar).is_none_or(|e| (e - 0.8).abs() > 1e-6) || h.app.session.sidecars_pending() > 0) {
+        step(&mut h, &mut Vec::new());
     }
-    let _ = PhotoId(id);
-    assert!(sidecar.is_file(), "sidecar written");
+    assert_eq!(exposure(&sidecar), Some(0.8), "the last edit reached the sidecar");
+    let id = PhotoId(id);
+    assert_eq!(h.app.session.metadata_status(id), lightcraft_engine::sidecar::MetadataStatus::UpToDate);
 }
