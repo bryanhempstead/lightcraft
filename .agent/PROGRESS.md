@@ -6,6 +6,30 @@ Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Sin
 files committed. Commit on `main` and push to origin. Upstream (storytold) changes are optional cherry-picks.
 
 ## Open
+- [ ] (crop-lens agent, 2026-11-23, branch `agent-crop-lens`, worktree ~/crafts/lc-crop-lens, not merged) **Crop dials one
+  axis, lens profiles by hand, loupe drafts.** (1) LR-CONSOLE-CROP: `crop.nudge` (now an engine command) moved a
+  straightened crop back inside with `CropGeometry::constrained`, which pulls towards the image centre on both axes —
+  every CropPositionX detent near a rotated edge also moved Y; and in the Crop tool (photo unstraightened, crop a tilted
+  frame) the crop's own X looked diagonal. Now `CropGeometry::shifted` / `scaled` (one axis, as far as the rotated photo
+  allows; scale about the centre keeping the shape) and `axes: image` while the Crop tool is open. (2)
+  LR-EDIT-OPTICS-PROFILE: Lens Corrections ▸ Profile shows the profile in use + make. / model. / prof. pickers over the
+  installed .lcp files, auto. / none.; `cmd:lens.profiles` / `lens.setProfile` / `lens.profileCorrections`; Enable
+  Profile Corrections takes the Set Lens lens's profile (`lcp::match_lens`), Set Lens re-matches while it's on; fixed
+  the .lcp parser cutting entries at nested lists (912 of 3602 installed profiles, every Leica M one). On this Mac:
+  Heliar 1:4.5/15 → VM 15mm f/4.5 Super Wide Heliar II Aspherical (or III — Bryan to check), Summicron-M 1:2/35 →
+  SUMMICRON-M 35 f/2 ASPH. (if his is the pre-ASPH one, pick it by hand), Summicron-M 1:2/50 → SUMMICRON-M 50 f/2,
+  Elmar 1:4/135 → no profile installed. (3) Loupe drafts: the loupe's slot runs one render at a time
+  (`JobPool::set_exclusive`; 3–4 drafts used to share the GPU), drafts share the sharp render's decoded source
+  (`Session::view_draft_job`), the draft size's stages are warmed in the background once the sharp render is shown
+  (`Renderer::warm`), crop dials draft at 0.35 (every draft is a whole-pipeline render), the edited photo's thumbnail
+  waits for the move to end. Probe: `console_dial_lag` (ignored; LC_BENCH_RAW=… LC_BENCH_LEGACY=1 for the old way).
+  Measured on his M262 DNG, edited, 2427 px loupe, 30 detents/s, old vs new interleaved on a loaded machine (load 40):
+  Clarity — drafts shown 35–43 → 78–80 of 90, tick→screen median 62–76 → 23 ms, p90 278–330 → 77–151 ms; Shadows —
+  drafts 35–38 → 65–66, median 70 → 22 ms (p90 ~730 ms both: a stall at the start of the turn, not found); steady-
+  state Shadows draft 5–14 ms (gpu finish only). Crop X dial: draft 279 → 89 ms (849 px), but tick→screen still ~1.1 s
+  median — not explained yet (per-draft GPU ~80 ms, yet only ~5 drafts/s land).
+  Left: commit-time costs on the UI thread not measured here (XMP auto-write walks `StemOwners::of` the whole catalog
+  and writes to the photo's drive per committed edit; `persist()` per command) — candidates for his 479 ms hitches.
 - [ ] (merges agent, 2026-11-23, branch `merges-area`, not merged) **LC-MERGE-FIND: merges. — found photo merges in
   the sidebar** (Bryan: "recognize possible photo merges and put those in a separate area … on the side bar").
   Engine `crates/engine/src/merge_find.rs`: per folder, capture-time runs (body / lens / focal, a few s apart) →

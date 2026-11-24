@@ -525,6 +525,11 @@ fn select_run(app: &mut LightcraftApp, ui: &egui::Ui, run: &DateRun, ids: &[Phot
 /// first gets a stand-in (its cached thumbnail, else its embedded camera preview), and its real
 /// render then follows in the background.
 pub fn request_thumb(app: &mut LightcraftApp, id: PhotoId, size: usize, priority: u32) {
+    // the photo being dragged / dialled: its thumbnail catches up once the move ends, not once
+    // per change (each was a CPU render beside the loupe's drafts)
+    if app.session.interaction.as_ref().is_some_and(|i| i.photo == id) && app.renderer.thumb(id).is_some() && !app.renderer.legacy() {
+        return;
+    }
     let bucket = lightcraft_engine::media::thumb_bucket(size);
     if let Some(photo) = app.session.catalog.photo(id)
         && app.renderer.thumb_current(photo, bucket, priority)

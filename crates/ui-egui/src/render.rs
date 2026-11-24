@@ -132,6 +132,9 @@ struct Queued {
     job: RenderJob,
 }
 
+/// The [`Slot::Prefetch`] number of [`Renderer::warm`]'s jobs (0 and 1 are the neighbours).
+pub const WARM_SLOT: u8 = 2;
+
 /// Variant thumbnails kept as textures (LRU).
 pub const VARIANT_TEXTURES: usize = 96;
 /// Priority of variant thumbnail jobs: below on-screen grid thumbnails and the loupe.
@@ -140,6 +143,10 @@ const VARIANT_PRIORITY: u32 = 6;
 pub struct Renderer {
     #[cfg(test)]
     pub(crate) thumb_jobs_built: usize,
+    /// Tests: render the way it was before the 2026-11-23 responsiveness work (parallel drafts,
+    /// no warm-up, drafts from their own source level), to measure against.
+    #[cfg(test)]
+    legacy: bool,
     request_ids: HashMap<Slot, u64>,
     /// Request id of the pixels each interactive view (loupe, before, hover) shows: a draft that
     /// finishes after a newer request was made still replaces older pixels, so a long slider drag
@@ -210,11 +217,26 @@ impl Renderer {
         Renderer {
             #[cfg(test)]
             thumb_jobs_built: 0,
+            #[cfg(test)]
+            legacy: false,
             request_ids: HashMap::new(),
             shown_ids: HashMap::new(),
             epoch: 0,
             preview_generation: None,
-            pool: JobPool::new(threads),
+            pool: {
+                let pool = JobPool::new(threads);
+                // a view renders one job at a time: during a drag / console turn the newest
+                // settings go next instead of a render per change side by side (QA-PERF)
+                // (the loupe's warm-up shares the loupe's turn: its first draft then finds the warm stages)
+                pool.set_exclusive(Some(std::sync::Arc::new(|s: &Slot| match s {
+                    Slot::Main | Slot::Prefetch(WARM_SLOT) => Some(0),
+                    Slot::Before => Some(1),
+                    Slot::Hover => Some(2),
+                    Slot::Second => Some(3),
+                    _ => None,
+                })));
+                pool
+            },
             thumb_inputs: HashMap::new(),
             offload: None,
             queue: Vec::new(),
@@ -371,6 +393,38 @@ impl Renderer {
         self.request_ids.insert(slot, job.request_id);
         let key = job.key;
         // a prefetch's pixels are never shown: nothing to prepare
+        self.pool.submit(slot, key, priority, Box::new(move || (lightcraft_engine::memory::in_background(|| job.run()), None)));
+    }
+
+    /// Tests: switch to the old way of rendering drafts ([`Renderer::legacy`]).
+    #[cfg(test)]
+    pub(crate) fn legacy_mode(&mut self) {
+        self.legacy = true;
+        self.pool.set_exclusive(None);
+    }
+
+    /// Rendering drafts the old way (tests measuring against it; always false in the app).
+    pub(crate) fn legacy(&self) -> bool {
+        #[cfg(test)]
+        let on = self.legacy;
+        #[cfg(not(test))]
+        let on = false;
+        on
+    }
+
+    /// Warm `view`'s stage cache with `job` — a draft-size render of what the view shows, run in
+    /// the background once the view is idle, never shown — so the first draft of the next slider
+    /// drag or console turn redoes only the stages its change feeds. Without it that first draft
+    /// ran the whole pipeline at a size the cache had never seen: a 250–600 ms stall on the first
+    /// dial detent of every photo (24 MP Leica DNG, edited). Once per job key.
+    pub fn warm(&mut self, view: Slot, job: RenderJob, priority: u32) {
+        let slot = Slot::Prefetch(WARM_SLOT);
+        if self.prefetched.get(&slot) == Some(&job.key) {
+            return;
+        }
+        self.prefetched.insert(slot, job.key);
+        let job = job.with_stages(self.stages.entry(view).or_default().clone());
+        let key = job.key;
         self.pool.submit(slot, key, priority, Box::new(move || (lightcraft_engine::memory::in_background(|| job.run()), None)));
     }
 

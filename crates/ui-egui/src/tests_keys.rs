@@ -1039,12 +1039,11 @@ fn crop_scale_keeps_centre_and_shape() {
 /// lenses), and the checkbox runs `lens.profileCorrections` (which picks the Set Lens profile).
 #[test]
 fn lens_corrections_show_the_profile_pickers() {
-    let mut h = demo();
+    let mut h = crate::tests_library2::headless(lightcraft_engine::Session::with_demo());
     let r = h.request("ui.set", json!({"view": "detail", "right": "edit"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    if !h.app.ui.section_open("lensCorrections") {
-        h.app.ui.toggle_section("lensCorrections");
-    }
+    // only this panel open, so a screenshot shows it
+    h.app.ui.open_sections = vec!["lensCorrections".into()];
     h.step();
     h.step();
     let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
@@ -1064,4 +1063,137 @@ fn lens_corrections_show_the_profile_pickers() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(h.app.session.develop_of(id).unwrap().optics.lens_profile, "still on");
+    crate::tests_library2::shot(&mut h, "lens-profile-pickers.png");
+}
+
+/// How far the loupe trails a Monogram dial: 30 Exposure ticks a second for 3 s on a real raw
+/// (ignored: `LC_BENCH_RAW=/path/to/24mp.dng cargo test --release -p lightcraft-ui-egui --lib --
+/// --ignored console_dial_lag --nocapture`). Prints the draft render time, how many ticks (and
+/// 60 Hz frames) the picture is behind while turning, and how long the sharp render takes after.
+#[test]
+#[ignore]
+fn console_dial_lag() {
+    use crate::render::Slot;
+    use std::time::Instant;
+    let Some(path) = std::env::var_os("LC_BENCH_RAW") else { return eprintln!("skipped: set LC_BENCH_RAW") };
+    let mut s = lightcraft_engine::Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = r["imported"][0].as_u64().expect("imported");
+    s.execute("library.select", &json!({"ids": [id]})).unwrap();
+    let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+    // a 14" MacBook Pro window (LC_BENCH_SIZE=1800x1100 for a ~2560 px loupe)
+    let size = std::env::var("LC_BENCH_SIZE")
+        .ok()
+        .and_then(|v| v.split_once('x').and_then(|(a, b)| Some([a.parse().ok()?, b.parse().ok()?])))
+        .unwrap_or([1512.0, 900.0]);
+    let mut h = Headless::new(app, size, 2.0);
+    if std::env::var_os("LC_BENCH_LEGACY").is_some() {
+        h.app.renderer.legacy_mode();
+        eprintln!("(the old way: parallel drafts, no warm-up, drafts from their own source)");
+    }
+    let r = h.request("ui.set", json!({"view": "detail", "module": "develop", "right": "edit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let sharp = |h: &Headless| h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.quick.is_none()) && !h.app.renderer.is_pending(Slot::Main);
+    let t0 = Instant::now();
+    assert!(h.step_until(Duration::from_secs(180), sharp), "first render");
+    h.settle(Duration::from_secs(60));
+    let full = h.app.renderer.textures.get(&Slot::Main).map(|t| (t.size, t.ms)).unwrap();
+    eprintln!("open: {:.0} ms; loupe render {}×{} in {:.0} ms", t0.elapsed().as_secs_f64() * 1e3, full.0[0], full.0[1], full.1);
+    // LC_BENCH_EDIT=1: an edited photo (noise reduction, sharpening, clarity, texture, dehaze,
+    // shadows / highlights) rather than the import state; LC_BENCH_CROP=1: cropped to the middle
+    if std::env::var_os("LC_BENCH_EDIT").is_some() {
+        let v = json!({"light.exposure": 0.3, "light.highlights": -40, "light.shadows": 30, "effects.clarity": 15, "effects.texture": 10,
+            "effects.dehaze": 10, "detail.nrLuminance": 30, "detail.nrColor": 25, "detail.sharpenAmount": 40});
+        h.app.run("develop.set", json!({"values": v})).unwrap();
+    }
+    if std::env::var_os("LC_BENCH_CROP").is_some() {
+        h.app.run("crop.set", json!({"rect": [0.2, 0.2, 0.8, 0.8]})).unwrap();
+    }
+    h.settle(Duration::from_secs(60));
+    assert!(h.step_until(Duration::from_secs(180), sharp), "edited render");
+    let line = std::env::var("LC_BENCH_LINE").unwrap_or_else(|_| "Exposure = ^0.02,-5,5".into());
+    let ticks_n = std::env::var("LC_BENCH_TICKS").ok().and_then(|v| v.parse().ok()).unwrap_or(90);
+    let gap = Duration::from_millis(33);
+    let start = Instant::now();
+    let mut ticks = 0usize;
+    // (job key the loupe asked for, the tick it shows, when)
+    let mut wanted: Vec<(u64, usize)> = Vec::new();
+    let mut shown_key = h.app.renderer.textures.get(&Slot::Main).map(|t| t.key);
+    let mut drafts: Vec<(f64, [usize; 2])> = Vec::new();
+    let mut lags: Vec<usize> = Vec::new();
+    // per tick: when it was sent, and when a render of it (or later) was first on screen
+    let mut sent: Vec<Instant> = Vec::new();
+    let mut seen: Vec<Option<Instant>> = Vec::new();
+    let mut frame_ms: Vec<f64> = Vec::new();
+    let mut last = 0usize;
+    loop {
+        let now = Instant::now();
+        if ticks < ticks_n && now >= start + gap * ticks as u32 {
+            crate::keymap::lr_input(&mut h.app, &line).unwrap();
+            ticks += 1;
+            sent.push(now);
+            seen.push(None);
+        }
+        let f0 = Instant::now();
+        h.step();
+        frame_ms.push(f0.elapsed().as_secs_f64() * 1e3);
+        if let Some(k) = h.app.renderer.wanted(Slot::Main)
+            && ticks > 0
+            && wanted.last().map(|w| w.0) != Some(k)
+        {
+            wanted.push((k, ticks));
+        }
+        let tex = h.app.renderer.textures.get(&Slot::Main).map(|t| (t.key, t.ms, t.size));
+        if let Some((k, ms, size)) = tex
+            && Some(k) != shown_key
+        {
+            shown_key = Some(k);
+            if ticks < ticks_n || h.app.session.interaction.is_some() {
+                drafts.push((ms, size));
+            }
+            if let Some(&(_, t)) = wanted.iter().find(|w| w.0 == k) {
+                for s in seen.iter_mut().take(t) {
+                    s.get_or_insert(Instant::now());
+                }
+                last = t;
+            }
+        }
+        if ticks > 0 && ticks <= ticks_n && h.app.session.interaction.is_some() {
+            lags.push(ticks - last.min(ticks));
+        }
+        let full_size = h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.size[0] >= full.0[0]);
+        if ticks == ticks_n && h.app.session.interaction.is_none() && sharp(&h) && full_size {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(60) {
+            eprintln!("gave up waiting");
+            break;
+        }
+        // a 120 Hz display's frame pacing
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    let after = sent.last().map(|t| t.elapsed().as_secs_f64() * 1e3).unwrap_or(0.0);
+    let avg = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
+    let latency: Vec<f64> = sent.iter().zip(&seen).filter_map(|(a, b)| b.map(|b| (b - *a).as_secs_f64() * 1e3)).collect();
+    let mut sorted = latency.clone();
+    sorted.sort_by(f64::total_cmp);
+    let p = |q: f64| sorted.get(((sorted.len() as f64 - 1.0) * q).round() as usize).copied().unwrap_or(f64::NAN);
+    let dm: Vec<f64> = drafts.iter().map(|d| d.0).collect();
+    eprintln!(
+        "{ticks} ticks at 30/s: {} drafts shown ({:.0} ms each on average, max {:.0}, first ones {:?}, size {:?}); ticks behind while turning: mean {:.1}, max {}; tick → on screen: median {:.0} ms, p90 {:.0} ms (= {:.1} / {:.1} frames at 60 Hz); UI frame: mean {:.1} ms, max {:.1} ms; sharp {:.0} ms after the last tick",
+        drafts.len(),
+        avg(&dm),
+        dm.iter().copied().fold(0.0, f64::max),
+        dm.iter().take(3).map(|m| m.round()).collect::<Vec<_>>(),
+        drafts.first().map(|d| d.1),
+        lags.iter().sum::<usize>() as f64 / lags.len().max(1) as f64,
+        lags.iter().max().copied().unwrap_or(0),
+        p(0.5),
+        p(0.9),
+        p(0.5) / 16.7,
+        p(0.9) / 16.7,
+        avg(&frame_ms),
+        frame_ms.iter().copied().fold(0.0, f64::max),
+        after,
+    );
 }
