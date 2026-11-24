@@ -464,7 +464,7 @@ pub fn standard_for(make: Option<&str>, model: &str) -> Option<Arc<Camera>> {
     let found = candidates(make, model).iter().find_map(|c| standard_index().get(c).cloned()).and_then(|path| match load_camera(&path, None) {
         Ok(c) => Some(Arc::new(c)),
         Err(e) => {
-            log::warn!("adobe: {}: {e}; using LightCraft's own colour for {model}", path.display());
+            log::warn!("adobe: {}: {e}; using LightCraft's own color for {model}", path.display());
             None
         }
     });
@@ -619,7 +619,7 @@ pub fn decode_color(cam: &Arc<Camera>, raw: &lightcraft_raw::RawImage) -> Option
     let spec = match cam.profile.color_spec(white, analog) {
         Ok(s) => s,
         Err(e) => {
-            log::warn!("adobe: colour spec for {}: {e}", cam.info.unique_model);
+            log::warn!("adobe: color spec for {}: {e}", cam.info.unique_model);
             return None;
         }
     };

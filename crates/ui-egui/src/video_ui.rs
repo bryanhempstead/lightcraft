@@ -361,11 +361,11 @@ pub fn loupe(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, img: Rect
     let rest = child.available_rect_before_wrap();
     let mut right = child.new_child(egui::UiBuilder::new().max_rect(rest).layout(egui::Layout::right_to_left(egui::Align::Center)));
     right.spacing_mut().item_spacing.x = 8.0;
-    let snd = if app.video.muted { "mute." } else { "snd." };
+    let snd = if app.video.muted { "mute." } else { "sound." };
     if bar_button(&mut right, "videoSound", snd, app.video.muted).on_hover_text(crate::i18n::tr("Sound on / off (needs ffplay)")).clicked() {
         clicked = Some("video.sound");
     }
-    if bar_button(&mut right, "videoCapture", "cap.", false)
+    if bar_button(&mut right, "videoCapture", "capture.", false)
         .on_hover_text(crate::i18n::tr("Capture Frame: this frame as a JPEG, stacked with the video"))
         .clicked()
     {

@@ -140,7 +140,7 @@ fn filter(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let (flag, rating) = (f.flag, f.rating);
     let any = flag.is_some() || rating > 0;
     // a click on the active choice clears it
-    let off = crate::widgets::text_button(&mut row, "filmFilterOff", if any { "filters off." } else { "no filter." }, false);
+    let off = crate::widgets::text_button(&mut row, "filmFilterOff", if any { "filters.off." } else { "no.filter." }, false);
     if off.on_hover_text(crate::i18n::tr("Show every photo of the source")).clicked() && any {
         let _ = app.run("library.filter", json!({"flag": Value::Null, "rating": 0}));
     }

@@ -164,7 +164,7 @@ pub struct QuickTool {
 pub const QUICK_TOOLS: &[QuickTool] = &[
     QuickTool { id: "quick.center", icon: Icon::Radial, tip: "Center mask — a soft vignette mask on the middle (right-click: make this one the default)", command: "mask.center", params: "{}", label: "center." },
     QuickTool { id: "quick.dust", icon: Icon::Dust, tip: "Find dust spots — review them in Remove and apply", command: "remove.dust", params: "{}", label: "dust." },
-    QuickTool { id: "quick.wb", icon: Icon::Picker, tip: "White Balance Selector (W)", command: "tool.wbPicker", params: "{}", label: "wb." },
+    QuickTool { id: "quick.wb", icon: Icon::Picker, tip: "White Balance Selector (W)", command: "tool.wbPicker", params: "{}", label: "white.balance." },
     QuickTool { id: "quick.auto", icon: Icon::Sliders, tip: "Auto settings", command: "develop.auto", params: "{}", label: "auto." },
     QuickTool { id: "quick.subject", icon: Icon::Subject, tip: "Select Subject mask", command: "mask.add", params: r#"{"kind": "subject"}"#, label: "subject." },
     QuickTool { id: "quick.sky", icon: Icon::Sky, tip: "Select Sky mask", command: "mask.add", params: r#"{"kind": "sky"}"#, label: "sky." },
@@ -496,7 +496,7 @@ fn detect_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let pending = if mine { app.session.remove_found.pending } else { 0 };
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
-        let r = text_button(ui, "removeDetect", "det.", false)
+        let r = text_button(ui, "removeDetect", "detect.", false)
             .on_hover_text(crate::i18n::tr("Detect objects to remove: people, wires and cables, sensor dust (⌥⇧O)"));
         if r.clicked() {
             app.ui.remove_picked.clear();
@@ -556,7 +556,7 @@ fn detect_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 app.toast(ui.ctx(), e.to_string());
             }
         }
-        if text_button(ui, "removeClearFound", "clr.", false).on_hover_text(crate::i18n::tr("Forget what was detected")).clicked() {
+        if text_button(ui, "removeClearFound", "clear.", false).on_hover_text(crate::i18n::tr("Forget what was detected")).clicked() {
             app.ui.remove_picked.clear();
             let _ = app.run("remove.clearCandidates", json!({}));
         }
@@ -571,7 +571,7 @@ fn reflection_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let on = st["enabled"] == true;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
-        if text_button(ui, "reflectionToggle", "refl.", on).on_hover_text(crate::i18n::tr("Remove reflections in glass (DSRNet)")).clicked() {
+        if text_button(ui, "reflectionToggle", "reflections.", on).on_hover_text(crate::i18n::tr("Remove reflections in glass (DSRNet)")).clicked() {
             match app.run("reflection.set", json!({"enabled": !on})) {
                 Ok(r) => {
                     if let Some(n) = r["notice"].as_str() {
@@ -583,7 +583,7 @@ fn reflection_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         if on {
             let keep = st["keep"] == true;
-            if text_button(ui, "reflectionRemove", "rmv.", !keep).on_hover_text(crate::i18n::tr("Remove the reflection")).clicked() {
+            if text_button(ui, "reflectionRemove", "remove.", !keep).on_hover_text(crate::i18n::tr("Remove the reflection")).clicked() {
                 let _ = app.run("reflection.set", json!({"keep": false}));
             }
             if text_button(ui, "reflectionKeep", "keep.", keep).on_hover_text(crate::i18n::tr("Keep only the reflection")).clicked() {
@@ -624,7 +624,7 @@ fn generative_row(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
         let on = app.ui.remove_generative;
-        let r = text_button(ui, "removeGenerative", "gen.ai.", on).on_hover_text(crate::i18n::tr(
+        let r = text_button(ui, "removeGenerative", "generative.ai.", on).on_hover_text(crate::i18n::tr(
             "Use Generative AI: Remove and Fill strokes are filled by a diffusion model (Stable Diffusion Inpainting), with three variations to pick from (< / >)",
         ));
         if r.clicked() {
@@ -693,7 +693,7 @@ fn variations_row(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, g: &ligh
         {
             let _ = app.run("spot.update", json!({"quick": !g.quick}));
         }
-        if text_button(ui, "genDelete", "del.", false).on_hover_text(crate::i18n::tr("Delete the spot (⌫)")).clicked() {
+        if text_button(ui, "genDelete", "delete.", false).on_hover_text(crate::i18n::tr("Delete the spot (⌫)")).clicked() {
             let _ = app.run("spot.delete", json!({}));
         }
     });

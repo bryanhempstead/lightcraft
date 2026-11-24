@@ -105,7 +105,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
             }
         }
         let n = l.focus_strokes.len() + l.blur_strokes.len();
-        if crate::widgets::text_button(ui, "lensBlurBrushClear", "clr.", false).on_hover_text(crate::i18n::tr("Remove the brush strokes")).clicked()
+        if crate::widgets::text_button(ui, "lensBlurBrushClear", "clear.", false).on_hover_text(crate::i18n::tr("Remove the brush strokes")).clicked()
             && n > 0
         {
             let _ = app.run("lensBlur.clearBrushes", json!({}));

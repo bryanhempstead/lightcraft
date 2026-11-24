@@ -956,7 +956,7 @@ fn list_ui(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 continue;
             }
             let chip_w = 46.0;
-            let text_w = inner_w - 10.0 - chip_w - 8.0 - 8.0 - 28.0 - 8.0 - 20.0 - 10.0;
+            let text_w = inner_w - 10.0 - chip_w - 8.0 - 8.0 - 36.0 - 8.0 - 20.0 - 10.0;
             let galley = ui.painter().layout(note.text.clone(), t.font(12.5), t.text, text_w.max(80.0));
             let line = context_line(&note);
             let sub = ui.painter().layout(line, t.font(10.5), t.text_dim, text_w.max(80.0));
@@ -985,7 +985,7 @@ fn list_ui(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             p.galley(pos2(tx, r.top() + 8.0), galley.clone(), t.text);
             p.galley(pos2(tx, r.top() + 8.0 + galley.size().y + 4.0), sub, t.text_dim);
             // ed. and ✕ show on hover (they keep their room)
-            let ed = Rect::from_min_size(pos2(r.right() - 28.0 - 8.0 - 20.0 - 10.0, r.top() + 8.0), vec2(28.0, 20.0));
+            let ed = Rect::from_min_size(pos2(r.right() - 36.0 - 8.0 - 20.0 - 10.0, r.top() + 8.0), vec2(36.0, 20.0));
             let rm = Rect::from_min_size(pos2(r.right() - 20.0 - 10.0, r.top() + 8.0), vec2(20.0, 20.0));
             let ed_resp = ui.interact(ed, egui::Id::new(("fix-note-edit", id)), Sense::click());
             let rm_resp = ui.interact(rm, egui::Id::new(("fix-note-remove", id)), Sense::click());
@@ -994,7 +994,7 @@ fn list_ui(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             if hovered {
                 let p = ui.painter();
                 p.rect(ed, 4.0, if ed_resp.hovered() { t.hover } else { t.button }, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-                p.text(ed.center(), Align2::CENTER_CENTER, crate::i18n::tr("ed."), t.semibold(10.5), t.text);
+                p.text(ed.center(), Align2::CENTER_CENTER, crate::i18n::tr("edit."), t.semibold(10.5), t.text);
                 if rm_resp.hovered() {
                     p.rect_filled(rm, 4.0, t.hover);
                 }
@@ -1047,7 +1047,7 @@ fn edit_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, id: u64, w: 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         save |= text_button(ui, "fixNoteEditSave", "save.", false).clicked();
-        cancel |= text_button(ui, "fixNoteEditCancel", "cncl.", false).clicked();
+        cancel |= text_button(ui, "fixNoteEditCancel", "cancel.", false).clicked();
     });
     if save {
         let text = app.fix_notes.editing.as_ref().map(|(_, s)| s.clone()).unwrap_or_default();

@@ -128,7 +128,7 @@ pub fn body(ui: &mut egui::Ui, catalog: &str, report: Option<&Value>, conflicts:
     }
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        for (key, label) in [("ask", "mine."), ("lightroom", "lr."), ("newest", "newest.")] {
+        for (key, label) in [("ask", "mine."), ("lightroom", "lightroom."), ("newest", "newest.")] {
             let r = ui.selectable_label(conflicts == key, label);
             crate::widgets::register(ui.ctx(), format!("chip:lrSyncConflicts:{key}"), r.rect);
             if r.clicked() {

@@ -526,7 +526,7 @@ fn bulk_row(app: &mut LightcraftApp, ui: &mut egui::Ui, groups: &[Vec<&FaceInfo>
                 done = true;
             }
         }
-        if text_button(ui, "peopleBulkRemove", "rm.", false).on_hover_text(crate::i18n::tr("Not faces: remove these face boxes")).clicked() {
+        if text_button(ui, "peopleBulkRemove", "remove.", false).on_hover_text(crate::i18n::tr("Not faces: remove these face boxes")).clicked() {
             let r = app.run("people.removeFaces", json!({"faces": faces_json(&faces)}));
             after(app, ui.ctx(), r);
             done = true;
@@ -657,7 +657,7 @@ fn person_page(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &lightcraft_e
                     app.ui.people_sel.clear();
                     after(app, ui.ctx(), r);
                 }
-                if text_button(ui, "confirmedRemove", "rm.", false).on_hover_text(crate::i18n::tr("Not a face: remove these face boxes")).clicked() {
+                if text_button(ui, "confirmedRemove", "remove.", false).on_hover_text(crate::i18n::tr("Not a face: remove these face boxes")).clicked() {
                     let r = app.run("people.removeFaces", json!({"faces": faces_json(&picked)}));
                     app.ui.people_sel.clear();
                     after(app, ui.ctx(), r);

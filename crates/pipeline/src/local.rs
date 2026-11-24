@@ -240,7 +240,7 @@ pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, src_long: usize, out_long:
             }
         });
         if let Some(t) = _t {
-            eprintln!("    nr colour: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+            eprintln!("    nr color: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
         }
     }
 }
@@ -504,13 +504,13 @@ mod tests {
         s.detail.nr_luminance = 30.0;
         s.detail.nr_color = 25.0;
         let (l, c) = nr_params(&s, 6000, 6000);
-        let (l, c) = (l.expect("luminance NR"), c.expect("colour NR"));
+        let (l, c) = (l.expect("luminance NR"), c.expect("color NR"));
         assert_eq!(l.k, 1.0);
         assert!(c.t > 0.95 && c.sigma > 4.0, "{c:?}");
         let (l2, c2) = nr_params(&s, 6000, 1500);
         assert!(l2.expect("luminance NR").sigma < l.sigma);
         // a preview keeps the gentler preview-fitted mix
-        assert!(c2.expect("colour NR").t < c.t);
+        assert!(c2.expect("color NR").t < c.t);
         s.detail.nr_luminance = 15.0;
         assert!(nr_params(&s, 6000, 6000).0.expect("luminance NR").k < 1.0);
         s.detail.nr_luminance = f64::NAN;

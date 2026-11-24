@@ -1132,7 +1132,7 @@ mod tests {
             let y = luminance_2020(p);
             *dst = p.map(|v| v * (1.0 - (-2.5 * y).exp()) / y);
         }
-        assert!(fit_pairs(&sensor, &reference).is_none(), "not enough colour to learn a matrix");
+        assert!(fit_pairs(&sensor, &reference).is_none(), "not enough color to learn a matrix");
         let look = fit_pairs_with(&sensor, &reference, Some((matrix, None))).unwrap();
         assert_eq!(look.matrix, matrix);
         reference.map_in_place(|p| [luminance_2020(p); 3]);
@@ -1232,8 +1232,8 @@ mod tests {
         assert_eq!(raw.info().developed_size(), (6000, 4000));
         let transform = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
         let look = fit_preview(&raw, &bytes, &transform);
-        eprintln!("R100 guarded colour fit accepted: {}", look.is_some());
-        assert!(look.is_some(), "this R100 corpus photo has enough matching colour after camera-framing alignment");
+        eprintln!("R100 guarded color fit accepted: {}", look.is_some());
+        assert!(look.is_some(), "this R100 corpus photo has enough matching color after camera-framing alignment");
         let (_, info) = crate::files::load_bytes(&bytes, 400).unwrap();
         assert!(info.raw && info.relative_wb);
         assert_eq!((info.as_shot_temp, info.as_shot_tint), (6500.0, 0.0));

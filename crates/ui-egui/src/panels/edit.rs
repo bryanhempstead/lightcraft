@@ -287,7 +287,7 @@ fn denoise_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, 
                 "result missing"
             };
             ui.label(egui::RichText::new(crate::i18n::tr(state)).color(t.text_dim).size(12.0));
-            if text_button(ui, "detailDenoiseRemove", "rem.", false).on_hover_text(crate::i18n::tr("Remove Enhance")).clicked() {
+            if text_button(ui, "detailDenoiseRemove", "remove.", false).on_hover_text(crate::i18n::tr("Remove Enhance")).clicked() {
                 let _ = app.run("enhance.remove", json!({}));
             }
         }
@@ -454,7 +454,7 @@ fn lens_corrections(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
             if crate::widgets::icon_button(ui, "fringePicker", Icon::Picker, vec2(26.0, 24.0), active, true, "Fringe Color Selector").clicked() {
                 app.ui.tool = if active { String::new() } else { "fringePicker".into() };
             }
-            ui.label(egui::RichText::new(crate::i18n::tr("sample fringe.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
+            ui.label(egui::RichText::new(crate::i18n::tr("sample.fringe.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
         });
         control(app, ui, d, "optics.defringePurple", true);
         let on = d.optics.defringe_purple_amount > 0.0;
@@ -1373,7 +1373,7 @@ fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
                 let tool = format!("tat:{k}");
                 let active = app.ui.tool == tool;
                 if text_button(ui, &format!("tatMixer-{k}"), label, active)
-                    .on_hover_text(crate::i18n::tr("Targeted adjustment: drag up/down on the photo to adjust the colours there"))
+                    .on_hover_text(crate::i18n::tr("Targeted adjustment: drag up/down on the photo to adjust the colors there"))
                     .clicked()
                 {
                     app.ui.tool = if active { String::new() } else { tool };
@@ -1385,7 +1385,7 @@ fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
         ui.horizontal(|ui| {
             ui.add_space(12.0);
             if crate::widgets::text_button(ui, "bwAuto", crate::i18n::tr("Auto"), false)
-                .on_hover_text(crate::i18n::tr("Set the mix from the photo's colours"))
+                .on_hover_text(crate::i18n::tr("Set the mix from the photo's colors"))
                 .clicked()
             {
                 let _ = app.run("develop.autoBwMix", json!({}));
@@ -1432,7 +1432,7 @@ fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) 
             ui.spacing_mut().item_spacing.x = 5.0;
             let active = app.ui.tool == "pointColor";
             let full = n >= lightcraft_develop::MAX_POINT_COLORS;
-            if crate::widgets::icon_button(ui, "pointColorPicker", Icon::Picker, vec2(26.0, 26.0), active, !full, "Sample a colour on the photo")
+            if crate::widgets::icon_button(ui, "pointColorPicker", Icon::Picker, vec2(26.0, 26.0), active, !full, "Sample a color on the photo")
                 .clicked()
             {
                 app.ui.tool = if active { String::new() } else { "pointColor".into() };
@@ -1452,7 +1452,7 @@ fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) 
     });
     if n == 0 {
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 8 }).show(ui, |ui| {
-            ui.label(egui::RichText::new(crate::i18n::tr("Pick a colour on the photo with the eyedropper.")).size(12.0).color(t.text_dim));
+            ui.label(egui::RichText::new(crate::i18n::tr("Pick a color on the photo with the eyedropper.")).size(12.0).color(t.text_dim));
         });
         return;
     }
@@ -1486,7 +1486,7 @@ fn hdr_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
     control(app, ui, d, "hdr.maxEv", true);
     padded_row(ui, |ui| {
         let vis = app.ui.hdr_visualize;
-        if text_button(ui, "hdrVisualize", "vis.hdr.", vis)
+        if text_button(ui, "hdrVisualize", "visualize.hdr.", vis)
             .on_hover_text(crate::i18n::tr(
                 "Visualize HDR: cyan, blue, purple, magenta up to 1, 2, 3 and over 3 stops above SDR white; red beyond what this display can show",
             ))
@@ -1495,7 +1495,7 @@ fn hdr_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
             let _ = app.run("view.visualizeHdr", json!({"on": !vis}));
         }
         let sdr = app.ui.hdr_sdr_preview;
-        if text_button(ui, "hdrSdrPreview", "sdr.prev.", sdr)
+        if text_button(ui, "hdrSdrPreview", "sdr.preview.", sdr)
             .on_hover_text(crate::i18n::tr(
                 "Preview for SDR Display: show the SDR rendition (what SDR screens and non-HDR exports get) and its settings",
             ))

@@ -793,11 +793,25 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
     let seg_w = ((w - gap * (per_row as f32 - 1.0)) / per_row as f32).max(24.0);
     let mut clicked = None;
     for (row_i, row) in items.chunks(per_row).enumerate() {
+        // equal widths, unless a label needs more: then each segment as wide as its label needs
+        // (the row's width shared by label width)
+        let label_w: Vec<f32> = row
+            .iter()
+            .map(|(l, _)| ui.painter().layout_no_wrap(crate::i18n::tr(l).to_string(), t.semibold(11.5), t.text).size().x + 16.0)
+            .collect();
+        let widths: Vec<f32> = if label_w.iter().all(|lw| *lw <= seg_w) {
+            vec![seg_w; row.len()]
+        } else {
+            let room = (w - gap * (row.len() as f32 - 1.0)).max(24.0 * row.len() as f32);
+            let total: f32 = label_w.iter().sum();
+            label_w.iter().map(|lw| (room * lw / total.max(1.0)).floor().max(24.0)).collect()
+        };
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
             for (j, (label, key)) in row.iter().enumerate() {
                 let label = crate::i18n::tr(label);
                 let i = row_i * per_row + j;
+                let seg_w = widths.get(j).copied().unwrap_or(seg_w);
                 let (r, resp) = ui.allocate_exact_size(vec2(seg_w, 24.0), Sense::click());
                 register(ui.ctx(), format!("button:{id}-{key}"), r);
                 let on = active == Some(i);

@@ -999,7 +999,7 @@ pub(crate) mod tests {
                 / img.data.len() as f32
         };
         let (before, info) = load_bytes(&plain, 64).unwrap();
-        assert!(sat(&before) > 0.05, "the synthetic scene is coloured");
+        assert!(sat(&before) > 0.05, "the synthetic scene is colored");
         assert!(info.camera_tone.is_none());
         // a map that removes all saturation, and a tone curve
         let grey = HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[0.0, 0.0, 1.0]; 8], srgb_value: false };

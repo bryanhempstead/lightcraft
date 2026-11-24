@@ -62,11 +62,12 @@ fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
 const TILE: f32 = 52.0;
 const TILE_GAP: f32 = 6.0;
 
-/// Columns and tile width of the Create New Mask grid in `width`: four tiles of up to 52 pt (at
-/// least 48, so the labels fit), else three (narrowed if even those don't fit).
-fn tile_layout(width: f32) -> (usize, f32) {
-    let tile = |n: f32| ((width - (n - 1.0) * TILE_GAP) / n).floor().min(TILE);
-    if tile(4.0) >= 48.0 { (4, tile(4.0)) } else { (3, tile(3.0).max(24.0)) }
+/// Columns and tile width of the Create New Mask grid in `width`: four tiles of up to 52 pt (or
+/// as wide as the widest label, `label_w`, needs), else three (narrowed if even those don't fit).
+fn tile_layout(width: f32, label_w: f32) -> (usize, f32) {
+    let need = (label_w + 8.0).max(48.0);
+    let tile = |n: f32| ((width - (n - 1.0) * TILE_GAP) / n).floor().min(TILE.max(need));
+    if tile(4.0) >= need { (4, tile(4.0)) } else { (3, tile(3.0).max(24.0)) }
 }
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
@@ -78,22 +79,26 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(6.0);
         // (Bryan's labels: short, lowercase, with a period)
         let tiles: [(&str, &str, Icon); 13] = [
-            ("subject", "subj.", Icon::Subject),
+            ("subject", "subject.", Icon::Subject),
             ("sky", "sky.", Icon::Sky),
-            ("background", "bg.", Icon::Subject),
-            ("object", "obj.", Icon::Subject),
-            ("people", "ppl.", Icon::Subject),
-            ("landscape", "land.", Icon::Sky),
-            ("prompt", "desc.", Icon::Subject),
+            ("background", "background.", Icon::Subject),
+            ("object", "object.", Icon::Subject),
+            ("people", "people.", Icon::Subject),
+            ("landscape", "landscape.", Icon::Sky),
+            ("prompt", "describe.", Icon::Subject),
             ("brush", "brush.", Icon::Brush),
-            ("linear", "lin.", Icon::Linear),
-            ("radial", "rad.", Icon::Radial),
-            ("luminanceRange", "lum.", Icon::Sliders),
-            ("colorRange", "clr.", Icon::Picker),
+            ("linear", "linear.", Icon::Linear),
+            ("radial", "radial.", Icon::Radial),
+            ("luminanceRange", "luminance.", Icon::Sliders),
+            ("colorRange", "color.", Icon::Picker),
             ("depthRange", "depth.", Icon::Sliders),
         ];
         // four 52 pt tiles a row when they fit, else as many as fit (at least three, shrunk)
-        let (cols, tile) = tile_layout(ui.available_width());
+        let label_w = tiles
+            .iter()
+            .map(|(_, l, _)| ui.painter().layout_no_wrap(l.to_string(), t.font(10.5), t.text_dim).size().x)
+            .fold(0.0, f32::max);
+        let (cols, tile) = tile_layout(ui.available_width(), label_w);
         egui::Grid::new("mask-tiles").spacing(vec2(TILE_GAP, TILE_GAP)).show(ui, |ui| {
             for (i, (kind, label, icon)) in tiles.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(tile, 52.0), Sense::click());
@@ -107,7 +112,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                             // an empty colour range; clicking the photo samples it
                             let _ = app.run("mask.add", json!({"kind": "colorRange"}));
                             app.ui.tool = "colorRange".into();
-                            app.toast(ui.ctx(), crate::i18n::tr("Click the photo to pick a colour · ⇧-click adds more"));
+                            app.toast(ui.ctx(), crate::i18n::tr("Click the photo to pick a color · ⇧-click adds more"));
                         }
                         "object" => start_object(app, ui.ctx(), "new"),
                         "prompt" => start_describe(app, "new"),
@@ -192,7 +197,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.label(egui::RichText::new(crate::i18n::tr("AI masks need an update")).color(t.text_dim));
-                if text_button(ui, "maskUpdateAll", "upd. all.", false).clicked() {
+                if text_button(ui, "maskUpdateAll", "update.all.", false).clicked() {
                     let _ = app.run("mask.updateAI", json!({}));
                 }
             });
@@ -248,7 +253,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 register(ui.ctx(), format!("maskUpdate:{}", m.id), cr);
                 let c = ui.interact(cr, egui::Id::new(("maskUpdate", m.id)), Sense::click());
                 ui.painter().rect_filled(cr, 4.0, if c.hovered() { t.hover } else { t.inset });
-                ui.painter().text(cr.center(), Align2::CENTER_CENTER, "⚠ upd.", t.font(10.5), t.text);
+                ui.painter().text(cr.center(), Align2::CENTER_CENTER, "⚠ update.", t.font(10.5), t.text);
                 if c.clicked() {
                     let _ = app.run("mask.updateAI", json!({"id": m.id}));
                 }
@@ -620,7 +625,7 @@ fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: usize, shape
                 );
                 let picking = app.ui.tool == "colorRange";
                 if text_button(ui, &format!("colorPick{comp}"), crate::i18n::tr("Pick"), picking)
-                    .on_hover_text(crate::i18n::tr("Click the photo to pick a colour; ⇧-click adds more (up to 5)"))
+                    .on_hover_text(crate::i18n::tr("Click the photo to pick a color; ⇧-click adds more (up to 5)"))
                     .clicked()
                 {
                     app.ui.tool = if picking { String::new() } else { "colorRange".into() };
@@ -726,8 +731,8 @@ fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: 
 
 /// Short labels for the People parts and Landscape classes (Bryan's chip style), in
 /// `lightcraft_develop::ai` order.
-const PART_CHIPS: [&str; 10] = ["pers.", "face.", "body.", "brows.", "sclera.", "iris.", "lips.", "teeth.", "hair.", "clothes."];
-const CLASS_CHIPS: [&str; 7] = ["sky.", "water.", "veg.", "mtn.", "arch.", "nat.gnd.", "art.gnd."];
+const PART_CHIPS: [&str; 10] = ["person.", "face.", "body.", "eyebrows.", "sclera.", "iris.", "lips.", "teeth.", "hair.", "clothes."];
+const CLASS_CHIPS: [&str; 7] = ["sky.", "water.", "vegetation.", "mountains.", "architecture.", "natural.ground.", "artificial.ground."];
 
 /// One click in a pickable list of `n`: click = just this one, ⌘-click adds or removes it,
 /// ⇧-click the run from the last click (`anchor`).
@@ -873,7 +878,7 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     ui.add_space(10.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        if text_button(ui, "aiPickSeparate", "sep.", p.separate).on_hover_text(crate::i18n::tr("Create separate masks")).clicked() {
+        if text_button(ui, "aiPickSeparate", "separate.", p.separate).on_hover_text(crate::i18n::tr("Create separate masks")).clicked() {
             p.separate = !p.separate;
         }
         let ready = if people { !p.people.is_empty() && !p.parts.is_empty() } else { !p.classes.is_empty() };

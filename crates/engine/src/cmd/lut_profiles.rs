@@ -30,7 +30,7 @@ pub struct LutProfile {
 fn load(file: &str) -> std::result::Result<lightcraft_pipeline::lut::Lut3d, String> {
     let text = std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?;
     if file.to_ascii_lowercase().ends_with(".xmp") {
-        crate::crs_table::profile_from_xmp(&text)?.map(|p| p.lut).ok_or_else(|| format!("{file}: no colour table"))
+        crate::crs_table::profile_from_xmp(&text)?.map(|p| p.lut).ok_or_else(|| format!("{file}: no color table"))
     } else {
         lightcraft_pipeline::lut::Lut3d::parse_cube(&text)
     }
@@ -322,7 +322,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Profiles",
             [],
             None,
-            "{paths: [.cube / .xmp / .dcp file, folder or .zip]} — camera profiles (.dcp: listed for their camera in the Profiles group, `cam:<name>`), 3D LUTs and camera-raw creative profiles (XMP Look profiles, or presets carrying one, whose look is an RGB colour table) become creative profiles (Amount 0–200 %; rendered on the CPU or the GPU) in the profile browser's groups (the profile's group, folder / zip name, else Imported); one already imported (same table, or same name and group) is skipped → {imported: [{id, name, group}], failed, alreadyImported, skipped}",
+            "{paths: [.cube / .xmp / .dcp file, folder or .zip]} — camera profiles (.dcp: listed for their camera in the Profiles group, `cam:<name>`), 3D LUTs and camera-raw creative profiles (XMP Look profiles, or presets carrying one, whose look is an RGB color table) become creative profiles (Amount 0–200 %; rendered on the CPU or the GPU) in the profile browser's groups (the profile's group, folder / zip name, else Imported); one already imported (same table, or same name and group) is skipped → {imported: [{id, name, group}], failed, alreadyImported, skipped}",
             always,
             import
         ),

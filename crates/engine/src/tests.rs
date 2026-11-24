@@ -653,14 +653,14 @@ fn color_range_sampling_selects_the_clicked_colour() {
     assert_eq!(r["samples"].as_array().unwrap().len(), 1);
     let img = mask(&mut s);
     let (centre, corner) = (at(&img, 0.5, 0.5), at(&img, 0.03, 0.03));
-    assert!(centre > 200 && corner < centre / 2, "the sampled colour is selected: centre {centre}, corner {corner}");
+    assert!(centre > 200 && corner < centre / 2, "the sampled color is selected: centre {centre}, corner {corner}");
     // ⇧-click adds, at most five
     for _ in 0..6 {
         s.execute("mask.sampleColor", &json!({"x": 0.03, "y": 0.03, "add": true})).unwrap();
     }
     let n = s.execute("mask.sampleColor", &json!({"x": 0.5, "y": 0.52, "add": true})).unwrap()["samples"].as_array().unwrap().len();
     assert_eq!(n, 5);
-    assert!(at(&mask(&mut s), 0.03, 0.03) > 200, "the added colour is selected too");
+    assert!(at(&mask(&mut s), 0.03, 0.03) > 200, "the added color is selected too");
     // a plain click starts over
     assert_eq!(s.execute("mask.sampleColor", &json!({"x": 0.5, "y": 0.5})).unwrap()["samples"].as_array().unwrap().len(), 1);
     assert!(s.execute("mask.sampleColor", &json!({"x": 1.5, "y": 0.5})).is_err());

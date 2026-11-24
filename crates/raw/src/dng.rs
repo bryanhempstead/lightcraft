@@ -144,7 +144,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             .iter()
             .map(|c| planes.iter().position(|p| p == c).map(|i| i as u8).filter(|&i| i < 3))
             .collect::<Option<_>>()
-            .ok_or_else(|| RawError::Unsupported("CFA with more than three colours".into()))?;
+            .ok_or_else(|| RawError::Unsupported("CFA with more than three colors".into()))?;
         if cpp != 1 {
             return Err(RawError::Unsupported("CFA data with several samples per pixel".into()));
         }

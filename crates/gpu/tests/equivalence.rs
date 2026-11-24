@@ -136,7 +136,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.color.vibrance = 40.0;
             s.color.saturation = -20.0;
         }),
-        ("colour mixer", |s| {
+        ("color mixer", |s| {
             s.mixer.blue.sat = -60.0;
             s.mixer.orange.hue = 30.0;
             s.mixer.green.lum = 40.0;
@@ -176,7 +176,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
                 PointColor { lum_shift: -60.0, variance: 50.0, range: 80.0, lr: lr(3.8, 0.4, 0.2), ..Default::default() },
             ];
         }),
-        ("colour grading", |s| {
+        ("color grading", |s| {
             s.grading.shadows = Wheel { hue: 220.0, sat: 40.0, lum: -10.0 };
             s.grading.highlights = Wheel { hue: 40.0, sat: 30.0, lum: 10.0 };
             s.grading.global = Wheel { hue: 300.0, sat: 10.0, lum: 0.0 };
@@ -776,7 +776,7 @@ fn adobe_base_and_look() {
     s.mixer.green.sat = -45.0;
     s.mixer.blue.lum = 7.0;
     s.mixer.yellow.hue = 63.0;
-    check("adobe measured colour", &src, &info, &s, &RenderRequest::fit(320, 240));
+    check("adobe measured color", &src, &info, &s, &RenderRequest::fit(320, 240));
 }
 
 /// R03: LUT profiles (a creative profile's RGB table in its own space, and a `.cube` on the

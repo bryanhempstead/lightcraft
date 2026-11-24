@@ -232,7 +232,7 @@ fn decode_stripe(stripe: &Stripe<'_>, height: usize, bits: u32, xtrans: bool) ->
         for pair in 0..6 {
             let colours = if pair % 2 == 0 { [0, 1] } else { [1, 2] };
             for &colour in &colours {
-                let lines = rows.get_mut(colour).ok_or_else(|| corrupt("invalid colour vector"))?;
+                let lines = rows.get_mut(colour).ok_or_else(|| corrupt("invalid color vector"))?;
                 let mut row = vec![0; size + 2];
                 let prev = lines.len() - 1;
                 let left = sample(lines, prev, 1)?;
@@ -250,7 +250,7 @@ fn decode_stripe(stripe: &Stripe<'_>, height: usize, bits: u32, xtrans: bool) ->
                     let Some(pos) = position.filter(|&x| x < size) else { continue };
                     let x = pos + 1;
                     for (which, &colour) in colours.iter().enumerate() {
-                        let lines = rows.get_mut(colour).ok_or_else(|| corrupt("invalid colour vector"))?;
+                        let lines = rows.get_mut(colour).ok_or_else(|| corrupt("invalid color vector"))?;
                         let y = lines.len() - 1;
                         let (nw, north, ne, nn) =
                             (sample(lines, y - 1, x - 1)?, sample(lines, y - 1, x)?, sample(lines, y - 1, x + 1)?, sample(lines, y - 2, x)?);
@@ -326,7 +326,7 @@ fn decode_stripe(stripe: &Stripe<'_>, height: usize, bits: u32, xtrans: bool) ->
                 };
                 let row = 2 + if colour == 1 { y } else { y / 2 };
                 let col = 1 + if xtrans { 2 * (x / 3) + (x % 3).min(1) } else { x / 2 };
-                output.push(sample(rows.get(colour).ok_or_else(|| corrupt("invalid colour vector"))?, row, col)? as u16);
+                output.push(sample(rows.get(colour).ok_or_else(|| corrupt("invalid color vector"))?, row, col)? as u16);
             }
         }
         previous = rows.into_iter().map(|mut r| r.split_off(r.len() - 2)).collect();

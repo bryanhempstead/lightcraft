@@ -262,10 +262,10 @@ fn keyword_list(app: &mut LightcraftApp, ui: &mut egui::Ui, active: Option<Photo
     egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 20, top: 2, bottom: 6 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            if crate::widgets::text_button(ui, "keywordListImport", "imp.", false).on_hover_text(crate::i18n::tr("Import Keywords…")).clicked() {
+            if crate::widgets::text_button(ui, "keywordListImport", "import.", false).on_hover_text(crate::i18n::tr("Import Keywords…")).clicked() {
                 let _ = app.run("dialog.importKeywords", json!({}));
             }
-            if crate::widgets::text_button(ui, "keywordListExport", "exp.", false).on_hover_text(crate::i18n::tr("Export Keywords…")).clicked() {
+            if crate::widgets::text_button(ui, "keywordListExport", "export.", false).on_hover_text(crate::i18n::tr("Export Keywords…")).clicked() {
                 let _ = app.run("dialog.exportKeywords", json!({}));
             }
             if crate::widgets::text_button(ui, "keywordListPurge", "purge.", false).on_hover_text(crate::i18n::tr("Purge Unused Keywords")).clicked()

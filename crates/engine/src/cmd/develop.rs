@@ -306,7 +306,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto B&W Mix",
             [],
             None,
-            "{} — sets the black & white mix from the photo's colours (and switches to B&W)",
+            "{} — sets the black & white mix from the photo's colors (and switches to B&W)",
             has_active,
             |s, _| {
                 let id = active(s, "develop.autoBwMix")?;
@@ -414,7 +414,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Fringe Color Selector",
             [],
             None,
-            "{x, y} normalized image coords of a purple or green fringe: sets that Defringe hue range around the colour (and Amount 5 when it is 0) → {fringe: purple|green, amount, hueLo, hueHi}",
+            "{x, y} normalized image coords of a purple or green fringe: sets that Defringe hue range around the color (and Amount 5 when it is 0) → {fringe: purple|green, amount, hueLo, hueHi}",
             has_active,
             |s, p| {
                 let (x, y) = (f64_req(p, "x", "develop.defringePick")?, f64_req(p, "y", "develop.defringePick")?);
@@ -425,7 +425,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let o = src.oriented(d.orientation);
                 let (cx, cy) = ((x.clamp(0.0, 1.0) * o.width as f64) as isize, (y.clamp(0.0, 1.0) * o.height as f64) as isize);
                 let (kind, pos) = lightcraft_pipeline::optics::fringe_pick(&o, cx, cy)
-                    .ok_or_else(|| bad("develop.defringePick", "the sampled colour is not a purple or green fringe"))?;
+                    .ok_or_else(|| bad("develop.defringePick", "the sampled color is not a purple or green fringe"))?;
                 // a 24-wide range centred on the colour (Lightroom keeps the two ends ≥ 10 apart)
                 let lo = (pos - 12.0).clamp(0.0, 76.0);
                 let hi = lo + 24.0;
@@ -1023,7 +1023,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sync Settings",
             [],
             None,
-            "{groups?: [settingsGroup] | subset? (as develop.copy; default: Lightroom's default subset), masks?: [mask id], matchExposure?: bool, autoAlign?: bool, matchCameraColor?: bool, scene?: bool} — copy the active photo's settings to all selected photos; matchCameraColor then matches each one's colour to the active photo across cameras / lenses / phones (develop.matchCameraColor); matchExposure sets each one's Exposure so it renders as bright as the active photo (however far over / under it was shot); autoAlign levels each one's horizon → {changed, matched, aligned, colour: [per photo]}",
+            "{groups?: [settingsGroup] | subset? (as develop.copy; default: Lightroom's default subset), masks?: [mask id], matchExposure?: bool, autoAlign?: bool, matchCameraColor?: bool, scene?: bool} — copy the active photo's settings to all selected photos; matchCameraColor then matches each one's color to the active photo across cameras / lenses / phones (develop.matchCameraColor); matchExposure sets each one's Exposure so it renders as bright as the active photo (however far over / under it was shot); autoAlign levels each one's horizon → {changed, matched, aligned, color: [per photo]}",
             has_selection,
             |s, p| {
                 let c = "develop.sync";
@@ -1072,7 +1072,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Match Camera & Lens Color",
             ["Photo"],
             None,
-            "{ids?, scene?: bool} — make each selected photo's colour match the active photo's across cameras, lenses and phones: a ColorChecker-style chart through both cameras' own colour paths sets Temp / Tint, HSL, Calibration and Saturation / Vibrance (raws of different cameras); the lens / device casts learned from your edits (develop.buildLensCasts) even out lens differences; with scene (default: shot within 30 min of each other) the two renders' neutrals and hue bands even out what is left. One undo step; same camera and lens without scene changes nothing → {changed, perPhoto: [{id, deltaE_before, deltaE_after, chart, lensCast, scene}]}",
+            "{ids?, scene?: bool} — make each selected photo's color match the active photo's across cameras, lenses and phones: a ColorChecker-style chart through both cameras' own color paths sets Temp / Tint, HSL, Calibration and Saturation / Vibrance (raws of different cameras); the lens / device casts learned from your edits (develop.buildLensCasts) even out lens differences; with scene (default: shot within 30 min of each other) the two renders' neutrals and hue bands even out what is left. One undo step; same camera and lens without scene changes nothing → {changed, perPhoto: [{id, deltaE_before, deltaE_after, chart, lensCast, scene}]}",
             has_selection,
             |s, p| {
                 let c = "develop.matchCameraColor";
@@ -1097,10 +1097,10 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(
             "develop.buildLensCasts",
-            "Learn Lens & Device Colour Casts",
+            "Learn Lens & Device Color Casts",
             [],
             None,
-            "{catalog?: path to a Lightroom .lrcat (default: the library's own edits), minSessions?: 3, minPhotos?: 10, dryRun?} — learn each lens's (and phone's) colour cast from how you finished its photos next to your other lenses at the same events; saved locally (lens-casts.json in LightCraft's settings folder, never shared) for develop.matchCameraColor → {path, lenses, devices}",
+            "{catalog?: path to a Lightroom .lrcat (default: the library's own edits), minSessions?: 3, minPhotos?: 10, dryRun?} — learn each lens's (and phone's) color cast from how you finished its photos next to your other lenses at the same events; saved locally (lens-casts.json in LightCraft's settings folder, never shared) for develop.matchCameraColor → {path, lenses, devices}",
             always,
             |s, p| {
                 let c = "develop.buildLensCasts";

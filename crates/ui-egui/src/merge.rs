@@ -184,8 +184,8 @@ pub struct MergeState {
 /// The kinds the Merge… dialog switches between: (command, button label, hover text).
 pub const KINDS: [(&str, &str, &str); 5] = [
     ("merge.hdr", "hdr.", "HDR — exposure brackets (the same view shot darker and brighter) → one photo with the whole range"),
-    ("merge.panorama", "pano.", "Panorama — overlapping photos → one wide photo"),
-    ("merge.hdrPanorama", "hdr.pano.", "HDR panorama — a bracket at each position → merged, then stitched"),
+    ("merge.panorama", "panorama.", "Panorama — overlapping photos → one wide photo"),
+    ("merge.hdrPanorama", "hdr.panorama.", "HDR panorama — a bracket at each position → merged, then stitched"),
     ("merge.focus", "focus.", "Focus stack — the same view focused near to far → one photo sharp throughout"),
     ("merge.take", "take.", "Best take — a burst or group shot: pick, per person, the photo their face comes from"),
 ];

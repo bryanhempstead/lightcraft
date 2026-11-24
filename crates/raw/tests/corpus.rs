@@ -313,7 +313,7 @@ fn corpus_sony_pre2017_colour_metadata() {
         assert!(img.white_at(0) > 16000.0, "{name}: white {} (14-bit scale)", img.white_at(0));
         seen += 1;
     }
-    eprintln!("pre-2017 Sony ARW colour metadata checked on {seen} files");
+    eprintln!("pre-2017 Sony ARW color metadata checked on {seen} files");
 }
 
 /// The embedded JPEG as linear RGB, reduced to `gw × gh` cells.
@@ -448,11 +448,11 @@ fn corpus_panasonic_encodings() {
         let best_other = ["RGGB", "GRBG", "GBRG", "BGGR"].into_iter().filter(|l| *l != cfa).map(agree).fold(f64::MIN, f64::max);
         let own = agree(cfa);
         eprintln!(
-            "{name:32} {}x{} {bits}-bit: green rank correlation {rho:.3}, colour agreement {own:.3} (others ≤ {best_other:.3})",
+            "{name:32} {}x{} {bits}-bit: green rank correlation {rho:.3}, color agreement {own:.3} (others ≤ {best_other:.3})",
             img.width, img.height
         );
         assert!(rho > 0.9, "{name}: rank correlation with the camera JPEG {rho}");
-        assert!(own > 0.5 && own > best_other, "{name}: colours follow the JPEG better with another layout ({own} vs {best_other})");
+        assert!(own > 0.5 && own > best_other, "{name}: colors follow the JPEG better with another layout ({own} vs {best_other})");
         seen += 1;
     }
     eprintln!("Panasonic encodings checked on {seen} files");
@@ -480,8 +480,8 @@ fn corpus_orf_cfa_patterns() {
         let best_other = ["RGGB", "GRBG", "GBRG", "BGGR"].into_iter().filter(|l| *l != cfa).map(agree).fold(f64::MIN, f64::max);
         let own = agree(cfa);
         let a = img.active_area;
-        eprintln!("{name:32} {cfa}, active area at ({}, {}): colour agreement {own:.3} (others ≤ {best_other:.3})", a.x, a.y);
-        assert!(own > 0.5 && own > best_other, "{name}: colours follow the JPEG better with another layout ({own} vs {best_other})");
+        eprintln!("{name:32} {cfa}, active area at ({}, {}): color agreement {own:.3} (others ≤ {best_other:.3})", a.x, a.y);
+        assert!(own > 0.5 && own > best_other, "{name}: colors follow the JPEG better with another layout ({own} vs {best_other})");
         seen += 1;
     }
     eprintln!("ORF CFA layouts checked on {seen} files");

@@ -510,7 +510,7 @@ impl Pool {
 
     /// The colorimetric transform of `model`: the mean of its files' own.
     fn colorimetric_of(&self, model: &str) -> Result<Mat3, String> {
-        let v = self.colorimetric.get(model).filter(|v| !v.is_empty()).ok_or_else(|| format!("{model}: no raw with colour matrices of its own"))?;
+        let v = self.colorimetric.get(model).filter(|v| !v.is_empty()).ok_or_else(|| format!("{model}: no raw with color matrices of its own"))?;
         let mut acc = [[0.0; 3]; 3];
         for t in v {
             for (a, b) in acc.iter_mut().flatten().zip(t.0.iter().flatten()) {
@@ -529,7 +529,7 @@ impl Pool {
     /// [`Pool::add_wb`] photos.
     pub fn transfer(&self, from: &CameraProfile, model: &str) -> Result<CameraProfile, String> {
         let mean = |m: &str| self.colorimetric_of(m);
-        let src = mean(&from.model)?.inverse().ok_or_else(|| format!("{}: singular colour transform", from.model))?;
+        let src = mean(&from.model)?.inverse().ok_or_else(|| format!("{}: singular color transform", from.model))?;
         let look = from.matrix().mul(&src);
         let matrix = look.mul(&mean(model)?);
         let mut p = CameraProfile::new(model, 0, 0, matrix, from.hue_sat.clone());
@@ -552,7 +552,7 @@ impl Pool {
             .filter(|(_, (files, _, _))| *files >= min_files)
             .map(|(model, (files, pairs, bright))| {
                 let (matrix, hue_sat, tone) =
-                    crate::camera_preview::fit_lightroom_profile(pairs, bright).ok_or_else(|| format!("{model}: no usable colour fit"))?;
+                    crate::camera_preview::fit_lightroom_profile(pairs, bright).ok_or_else(|| format!("{model}: no usable color fit"))?;
                 let mut p = CameraProfile::new(model, *files, pairs.len(), matrix, hue_sat);
                 p.tone = Some(tone);
                 p.source = Some("lightroom".into());
@@ -570,7 +570,7 @@ impl Pool {
             .into_iter()
             .filter(|(_, (files, _))| *files >= min_files)
             .map(|(model, (files, pairs))| {
-                let (matrix, hue_sat) = crate::camera_preview::fit_profile(pairs).ok_or_else(|| format!("{model}: no usable colour fit"))?;
+                let (matrix, hue_sat) = crate::camera_preview::fit_profile(pairs).ok_or_else(|| format!("{model}: no usable color fit"))?;
                 Ok(CameraProfile::new(model, *files, pairs.len(), matrix, hue_sat))
             })
             .collect()

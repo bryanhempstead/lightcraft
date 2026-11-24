@@ -431,9 +431,9 @@ impl MergeType {
     pub fn tag(self) -> &'static str {
         match self {
             MergeType::Hdr => "hdr.",
-            MergeType::Pano => "pano.",
+            MergeType::Pano => "panorama.",
             MergeType::Stack => "stack.",
-            MergeType::HdrPano => "hdr.pano.",
+            MergeType::HdrPano => "hdr.panorama.",
         }
     }
     /// The Photo Merge command that makes it.

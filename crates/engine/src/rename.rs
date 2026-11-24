@@ -264,7 +264,7 @@ pub const TOKENS: &[TokenHelp] = &[
     TokenHelp { tag: "{aperture}", aliases: &[], meaning: "Aperture (f-number)" },
     TokenHelp { tag: "{shutter}", aliases: &[], meaning: "Shutter speed (1-250)" },
     TokenHelp { tag: "{dimensions}", aliases: &["{width}", "{height}"], meaning: "Pixel dimensions, 6000x4000" },
-    TokenHelp { tag: "{label}", aliases: &[], meaning: "Colour label" },
+    TokenHelp { tag: "{label}", aliases: &[], meaning: "Color label" },
 ];
 
 /// The `%` directives of `{date:…}`.

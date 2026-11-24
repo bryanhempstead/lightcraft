@@ -89,7 +89,7 @@ pub(crate) fn naming_template_row(app: &mut LightcraftApp, ui: &mut egui::Ui, id
             }
         }
         if let Some(name) = user_current {
-            let r = ui.button("del.");
+            let r = ui.button("delete.");
             crate::widgets::register(ui.ctx(), format!("button:{id}DeleteTemplate"), r.rect);
             if r.clicked() {
                 let _ = app.run("naming.deleteTemplate", json!({"name": name}));
@@ -383,7 +383,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         crate::widgets::register(ui.ctx(), "field:labelSetName", te.rect);
                     });
                     ui.label(
-                        egui::RichText::new(crate::i18n::tr("Names appear in the label menu, the filter bar and the Info panel, and are written to XMP. Empty = the colour's name."))
+                        egui::RichText::new(crate::i18n::tr("Names appear in the label menu, the filter bar and the Info panel, and are written to XMP. Empty = the color's name."))
                             .color(t.text_dim),
                     );
                 }
@@ -556,7 +556,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     ui.add_space(12.0);
                     ui.label(egui::RichText::new(crate::i18n::tr("Then, on each photo")).color(t.text_dim));
                     let r = ui.checkbox(match_color, crate::i18n::tr("Match camera & lens color")).on_hover_text(crate::i18n::tr(
-                        "Make each photo's colour match this one when it was shot on another camera, lens or phone: a colour chart through both cameras' own colour profiles sets White Balance, HSL, Calibration and Saturation (ordinary sliders you can still change); lens and phone casts are learned from your own edits; photos shot within 30 minutes of this one also even out their neutrals",
+                        "Make each photo's color match this one when it was shot on another camera, lens or phone: a color chart through both cameras' own color profiles sets White Balance, HSL, Calibration and Saturation (ordinary sliders you can still change); lens and phone casts are learned from your own edits; photos shot within 30 minutes of this one also even out their neutrals",
                     ));
                     crate::widgets::register(ui.ctx(), "syncGroup:matchColor", r.rect);
                     let r = ui.checkbox(match_exposure, crate::i18n::tr("Match exposure")).on_hover_text(crate::i18n::tr(
@@ -1420,7 +1420,7 @@ fn group_checklist(app: &mut LightcraftApp, ui: &mut egui::Ui, tag: &str, groups
     };
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
-        for (label, subset) in [("all.", "all"), ("none.", "none"), ("def.", "default"), ("mod.", "modified")] {
+        for (label, subset) in [("all.", "all"), ("none.", "none"), ("default.", "default"), ("modified.", "modified")] {
             let r = ui.button(label).on_hover_text(crate::i18n::tr(match subset {
                 "all" => "Check all",
                 "none" => "Check none",
@@ -1479,7 +1479,7 @@ fn group_checklist(app: &mut LightcraftApp, ui: &mut egui::Ui, tag: &str, groups
         if save.clicked() {
             run(app, "develop.saveSubset", json!({"name": name, "groups": groups}));
         }
-        let ren = ui.button("ren.").on_hover_text(crate::i18n::tr("Rename the subset picked above to this name"));
+        let ren = ui.button("rename.").on_hover_text(crate::i18n::tr("Rename the subset picked above to this name"));
         crate::widgets::register(ui.ctx(), format!("{tag}:renameSubset"), ren.rect);
         if ren.clicked() {
             match current {
@@ -1487,7 +1487,7 @@ fn group_checklist(app: &mut LightcraftApp, ui: &mut egui::Ui, tag: &str, groups
                 None => app.toast(&ctx, crate::i18n::tr("Pick a saved subset first")),
             }
         }
-        let del = ui.button("del.").on_hover_text(crate::i18n::tr("Delete the saved subset with this name"));
+        let del = ui.button("delete.").on_hover_text(crate::i18n::tr("Delete the saved subset with this name"));
         crate::widgets::register(ui.ctx(), format!("{tag}:deleteSubset"), del.rect);
         if del.clicked() {
             run(app, "develop.deleteSubset", json!({"name": name}));

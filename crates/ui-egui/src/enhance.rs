@@ -356,7 +356,7 @@ pub(crate) fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, m
             ui.label(egui::RichText::new(format!("Downloading {:.0}%", pct)).color(t.text_dim).size(12.0));
             ctx_repaint(ui);
         } else {
-            let r = crate::widgets::text_button(ui, &format!("enhanceDownload-{key}"), "dl.", false).on_hover_text(format!(
+            let r = crate::widgets::text_button(ui, &format!("enhanceDownload-{key}"), "download.", false).on_hover_text(format!(
                 "{} — {:.0} MB, {} (not LightCraft's licence; {})",
                 m["name"].as_str().unwrap_or(key),
                 mb,

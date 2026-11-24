@@ -134,7 +134,7 @@ fn unsupported_name(ct: ColorType) -> &'static str {
     match ct {
         ColorType::Lab(_) => "CIE L*a*b* TIFF",
         ColorType::YCbCr(_) => "uncompressed YCbCr TIFF",
-        _ => "colour type",
+        _ => "color type",
     }
 }
 

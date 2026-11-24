@@ -273,7 +273,7 @@ fn first_frame_draws_the_app() {
     assert!(h.app.widgets.iter().any(|(w, _)| w == "module:library"), "frame 1 drew the top bar");
     let img = h.paint();
     let mid = img.pixels[(img.size[1] / 2) * img.size[0] + img.size[0] / 2];
-    assert_ne!(mid, Color32::from_rgb(12, 12, 12), "frame 1 is not the empty clear colour");
+    assert_ne!(mid, Color32::from_rgb(12, 12, 12), "frame 1 is not the empty clear color");
 
     let mut cold = demo();
     cold.step();

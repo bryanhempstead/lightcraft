@@ -486,7 +486,7 @@ pub fn left(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         {
             app.toast(ui.ctx(), e);
         }
-        if text_button(&mut row, "mapLocClear", "clr.", false)
+        if text_button(&mut row, "mapLocClear", "clear.", false)
             .on_hover_text(crate::i18n::tr("Show all photos again (clear the location filter)"))
             .clicked()
             && let Err(e) = app.run("library.clearFilter", json!({}))

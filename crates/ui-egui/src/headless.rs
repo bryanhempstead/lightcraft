@@ -104,6 +104,43 @@ impl HeadlessView {
         out
     }
 
+    /// [`Self::texts`] without the ones painted over: a text under an opaque rectangle drawn after
+    /// it (a window over the panel it lies on) isn't seen, so layout audits skip it.
+    pub fn visible_texts(&self) -> Vec<(String, egui::Rect, egui::Rect)> {
+        enum Item {
+            Text(String, egui::Rect, egui::Rect),
+            Cover(egui::Rect),
+        }
+        fn walk(shape: &egui::epaint::Shape, clip: egui::Rect, out: &mut Vec<Item>) {
+            match shape {
+                egui::epaint::Shape::Text(t) if !t.galley.job.text.trim().is_empty() => {
+                    out.push(Item::Text(t.galley.job.text.clone(), t.visual_bounding_rect(), clip));
+                }
+                egui::epaint::Shape::Rect(r) if r.fill.a() == 255 => out.push(Item::Cover(r.rect.intersect(clip))),
+                egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, out)),
+                _ => {}
+            }
+        }
+        let mut items = Vec::new();
+        for s in &self.shapes {
+            walk(&s.shape, s.clip_rect, &mut items);
+        }
+        let covers: Vec<(usize, egui::Rect)> =
+            items.iter().enumerate().filter_map(|(i, it)| if let Item::Cover(r) = it { Some((i, *r)) } else { None }).collect();
+        items
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, it)| match it {
+                Item::Text(s, r, clip) => {
+                    let seen = r.intersect(clip);
+                    let hidden = covers.iter().any(|(j, c)| *j > i && c.contains_rect(seen));
+                    (!hidden).then_some((s, r, clip))
+                }
+                Item::Cover(_) => None,
+            })
+            .collect()
+    }
+
     /// Frames run so far.
     pub fn frames(&self) -> u64 {
         self.frames
@@ -353,7 +390,7 @@ mod tests {
         let mut colours: Vec<u32> = img.pixels.iter().map(|c| u32::from_le_bytes(c.to_array())).collect();
         colours.sort_unstable();
         colours.dedup();
-        assert!(colours.len() > 200, "only {} colours", colours.len());
+        assert!(colours.len() > 200, "only {} colors", colours.len());
         // text in the top bar: bright pixels on the dark chrome
         let top_h = crate::theme::Tokens::default().top_bar_h as usize;
         let bright = img.pixels[..top_h * 1200].iter().filter(|c| c.r() > 150 && c.g() > 150 && c.b() > 150).count();
@@ -474,6 +511,11 @@ mod tests {
         h.request("ui.clickWidget", json!({"id": "profileCell:lc.vivid"}), t);
         assert_eq!(photo(&h).develop.profile.id, "lc.vivid");
         assert_eq!(photo(&h).history.len(), before.history.len() + 1);
+        // the second row of cells sits below the fold (filter. and view. rows stacked): scroll to it
+        let cell = h.app.widgets.iter().find(|(w, _)| w == "profileCell:lc.vivid").map(|(_, r)| *r).unwrap();
+        h.request("ui.move", json!({"x": cell.center().x, "y": cell.center().y}), t);
+        h.request("ui.scroll", json!({"dy": -160.0}), t);
+        h.settle(SETTLE);
         h.request("ui.clickWidget", json!({"id": "profileStar:lc.portrait"}), t);
         assert_eq!(h.app.session.profile_favorites, ["lc.portrait"]);
         assert_eq!(photo(&h).develop.profile.id, "lc.vivid", "the star doesn't apply");
