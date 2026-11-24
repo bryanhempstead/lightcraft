@@ -74,7 +74,7 @@ fn merges_specs() -> Vec<CommandSpec> {
             "{scope?: {kind: all|folder|album, path?, deep?, id?} | path?, deep?: bool (a shoot folder with its camera subfolders: one pool), album?, background?: bool} — merges.: look for photo merges in three steps (frames fired close together by one body and lens; their thumbnails compared; classified and scored): frames overlapping after a shift → panorama. (exposure drift allowed), one framing at stepped exposures → hdr., one framing with the focus moving → focus.stack., brackets at shifted framings → hdr.panorama.; bursts are left out. Kept as open groups to review (frames already in a group, sent-back ones too, are never suggested again); background: true looks on a worker thread in the app (→ {queued}) → {found, groups: [{id, kind, tag, photos, state, result, folder, found, confidence, reasons}]}",
             always,
             |s, p| {
-                let scope = Scope::from_params(p).map_err(|e| bad("merge.find", e))?;
+                let scope = here_or(s, p, "merge.find")?;
                 let background = bool_or(p, "background", false) && s.vision.background;
                 s.merge_find(&scope, background)
             }
@@ -87,7 +87,7 @@ fn merges_specs() -> Vec<CommandSpec> {
             "{scope? | path?, deep?, album?, background?: bool} — forget the open groups not touched yet (no frame taken out or put back) in the scope and look again with the current finder; merged, sent-back and changed groups stay (one undo step) → {removed, find}",
             always,
             |s, p| {
-                let scope = Scope::from_params(p).map_err(|e| bad("merge.recheck", e))?;
+                let scope = here_or(s, p, "merge.recheck")?;
                 let background = bool_or(p, "background", false) && s.vision.background;
                 s.merge_recheck(&scope, background)
             }
@@ -315,4 +315,21 @@ fn base_specs() -> Vec<CommandSpec> {
             |s, p| run(s, "merge.take", p)
         ),
     ]
+}
+
+/// The scope asked for; `path: ""` (a device key with no folder typed) = the folder / collection /
+/// merges. view on screen — never the whole library by accident.
+fn here_or(s: &Session, p: &Value, c: &str) -> Result<crate::merge_find::Scope> {
+    use crate::merge_find::Scope;
+    if p.get("path").and_then(Value::as_str).is_some_and(|x| x.trim().is_empty()) && p.get("scope").is_none() {
+        use crate::LibrarySource as L;
+        return match s.source {
+            L::LibraryFolder => s.library_folder.clone().map(|path| Scope::Folder { path, deep: true }).ok_or_else(|| bad(c, "no folder on screen")),
+            L::Folder => s.browse.as_ref().map(|b| Scope::Folder { path: b.path.clone(), deep: true }).ok_or_else(|| bad(c, "no folder on screen")),
+            L::Album(id) => Ok(Scope::Album { id }),
+            L::Merges => Ok(s.merges_scope.clone().unwrap_or_default()),
+            _ => Err(bad(c, "an empty path means the folder on screen: open a folder, shoot or collection first")),
+        };
+    }
+    Scope::from_params(p).map_err(|e| bad(c, e))
 }

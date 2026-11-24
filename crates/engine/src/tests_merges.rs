@@ -487,3 +487,16 @@ fn recheck_replaces_untouched_old_guesses_only() {
     assert!(crate::merge_find::group(&s.catalog, &crate::merge_find::group_id(&a)).is_some(), "undo brings it back");
     let _ = std::fs::remove_dir_all(&burst);
 }
+
+/// A device key's `path: ""` = the folder on screen; with none on screen it refuses (never the
+/// whole library by accident).
+#[test]
+fn an_empty_path_means_the_folder_on_screen() {
+    let (mut s, dir, _, _, _) = brackets("here");
+    s.execute("library.source", &json!({"kind": "all"})).unwrap();
+    assert!(s.execute("merge.find", &json!({"path": ""})).is_err(), "nothing on screen: refused");
+    s.execute("library.source", &json!({"kind": "libraryFolder", "path": dir.to_string_lossy()})).unwrap();
+    let r = s.execute("merge.recheck", &json!({"path": "", "deep": true})).unwrap();
+    assert!(r["find"].is_object(), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
