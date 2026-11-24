@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod accents;
 pub mod capture_time_dialog;
 pub mod control;
 pub mod credits;
@@ -905,6 +906,7 @@ impl LightcraftApp {
 
     /// Per-frame logic before layout (control channel, renders, shortcuts, drops).
     pub fn logic(&mut self, ctx: &egui::Context) {
+        theme::sync_accents(ctx, &self.ui.settings.accents);
         let t0 = now_ms();
         panels::library_problem::logic(self);
         self.logic_inner(ctx);

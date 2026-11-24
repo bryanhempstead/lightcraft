@@ -59,7 +59,17 @@ pub struct Tokens {
     pub track: Color32,
     pub thumb: Color32,
     pub thumb_hover: Color32,
+    /// The selection & focus accent (Settings ▸ Interface ▸ accents.: select.; the classic blue).
     pub accent: Color32,
+    /// The other accent roles ([`crate::accents::Role`]); None = that area keeps its classic look
+    /// (no accent picked). Active tools & toggles, the picked slider:
+    pub tools_accent: Option<Color32>,
+    /// Develop sliders' thumb and fill.
+    pub slider_accent: Option<Color32>,
+    /// Badges & highlights (also sets `fav` and `pick`).
+    pub badge_accent: Option<Color32>,
+    /// The current module and open panel headings.
+    pub tab_accent: Option<Color32>,
     pub star: Color32,
     /// fav.'s heart
     pub fav: Color32,
@@ -105,6 +115,10 @@ impl Default for Tokens {
             thumb: Color32::from_rgb(0xa0, 0xa0, 0xa0),
             thumb_hover: Color32::from_rgb(0xe0, 0xe0, 0xe0),
             accent: Color32::from_rgb(0x01, 0x65, 0xdd),
+            tools_accent: None,
+            slider_accent: None,
+            badge_accent: None,
+            tab_accent: None,
             star: Color32::from_rgb(0xd8, 0xd8, 0xd8),
             fav: Color32::from_rgb(0xe8, 0x5a, 0x74),
             pick: Color32::from_rgb(0xf0, 0xf0, 0xf0),
@@ -125,6 +139,21 @@ impl Default for Tokens {
 impl Tokens {
     pub fn get(ctx: &egui::Context) -> Tokens {
         ctx.data(|d| d.get_temp::<Tokens>(egui::Id::NULL)).unwrap_or_default()
+    }
+    /// The tokens with the owner's accents ([`crate::accents::Accents`]) applied to their roles;
+    /// with no accent picked, the defaults.
+    pub fn with_accents(a: &crate::accents::Accents) -> Tokens {
+        let mut t = Tokens::default();
+        if let Some([sel, tools, sliders, badges, tabs]) = a.resolve().map(|r| r.map(crate::accents::rgb)) {
+            t.accent = sel;
+            t.tools_accent = Some(tools);
+            t.slider_accent = Some(sliders);
+            t.badge_accent = Some(badges);
+            t.tab_accent = Some(tabs);
+            t.fav = badges;
+            t.pick = badges;
+        }
+        t
     }
     pub fn font(&self, size: f32) -> FontId {
         FontId::proportional(size)
@@ -183,9 +212,56 @@ fn craft_font_name(f: &lightcraft_engine::CraftFont) -> String {
     format!("craft-fonts {} {}", f.family, f.style)
 }
 
+/// Text (or a glyph) that reads on a `fill`: black or white, whichever contrasts more (WCAG
+/// relative luminance).
+pub fn text_on(fill: Color32) -> Color32 {
+    let lin = |c: u8| {
+        let c = f32::from(c) / 255.0;
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let l = 0.2126 * lin(fill.r()) + 0.7152 * lin(fill.g()) + 0.0722 * lin(fill.b());
+    // contrast with black (l + 0.05) / 0.05 vs with white 1.05 / (l + 0.05): equal at l ≈ 0.179
+    if l > 0.179 { Color32::BLACK } else { Color32::WHITE }
+}
+
+/// An accent used as text or a glyph on the dark chrome: a dark one is lifted toward white until it
+/// reads (a light one is returned as it is).
+pub fn legible(c: Color32) -> Color32 {
+    let mut out = c;
+    for _ in 0..6 {
+        if text_on(out) == Color32::BLACK {
+            break;
+        }
+        out = out.lerp_to_gamma(Color32::WHITE, 0.2);
+    }
+    out
+}
+
+/// Memory key: the accents the theme was last applied with.
+fn applied_id() -> egui::Id {
+    egui::Id::new("theme-accents-applied")
+}
+
+/// Re-apply the theme when the accents changed since it was last applied (cheap otherwise; the
+/// app calls this every frame, so a change shows on the next frame without a restart).
+pub fn sync_accents(ctx: &egui::Context, a: &crate::accents::Accents) {
+    let same = ctx.data(|d| d.get_temp::<crate::accents::Accents>(applied_id())).is_some_and(|x| x == *a);
+    if !same {
+        apply_with(ctx, a);
+    }
+}
+
 pub fn apply(ctx: &egui::Context) {
-    let t = Tokens::default();
-    ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, t));
+    apply_with(ctx, &crate::accents::Accents::default());
+}
+
+/// The theme with the owner's accents.
+pub fn apply_with(ctx: &egui::Context, accents: &crate::accents::Accents) {
+    let t = Tokens::with_accents(accents);
+    ctx.data_mut(|d| {
+        d.insert_temp(egui::Id::NULL, t);
+        d.insert_temp(applied_id(), accents.clone());
+    });
     let mut v = Visuals::dark();
     v.panel_fill = t.chrome;
     v.window_fill = t.chrome;

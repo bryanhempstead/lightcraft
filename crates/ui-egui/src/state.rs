@@ -447,6 +447,9 @@ pub struct AppSettings {
     /// The sections that open at launch, per side (a header's right-click ▸ Open by Default,
     /// `panel.defaultOpen`). A side not listed opens what was open at quit.
     pub panel_default_open: std::collections::BTreeMap<String, Vec<String>>,
+    /// Up to four accent colours and the areas they colour (Settings ▸ Interface ▸ accents.,
+    /// `app.accents`).
+    pub accents: crate::accents::Accents,
 }
 
 /// Develop View Options (LRC-DEV-VIEWOPTIONS): Develop's loupe has its own Info 1 / Info 2 lines,
@@ -521,6 +524,7 @@ impl Default for AppSettings {
             identity_plate: crate::identity::IdentityPlate::default(),
             panel_order: Default::default(),
             panel_default_open: Default::default(),
+            accents: crate::accents::Accents::default(),
         }
     }
 }

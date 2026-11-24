@@ -156,7 +156,7 @@ fn track_stops(track: &Track) -> Option<Vec<Color32>> {
     })
 }
 
-fn paint_track(ui: &Ui, rect: Rect, track: &Track, t: &Tokens, thumb_x: f32, ring: f32) {
+fn paint_track(ui: &Ui, rect: Rect, track: &Track, t: &Tokens, thumb_x: f32, ring: f32, fill: Option<(f32, Color32)>) {
     let p = ui.painter();
     let y = rect.center().y;
     let h = 1.0;
@@ -175,6 +175,9 @@ fn paint_track(ui: &Ui, rect: Rect, track: &Track, t: &Tokens, thumb_x: f32, rin
         }
     } else {
         p.rect_filled(Rect::from_min_max(pos2(rect.left(), y - h), pos2(rect.right(), y + h)), 1.0, t.track);
+        if let Some((from, c)) = fill {
+            p.rect_filled(Rect::from_min_max(pos2(from.min(thumb_x), y - h), pos2(from.max(thumb_x), y + h)), 1.0, c);
+        }
     }
     // gap around the hollow thumb
     p.rect_filled(Rect::from_center_size(pos2(thumb_x, y), vec2(ring * 2.0 + 4.0, 6.0)), 0.0, t.chrome);
@@ -535,7 +538,8 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let p = ui.painter();
     if picked {
         // the picked slider: its row tinted and outlined in the accent (inside the row, 2 px clear)
-        p.rect(row.shrink2(vec2(4.0, 1.0)), 4.0, t.accent.gamma_multiply(0.14), Stroke::new(1.0, t.accent.gamma_multiply(0.7)), egui::StrokeKind::Inside);
+        let a = t.tools_accent.unwrap_or(t.accent);
+        p.rect(row.shrink2(vec2(4.0, 1.0)), 4.0, a.gamma_multiply(0.14), Stroke::new(1.0, a.gamma_multiply(0.7)), egui::StrokeKind::Inside);
     }
     let label = crate::i18n::tr(label_override.unwrap_or(spec.label));
     if classic {
@@ -552,14 +556,16 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     }
     let ring = if classic { 5.0 } else { 7.0 };
     let tx = to_x(v);
-    paint_track(ui, track_rect, &spec.track, &t, tx, ring);
+    // with an accent for sliders a plain track fills from its default to the thumb
+    let fill = t.slider_accent.filter(|_| enabled).map(|c| (to_x(spec.default.clamp(spec.min, spec.max)), c));
+    paint_track(ui, track_rect, &spec.track, &t, tx, ring, fill);
     let p = ui.painter();
-    let ring_c = if !enabled {
-        t.text_disabled
-    } else if hovered {
-        t.thumb_hover
-    } else {
-        t.thumb
+    let ring_c = match t.slider_accent {
+        _ if !enabled => t.text_disabled,
+        Some(a) if hovered => lerp(a, Color32::WHITE, 0.35),
+        Some(a) => a,
+        None if hovered => t.thumb_hover,
+        None => t.thumb,
     };
     p.circle_filled(pos2(tx, track_rect.center().y), ring, t.chrome);
     p.circle_stroke(pos2(tx, track_rect.center().y), ring, Stroke::new(2.0, ring_c));
@@ -665,7 +671,7 @@ pub fn classic_header(ui: &mut Ui, id: &str, title: &str, open: bool, right_side
     } else {
         Icon::ChevronRight
     };
-    let text_c = if open { t.text } else { t.text_label };
+    let text_c = if open { t.tab_accent.map_or(t.text, crate::theme::legible) } else { t.text_label };
     if right_side {
         let tr = Rect::from_center_size(pos2(r.right() - 16.0, r.center().y), vec2(11.0, 11.0));
         paint(p, tr, tri, t.text_dim);
@@ -741,7 +747,7 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label));
     register(ui.ctx(), format!("button:{id}"), r);
     let fill = if active {
-        t.pressed
+        t.tools_accent.unwrap_or(t.pressed)
     } else if resp.hovered() {
         t.hover
     } else {
@@ -749,7 +755,9 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     };
     let p = ui.painter();
     p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-    p.galley(r.center() - galley.size() / 2.0, galley, t.text);
+    // on an accent fill: black or white text, whichever reads
+    let text_c = if active && t.tools_accent.is_some() { crate::theme::text_on(fill) } else { t.text };
+    p.galley(r.center() - galley.size() / 2.0, galley, text_c);
     resp
 }
 
@@ -792,8 +800,9 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 let i = row_i * per_row + j;
                 let (r, resp) = ui.allocate_exact_size(vec2(seg_w, 24.0), Sense::click());
                 register(ui.ctx(), format!("button:{id}-{key}"), r);
-                let fill = if active == Some(i) {
-                    t.pressed
+                let on = active == Some(i);
+                let fill = if on {
+                    t.tools_accent.unwrap_or(t.pressed)
                 } else if resp.hovered() {
                     t.hover
                 } else {
@@ -801,7 +810,8 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 };
                 let p = ui.painter();
                 p.rect(r, CornerRadius::same(4), fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
-                p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), t.text);
+                let text_c = if on && t.tools_accent.is_some() { crate::theme::text_on(fill) } else { t.text };
+                p.text(r.center(), Align2::CENTER_CENTER, label, t.semibold(11.5), text_c);
                 if resp.clicked() {
                     clicked = Some(i);
                 }
@@ -828,7 +838,7 @@ pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: 
     let c = if !enabled {
         t.text_disabled
     } else if active {
-        t.pick
+        t.tools_accent.map_or(t.pick, crate::theme::legible)
     } else if resp.hovered() {
         t.text
     } else {
