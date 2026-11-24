@@ -38,6 +38,11 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
      `develop.paste`, `dialog.export`, `dialog.merge` (⌘⇧M), `view.merges` (merge. tab), `merge.find` / `merge.recheck`,
      `photo.toggleFavorite`, favorites. view (`library.source all` + `library.filter {favorite:true}`),
      `dialog.enhance {denoise:true}`, `shoot.sort`. They are all control-protocol commands (`engine.execute`).
+  PAUSED until 11-27 (Bryan: LightCraft only until then): Second Brain merge page — branch `agent-mergepage` in
+  ~/second-brain-mergepage (8f770c6 page + a WIP commit); still to add there: layout./aspect./per.row. per screen size and
+  the merge box (match LightCraft's), then merge into Second Brain + one restart with his OK. Cameras in the library
+  (11-24): M262, R6 (CR3), A7S III (ARW), GR III, X-T2 + X100F (RAF), iPhones 8–15 (HEIC/JPEG/DNG) — one of each developed
+  OK with `lightcraft-cli render` and looked at.
   Done 11-24 since: merge. tab follows the sidebar (folder + its folders / collection / all); shoots. sort imported. /
   taken. / name. + newest/oldest; shoot right-click color. + find./recheck.merges.; Catalog ▸ favorites.; auto finder =
   weddings only (re-check 1,368 → 341 groups, Ciara+Logan 327 → 73); `docs/LightCraft-shortcuts.pdf` (also on Desktop).
