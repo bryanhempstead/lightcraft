@@ -212,6 +212,8 @@ pub struct Session {
     /// The copied photo's settings at the history state a relative paste counts from (same
     /// groups as [`Session::clipboard`]); `None` = paste exact settings.
     pub clipboard_base: Option<Value>,
+    /// The settings groups in [`Session::clipboard`] (what Paste Selected Settings can offer).
+    pub clipboard_groups: Vec<lightcraft_develop::SettingsGroup>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
     pub browse: Option<Browse>,
     /// The folder the [`LibrarySource::LibraryFolder`] view shows: the library's photos imported
@@ -439,6 +441,7 @@ impl Session {
             skip_auto_write: false,
             clipboard: None,
             clipboard_base: None,
+            clipboard_groups: Vec::new(),
             meta_clipboard: None,
             browse: None,
             library_folder: None,

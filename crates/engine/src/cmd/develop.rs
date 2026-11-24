@@ -937,13 +937,19 @@ pub fn specs() -> Vec<CommandSpec> {
                 let c = "develop.copy";
                 let id = active(s, c)?;
                 let base = paste_base(s, id, p, c)?;
-                if let Some(g) = groups_param(s, p, c)? {
-                    s.copy_groups = g;
-                }
+                // ⌘C (no groups / subset): everything — what goes over is picked when pasting
+                // (⌘V opens Paste Selected Settings, Bryan 11-24). The Copy dialog passes its own.
+                let groups = match groups_param(s, p, c)? {
+                    Some(g) => {
+                        s.copy_groups = g.clone();
+                        g
+                    }
+                    None => crate::cmd::copy_subsets::resolve(s, "all").map_err(|e| bad(c, e))?,
+                };
                 let masks = masks_param(p, c)?;
                 let d = s.develop_of(id).unwrap_or_default();
                 let take = |d: &DevelopSettings| {
-                    let mut v = lightcraft_develop::extract_groups(d, &s.copy_groups);
+                    let mut v = lightcraft_develop::extract_groups(d, &groups);
                     if let Some(m) = &masks {
                         lightcraft_develop::retain_masks(&mut v, m);
                     }
@@ -952,7 +958,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let clip = take(&d);
                 s.clipboard_base = base.as_ref().map(take);
                 s.clipboard = Some(clip);
-                Ok(json!({"groups": s.copy_groups, "mode": str_param(p, "mode").unwrap_or("exact")}))
+                s.clipboard_groups = groups.clone();
+                Ok(json!({"groups": groups, "mode": str_param(p, "mode").unwrap_or("exact")}))
             }
         ),
         cmd!(
@@ -983,7 +990,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "develop.paste",
             "Paste Edit Settings",
             ["Edit"],
-            Some("Cmd+V"),
+            Some("Cmd+Shift+V"),
             "{ids?, groups?: [settingsGroup], subset? (paste only these of the copied groups), maskMode?: replace (default) | merge — copied masks replace the photo's own or are added to them} — exact settings, or the changes since a history state when copied that way (develop.copy mode) → {changed, relative}",
             has_clipboard,
             |s, p| {

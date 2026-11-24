@@ -848,15 +848,15 @@ fn copy_relative_and_paste_asks_merge_or_replace_masks() {
     click(&mut h, "copyPasteMode:sinceFirst");
     assert_eq!(h.request("ui.dialog.confirm", json!({}), T)["ok"], true);
     assert!(h.app.session.clipboard_base.is_some(), "relative");
-    // ⌘V onto a photo with a mask of its own: asked, merge is the default
+    // ⌘V onto a photo with a mask of its own: the paste box asks what goes over, masks merged or replaced
     exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
     key(&mut h, "V", json!({"cmd": true}));
     h.step();
-    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::PasteMasks { merge: true, .. })), "{:?}", h.app.ui.dialog);
+    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::PasteSettings { groups, .. }) if groups.iter().any(|g| g == "masks")), "{:?}", h.app.ui.dialog);
     for _ in 0..8 {
         h.step();
     }
-    click(&mut h, "pasteMasks:replaceMasks");
+    click(&mut h, "pasteGroup:replaceMasks");
     assert_eq!(h.request("ui.dialog.confirm", json!({}), T)["ok"], true);
     let d = h.app.session.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap();
     assert!((d.light.exposure - 1.5).abs() < 1e-9, "+0.5 EV on its own 1.0: {}", d.light.exposure);
@@ -1471,4 +1471,43 @@ fn commit_hitch() {
     assert_eq!(exposure(&sidecar), Some(0.8), "the last edit reached the sidecar");
     let id = PhotoId(id);
     assert_eq!(h.app.session.metadata_status(id), lightcraft_engine::sidecar::MetadataStatus::UpToDate);
+}
+
+/// ⌘C copies everything about the photo; ⌘V on another opens Paste Selected Settings (the
+/// sync-style checklist) to pick what goes over; the ticks are remembered (Bryan, 11-24).
+#[test]
+fn cmd_c_copies_everything_and_cmd_v_asks_what_to_paste() {
+    let mut h = demo();
+    let ids: Vec<u64> = h.app.session.catalog.photos().take(2).map(|p| p.id.0).collect();
+    exec(&mut h, "library.select", json!({"ids": [ids[0]]}));
+    exec(&mut h, "develop.set", json!({"values": {"light.exposure": 1.0, "detail.sharpenAmount": 90}}));
+    h.step();
+    key(&mut h, "C", json!({"cmd": true}));
+    h.step();
+    let copied = h.app.session.clipboard_groups.len();
+    assert!(copied > 20, "every setting copied, not the last Copy dialog choice ({copied})");
+    exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
+    h.step();
+    key(&mut h, "V", json!({"cmd": true}));
+    for _ in 0..8 {
+        h.step();
+    }
+    let Some(crate::state::Dialog::PasteSettings { groups, .. }) = &h.app.ui.dialog else { panic!("⌘V: {:?}", h.app.ui.dialog) };
+    assert_eq!(groups.len(), copied, "all ticked the first time");
+    for w in ["pasteGroup:none", "pasteGroup:exposure"] {
+        let r = h.request("ui.clickWidget", json!({"id": w}), T);
+        assert_eq!(r["ok"], true, "{w}: {r}");
+        h.step();
+    }
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let d = h.app.session.develop_of(lightcraft_catalog::PhotoId(ids[1])).unwrap_or_default();
+    assert_eq!((d.light.exposure, d.detail.sharpen_amount == 90.0), (1.0, false), "only exposure went over");
+    // next ⌘V starts from that pick
+    key(&mut h, "V", json!({"cmd": true}));
+    for _ in 0..4 {
+        h.step();
+    }
+    let Some(crate::state::Dialog::PasteSettings { groups, .. }) = &h.app.ui.dialog else { panic!("second ⌘V") };
+    assert_eq!(groups, &["exposure".to_string()]);
 }

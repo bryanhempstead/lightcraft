@@ -1173,6 +1173,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             json!({"groups": groups, "masks": masks, "matchExposure": match_exposure, "autoAlign": auto_align, "matchCameraColor": match_color}),
         ),
         Dialog::PasteSettings { groups, merge_masks } => {
+            app.ui.sync_prefs.groups = Some(groups.clone());   // the next paste / sync box starts from these ticks
             app.run("develop.paste", json!({"groups": groups, "maskMode": if *merge_masks { "merge" } else { "replace" }}))
         }
         Dialog::PasteMasks { params, merge } => {

@@ -171,7 +171,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.createPreset", "Create Preset…", Some("Cmd+Shift+P"), "Photo"),
     ("dialog.autoStack", "Auto-Stack by Capture Time…", None, "Photo>Stack"),
     ("dialog.copySettings", "Choose Edit Settings to Copy…", Some("Cmd+Shift+C"), "Edit"),
-    ("dialog.pasteSettings", "Paste Selected Settings…", Some("Cmd+Shift+V"), "Edit"),
+    ("dialog.pasteSettings", "Paste Selected Settings…", Some("Cmd+V"), "Edit"),
     ("dialog.syncSettings", "Sync Settings…", None, "Photo>Develop Settings"),
     ("library.syncMetadata", "Sync Metadata", None, "Library"),
     ("view.previousImport", "Previous Import", None, "Library"),
@@ -1495,7 +1495,13 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "dialog.pasteSettings" => {
-            let groups = crate::state::group_ids(&app.session.copy_groups);
+            // ticked: what was picked last time (here or in Sync Settings), among what was copied
+            let copied = if app.session.clipboard_groups.is_empty() { &app.session.copy_groups } else { &app.session.clipboard_groups };
+            let all = crate::state::group_ids(copied);
+            let groups = match app.ui.sync_prefs.groups.as_deref().map(crate::state::normalize_groups) {
+                Some(last) if all.iter().any(|g| last.contains(g)) => all.into_iter().filter(|g| last.contains(g)).collect(),
+                _ => all,
+            };
             app.ui.dialog = Some(Dialog::PasteSettings { groups, merge_masks: false });
             Ok(Value::Null)
         }
