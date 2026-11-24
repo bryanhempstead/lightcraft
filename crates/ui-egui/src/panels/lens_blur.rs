@@ -69,54 +69,60 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
         }
     });
     super::edit::control(app, ui, d, "lensBlur.boost", true);
-    super::edit::sub_title(ui, "Focal Range");
-    depth_bar(ui, d);
-    row(ui, |ui| {
-        let picking = app.ui.tool == "lensFocus";
-        if crate::widgets::text_button(ui, "lensBlurFocus", "focus.", picking)
-            .on_hover_text(crate::i18n::tr("Click the photo where it should be in focus"))
-            .clicked()
-        {
-            app.ui.tool = if picking { String::new() } else { "lensFocus".into() };
-        }
-        let vis = app.enhance.visualize_depth;
-        if crate::widgets::text_button(ui, "lensBlurVisualize", "depth.", vis).on_hover_text(crate::i18n::tr("Visualize Depth")).clicked() {
-            app.enhance.visualize_depth = !vis;
-        }
-        if d.depth.is_some()
-            && crate::widgets::text_button(ui, "lensBlurRedepth", "redo.", false).on_hover_text(crate::i18n::tr("Estimate the depth again")).clicked()
-            && let Err(e) = app.run("enhance.depth", json!({}))
-        {
-            app.toast(ui.ctx(), e);
-        }
-    });
-    super::edit::control(app, ui, d, "lensBlur.focalDistance", true);
-    super::edit::control(app, ui, d, "lensBlur.focalRange", true);
-    if app.enhance.visualize_depth {
-        depth_map(ui, d);
-    }
-    super::edit::sub_title(ui, "Refine");
-    row(ui, |ui| {
-        for (kind, label, tip) in [("focus", "focus.brush.", "Paint what stays sharp"), ("blur", "blur.brush.", "Paint what is fully blurred")] {
-            let tool = format!("lensBrush:{kind}");
-            let on = app.ui.tool == tool;
-            if crate::widgets::text_button(ui, &format!("lensBlurBrush-{kind}"), label, on).on_hover_text(crate::i18n::tr(tip)).clicked() {
-                app.ui.tool = if on { String::new() } else { tool };
+    if super::edit::sub_fold(ui, "develop.lens.blur.focal.range", "Focal Range") {
+        depth_bar(ui, d);
+        row(ui, |ui| {
+            let picking = app.ui.tool == "lensFocus";
+            if crate::widgets::text_button(ui, "lensBlurFocus", "focus.", picking)
+                .on_hover_text(crate::i18n::tr("Click the photo where it should be in focus"))
+                .clicked()
+            {
+                app.ui.tool = if picking { String::new() } else { "lensFocus".into() };
             }
+            let vis = app.enhance.visualize_depth;
+            if crate::widgets::text_button(ui, "lensBlurVisualize", "depth.", vis).on_hover_text(crate::i18n::tr("Visualize Depth")).clicked() {
+                app.enhance.visualize_depth = !vis;
+            }
+            if d.depth.is_some()
+                && crate::widgets::text_button(ui, "lensBlurRedepth", "redo.", false)
+                    .on_hover_text(crate::i18n::tr("Estimate the depth again"))
+                    .clicked()
+                && let Err(e) = app.run("enhance.depth", json!({}))
+            {
+                app.toast(ui.ctx(), e);
+            }
+        });
+        super::edit::control(app, ui, d, "lensBlur.focalDistance", true);
+        super::edit::control(app, ui, d, "lensBlur.focalRange", true);
+        if app.enhance.visualize_depth {
+            depth_map(ui, d);
         }
-        let n = l.focus_strokes.len() + l.blur_strokes.len();
-        if crate::widgets::text_button(ui, "lensBlurBrushClear", "clear.", false).on_hover_text(crate::i18n::tr("Remove the brush strokes")).clicked()
-            && n > 0
-        {
-            let _ = app.run("lensBlur.clearBrushes", json!({}));
-        }
-        ui.label(egui::RichText::new(format!("{n}")).color(t.text_dim).size(12.0));
-    });
-    if app.ui.tool.starts_with("lensBrush:") {
-        let mut size = app.enhance.brush_size;
-        if let Some(v) = crate::widgets::slider(ui, &BRUSH_SIZE, size, true, None).value {
-            size = v;
-            app.enhance.brush_size = size;
+    }
+    if super::edit::sub_fold(ui, "develop.lens.blur.refine", "Refine") {
+        row(ui, |ui| {
+            for (kind, label, tip) in [("focus", "focus.brush.", "Paint what stays sharp"), ("blur", "blur.brush.", "Paint what is fully blurred")] {
+                let tool = format!("lensBrush:{kind}");
+                let on = app.ui.tool == tool;
+                if crate::widgets::text_button(ui, &format!("lensBlurBrush-{kind}"), label, on).on_hover_text(crate::i18n::tr(tip)).clicked() {
+                    app.ui.tool = if on { String::new() } else { tool };
+                }
+            }
+            let n = l.focus_strokes.len() + l.blur_strokes.len();
+            if crate::widgets::text_button(ui, "lensBlurBrushClear", "clear.", false)
+                .on_hover_text(crate::i18n::tr("Remove the brush strokes"))
+                .clicked()
+                && n > 0
+            {
+                let _ = app.run("lensBlur.clearBrushes", json!({}));
+            }
+            ui.label(egui::RichText::new(format!("{n}")).color(t.text_dim).size(12.0));
+        });
+        if app.ui.tool.starts_with("lensBrush:") {
+            let mut size = app.enhance.brush_size;
+            if let Some(v) = crate::widgets::slider(ui, &BRUSH_SIZE, size, true, None).value {
+                size = v;
+                app.enhance.brush_size = size;
+            }
         }
     }
     ui.add_space(6.0);

@@ -181,22 +181,24 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 ui.add_space(6.0);
             }),
             "detail" => section(app, ui, &d, "detail", |app, ui, d| {
-                sub_title(ui, crate::i18n::tr("Sharpening"));
-                for c in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail", "detail.sharpenMasking"] {
-                    control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
+                if sub_fold(ui, "develop.detail.sharpening", "Sharpening") {
+                    for c in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail", "detail.sharpenMasking"] {
+                        control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
+                    }
                 }
-                sub_title(ui, crate::i18n::tr("Noise Reduction"));
-                for c in [
-                    "detail.nrLuminance",
-                    "detail.nrDetail",
-                    "detail.nrContrast",
-                    "detail.nrColor",
-                    "detail.nrColorDetail",
-                    "detail.nrColorSmoothness",
-                ] {
-                    control(app, ui, d, c, true);
+                if sub_fold(ui, "develop.detail.noise.reduction", "Noise Reduction") {
+                    for c in [
+                        "detail.nrLuminance",
+                        "detail.nrDetail",
+                        "detail.nrContrast",
+                        "detail.nrColor",
+                        "detail.nrColorDetail",
+                        "detail.nrColorSmoothness",
+                    ] {
+                        control(app, ui, d, c, true);
+                    }
+                    denoise_row(app, ui, d, id);
                 }
-                denoise_row(app, ui, d, id);
                 ui.add_space(6.0);
             }),
             "lensCorrections" => section(app, ui, &d, "lensCorrections", |app, ui, d| lens_corrections(app, ui, d, id)),
@@ -205,8 +207,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 ui.add_space(6.0);
             }),
             "effects" => section(app, ui, &d, "effects", |app, ui, d| {
-                sub_title(ui, crate::i18n::tr("Post-Crop Vignetting"));
-                {
+                if sub_fold(ui, "develop.effects.post.crop.vignetting", "Post-Crop Vignetting") {
                     use lightcraft_develop::VignetteStyle as V;
                     let styles = [
                         (V::HighlightPriority, "Highlight Priority", "highlightPriority"),
@@ -234,25 +235,28 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                             json!({"settings": {"vignette": {"style": serde_json::to_value(styles[i].0).unwrap_or_default()}}}),
                         );
                     }
+                    for c in ["vignette.amount", "vignette.midpoint", "vignette.roundness", "vignette.feather", "vignette.highlights"] {
+                        let enabled = c == "vignette.amount" || d.vignette.amount != 0.0;
+                        control(app, ui, d, c, enabled);
+                    }
                 }
-                for c in ["vignette.amount", "vignette.midpoint", "vignette.roundness", "vignette.feather", "vignette.highlights"] {
-                    let enabled = c == "vignette.amount" || d.vignette.amount != 0.0;
-                    control(app, ui, d, c, enabled);
-                }
-                sub_title(ui, crate::i18n::tr("Grain"));
-                for c in ["grain.amount", "grain.size", "grain.roughness"] {
-                    control(app, ui, d, c, c == "grain.amount" || d.grain.amount != 0.0);
+                if sub_fold(ui, "develop.effects.grain", "Grain") {
+                    for c in ["grain.amount", "grain.size", "grain.roughness"] {
+                        control(app, ui, d, c, c == "grain.amount" || d.grain.amount != 0.0);
+                    }
                 }
                 ui.add_space(6.0);
             }),
             "lensBlur" => section(app, ui, &d, "lensBlur", super::lens_blur::show),
             "calibration" => section(app, ui, &d, "calibration", |app, ui, d| {
-                sub_title(ui, crate::i18n::tr("Shadows"));
-                control(app, ui, d, "calibration.shadowsTint", true);
+                if sub_fold(ui, "develop.calibration.shadows", "Shadows") {
+                    control(app, ui, d, "calibration.shadowsTint", true);
+                }
                 for (title, k) in [("Red Primary", "red"), ("Green Primary", "green"), ("Blue Primary", "blue")] {
-                    sub_title(ui, title);
-                    control(app, ui, d, &format!("calibration.{k}Hue"), true);
-                    control(app, ui, d, &format!("calibration.{k}Sat"), true);
+                    if sub_fold(ui, &format!("develop.calibration.{k}.primary"), title) {
+                        control(app, ui, d, &format!("calibration.{k}Hue"), true);
+                        control(app, ui, d, &format!("calibration.{k}Sat"), true);
+                    }
                 }
                 ui.add_space(6.0);
             }),
@@ -443,36 +447,41 @@ fn lens_corrections(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
         });
         if d.optics.lens_profile {
             let in_use = lens_profile_picker(app, ui, d, has_lens);
-            sub_title(ui, crate::i18n::tr("Amount"));
-            for c in ["optics.profileDistortion", "optics.profileVignetting"] {
-                control(app, ui, d, c, has_lens || in_use);
+            if sub_fold(ui, "develop.lens.amount", "Amount") {
+                for c in ["optics.profileDistortion", "optics.profileVignetting"] {
+                    control(app, ui, d, c, has_lens || in_use);
+                }
             }
         }
     } else {
-        sub_title(ui, crate::i18n::tr("Distortion"));
-        control(app, ui, d, "optics.distortion", true);
-        sub_title(ui, crate::i18n::tr("Defringe"));
-        padded_row(ui, |ui| {
-            let active = app.ui.tool == "fringePicker";
-            if crate::widgets::icon_button(ui, "fringePicker", Icon::Picker, vec2(26.0, 24.0), active, true, "Fringe Color Selector").clicked() {
-                app.ui.tool = if active { String::new() } else { "fringePicker".into() };
-            }
-            ui.label(egui::RichText::new(crate::i18n::tr("sample.fringe.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
-        });
-        control(app, ui, d, "optics.defringePurple", true);
-        let on = d.optics.defringe_purple_amount > 0.0;
-        control(app, ui, d, "optics.defringePurpleHueLo", on);
-        control(app, ui, d, "optics.defringePurpleHueHi", on);
-        control(app, ui, d, "optics.defringeGreen", true);
-        let on = d.optics.defringe_green_amount > 0.0;
-        control(app, ui, d, "optics.defringeGreenHueLo", on);
-        control(app, ui, d, "optics.defringeGreenHueHi", on);
-        sub_title(ui, crate::i18n::tr("Lateral Chromatic Aberration"));
-        control(app, ui, d, "optics.caRed", true);
-        control(app, ui, d, "optics.caBlue", true);
-        sub_title(ui, crate::i18n::tr("Lens Vignetting"));
-        control(app, ui, d, "optics.vignetting", true);
-        control(app, ui, d, "optics.vignettingMidpoint", d.optics.vignetting != 0.0);
+        if sub_fold(ui, "develop.lens.distortion", "Distortion") {
+            control(app, ui, d, "optics.distortion", true);
+        }
+        if sub_fold(ui, "develop.lens.defringe", "Defringe") {
+            padded_row(ui, |ui| {
+                let active = app.ui.tool == "fringePicker";
+                if crate::widgets::icon_button(ui, "fringePicker", Icon::Picker, vec2(26.0, 24.0), active, true, "Fringe Color Selector").clicked() {
+                    app.ui.tool = if active { String::new() } else { "fringePicker".into() };
+                }
+                ui.label(egui::RichText::new(crate::i18n::tr("sample.fringe.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
+            });
+            control(app, ui, d, "optics.defringePurple", true);
+            let on = d.optics.defringe_purple_amount > 0.0;
+            control(app, ui, d, "optics.defringePurpleHueLo", on);
+            control(app, ui, d, "optics.defringePurpleHueHi", on);
+            control(app, ui, d, "optics.defringeGreen", true);
+            let on = d.optics.defringe_green_amount > 0.0;
+            control(app, ui, d, "optics.defringeGreenHueLo", on);
+            control(app, ui, d, "optics.defringeGreenHueHi", on);
+        }
+        if sub_fold(ui, "develop.lens.lateral.chromatic.aberration", "Lateral Chromatic Aberration") {
+            control(app, ui, d, "optics.caRed", true);
+            control(app, ui, d, "optics.caBlue", true);
+        }
+        if sub_fold(ui, "develop.lens.vignetting", "Lens Vignetting") {
+            control(app, ui, d, "optics.vignetting", true);
+            control(app, ui, d, "optics.vignettingMidpoint", d.optics.vignetting != 0.0);
+        }
     }
     ui.add_space(6.0);
 }
@@ -662,6 +671,21 @@ pub fn sub_title(ui: &mut egui::Ui, title: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
     ui.painter().text(pos2(r.left() + 12.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(12.0), t.text_label);
+}
+
+/// A panel's sub-group title (Sharpening, Noise Reduction, Grain, Defringe…), foldable: a click
+/// folds the group's sliders away (remembered, `crate::folds`, id `develop.<panel>.<group>`).
+/// Returns whether the group is open.
+pub fn sub_fold(ui: &mut egui::Ui, id: &str, title: &str) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+    let open = crate::folds::toggle_on_click(ui, &resp, id);
+    register(ui.ctx(), format!("fold:{id}"), r);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
+    let hover = ui.rect_contains_pointer(r);
+    crate::folds::paint_triangle(ui, pos2(r.left() + 16.0, r.center().y + 2.0), open, if hover { t.text } else { t.text_dim });
+    ui.painter().text(pos2(r.left() + 28.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(12.0), t.text_label);
+    open
 }
 
 fn section(
@@ -1333,8 +1357,8 @@ fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
             _ => vec![("hue", "")],
         };
         for (k, title) in rows {
-            if !title.is_empty() {
-                sub_title(ui, title);
+            if !title.is_empty() && !sub_fold(ui, &format!("develop.mixer.{k}"), title) {
+                continue;
             }
             for b in bands {
                 let id = format!("mixer.{b}.{k}");
@@ -1462,9 +1486,10 @@ fn point_color(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) 
     for k in ["hueShift", "satShift", "lumShift", "variance"] {
         control(app, ui, d, &format!("pointColor.{sel}.{k}"), true);
     }
-    sub_title(ui, crate::i18n::tr("Range"));
-    for k in ["range", "hueRange", "satRange", "lumRange"] {
-        control(app, ui, d, &format!("pointColor.{sel}.{k}"), true);
+    if sub_fold(ui, "develop.point.color.range", "Range") {
+        for k in ["range", "hueRange", "satRange", "lumRange"] {
+            control(app, ui, d, &format!("pointColor.{sel}.{k}"), true);
+        }
     }
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 8 }).show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -1508,9 +1533,12 @@ fn hdr_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
         }
     });
     if app.ui.hdr_sdr_preview {
-        sub_title(ui, crate::i18n::tr("SDR Settings"));
-        for c in ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrClarity", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites", "hdr.sdrBlend"] {
-            control(app, ui, d, c, true);
+        if sub_fold(ui, "develop.hdr.sdr.settings", "SDR Settings") {
+            for c in
+                ["hdr.sdrBrightness", "hdr.sdrContrast", "hdr.sdrClarity", "hdr.sdrHighlights", "hdr.sdrShadows", "hdr.sdrWhites", "hdr.sdrBlend"]
+            {
+                control(app, ui, d, c, true);
+            }
         }
     }
 }

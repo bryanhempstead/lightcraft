@@ -364,16 +364,22 @@ fn tags(app: &mut LightcraftApp, ui: &mut egui::Ui, params: &Value, t: &Tokens) 
         .filter_map(|x| Some((x["keyword"].as_str()?.to_string(), x["from"].as_str()?.to_string(), x["score"].as_f64()?, x["have"].as_u64()?)))
         .collect();
     let looks: Vec<String> = sug["looksLike"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-    ui.horizontal(|ui| {
-        let (lr, _) = ui.allocate_exact_size(vec2(44.0, 18.0), Sense::hover());
-        ui.painter().text(lr.left_center(), Align2::LEFT_CENTER, crate::i18n::tr("tags:"), t.font(12.0), t.text_dim);
-        let text = if looks.is_empty() { "suggested for these photos".to_string() } else { format!("looks like {}", looks.join(", ")) };
-        let w = ui.available_width();
-        let g = one_line(ui, &text, t.font(12.0), t.text_label, w);
-        let (r, _) = ui.allocate_exact_size(vec2(w, 18.0), Sense::hover());
-        ui.painter().galley(pos2(r.left(), r.center().y - g.size().y / 2.0), g, t.text_label);
-        register(ui.ctx(), "place:looksLike", r);
-    });
+    let open = ui
+        .horizontal(|ui| {
+            // the suggestions fold to this line (remembered, crate::folds)
+            let open = crate::folds::label(ui, "places.tags", "tags:", 12.0, t.text_dim);
+            let text = if looks.is_empty() { "suggested for these photos".to_string() } else { format!("looks like {}", looks.join(", ")) };
+            let w = ui.available_width();
+            let g = one_line(ui, &text, t.font(12.0), t.text_label, w);
+            let (r, _) = ui.allocate_exact_size(vec2(w, 18.0), Sense::hover());
+            ui.painter().galley(pos2(r.left(), r.center().y - g.size().y / 2.0), g, t.text_label);
+            register(ui.ctx(), "place:looksLike", r);
+            open
+        })
+        .inner;
+    if !open {
+        return;
+    }
     app.places.picked_tags.retain(|k| list.iter().any(|x| x.0 == *k));
     if list.is_empty() {
         ui.label(

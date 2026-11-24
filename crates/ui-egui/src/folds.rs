@@ -109,6 +109,37 @@ pub fn header_sized(ui: &mut Ui, id: &str, title: &str, size: f32, h: f32) -> bo
     open
 }
 
+/// A foldable title inside a row of its own controls (Masks + its eye, People + close.): the
+/// triangle and `title` as wide as they are, `size` pt. Returns whether the section is open.
+pub fn label(ui: &mut Ui, id: &str, title: &str, size: f32, color: egui::Color32) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let title = crate::i18n::tr(title);
+    let galley = ui.painter().layout_no_wrap(title.to_string(), t.semibold(size), color);
+    let (r, resp) = ui.allocate_exact_size(vec2(galley.size().x + 18.0, galley.size().y.max(20.0)), Sense::click());
+    let open = toggle_on_click(ui, &resp, id);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
+    register(ui.ctx(), format!("fold:{id}"), r);
+    let hover = ui.rect_contains_pointer(r);
+    paint_triangle(ui, pos2(r.left() + 6.0, r.center().y), open, if hover { t.text } else { t.text_dim });
+    ui.painter().galley(pos2(r.left() + 18.0, r.center().y - galley.size().y / 2.0), galley, color);
+    open
+}
+
+/// Width of a [`triangle`] (spacers beside headings without one keep them in line).
+pub const TRIANGLE_W: f32 = 16.0;
+
+/// Just the ▾ / ▸, for a heading that is a control of its own (a checklist heading's checkbox):
+/// [`TRIANGLE_W`] × `h`, a click folds `id`. Returns whether the section is open.
+pub fn triangle(ui: &mut Ui, id: &str, h: f32) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(TRIANGLE_W, h), Sense::click());
+    let open = toggle_on_click(ui, &resp, id);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, id));
+    register(ui.ctx(), format!("fold:{id}"), r);
+    paint_triangle(ui, r.center(), open, if resp.hovered() { t.text } else { t.text_dim });
+    open
+}
+
 /// [`header_sized`] at the size of a dialog's group heading (12.5 pt, 24 points high).
 pub fn header(ui: &mut Ui, id: &str, title: &str) -> bool {
     header_sized(ui, id, title, 12.5, 24.0)

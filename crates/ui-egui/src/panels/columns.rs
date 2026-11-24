@@ -39,12 +39,30 @@ fn data(app: &mut LightcraftApp, ctx: &egui::Context) -> Value {
     v
 }
 
+/// The fold id of the column browser (its ▾ / ▸ at the left edge folds it to one line).
+pub const FOLD: &str = "library.filter.columns";
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEIGHT), Sense::hover());
+    let open = crate::folds::is_open(ui.ctx(), FOLD);
+    let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), if open { HEIGHT } else { HEADER + 8.0 }), Sense::hover());
     ui.painter().rect_filled(area, 0.0, t.chrome);
     ui.painter().line_segment([area.left_bottom(), area.right_bottom()], Stroke::new(1.0, t.divider));
     register(ui.ctx(), "columnBrowser", area);
+    // the fold triangle (remembered, crate::folds); folded, the browser is one line with its name
+    let tri = Rect::from_min_size(egui::pos2(area.left() + 4.0, area.top() + 4.0), vec2(20.0, HEADER));
+    let tri = if open { tri } else { Rect::from_min_max(tri.min, egui::pos2(area.right() - 8.0, tri.bottom())) };
+    let resp = ui.interact(tri, egui::Id::new("column-browser-fold"), Sense::click());
+    register(ui.ctx(), format!("fold:{FOLD}"), tri);
+    let open = crate::folds::toggle_on_click(ui, &resp, FOLD);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, "metadata columns"));
+    let c = egui::pos2(tri.left() + 10.0, tri.center().y);
+    crate::folds::paint_triangle(ui, c, open, if resp.hovered() { t.text } else { t.text_dim });
+    if !open {
+        let label = crate::i18n::tr("metadata.columns.");
+        ui.painter().text(egui::pos2(tri.left() + 24.0, c.y), egui::Align2::LEFT_CENTER, label, t.font(12.0), t.text_label);
+        return;
+    }
     let d = data(app, ui.ctx());
     let cols = d["columns"].as_array().cloned().unwrap_or_default();
     let available: Vec<(String, String)> = d["available"]
@@ -52,7 +70,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         .map(|a| a.iter().map(|c| (c["id"].as_str().unwrap_or("").to_string(), c["label"].as_str().unwrap_or("").to_string())).collect())
         .unwrap_or_default();
     // + / − sit at the right edge, 16 px in; the columns share the rest, 8 px apart
-    let inner = area.shrink2(vec2(16.0, 8.0));
+    let inner = Rect::from_min_max(egui::pos2(area.left() + 32.0, area.top() + 8.0), egui::pos2(area.right() - 16.0, area.bottom() - 8.0));
     let buttons_w = 64.0;
     let n = cols.len().max(1) as f32;
     let gap = 8.0;

@@ -236,13 +236,35 @@ pub(crate) fn wide_button(ui: &mut egui::Ui, id: &str, label: &str, w: f32) -> e
     resp
 }
 
-pub fn header(ui: &mut egui::Ui, title: &str) {
+/// A tool drawer's title (Crop & Straighten, Remove, Red Eye, Masking, Info…), foldable: a click
+/// folds the drawer to its title (remembered, `crate::folds`, id `drawer.<title>`). Returns whether
+/// the drawer's body is shown; inside a Classic panel (no title of its own) always true.
+pub fn header(ui: &mut egui::Ui, title: &str) -> bool {
     let t = Tokens::get(ui.ctx());
     if ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new(NO_HEADERS))).unwrap_or(false) {
-        return;
+        return true;
     }
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 12.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(13.0), t.text);
+    let id = format!("drawer.{}", fold_slug(title));
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+    let open = crate::folds::toggle_on_click(ui, &resp, &id);
+    register(ui.ctx(), format!("fold:{id}"), r);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
+    let hover = ui.rect_contains_pointer(r);
+    crate::folds::paint_triangle(ui, pos2(r.left() + 16.0, r.center().y + 2.0), open, if hover { t.text } else { t.text_dim });
+    ui.painter().text(pos2(r.left() + 28.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(13.0), t.text);
+    open
+}
+
+/// `Crop & Straighten` → `crop.straighten`: a section title as a fold id part.
+pub fn fold_slug(title: &str) -> String {
+    let mut out = String::new();
+    for w in title.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+        if !out.is_empty() {
+            out.push('.');
+        }
+        out.push_str(&w.to_lowercase());
+    }
+    out
 }
 
 /// Memory key: the right panels' own titles are left out (they are drawn inside a Classic panel
@@ -340,7 +362,9 @@ fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
-    header(ui, "Crop & Straighten");
+    if !header(ui, "Crop & Straighten") {
+        return;
+    }
     padded(ui, |ui| {
         let original = app.session.catalog.photo(id).map(|p| {
             let (w, h) = (p.width.max(1) as f64, p.height.max(1) as f64);
@@ -765,7 +789,9 @@ fn variations_row(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, g: &ligh
 
 fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
-    header(ui, "Remove");
+    if !header(ui, "Remove") {
+        return;
+    }
     padded(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             for (label, tool) in [("Remove", "remove"), ("Fill", "fill"), ("Heal", "heal"), ("Clone", "clone")] {
@@ -908,7 +934,9 @@ fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 
 fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
-    header(ui, "Red Eye");
+    if !header(ui, "Red Eye") {
+        return;
+    }
     padded(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             for (label, pet) in [("Red Eye", false), ("Pet Eye", true)] {
@@ -1086,7 +1114,9 @@ fn field_arrow(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str
 
 pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
-    header(ui, "Info");
+    if !header(ui, "Info") {
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| metadata_view_bar(app, ui));
     let groups = metadata_groups(app);
@@ -1195,16 +1225,18 @@ pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 meta_field_mixed(app, ui, label, key, v.as_deref(), lines);
             }
         }
-        if has("exif") {
+        // the read-only groups fold to their titles (remembered, crate::folds)
+        let group = |ui: &mut egui::Ui, id: &str, title: &str| crate::folds::header_sized(ui, &format!("metadata.{id}"), title, 12.0, 22.0);
+        if has("exif") && group(ui, "exif", "EXIF") {
             exif_rows(ui, &p);
         }
-        if has("iptcExt") {
+        if has("iptcExt") && group(ui, "iptc.extension", "IPTC Extension") {
             iptc_ext_rows(app, ui, &p);
         }
-        if has("dng") {
+        if has("dng") && group(ui, "dng", "DNG header") {
             dng_rows(app, ui, &p);
         }
-        if has("video") {
+        if has("video") && group(ui, "video", "Video") {
             video_rows(app, ui, &p);
         }
         if !has("file") && !has("location") && !has("gps") {
@@ -1288,8 +1320,6 @@ pub(crate) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 /// Source Type; `< mixed >` when the selected photos differ.
 fn iptc_ext_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(crate::i18n::tr("IPTC Extension")).font(t.semibold(12.0)).color(t.text));
-    ui.add_space(4.0);
     let sel: Vec<PhotoId> = if app.session.selection.ids.len() > 1 { app.session.selection.ids.to_vec() } else { vec![p.id] };
     for f in lightcraft_meta::iptc_ext::IPTC_EXT {
         let mine = p.meta.iptc_ext.get(f.id).cloned().unwrap_or_default();
@@ -1704,7 +1734,9 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
 
 pub(crate) fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
-    header(ui, "Keywords");
+    if !header(ui, "Keywords") {
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
         let kid = egui::Id::new("kw-input");
@@ -1772,8 +1804,12 @@ pub(crate) fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
         let last = typed.rsplit(',').next().unwrap_or("").trim().to_string();
         let suggestions = (*app.caches.suggestions(&app.session.catalog, &p.meta.keywords, &last, 12)).clone();
         if !suggestions.is_empty() {
-            ui.label(egui::RichText::new(crate::i18n::tr("Suggestions")).color(t.text_dim));
+            // folds to its title (remembered, crate::folds)
+            let open = crate::folds::label(ui, "keywording.suggestions", "Suggestions", 12.0, t.text_dim);
             ui.horizontal_wrapped(|ui| {
+                if !open {
+                    return;
+                }
                 for k in suggestions {
                     let r = ui
                         .add(egui::Button::new(egui::RichText::new(format!("+ {}", k.replace('|', " › "))).color(t.text_label)).corner_radius(10.0));
@@ -1796,38 +1832,45 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui, have: &[String]) {
     let t = Tokens::get(ui.ctx());
     let sets = lightcraft_engine::cmd::keywords::keyword_sets_json(&app.session);
     let current = sets["current"].as_str().unwrap_or_default().to_string();
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::tr("Keyword Set")).color(t.text_dim));
-        egui::ComboBox::from_id_salt("kw-set")
-            .selected_text(crate::i18n::builtin_label(&current, current == lightcraft_engine::cmd::keywords::RECENT))
-            .show_ui(ui, |ui| {
-                for set in sets["sets"].as_array().into_iter().flatten() {
-                    let name = set["name"].as_str().unwrap_or_default();
-                    if ui
-                        .selectable_label(name == current, crate::i18n::builtin_label(name, name == lightcraft_engine::cmd::keywords::RECENT))
-                        .clicked()
-                    {
-                        let _ = app.run("keyword.useSet", json!({"name": name}));
+    let open = ui
+        .horizontal(|ui| {
+            // folds to its title (remembered, crate::folds)
+            let open = crate::folds::label(ui, "keywording.keyword.set", "Keyword Set", 12.0, t.text_dim);
+            egui::ComboBox::from_id_salt("kw-set")
+                .selected_text(crate::i18n::builtin_label(&current, current == lightcraft_engine::cmd::keywords::RECENT))
+                .show_ui(ui, |ui| {
+                    for set in sets["sets"].as_array().into_iter().flatten() {
+                        let name = set["name"].as_str().unwrap_or_default();
+                        if ui
+                            .selectable_label(name == current, crate::i18n::builtin_label(name, name == lightcraft_engine::cmd::keywords::RECENT))
+                            .clicked()
+                        {
+                            let _ = app.run("keyword.useSet", json!({"name": name}));
+                        }
                     }
-                }
-                ui.separator();
-                if ui.button(crate::i18n::tr("Save Current Keywords as Set…")).clicked() {
-                    app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
-                        title: "Save Keyword Set".into(),
-                        hint: "Set name".into(),
-                        value: String::new(),
-                        command: "keyword.saveSet".into(),
-                        params: json!({}),
-                        key: "name".into(),
-                    });
-                }
-                if current != lightcraft_engine::cmd::keywords::RECENT
-                    && ui.button(crate::i18n::tr_format!("Delete “{current}”", current = current)).clicked()
-                {
-                    let _ = app.run("keyword.deleteSet", json!({"name": current}));
-                }
-            });
-    });
+                    ui.separator();
+                    if ui.button(crate::i18n::tr("Save Current Keywords as Set…")).clicked() {
+                        app.ui.dialog = Some(crate::state::Dialog::TextPrompt {
+                            title: "Save Keyword Set".into(),
+                            hint: "Set name".into(),
+                            value: String::new(),
+                            command: "keyword.saveSet".into(),
+                            params: json!({}),
+                            key: "name".into(),
+                        });
+                    }
+                    if current != lightcraft_engine::cmd::keywords::RECENT
+                        && ui.button(crate::i18n::tr_format!("Delete “{current}”", current = current)).clicked()
+                    {
+                        let _ = app.run("keyword.deleteSet", json!({"name": current}));
+                    }
+                });
+            open
+        })
+        .inner;
+    if !open {
+        return;
+    }
     let kws: Vec<String> = sets["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(str::to_string)).collect();
     if kws.is_empty() {
         ui.label(egui::RichText::new(crate::i18n::tr("Keywords you add appear here; ⌥1–⌥9 apply them.")).color(t.text_dim));
@@ -1857,7 +1900,9 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui, have: &[String]) {
 
 pub(crate) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
-    header(ui, "Versions");
+    if !header(ui, "Versions") {
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
         if text_button(ui, "versionCreate", crate::i18n::tr("Create Version"), false).clicked() {
@@ -1961,7 +2006,9 @@ fn short_time(iso: &str) -> String {
 
 pub(crate) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
-    header(ui, "History");
+    if !header(ui, "History") {
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     // the steps it had in Lightroom Classic (migrated with it), under ours
     let lightroom = lightcraft_engine::lr_history::history_of(&app.session, id);
@@ -1996,7 +2043,10 @@ pub(crate) fn activity(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
         }
         let Some(lr) = lightroom else { return };
         ui.add_space(6.0);
-        ui.label(egui::RichText::new(crate::i18n::tr("In Lightroom Classic")).font(t.semibold(11.5)).color(t.text_dim));
+        // folds to its title (remembered, crate::folds)
+        if !crate::folds::header_sized(ui, "history.lightroom.classic", "In Lightroom Classic", 11.5, 22.0) {
+            return;
+        }
         for (i, st) in lr.steps.iter().enumerate().rev() {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
             register(ui.ctx(), format!("lrhistory:{i}"), r);
