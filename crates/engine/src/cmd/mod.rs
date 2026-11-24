@@ -46,6 +46,7 @@ mod video;
 pub use video::{frame_timecode as video_frame_timecode, seconds as video_seconds, timecode as video_timecode};
 mod query;
 pub mod recheck;
+mod sb_pipeline;
 pub mod shoot;
 pub mod shoots;
 pub mod tether;
@@ -177,6 +178,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(tether::specs());
         v.extend(map::specs());
         v.extend(galleries::specs());
+        v.extend(sb_pipeline::specs());
         v.extend(publish::specs());
         v.extend(video::specs());
         v.extend(people::specs());

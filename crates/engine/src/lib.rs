@@ -62,6 +62,7 @@ pub mod presets;
 pub mod publish;
 pub mod remove_detect;
 pub mod rename;
+pub mod sb_pipeline;
 pub mod segment;
 pub mod sidecar;
 pub mod smart;
@@ -1241,6 +1242,8 @@ mod tests_publish;
 mod tests_rating_keys;
 #[cfg(test)]
 mod tests_recheck;
+#[cfg(test)]
+mod tests_sb_pipeline;
 #[cfg(test)]
 mod tests_segment;
 #[cfg(test)]

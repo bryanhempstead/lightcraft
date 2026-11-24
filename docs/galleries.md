@@ -81,6 +81,7 @@ LOT48.
 | Method | Path | Body / query | Answer |
 |---|---|---|---|
 | GET | `/v1/ping` | | `{ok, app: "second-brain", api: 1}` |
+| POST | `/v1/pipeline/inbox` | | `{ok, taken: [{file, ok, id, name, stage, backup} | {file, ok: false, error}]}` — take LightCraft's queued pipeline requests now (`pipeline.add`, `crates/engine/src/sb_pipeline.rs`) |
 | GET | `/v1/galleries` | | `{galleries: [record + published, cardCover, views, viewers, downloads, orders, picks, hasPassword]}` |
 | GET | `/v1/galleries/:id` | | `{gallery (+ password), photos: [{name, size, web}], videos, files}` |
 | POST | `/v1/galleries` | `{folder, name?, clientName?, clientEmail?, password?, allowDownload?, expires?, allowPrints?, layout?, lightcraft?}` | `{gallery, published}` |
