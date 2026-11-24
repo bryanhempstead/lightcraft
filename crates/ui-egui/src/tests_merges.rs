@@ -514,19 +514,33 @@ fn resuming_goes_back_to_a_merges_view() {
     assert!(matches!(h.app.session.source, lightcraft_engine::LibrarySource::Merges), "{:?}", h.app.session.source);
 }
 
-/// The merge. tab (after develop.): every group of the library in the merges. view, lit while there.
+/// The merge. tab (after develop.) follows the sidebar like Develop: the picked folder's merges
+/// (with its folders'), a collection's, or all; library. leaves it.
 #[test]
 fn the_merge_tab_opens_every_merge() {
     let mut f = fixture("tab");
+    let folder = f.dir.to_string_lossy().to_string();
     let h = &mut f.h;
     assert!(h.step_until(T, |h| merge_find::groups(&h.app.session.catalog).len() == 1));
     h.settle(SETTLE);
     let (develop, merge) = (widget(h, "module:develop"), widget(h, "module:merge"));
     assert!(merge.left() > develop.right() + 8.0, "right after develop.: {develop:?} {merge:?}");
+    // a folder picked in the sidebar: merge. shows that folder's merges (and its folders')
+    h.app.run("library.source", json!({"kind": "libraryFolder", "path": folder})).unwrap();
     let r = h.request("ui.clickWidget", json!({"id": "module:merge"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(matches!(h.app.session.source, lightcraft_engine::LibrarySource::Merges));
-    assert_eq!(h.app.session.merges_scope.clone().unwrap_or_default(), lightcraft_engine::merge_find::Scope::All);
+    assert_eq!(h.app.session.merges_scope.clone().unwrap_or_default(), lightcraft_engine::merge_find::Scope::Folder { path: folder.clone(), deep: true });
     assert!(has(h, "merges:bar"), "the merges. view");
+    // another pick in the sidebar while on merge.: its merges (All Photographs → all)
+    h.app.run("library.source", json!({"kind": "all"})).unwrap();
+    h.settle(SETTLE);
+    assert!(matches!(h.app.session.source, lightcraft_engine::LibrarySource::Merges));
+    assert_eq!(h.app.session.merges_scope.clone().unwrap_or_default(), lightcraft_engine::merge_find::Scope::All);
+    // library. leaves the tab
+    h.app.run("view.library", json!({})).unwrap();
+    h.app.run("library.source", json!({"kind": "all"})).unwrap();
+    h.settle(SETTLE);
+    assert!(!matches!(h.app.session.source, lightcraft_engine::LibrarySource::Merges));
 }

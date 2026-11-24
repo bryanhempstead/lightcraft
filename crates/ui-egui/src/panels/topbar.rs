@@ -271,7 +271,7 @@ pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> 
     let map = app.ui.view == crate::state::ViewMode::Map;
     let galleries = app.ui.view == crate::state::ViewMode::Galleries;
     let library = app.ui.module == crate::state::Module::Library && !map && !galleries;
-    let merges = library && app.session.source == lightcraft_engine::LibrarySource::Merges;
+    let merges = library && app.merge_tab;
     // right to left: galleries. | map. | merge. | develop. | library.
     let items = [
         ("galleries", "Galleries", galleries, "view.galleries", "Client galleries, kept by Second Brain (⌘⌥4)"),

@@ -452,6 +452,10 @@ pub fn paste_meets_masks(app: &LightcraftApp, p: &Value) -> bool {
 }
 
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    // another module tab: the merge. tab is left
+    if matches!(id, "view.library" | "view.develop" | "view.map" | "view.galleries") {
+        app.merge_tab = false;
+    }
     // The old Edit ▸ Language commands, from scripts written before LightCraft went English only.
     if id.starts_with("app.language.") {
         return Some(Err(ENGLISH_ONLY.into()));
@@ -1576,8 +1580,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         }
         // the merge. tab: every merges. group of the library, in the merges. view
         "view.merges" => {
+            let scope = crate::merges::scope_of_source(app);
             enter_library(app, Some(ViewMode::PhotoGrid));
-            app.run("library.source", json!({"kind": "merges"}))
+            app.merge_tab = true;
+            crate::merges::show_scope(app, &scope)
         }
         "view.hideDenoiseHint" => match p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or(app.session.active()) {
             Some(id) => {

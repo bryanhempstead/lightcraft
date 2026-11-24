@@ -314,6 +314,8 @@ pub struct LightcraftApp {
     pub hdr_view: Option<Box<dyn hdr_view::HdrView>>,
     /// Photos whose denoise. prompt was put away with hide. (this session).
     pub denoise_hidden: std::collections::HashSet<lightcraft_catalog::PhotoId>,
+    /// The merge. tab is open: the sidebar's folder / collection picks show their merges.
+    pub merge_tab: bool,
     /// The window surface's colour space, when the app can set it ([`display_p3::WindowSpace`]).
     pub window_space: Option<Box<dyn display_p3::WindowSpace>>,
     /// Scroll offsets (points) of the photo grid (vertical) and the filmstrip (horizontal) as
@@ -429,6 +431,7 @@ impl LightcraftApp {
             image_rect: None,
             hdr_view: None,
             denoise_hidden: Default::default(),
+            merge_tab: false,
             window_space: None,
             grid_scroll: None,
             film_scroll: None,

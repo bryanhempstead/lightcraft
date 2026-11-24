@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::{MergeType, PhotoId};
-use lightcraft_engine::merge_find::{self, Confidence, Counts, GroupState, MergeGroup};
+use lightcraft_engine::merge_find::{self, Confidence, Counts, GroupState, MergeGroup, Scope};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -61,8 +61,39 @@ pub fn counts(app: &LightcraftApp, ctx: &egui::Context) -> Arc<Counts> {
     c
 }
 
+/// The merges. scope matching what the sidebar shows, as Develop follows it: a folder → its
+/// merges and those of every folder in it; a collection → its; anything else → all.
+pub fn scope_of_source(app: &LightcraftApp) -> Scope {
+    use lightcraft_engine::LibrarySource as S;
+    let s = &app.session;
+    match s.source {
+        S::LibraryFolder => s.library_folder.clone().map_or(Scope::All, |path| Scope::Folder { path, deep: true }),
+        S::Folder => s.browse.as_ref().map_or(Scope::All, |b| Scope::Folder { path: b.path.clone(), deep: true }),
+        S::Album(id) => Scope::Album { id },
+        S::Merges => s.merges_scope.clone().unwrap_or_default(),
+        _ => Scope::All,
+    }
+}
+
+/// Show the merges. view of `scope` (`library.source {kind: merges, …}`).
+pub fn show_scope(app: &mut LightcraftApp, scope: &Scope) -> Result<Value, String> {
+    let p = match scope {
+        Scope::Folder { path, deep } => json!({"kind": "merges", "path": path, "deep": deep}),
+        Scope::Album { id } => json!({"kind": "merges", "id": id.0}),
+        Scope::All => json!({"kind": "merges"}),
+    };
+    app.run("library.source", p)
+}
+
 /// Per frame: land a finder run, start the automatic one, feed the merge worker.
 pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // the merge. tab follows the sidebar: a folder / collection picked there shows its merges
+    if app.merge_tab && app.session.source != lightcraft_engine::LibrarySource::Merges {
+        let scope = scope_of_source(app);
+        if show_scope(app, &scope).is_err() {
+            app.merge_tab = false;
+        }
+    }
     if let Some(r) = app.session.merge_find_poll() {
         landed(app, ctx, r);
     }
