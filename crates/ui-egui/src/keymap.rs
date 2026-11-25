@@ -1897,7 +1897,9 @@ pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, Str
         return app.run("geometry.upright", json!({"mode": mode}));
     }
     // the numbers after the name: dial `^d,min,max` / `vd,…`, slider `v,min,max`
-    let dial = rest.strip_prefix('^').map(|r| (1.0, r)).or_else(|| rest.strip_prefix('v').map(|r| (-1.0, r)));
+    // a dial needs a digit right after the sign, so a cycle list named `vertical` is not a dial
+    let after = |sign: char| rest.strip_prefix(sign).filter(|r| r.starts_with(|c: char| c.is_ascii_digit()));
+    let dial = after('^').map(|r| (1.0, r)).or_else(|| after('v').map(|r| (-1.0, r)));
     let nums: Vec<f64> = dial.map(|(_, r)| r).unwrap_or(rest).split(',').filter_map(|x| x.trim().parse::<f64>().ok()).collect();
     if name == "lc_cycle" || name.starts_with("lc_cycle_") {
         let list = if name == "lc_cycle" { rest.split(',').next().unwrap_or("").trim() } else { name.trim_start_matches("lc_cycle_") };
@@ -2004,16 +2006,8 @@ pub fn cycle(app: &mut crate::LightcraftApp, list: &str, dir: Option<f64>, hw: O
     let Some(item) = items.get(next) else { return Err("cycle: out of range".into()) };
     let ctx = egui::Context::default();
     crate::shortcuts::dispatch(app, &ctx, &item.command, if item.params.is_null() { json!({}) } else { item.params.clone() });
-    say(app, format!("{} {}", list_label(list), item.label));
+    say(app, item.label.clone());
     Ok(json!({"list": list, "index": next, "label": item.label, "command": item.command}))
-}
-
-fn list_label(list: &str) -> &str {
-    match list {
-        "cropAspect" => "Crop",
-        "whiteBalance" => "WB",
-        _ => list,
-    }
 }
 
 /// Commands of the keymap and its super keys; `None` = not one of them.
