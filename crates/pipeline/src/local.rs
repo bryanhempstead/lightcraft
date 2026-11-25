@@ -368,6 +368,7 @@ pub(crate) fn prepare(
     planes: &mut Planes,
     tex_space: Option<&[[f32; 3]; 3]>,
     adobe: bool,
+    uncropped: bool,
 ) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
     let texture_detail = texture_level(s, px_per_long, native_long).map(|lv| match &planes.texture_detail {
@@ -443,13 +444,24 @@ pub(crate) fn prepare(
         (false, _) => None,
     };
     let (need_map, need_haze) = crate::scene_cr::needs(s, adobe);
+    // (`uncropped`: `img` is the whole uncropped photo, so its map and haze are the photo's: every
+    // render of the photo reads them, whatever its crop)
     let scene_map = if need_map {
-        planes.scene_map.get_or_insert_with(|| timed("scene map", || crate::scene_cr::MapBase::of(&img).map(Arc::new))).clone()
+        planes
+            .scene_map
+            .get_or_insert_with(|| timed("scene map", || crate::scene_cr::MapBase::of(&img).map(|m| Arc::new(if uncropped { m.whole_photo() } else { m }))))
+            .clone()
     } else {
         None
     };
-    let haze =
-        if need_haze { planes.haze.get_or_insert_with(|| timed("haze", || crate::scene_cr::Haze::of(&img).map(Arc::new))).clone() } else { None };
+    let haze = if need_haze {
+        planes
+            .haze
+            .get_or_insert_with(|| timed("haze", || crate::scene_cr::Haze::of(&img).map(|h| Arc::new(if uncropped { h.whole_photo() } else { h }))))
+            .clone()
+    } else {
+        None
+    };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev));
     Prepared {

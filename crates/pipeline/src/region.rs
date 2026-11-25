@@ -187,19 +187,6 @@ pub fn place(
     place_with(region, frame, s, full_w, full_h, px_per_long, pad, WHOLE_SHARE)
 }
 
-/// How far (output px) the scene-linear stage (retouch, defringe, noise reduction) reaches.
-fn lin_reach(s: &DevelopSettings, src_long: usize, out_long: usize) -> f64 {
-    let (lum, col) = local::nr_params(s, src_long, out_long);
-    let mut r: f64 = 32.0;
-    if let Some(n) = lum {
-        r = r.max(6.0 * n.sigma as f64);
-    }
-    if let Some(n) = col {
-        r = r.max(3.5 * n.sigma as f64);
-    }
-    r.ceil()
-}
-
 /// [`place`] with the window padded by `pad` px, the whole render once it covers more than
 /// `whole_share` of it.
 #[allow(clippy::too_many_arguments)]
@@ -288,8 +275,9 @@ pub fn crop_samples<T: Copy + Default>(data: &[T], src_w: usize, n: usize, (x, y
 }
 
 /// Identifies the [`Globals`] of `s` for one photo: they follow the scene-linear image (white
-/// balance, geometry, lens corrections, spots, noise reduction…) and which of them the settings
-/// use, not the per-pixel stage's sliders — an Exposure, tone or colour drag keeps them.
+/// balance, lens corrections, spots, noise reduction…) and which of them the settings use, not
+/// the crop (they are the uncropped photo's) nor the per-pixel stage's sliders — an Exposure,
+/// tone or colour drag, or a crop drag, keeps them.
 pub fn globals_key(s: &DevelopSettings) -> u64 {
     use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
     let e = s.effective();
@@ -303,6 +291,9 @@ pub fn globals_key(s: &DevelopSettings) -> u64 {
         crate::settings_for(&e, &crate::RenderRequest::fit(1, 1)).hdr.enabled,
     );
     let mut k = e.into_owned();
+    // the photo is measured whole and uncropped (`crate::globals`): no crop, straighten, aspect
+    // or flip moves what it says
+    k.crop = Default::default();
     // what only the per-pixel stage reads
     k.light = Default::default();
     k.curve = Default::default();
@@ -322,121 +313,21 @@ pub fn globals_key(s: &DevelopSettings) -> u64 {
     BuildHasherDefault::<DefaultHasher>::default().hash_one((k.hash64(), needs))
 }
 
-/// Camera Raw's scene tone map and haze ([`crate::scene_cr`]) are block means of the whole
-/// render's scene-linear image (512 px across): made from a smaller render, the blocks cover
-/// other pixels and the map differs. This makes the means the whole `req` render's own map is
-/// made of — its resampled, white-balanced, retouched, noise-reduced pixels — from windows of
-/// rows ([`place_with`]: padded by the reach of that stage, grown to the spots it needs), so a
-/// full-size buffer is never held. `None` for an empty render.
-pub fn scene_means(
-    src: &lightcraft_raster::Rgb32f,
-    info: &crate::SourceInfo,
-    s: &DevelopSettings,
-    req: &crate::RenderRequest,
-) -> Option<lightcraft_raster::Rgb32f> {
-    use lightcraft_raster::Rgb32f;
-    let effective = s.effective();
-    let req = crate::RenderRequest { region: None, ..*req };
-    let rendition = crate::settings_for(&effective, &req);
-    let base = crate::plan(src, info, &rendition, &req);
-    let s = &*base.settings;
-    let (w, h) = (base.w, base.h);
-    if w == 0 || h == 0 {
-        return None;
-    }
-    let (mw, mh) = crate::scene_cr::map_size(w, h);
-    let oriented = (base.frame.orient != lightcraft_geom::Orientation::Normal).then(|| src.oriented(base.frame.orient));
-    let o = oriented.as_ref().unwrap_or(src);
-    // the blocks of `scene_cr::box_reduce`: which map column / row each pixel adds to
-    let blocks = |n: usize, m: usize| -> Vec<usize> {
-        let mut of = vec![0usize; n];
-        for b in 0..m {
-            let a = (b * n / m).min(n.saturating_sub(1));
-            let z = ((b + 1) * n / m).max(a + 1).min(n);
-            for v in of.get_mut(a..z).into_iter().flatten() {
-                *v = b;
-            }
-        }
-        of
-    };
-    let (cols, rows) = (blocks(w, mw), blocks(h, mh));
-    let mut sum = vec![[0f64; 3]; mw * mh];
-    let pad = lin_reach(s, base.src_long, w.max(h));
-    const BAND: usize = 512;
-    let mut y0 = 0;
-    while y0 < h {
-        let y1 = (y0 + BAND).min(h);
-        let band = Region { x0: 0.0, y0: y0 as f64 / h as f64, x1: 1.0, y1: y1 as f64 / h as f64 };
-        let mut frame = base.frame.whole();
-        let Some((px, bw, bh)) = place_with(band, &mut frame, s, w, h, base.px_per_long, pad, 1.0) else { break };
-        // (the whole frame at once when the stage can't be windowed: Lens Blur, auto-sourced spots)
-        let px = if frame.window.is_none() { RegionPx { x: 0, y: 0, w, h, full_w: w, full_h: h } } else { px };
-        let eyes = crate::redeye::resolve(src, &s.red_eye, s.orientation, &frame, bw, bh, base.px_per_long);
-        let (ox, oy) = frame.offset();
-        let p = crate::Plan {
-            settings: std::borrow::Cow::Borrowed(s),
-            frame,
-            w: bw,
-            h: bh,
-            px_per_long: base.px_per_long,
-            src_long: base.src_long,
-            geo: 0,
-            lin_key: 0,
-            eyes,
-            region: Some(px),
-        };
-        let mut img = p.frame.sample_oriented(o, bw, bh);
-        crate::lin_cpu(&mut img, info, &p);
-        local::denoise(&mut img, s, base.src_long, w.max(h));
-        for y in px.y..px.y + px.h {
-            let Some(&my) = rows.get(y) else { continue };
-            let at = (y - oy) * bw + (px.x - ox);
-            for (x, q) in img.data.get(at..at + px.w).unwrap_or(&[]).iter().enumerate() {
-                let Some(cell) = cols.get(px.x + x).and_then(|mx| sum.get_mut(my * mw + mx)) else { continue };
-                for c in 0..3 {
-                    let v = q[c];
-                    cell[c] += f64::from(if v.is_finite() { v.clamp(-1e6, 1e6) } else { 0.0 });
-                }
-            }
-        }
-        y0 = y1.max(px.y + px.h);
-    }
-    let count = |n: usize, m: usize, b: usize| {
-        let a = (b * n / m).min(n.saturating_sub(1));
-        ((b + 1) * n / m).max(a + 1).min(n) - a
-    };
-    let mut means = Rgb32f::new(mw, mh);
-    for (i, (o, s)) in means.data.iter_mut().zip(&sum).enumerate() {
-        let n = (count(w, mw, i % mw) * count(h, mh, i / mw)).max(1) as f64;
-        *o = s.map(|v| (v / n) as f32);
-    }
-    Some(means)
-}
-
-/// [`Globals`] for a region render of `full` (the source the region renders from) for `req`:
-/// the tone statistics, percentile and airlight from a whole render of `ctx` for `ctx_req`
-/// (preview size, [`crate::globals`]), Camera Raw's scene map and haze from `full` at `req`'s
-/// size ([`scene_means`]).
+/// [`Globals`] for a region render of `s` (of `_full`, the source it renders from, for `_req`):
+/// the whole, uncropped photo's tone statistics, percentile, airlight, scene map and haze
+/// ([`crate::globals`]), measured from `ctx` (the preview-size source) whatever the size and crop
+/// of the region's whole render. The render's own source and request take no part (they once did:
+/// the scene map was measured on the render's cropped frame): a region reads the photo-wide
+/// values the whole render reads.
 #[allow(clippy::too_many_arguments)]
 pub fn globals_for(
-    full: &lightcraft_raster::Rgb32f,
-    full_info: &crate::SourceInfo,
+    _full: &lightcraft_raster::Rgb32f,
+    _full_info: &crate::SourceInfo,
     ctx: &lightcraft_raster::Rgb32f,
     ctx_info: &crate::SourceInfo,
     s: &DevelopSettings,
-    req: &crate::RenderRequest,
+    _req: &crate::RenderRequest,
     ctx_req: &crate::RenderRequest,
 ) -> Globals {
-    let mut g = crate::globals(ctx, ctx_info, s, ctx_req);
-    if (g.scene_map.is_some() || g.haze.is_some())
-        && let Some(means) = scene_means(full, full_info, s, req)
-    {
-        if g.scene_map.is_some() {
-            g.scene_map = crate::scene_cr::MapBase::of(&means).map(Arc::new);
-        }
-        if g.haze.is_some() {
-            g.haze = crate::scene_cr::Haze::of(&means).map(Arc::new);
-        }
-    }
-    g
+    crate::globals(ctx, ctx_info, s, ctx_req)
 }

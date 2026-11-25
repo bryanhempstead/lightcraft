@@ -332,11 +332,13 @@ pub struct StageCache {
     ext: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
     /// A region view's whole-photo values ([`region::Globals`]) and their key.
     globals: Mutex<Option<(u64, Arc<Globals>)>>,
+    /// The whole-photo statistics ([`analysis`]) of the last source rendered, and their key.
+    analysis: Mutex<Option<(std::sync::Weak<Rgb32f>, u64, Arc<Globals>)>>,
 }
 
 impl Default for StageCache {
     fn default() -> Self {
-        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None), globals: Mutex::new(None) }
+        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None), globals: Mutex::new(None), analysis: Mutex::new(None) }
     }
 }
 
@@ -346,6 +348,19 @@ impl StageCache {
         self.lock().clear();
         *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.globals.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.analysis.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// The whole-photo statistics kept for `src` under `key` ([`Self::set_analysis`]), if any.
+    pub fn analysis(&self, src: &Arc<Rgb32f>, key: u64) -> Option<Arc<Globals>> {
+        let g = self.analysis.lock().unwrap_or_else(|e| e.into_inner());
+        let (w, k, g) = g.as_ref()?;
+        (*k == key && w.upgrade().is_some_and(|s| Arc::ptr_eq(&s, src))).then(|| g.clone())
+    }
+
+    /// Keep the whole-photo statistics of `src` (one set: the latest).
+    pub fn set_analysis(&self, src: &Arc<Rgb32f>, key: u64, g: Arc<Globals>) {
+        *self.analysis.lock().unwrap_or_else(|e| e.into_inner()) = Some((Arc::downgrade(src), key, g));
     }
 
     /// The whole-photo values kept for `key` ([`Self::set_globals`]), if any.
@@ -568,11 +583,35 @@ pub fn render_region(
     render_impl(Src::Shared(src), info, s, req, cache, Some(globals))
 }
 
-/// What a whole render of `req` (its region ignored) learns from the whole photo, for
-/// [`render_region`]: usually a preview-size render's.
+/// Long edge (px) of the analysis render ([`globals`]): fixed, so that every render of a photo,
+/// whatever its size, takes the same whole-photo statistics.
+pub const ANALYSIS_EDGE: usize = 1024;
+
+/// Whether `s` reads any whole-photo statistic ([`Globals`]).
+pub fn needs_globals(s: &DevelopSettings) -> bool {
+    let e = s.effective();
+    let sig = local::plane_sigmas(&e, 1000.0, Quality::Full);
+    let (map, haze) = scene_cr::needs(&e, true);
+    sig.base.is_some() || sig.dark.is_some() || local::dehaze_key_needed(&e) || map || haze
+}
+
+/// What the whole, uncropped photo says about its tone: the statistics every render of it takes,
+/// whatever its crop, straighten angle, flip or size (for [`render_region`], and the renders
+/// that don't get any: [`analysis`]).
+///
+/// Camera Raw processes the whole image and crops afterwards, so a crop never moves the tone of
+/// the pixels inside it. A render measuring its own cropped frame instead let the exposure of a
+/// photo change while its crop was dragged (a bright sky cropped away darkened the rest, and a
+/// draft of the uncropped frame differed from the cropped result). `req` contributes only its
+/// output depth: the frame is the uncropped one at [`ANALYSIS_EDGE`] (or the source's own size, if
+/// smaller), at full quality.
 pub fn globals(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Globals {
+    if !needs_globals(s) {
+        return Globals::default();
+    }
     let effective = s.effective();
-    let req = RenderRequest { region: None, ..*req };
+    let edge = ANALYSIS_EDGE.min(src.width.max(src.height)).max(1);
+    let req = RenderRequest { max_w: edge, max_h: edge, apply_crop: false, depth: req.depth, ..RenderRequest::fit(edge, edge) };
     let rendition = settings_for(&effective, &req);
     let plan = plan(src, info, &rendition, &req);
     let s = &*plan.settings;
@@ -591,8 +630,27 @@ pub fn globals(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         &mut planes,
         tex_space.as_ref().map(|m| &m.0),
         info.adobe.is_some(),
+        true,
     );
     Globals { tone_stats: prep.tone_stats, p99: prep.p99, air: prep.dark.is_some().then_some(prep.air), scene_map: prep.scene_map, haze: prep.haze }
+}
+
+/// [`globals`] for a render of `src` with `s`, kept in `cache` while the photo's scene-linear
+/// settings (everything but the crop, the per-pixel sliders and size) stay: a slider or crop drag
+/// doesn't measure the photo again. `None` when `s` reads no statistic.
+pub fn analysis(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Option<Arc<Globals>> {
+    if !needs_globals(s) {
+        return None;
+    }
+    let key = hash_of((region::globals_key(s), format!("{info:?}"), req.depth == OutputDepth::F32Hdr));
+    if let Some(g) = cache.and_then(|c| c.analysis(src, key)) {
+        return Some(g);
+    }
+    let g = Arc::new(globals(src, info, s, req));
+    if let Some(c) = cache {
+        c.set_analysis(src, key, g.clone());
+    }
+    Some(g)
 }
 
 enum Src<'a> {
@@ -628,6 +686,18 @@ fn render_impl(
     let plan = plan(src_img, info, s, req);
     let Plan { ref frame, w, h, px_per_long, src_long, geo, lin_key, .. } = plan;
     let s = &*plan.settings;
+
+    // what depends on the whole photo comes from the whole, uncropped photo (see [`globals`]),
+    // unless a region render brought them
+    let own = match (globals, &src) {
+        (None, Src::Shared(a)) => analysis(a, info, edit, req, cache),
+        (None, Src::Borrowed(_)) => {
+            let g = self::globals(src_img, info, edit, req);
+            needs_globals(edit).then(|| Arc::new(g))
+        }
+        _ => None,
+    };
+    let globals = globals.or(own.as_deref());
 
     let shared = match (&src, cache) {
         (Src::Shared(a), Some(c)) => Some((*a, c)),
@@ -670,6 +740,7 @@ fn render_impl(
         &mut planes,
         tex_space.as_ref().map(|m| &m.0),
         info.adobe.is_some(),
+        false,
     );
     if let Some(a) = globals.and_then(|g| g.air).filter(|_| prep.dark.is_some()) {
         prep.air = a;
@@ -820,6 +891,8 @@ pub(crate) fn for_rows<T: Send>(data: &mut [T], w: usize, f: impl Fn(usize, &mut
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_crop_tone;
 #[cfg(test)]
 mod tests_geometry;
 #[cfg(test)]

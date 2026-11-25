@@ -263,6 +263,9 @@ pub struct MapBase {
     pub dark: f32,
     detail: OnceLock<ClarityDetail>,
     rule: OnceLock<RuleStats>,
+    /// The map covers the whole uncropped photo ([`MapBase::whole_photo`]), not the frame of
+    /// the render that made it: a render finds its pixels on it through [`SceneTone::framed`].
+    pub whole: bool,
 }
 
 impl std::fmt::Debug for MapBase {
@@ -288,7 +291,16 @@ impl MapBase {
         let (a, b) = guided_coefficients(&logs, w, h, r, EPSILON);
         let clarity_key = 0.25 * percentile(&logs, 0.999) + 0.75 * percentile(&logs, 0.99);
         let dark = crate::black_cr::dark_of(&logs).unwrap_or(FLOOR.log2());
-        Some(MapBase { w, h, logs, a, b, clarity_key, dark, detail: OnceLock::new(), rule: OnceLock::new() })
+        Some(MapBase { w, h, logs, a, b, clarity_key, dark, detail: OnceLock::new(), rule: OnceLock::new(), whole: false })
+    }
+
+    /// This map marked as the whole uncropped photo's: Camera Raw measures the whole image
+    /// (its tone statistics, the dark key, Clarity's and the rule's levels, the local base) and
+    /// crops afterwards, so every render of the photo, whatever its crop, straighten angle or
+    /// size, reads this one map.
+    pub fn whole_photo(mut self) -> MapBase {
+        self.whole = true;
+        self
     }
 
     /// The guided base's coefficients on the map (the base is `A · level + B`), before Exposure.
@@ -647,9 +659,17 @@ pub struct Haze {
     pub air: [f32; 3],
     /// The haze's density on the map's grid.
     pub density: Vec<f32>,
+    /// Of the whole uncropped photo, as [`MapBase::whole`].
+    pub whole: bool,
 }
 
 impl Haze {
+    /// This haze marked as the whole uncropped photo's ([`MapBase::whole_photo`]).
+    pub fn whole_photo(mut self) -> Haze {
+        self.whole = true;
+        self
+    }
+
     /// The haze of `img` (linear Rec.2020, before Exposure).
     pub fn of(img: &Rgb32f) -> Option<Haze> {
         let (px, w, h) = reduce(img)?;
@@ -661,7 +681,7 @@ impl Haze {
     /// The haze of `scene`, `w × h` linear ProPhoto values.
     pub fn of_pp(scene: &[[f32; 3]], w: usize, h: usize) -> Haze {
         if scene.is_empty() || scene.len() != w * h {
-            return Haze { w: 1, h: 1, air: [1.; 3], density: vec![0.] };
+            return Haze { w: 1, h: 1, air: [1.; 3], density: vec![0.], whole: false };
         }
         let r = ((HAZE_RADIUS * w.max(h) as f32).round() as usize).max(1);
         let dark = min_filter(&scene.iter().map(|p| p[0].min(p[1]).min(p[2])).collect::<Vec<_>>(), w, h, r);
@@ -683,7 +703,7 @@ impl Haze {
         let raw = min_filter(&relative, w, h, r);
         let (a, b) = guided_coefficients(&raw, w, h, 2 * r, HAZE_EPSILON);
         let density = raw.iter().zip(a.iter().zip(&b)).map(|(v, (a, b))| a * v + b).collect();
-        Haze { w, h, air, density }
+        Haze { w, h, air, density, whole: false }
     }
 }
 
@@ -1158,8 +1178,11 @@ pub struct Sample {
 #[derive(Clone)]
 pub struct SceneTone {
     pub map: Arc<MapBase>,
-    /// Map size over render size.
-    pub scale: [f32; 2],
+    /// Render pixel centre `(X, Y)` (in the whole render, a region render's offset included) →
+    /// map cell coordinates: `x = xf[0]·X + xf[1]·Y + xf[2]`, `y = xf[3]·X + xf[4]·Y + xf[5]`.
+    /// Map size over render size for a map of the render's own frame; for the whole photo's map
+    /// ([`MapBase::whole`]) where the render's crop, angle and flips put the pixel ([`Self::framed`]).
+    pub xf: [f32; 6],
     pub ev: f32,
     /// Clarity (global or masks) reads the map's detail.
     pub clarity: bool,
@@ -1175,14 +1198,29 @@ pub struct SceneTone {
 impl SceneTone {
     /// For a `w × h` render at Exposure `ev`.
     pub fn new(map: Arc<MapBase>, w: usize, h: usize, ev: f32) -> SceneTone {
-        let scale = [map.w as f32 / w.max(1) as f32, map.h as f32 / h.max(1) as f32];
-        SceneTone { map, scale, ev, clarity: false, hs: None, hs_shift: 0., haze: None }
+        let xf = [map.w as f32 / w.max(1) as f32, 0., -0.5, 0., map.h as f32 / h.max(1) as f32, -0.5];
+        SceneTone { map, xf, ev, clarity: false, hs: None, hs_shift: 0., haze: None }
+    }
+
+    /// Find the render's pixels on a map of the whole uncropped photo: `to_norm` takes a pixel
+    /// centre of the render's buffer to normalized image coordinates ([`crate::geometry::Frame::out_to_norm`]),
+    /// `offset` is where the buffer sits in the whole render (pixels are read there).
+    pub fn framed(mut self, to_norm: &lightcraft_geom::Affine, offset: (usize, usize)) -> SceneTone {
+        let [a, b, c, d, e, f] = to_norm.0;
+        let (mw, mh) = (self.map.w as f64, self.map.h as f64);
+        let (ox, oy) = (offset.0 as f64, offset.1 as f64);
+        // normalized x = a·(X − ox) + c·(Y − oy) + e; the cell is mw · that − ½
+        let xf = [mw * a, mw * c, mw * (e - a * ox - c * oy) - 0.5, mh * b, mh * d, mh * (f - b * ox - d * oy) - 0.5];
+        self.xf = xf.map(|v| v as f32);
+        self
     }
 
     pub fn sample(&self, x: usize, y: usize) -> Sample {
         let (mw, mh) = (self.map.w, self.map.h);
-        let fx = ((x as f32 + 0.5) * self.scale[0] - 0.5).clamp(0., (mw - 1) as f32);
-        let fy = ((y as f32 + 0.5) * self.scale[1] - 0.5).clamp(0., (mh - 1) as f32);
+        let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+        let xf = &self.xf;
+        let fx = (xf[0] * px + xf[1] * py + xf[2]).clamp(0., (mw - 1) as f32);
+        let fy = (xf[3] * px + xf[4] * py + xf[5]).clamp(0., (mh - 1) as f32);
         let (ix, iy) = (fx as usize, fy as usize);
         let (jx, jy) = ((ix + 1).min(mw - 1), (iy + 1).min(mh - 1));
         let (tx, ty) = (fx - ix as f32, fy - iy as f32);

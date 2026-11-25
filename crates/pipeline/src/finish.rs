@@ -706,17 +706,23 @@ impl FinishParams {
             self.black_from_map(m, s, hs);
         }
         let map = map.filter(|_| clarity || hs);
-        let haze = haze.filter(|_| dehaze);
+        // (the haze is read on the map's grid: of the same frame, or both of the whole photo)
+        let haze = haze.filter(|h| dehaze && map.is_none_or(|m| (m.w, m.h, m.whole) == (h.w, h.h, h.whole)));
         // a flat stand-in map when only the haze is needed (its grid is the haze's)
         let base = match (map, haze) {
             (Some(m), _) => m.clone(),
             (None, Some(h)) => match sc::MapBase::new(vec![0.18; h.w * h.h], h.w, h.h) {
-                Some(m) => std::sync::Arc::new(m),
+                Some(m) => std::sync::Arc::new(if h.whole { m.whole_photo() } else { m }),
                 None => return self,
             },
             (None, None) => return self,
         };
+        let whole = base.whole;
         let mut t = sc::SceneTone::new(base, self.win.2, self.win.3, self.ev);
+        if whole {
+            // (the buffer's pixels are looked up at their place in the whole render: `out_to_norm` is the buffer's)
+            t = t.framed(&self.out_to_norm, (self.win.0, self.win.1));
+        }
         t.clarity = clarity && map.is_some();
         if t.clarity {
             // made here, outside the per-pixel stage's parallel rows: a lazily made detail inside
