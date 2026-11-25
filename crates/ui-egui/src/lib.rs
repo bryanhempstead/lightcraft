@@ -261,6 +261,8 @@ impl PerfWindow {
 
 /// How long the crop's thirds grid stays after the last crop adjustment.
 pub const CROP_GRID_HOLD: std::time::Duration = std::time::Duration::from_millis(800);
+/// Seconds without a wheel notch that end one wheel punch-in / out of the crop (one undo step).
+pub const CROP_WHEEL_HOLD: f64 = 0.4;
 
 pub struct LightcraftApp {
     /// The Map module's tiles and textures (LR-MAP-MODULE).
@@ -381,6 +383,9 @@ pub struct LightcraftApp {
     /// When the crop was last adjusted (a handle drag, a crop dial): its thirds grid shows until
     /// [`CROP_GRID_HOLD`] after (Lightroom's Auto crop overlay).
     pub crop_touch: Option<std::time::Instant>,
+    /// The Crop tool's wheel: when (egui time) the last notch punched the crop in or out. The notches
+    /// of one burst are a single undo step, closed [`CROP_WHEEL_HOLD`] seconds after the last.
+    pub crop_wheel: Option<f64>,
     /// The key of the loupe's uncropped crop-dial draft ([`lightcraft_engine::Session::reframe_draft_job`]):
     /// a Main texture with it is drawn cropped to the current crop.
     pub reframe_key: Option<u64>,
@@ -483,6 +488,7 @@ impl LightcraftApp {
             h_down: None,
             h_replay: false,
             crop_touch: None,
+            crop_wheel: None,
             reframe_key: None,
             reframe_keys: Vec::new(),
             reframe_pin: None,

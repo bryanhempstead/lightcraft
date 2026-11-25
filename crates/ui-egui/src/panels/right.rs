@@ -379,7 +379,13 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             egui::Popup::menu(&r).show(|ui| {
                 for (label, a) in ASPECT_PRESETS {
                     if ui.button(crate::i18n::tr(label)).clicked() {
-                        let _ = app.run("crop.aspect", json!({"aspect": a}));
+                        // "As Shot" is the true default (the whole frame); "Original" is the photo's
+                        // own shape at the punch-in the crop already has
+                        if a == "asShot" {
+                            let _ = app.run("crop.resetToAsShot", json!({}));
+                        } else {
+                            let _ = app.run("crop.aspect", json!({"aspect": a}));
+                        }
                     }
                 }
                 ui.separator();
@@ -412,6 +418,12 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
             if text_button(ui, "cropReset", crate::i18n::tr("Reset"), false).clicked() {
                 let _ = app.run("crop.reset", json!({}));
+            }
+            if text_button(ui, "cropAsShot", crate::i18n::tr("as shot."), false)
+                .on_hover_text(crate::i18n::tr("The whole frame again: no crop, no straighten (a ratio keeps how punched in you are)"))
+                .clicked()
+            {
+                let _ = app.run("crop.resetToAsShot", json!({}));
             }
         });
     });

@@ -88,6 +88,7 @@ pub const SUPER_ACTIONS: &[(&str, &str, &str, &str)] = &[
     ("crop", "crop 2x3", "crop.aspect", r#"{"aspect": "2x3"}"#),
     ("crop", "crop 5x7", "crop.aspect", r#"{"aspect": "5x7"}"#),
     ("crop", "crop reset", "crop.reset", "{}"),
+    ("crop", "crop as shot (whole frame)", "crop.resetToAsShot", "{}"),
     ("crop", "auto straighten", "crop.autoStraighten", "{}"),
     ("develop", "paste from previous", "develop.pastePrevious", "{}"),
     ("develop", "exposure +1/3", "develop.adjust", r#"{"control": "light.exposure", "delta": 0.33}"#),
@@ -1641,6 +1642,8 @@ pub fn nudge(app: &mut crate::LightcraftApp, control: &str, delta: f64) -> Resul
         "crop.x" => app.run("crop.nudge", json!({"x": delta, "axes": axes})),
         "crop.y" => app.run("crop.nudge", json!({"y": delta, "axes": axes})),
         "crop.scale" => app.run("crop.nudge", json!({"scale": delta})),
+        // the angle alone turns: the crop keeps its centre and punch-in (no refit of the whole crop)
+        "crop.angle" => app.run("crop.straighten", json!({"delta": delta})),
         _ => app.run("develop.adjust", json!({"control": control, "delta": delta})),
     };
     if r.is_ok() {
@@ -1911,7 +1914,7 @@ pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, Str
     match (dial, nums.as_slice()) {
         (Some((sign, _)), [d, ..]) => {
             // Monogram's own increment per detent; the crop pseudo controls move in LightCraft's units
-            let delta = if control.starts_with("crop.") && control != "crop.angle" { app.keymap.steps(control)[0] } else { *d };
+            let delta = if control.starts_with("crop.") { app.keymap.steps(control)[0] } else { *d };
             nudge(app, control, sign * delta.abs())
         }
         (None, [v, min, max]) => {

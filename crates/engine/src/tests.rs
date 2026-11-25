@@ -410,6 +410,54 @@ fn crop_aspect_lock_current_and_toggle() {
     assert!(active_dev(&s).crop.aspect.is_none(), "toggle unlocks");
 }
 
+/// Bryan, 2026-11-24: zoomed (punched) in on a subject, a new aspect ratio keeps the punch-in and the
+/// subject; cycling 4x5 → 4x3 → 4x5 comes back to the same crop; "default aspect" (`original`)
+/// keeps the punch-in too; `crop.resetToAsShot` is the one way back to the whole frame.
+#[test]
+fn a_new_aspect_keeps_the_punch_in_and_cycling_returns_to_it() {
+    let mut s = demo();
+    let id = s.active().unwrap();
+    let (w, h) = {
+        let p = s.catalog.photo(id).unwrap();
+        let d = active_dev(&s);
+        if d.orientation.swaps_axes() { (p.height as f64, p.width as f64) } else { (p.width as f64, p.height as f64) }
+    };
+    // half-size crop of the photo's own shape, off to one side
+    s.execute("crop.set", &json!({"rect": [0.05, 0.1, 0.55, 0.6]})).unwrap();
+    let before = active_dev(&s).crop.geometry;
+    let (centre, punch) = (before.rect.center(), before.punch(w, h));
+    assert!((punch - 0.5).abs() < 1e-6, "{punch}");
+    s.execute("crop.aspect", &json!({"aspect": "4x5"})).unwrap();
+    let a = active_dev(&s).crop.geometry;
+    assert!((a.rect.center().x - centre.x).abs() < 1e-9 && (a.rect.center().y - centre.y).abs() < 1e-9, "centre kept: {a:?}");
+    assert!((a.punch(w, h) - punch).abs() < 1e-6, "comparable punch-in: {} vs {punch}", a.punch(w, h));
+    assert!(a.rect.width() < 0.9 && a.rect.height() < 0.9, "not the full frame: {a:?}");
+    // 4x5 → 4x3 → 4x5: identical crop, however far the middle shape had to slide
+    s.execute("crop.aspect", &json!({"aspect": "4x3"})).unwrap();
+    assert!((active_dev(&s).crop.geometry.punch(w, h) - punch).abs() < 1e-6);
+    s.execute("crop.aspect", &json!({"aspect": "1x1"})).unwrap();
+    s.execute("crop.aspect", &json!({"aspect": "4x5"})).unwrap();
+    assert_eq!(active_dev(&s).crop.geometry, a, "back to the very same 4x5");
+    // the default aspect keeps the punch-in; it is not the full frame
+    s.execute("crop.aspect", &json!({"aspect": "original"})).unwrap();
+    let o = active_dev(&s).crop.geometry;
+    assert!((o.punch(w, h) - punch).abs() < 1e-6 && (o.rect.center().x - centre.x).abs() < 1e-9, "{o:?}");
+    assert!(!o.rect.is_empty() && o.rect != lightcraft_geom::Rect::UNIT);
+    // a swap (X) keeps it too
+    s.execute("crop.rotateAspect", &json!({})).unwrap();
+    assert!((active_dev(&s).crop.geometry.punch(w, h) - punch).abs() < 1e-6);
+    // a hand edit starts a new framing from what is on screen
+    s.execute("crop.set", &json!({"rect": [0.3, 0.3, 0.5, 0.5]})).unwrap();
+    s.execute("crop.aspect", &json!({"aspect": "16x9"})).unwrap();
+    assert!(active_dev(&s).crop.geometry.rect.width() < 0.4);
+    // the true reset: the whole frame, no lock, flips kept
+    s.execute("photo.flipHorizontal", &json!({})).unwrap();
+    s.execute("crop.resetToAsShot", &json!({})).unwrap();
+    let d = active_dev(&s);
+    assert!(d.crop.geometry.is_identity() && d.crop.aspect.is_none() && d.crop.framing.is_none());
+    assert!(d.crop.flip_h, "a flip isn't framing");
+}
+
 // Feature: dragging crop handles (issue 295)
 #[test]
 fn crop_drag_stops_at_the_image_edge_and_keeps_the_anchor() {

@@ -2,7 +2,7 @@
 
 use lightcraft_catalog::{Op, PhotoId, Version};
 use lightcraft_develop::{DevelopSettings, Preset, Section, SettingsGroup, Treatment, Upright, WbMode, controls};
-use lightcraft_geom::{CropGeometry, CropHandle, Point, Rect, crop_fit_angle, drag_crop};
+use lightcraft_geom::{CropGeometry, CropHandle, Point, Rect, drag_crop};
 use serde_json::{Value, json};
 
 use super::copy_subsets::{groups_param, masks_param, merge_masks_param, paste_base};
@@ -27,12 +27,12 @@ fn section_param(p: &Value, c: &str) -> Result<Section> {
     serde_json::from_value(v).map_err(|e| bad(c, e.to_string()))
 }
 
-/// Turn the crop to `angle`, keeping its size if it still fits, else shrinking it to fit.
+/// Turn the crop to `angle`: the same shape on the same subject, as big as it was (it grows back when
+/// the angle returns), shrunk and slid only as far as the rotated photo needs.
 fn straighten(d: &mut DevelopSettings, w: f64, h: f64, angle: f64) {
-    let r = d.crop.geometry.rect_px(w, h);
-    let fit = crop_fit_angle(w, h, angle, Some(r.width() / r.height()));
-    let cand = CropGeometry { rect: d.crop.geometry.rect, angle };
-    d.crop.geometry = if cand.is_within_image(w, h) { cand } else { fit };
+    let (g, f) = d.crop.geometry.turned(angle, d.crop.framing, w, h);
+    d.crop.geometry = g;
+    d.crop.framing = Some(f);
 }
 
 /// The level angle for photo `id` with settings `d` (its horizon or plumb lines), if it has one.
@@ -124,6 +124,17 @@ fn aspect_tuple(c: &str, x: f64, y: f64) -> Result<(u32, u32)> {
     Ok((a as u32, b as u32))
 }
 
+/// Give the crop the shape `ratio` (width / height in pixels) keeping how punched in it is and the
+/// subject it is centred on, so changing the ratio never starts over at the full frame, and cycling
+/// ratios returns to the same framing (the crop's remembered `framing`, while it still matches).
+fn reshape_crop(d: &mut DevelopSettings, w: f64, h: f64, ratio: f64) {
+    let g = d.crop.geometry;
+    let (punch, centre) = g.framing(d.crop.framing, w, h);
+    let next = CropGeometry::with_punch(g.angle, ratio, punch, centre, w, h);
+    d.crop.geometry = next;
+    d.crop.framing = Some(lightcraft_geom::Framing { result: next, punch, centre, width: next.rect.width() });
+}
+
 fn set_aspect(d: &mut DevelopSettings, w: f64, h: f64, aspect: Option<(u32, u32)>) {
     d.crop.aspect = aspect;
     let a = aspect.map(|(aw, ah)| {
@@ -131,8 +142,7 @@ fn set_aspect(d: &mut DevelopSettings, w: f64, h: f64, aspect: Option<(u32, u32)
         let (aw, ah) = (aw as f64, ah as f64);
         if (w >= h) == (aw >= ah) { aw / ah } else { ah / aw }
     });
-    let angle = d.crop.geometry.angle;
-    d.crop.geometry = crop_fit_angle(w, h, angle, a);
+    reshape_crop(d, w, h, a.unwrap_or(w / h));
 }
 
 /// The user preset named by `p.id` (built-ins can't be changed).
@@ -736,12 +746,17 @@ pub fn specs() -> Vec<CommandSpec> {
             "Straighten",
             [],
             None,
-            "{angle: degrees -45..45} — keeps the largest crop of the current aspect",
+            "{angle: degrees -45..45} or {delta: degrees to turn by (a console's CropAngle detent)} — turns only the angle: the crop keeps its shape, its centre and how punched in it is, shrinking (and sliding) only as far as the rotated photo needs, and growing back when the angle returns",
             has_active,
             |s, p| {
                 let id = active(s, "crop.straighten")?;
                 let (w, h) = crop_dims(s, id);
-                let angle = f64_req(p, "angle", "crop.straighten")?.clamp(-45.0, 45.0);
+                let cur = s.develop_of(id).map(|d| d.crop.geometry.angle).unwrap_or(0.0);
+                let angle = match p.get("delta") {
+                    Some(v) if p.get("angle").is_none() => cur + v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("crop.straighten", "`delta` must be a number"))?,
+                    _ => f64_req(p, "angle", "crop.straighten")?,
+                }
+                .clamp(-45.0, 45.0);
                 edit(s, "crop.straighten", "Straighten", |d| {
                     straighten(d, w, h, angle);
                     Ok(())
@@ -775,7 +790,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Crop Aspect",
             [],
             None,
-            "{aspect: \"original\"|\"asShot\" (the camera's own framing: raws are decoded inside the in-camera crop, so the same as original)|\"free\"|\"current\" (lock the crop's present shape)|\"toggle\" (lock ↔ free)|\"1x1\"|\"4x5\"|\"8.5x11\"|\"5x7\"|\"2x3\"|\"4x3\"|\"16x9\"|\"16x10\"|[w,h]}",
+            "{aspect: \"original\"|\"asShot\" (the photo's own shape, the default aspect: raws are decoded inside the in-camera crop; like every ratio it keeps how punched in the crop is and the subject it is centred on, so it never resets to the full frame — `crop.resetToAsShot` does that)|\"free\"|\"current\" (lock the crop's present shape)|\"toggle\" (lock ↔ free)|\"1x1\"|\"4x5\"|\"8.5x11\"|\"5x7\"|\"2x3\"|\"4x3\"|\"16x9\"|\"16x10\"|[w,h]}",
             has_active,
             |s, p| {
                 let id = active(s, "crop.aspect")?;
@@ -827,11 +842,25 @@ pub fn specs() -> Vec<CommandSpec> {
                 let r = d.crop.geometry.rect_px(w, h);
                 let a = r.height() / r.width();
                 d.crop.aspect = d.crop.aspect.map(|(x, y)| (y, x));
-                let angle = d.crop.geometry.angle;
-                d.crop.geometry = crop_fit_angle(w, h, angle, Some(a));
+                reshape_crop(d, w, h, a);
                 Ok(())
             })
         }),
+        cmd!(
+            "crop.resetToAsShot",
+            "Crop As Shot",
+            [],
+            None,
+            "{} — back to the true default: the whole frame as shot (no crop, no straighten, no ratio lock, no remembered punch-in); flips stay. `crop.aspect original` is the other \"as shot\": it keeps how punched in the crop is",
+            has_active,
+            |s, _| {
+                edit(s, "crop.resetToAsShot", "Crop As Shot", |d| {
+                    let (flip_h, flip_v) = (d.crop.flip_h, d.crop.flip_v);
+                    d.crop = lightcraft_develop::Crop { flip_h, flip_v, ..Default::default() };
+                    Ok(())
+                })
+            }
+        ),
         cmd!("crop.reset", "Reset Crop", [], Some("Cmd+Alt+R"), "{}", has_active, |s, _| {
             edit(s, "crop.reset", "Reset Crop", |d| {
                 d.crop = Default::default();

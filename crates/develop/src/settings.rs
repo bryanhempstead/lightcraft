@@ -703,6 +703,10 @@ pub struct Crop {
     pub aspect: Option<(u32, u32)>,
     pub flip_h: bool,
     pub flip_v: bool,
+    /// How punched in the crop was when its aspect ratio last changed (not saved): cycling ratios
+    /// returns to the same framing. Only counts while the crop still equals its `result`.
+    #[serde(skip)]
+    pub framing: Option<lightcraft_geom::Framing>,
 }
 
 // ---------------------------------------------------------------------------------------------

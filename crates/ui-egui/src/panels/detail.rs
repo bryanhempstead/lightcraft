@@ -37,6 +37,12 @@ pub enum Gesture {
         start: lightcraft_geom::Rect,
         angle: f64,
     },
+    /// Crop tool: a plain drag inside the frame pans the photo under it, straight (the frame goes
+    /// the other way; never a rotation).
+    CropPan {
+        start: lightcraft_geom::Rect,
+        angle: f64,
+    },
     /// Straighten tool: a line drawn along something that should be level (or plumb).
     StraightenLine {
         a: Pos2,
@@ -402,6 +408,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let resp = ui.interact(canvas, egui::Id::new("loupe"), Sense::click_and_drag());
     let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
     let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
+    // the Crop tool's wheel punches the crop in and out (before the loupe's own wheel zoom sees it)
+    crop_wheel(app, ui, &resp, crop_tool);
     let mut navigating = false;
     for &view_area in &areas {
         let view_img = if view_area == main_area { img_rect } else { fit_rect(view_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan) };
@@ -1690,6 +1698,55 @@ fn general_interaction(
 
 // ------------------------------------------------------------------------ crop
 
+/// How much one wheel notch punches the crop: up (away from you) goes in by this factor.
+const CROP_WHEEL_STEP: f32 = 0.94;
+
+/// The scroll wheel in the Crop tool (and only there): up punches the crop in, down out, about the
+/// crop's centre and keeping its shape (`crop.nudge`), instead of zooming the loupe. The notches of a
+/// burst are one undo step, closed [`crate::CROP_WHEEL_HOLD`] after the last. Pinch and ⌘-wheel (a zoom
+/// to egui), ⌥-scroll (pan) and a trackpad's pan of a zoomed loupe keep their loupe meanings.
+fn crop_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, crop_tool: bool) {
+    let now = ui.input(|i| i.time);
+    // close a finished burst (also when the tool was left meanwhile)
+    if let Some(t) = app.crop_wheel {
+        let idle = now - t;
+        if !crop_tool || idle >= crate::CROP_WHEEL_HOLD {
+            app.crop_wheel = None;
+            let _ = app.run("develop.endInteraction", json!({}));
+        } else {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::CROP_WHEEL_HOLD - idle));
+        }
+    }
+    if !crop_tool || !resp.hovered() || app.gesture.is_some() {
+        return;
+    }
+    let (scroll, zoom, alt, touch, mouse) = ui.input(|i| {
+        let mouse = i.events.iter().rev().find_map(|e| match e {
+            egui::Event::MouseWheel { unit, phase, .. } => Some(*unit != egui::MouseWheelUnit::Point && *phase == egui::TouchPhase::Move),
+            _ => None,
+        });
+        (i.smooth_scroll_delta.y, i.zoom_delta(), i.modifiers.alt || i.modifiers.command, i.multi_touch().is_some(), mouse)
+    });
+    let mouse = mouse.unwrap_or(app.ui.wheel_mouse);
+    // a trackpad's scroll of a zoomed loupe is its pan; everything else vertical is the crop's
+    let pans_loupe = !mouse && app.ui.zoom != crate::state::Zoom::Fit;
+    if scroll == 0.0 || !scroll.is_finite() || zoom != 1.0 || alt || touch || pans_loupe {
+        return;
+    }
+    let k = CROP_WHEEL_STEP.powf((scroll / NOTCH).clamp(-8.0, 8.0));
+    if app.crop_wheel.is_none() && app.session.interaction.is_none() {
+        let _ = app.run("develop.beginInteraction", json!({"label": "Crop"}));
+        app.crop_wheel = Some(now);
+    }
+    if app.crop_wheel.is_some() {
+        app.crop_wheel = Some(now);
+    }
+    let _ = app.run("crop.nudge", json!({"scale": (1.0 - k as f64) * 100.0}));
+    app.crop_touch = Some(std::time::Instant::now());
+    ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+    ui.ctx().request_repaint();
+}
+
 fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, frame: &Frame, d: &DevelopSettings, id: PhotoId) {
     if app.ui.tool == "guidedUpright" {
         guided_overlay(app, ui, resp, map, frame, d);
@@ -1773,12 +1830,17 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         })
     };
     if let Some(hq) = resp.hover_pos() {
+        // ⇧ moves the frame itself (even from an edge); plain drags pan the photo under it
+        let free = ui.input(|i| i.modifiers.shift) && (inside(hq) || pick(hq).is_some());
+        let panning = matches!(app.gesture, Some(Gesture::CropPan { .. }));
         ui.ctx().set_cursor_icon(match pick(hq) {
+            _ if free => egui::CursorIcon::Move,
             Some(0 | 2) => egui::CursorIcon::ResizeNwSe,
             Some(1 | 3) => egui::CursorIcon::ResizeNeSw,
             Some(4 | 6) => egui::CursorIcon::ResizeVertical,
             Some(_) => egui::CursorIcon::ResizeHorizontal,
-            None if inside(hq) => egui::CursorIcon::Move,
+            None if inside(hq) && panning => egui::CursorIcon::Grabbing,
+            None if inside(hq) => egui::CursorIcon::Grab,
             None => egui::CursorIcon::Alias,
         });
     }
@@ -1798,9 +1860,14 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         // quick drag on the bottom edge used to land inside the frame and move the whole crop
         // (Bryan, 2026-11-24).
         let _ = app.run("develop.beginInteraction", json!({"label": "Crop"}));
+        let (start, angle) = (d.crop.geometry.rect, d.crop.geometry.angle);
+        // ⇧ held where the button went down on the frame (inside it, or on an edge or corner): move the
+        // whole crop freely, following the pointer, with no edge resize and no ratio in the way
+        let free_move = ui.input(|i| i.modifiers.shift) && (inside(q) || pick(q).is_some());
         app.gesture = Some(match pick(q) {
-            Some(h) => Gesture::CropHandle { handle: h as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
-            None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
+            _ if free_move => Gesture::CropHandle { handle: 8, start, angle },
+            Some(h) => Gesture::CropHandle { handle: h as u8, start, angle },
+            None if inside(q) => Gesture::CropPan { start, angle },
             None => {
                 let c = map.screen(Point::new(0.5, 0.5));
                 Gesture::CropRotate { start_angle: d.crop.geometry.angle, a0: (q - c).angle() }
@@ -1819,6 +1886,17 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
                 let _ = app.run(
                     "crop.drag",
                     json!({"handle": handle, "from": [orig.x, orig.y], "to": [n.x, n.y], "start": [start.x0, start.y0, start.x1, start.y1]}),
+                );
+            }
+            Some(Gesture::CropPan { start, angle }) => {
+                // The photo follows the pointer under the frame: the frame moves by the opposite
+                // amount, as a pure translation (`crop.drag` ▸ move keeps the size and the angle).
+                let n = to_straight(map.norm(q), angle, frame);
+                let orig = ui.input(|i| i.pointer.press_origin()).map(|q0| to_straight(map.norm(q0), angle, frame)).unwrap_or(n);
+                let to = [2.0 * orig.x - n.x, 2.0 * orig.y - n.y];
+                let _ = app.run(
+                    "crop.drag",
+                    json!({"handle": 8, "from": [orig.x, orig.y], "to": to, "start": [start.x0, start.y0, start.x1, start.y1]}),
                 );
             }
             Some(Gesture::CropRotate { start_angle, a0 }) => {
