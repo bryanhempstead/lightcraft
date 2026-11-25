@@ -487,3 +487,57 @@ fn recheck_replaces_untouched_old_guesses_only() {
     assert!(crate::merge_find::group(&s.catalog, &crate::merge_find::group_id(&a)).is_some(), "undo brings it back");
     let _ = std::fs::remove_dir_all(&burst);
 }
+
+/// Settings ▸ merge. (Bryan, 2026-11-24: "pick and choose by default for the different types of
+/// merges"): an hdr. group merged with its kind's defaults — originals kept visible, the merged
+/// photo in merges. only, not stacked — and the automatic finder's every-folder rule.
+#[test]
+fn merge_settings_decide_what_a_group_merge_does() {
+    let (mut s, dir, ids, other, _) = brackets("prefs");
+    let folder = dir.to_string_lossy().to_string();
+    s.merge_prefs.hdr.hide_originals = false;
+    s.merge_prefs.hdr.merges_only = true;
+    s.merge_prefs.hdr.stack = false;
+    s.merge_prefs.panorama.hide_originals = true; // another kind's settings don't apply
+    let r = s.execute("merge.find", &json!({"path": folder})).unwrap();
+    let gid = r["groups"][0]["id"].as_str().unwrap().to_string();
+    let counts = crate::merge_find::counts(&s.catalog);
+    assert_eq!((counts.open_folder(&folder, false), counts.folder(&folder, true)), (1, 1));
+    let r = s.execute("merge.mergeGroups", &json!({"ids": [gid], "options": {"autoSettings": false}})).unwrap();
+    assert_eq!(r["failed"], json!([]), "{r}");
+    let merged = PhotoId(r["merged"][0]["id"].as_u64().unwrap());
+    s.execute("library.source", &json!({"kind": "libraryFolder", "path": folder})).unwrap();
+    let shown = s.visible_cloned();
+    assert!(ids.iter().all(|i| shown.contains(i)), "the originals stay visible: {shown:?}");
+    assert!(shown.contains(&other) && !shown.contains(&merged), "the merged photo only in merges.: {shown:?}");
+    assert!(s.catalog.stack_of(merged).is_none(), "not stacked");
+    s.execute("library.source", &json!({"kind": "merges", "path": folder})).unwrap();
+    assert!(s.visible_cloned().contains(&merged));
+    let counts = crate::merge_find::counts(&s.catalog);
+    assert_eq!(counts.open_folder(&folder, false), 0, "merged: no longer open");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // find automatically: every new folder looks at a folder not named like a wedding too
+    let plain = std::env::temp_dir().join(format!("lc-merges-plain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&plain);
+    std::fs::create_dir_all(&plain).unwrap();
+    let mut paths = Vec::new();
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(200, 120, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+        let p = plain.join(format!("IMG_{i}.dng"));
+        std::fs::write(&p, b).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    s.vision.background = true;
+    let ids = import(&mut s, paths);
+    for (i, (id, (sh, b))) in ids.iter().zip([("1/500", -2.0), ("1/125", 0.0), ("1/30", 2.0)]).enumerate() {
+        exif(&mut s, *id, &format!("2026-11-20T09:30:0{i}"), sh, Some(b));
+    }
+    let r = s.merge_find_auto().expect("a first look").unwrap();
+    assert_eq!(r["found"], 0, "weddings only: {r}");
+    s.merge_scanned.clear();
+    s.catalog.apply(Op::SetRecord { key: crate::merge_find::SCANNED.into(), value: None }).unwrap();
+    let r = s.merge_find_auto_in(true).expect("every folder").unwrap();
+    assert_eq!(r["found"], 1, "{r}");
+    let _ = std::fs::remove_dir_all(&plain);
+}

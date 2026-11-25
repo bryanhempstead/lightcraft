@@ -523,19 +523,29 @@ pub struct Counts {
     /// Folder (as [`lightcraft_catalog::local::folder_of`] names it) → live groups whose frames are in it.
     pub by_folder: BTreeMap<String, usize>,
     pub by_album: HashMap<AlbumId, usize>,
+    /// Folder → open groups (waiting to be merged or sent back) whose frames are in it.
+    pub open_by_folder: BTreeMap<String, usize>,
 }
 
 impl Counts {
     /// Groups of the folder at `path` (`deep`: with the folders inside it).
     pub fn folder(&self, path: &str, deep: bool) -> usize {
+        Self::in_folder(&self.by_folder, path, deep)
+    }
+    /// Open groups of the folder at `path` (`deep`: with the folders inside it): the merge. page's
+    /// count on a shoot or folder row.
+    pub fn open_folder(&self, path: &str, deep: bool) -> usize {
+        Self::in_folder(&self.open_by_folder, path, deep)
+    }
+    fn in_folder(map: &BTreeMap<String, usize>, path: &str, deep: bool) -> usize {
         let root = lightcraft_catalog::query::folder_key(path);
         if root.is_empty() {
             return 0;
         }
         if deep {
-            self.by_folder.iter().filter(|(k, _)| lightcraft_catalog::query::folder_within(k, &root)).map(|(_, n)| *n).sum()
+            map.iter().filter(|(k, _)| lightcraft_catalog::query::folder_within(k, &root)).map(|(_, n)| *n).sum()
         } else {
-            self.by_folder.iter().filter(|(k, _)| k.trim_end_matches('/') == root.trim_end_matches('/')).map(|(_, n)| *n).sum()
+            map.iter().filter(|(k, _)| k.trim_end_matches('/') == root.trim_end_matches('/')).map(|(_, n)| *n).sum()
         }
     }
     pub fn album(&self, id: AlbumId) -> usize {
@@ -550,6 +560,9 @@ pub fn counts(cat: &Catalog) -> Counts {
     let mut of_photo: HashMap<PhotoId, Vec<usize>> = HashMap::new();
     for (i, g) in live.iter().enumerate() {
         *out.by_folder.entry(g.folder.clone()).or_default() += 1;
+        if g.state == GroupState::Open {
+            *out.open_by_folder.entry(g.folder.clone()).or_default() += 1;
+        }
         for m in g.photos.iter().copied().chain(g.result) {
             of_photo.entry(m).or_default().push(i);
         }
@@ -1460,6 +1473,12 @@ impl Session {
     /// folders whose photos changed since it last looked (all of them the first time). `None`:
     /// nothing new, or a run is going.
     pub fn merge_find_auto(&mut self) -> Option<Result<Value>> {
+        self.merge_find_auto_in(false)
+    }
+
+    /// [`Session::merge_find_auto`] with Settings ▸ merge. ▸ find automatically: weddings only
+    /// (`every_folder` false: folders named like a wedding), or every new folder.
+    pub fn merge_find_auto_in(&mut self, every_folder: bool) -> Option<Result<Value>> {
         if self.merge_find_job.is_some() {
             return None;
         }
@@ -1472,7 +1491,7 @@ impl Session {
         }
         // by themselves only weddings are looked at (Bryan 11-24: everything else he rechecks by hand —
         // a shoot's recheck.merges. / find.); the others still count as looked at
-        let wedding = |f: &str| f.to_lowercase().contains("wedding");
+        let wedding = |f: &str| every_folder || f.to_lowercase().contains("wedding");
         let ids: Vec<PhotoId> = self
             .catalog
             .photos()
@@ -1524,19 +1543,22 @@ impl Session {
         Ok(json!({"found": out.len(), "groups": out}))
     }
 
-    /// After a group's frames `sources` were merged into `result`: hide them, mark the merged
-    /// photo, put it into every collection they were in (where the first of them was), and note
+    /// After a group's frames `sources` were merged into `result`: hide them (unless Settings ▸
+    /// merge. keeps them visible for its kind), mark the merged photo (shown in merges. only when
+    /// the settings say so), put it into every collection they were in (where the first of them was), and note
     /// the group merged. One undo step.
     pub fn merge_group_done(&mut self, group_id: &str, result: PhotoId, sources: &[PhotoId]) -> Result<Value> {
         let mut g = group(&self.catalog, group_id).ok_or_else(|| EngineError::Other(format!("no merge group {group_id}")))?;
         let res = self.catalog.photo(result).cloned().ok_or(lightcraft_catalog::CatalogError::NoPhoto(result))?;
+        // Settings ▸ merge.: hide the originals (or keep them visible), where the merged photo shows
+        let prefs = self.merge_prefs.kind(g.kind).clone();
         let mut ops = Vec::new();
-        for s in sources.iter().filter(|s| **s != result) {
+        for s in sources.iter().filter(|s| **s != result && prefs.hide_originals) {
             let Some(p) = self.catalog.photo(*s) else { continue };
             let mark = MergeMark { into: Some(result), ..p.merge.unwrap_or_default() };
             ops.push(Op::SetMerge { id: *s, merge: Some(mark) });
         }
-        ops.push(Op::SetMerge { id: result, merge: Some(MergeMark { into: None, kind: Some(g.kind), only_merges: false }) });
+        ops.push(Op::SetMerge { id: result, merge: Some(MergeMark { into: None, kind: Some(g.kind), only_merges: prefs.merges_only }) });
         // the originals' place in capture order
         if res.captured.is_none()
             && let Some(c) = sources.iter().find_map(|s| self.catalog.photo(*s).and_then(|p| p.captured.clone()))
@@ -1568,9 +1590,10 @@ impl Session {
         if picked.len() >= 2 { picked } else { live }
     }
 
-    /// Merge groups to the end (`merge.mergeGroups`): each with its kind (or `kind`), then
-    /// [`Session::merge_group_done`].
-    pub fn merge_groups_now(&mut self, ids: &[String], kind: Option<MergeType>, only: &[PhotoId], auto_settings: bool) -> Result<Value> {
+    /// Merge groups to the end (`merge.mergeGroups`): each with its kind (or `kind`), its kind's
+    /// defaults (Settings ▸ merge., [`Session::merge_prefs`]) with `options` (merge parameters:
+    /// `autoSettings`, `projection`, `deghost` …) over them, then [`Session::merge_group_done`].
+    pub fn merge_groups_now(&mut self, ids: &[String], kind: Option<MergeType>, only: &[PhotoId], options: &Value) -> Result<Value> {
         let mut merged = Vec::new();
         let mut failed = Vec::new();
         for id in ids {
@@ -1584,7 +1607,19 @@ impl Session {
                 continue;
             }
             let k = kind.unwrap_or(g.kind);
-            let params = json!({"autoSettings": auto_settings, "stack": false, "autoCrop": true});
+            let mut params = self.merge_prefs.params(k);
+            if let (Some(o), Some(p)) = (options.as_object(), params.as_object_mut()) {
+                p.extend(o.iter().filter(|(k, _)| k.as_str() != "command").map(|(k, v)| (k.clone(), v.clone())));
+            }
+            if let Some(p) = params.as_object_mut() {
+                // a stack only with the originals kept visible (hidden, they'd come back folded
+                // under it on unmerge.) and the merged photo in their folder (shown in merges.
+                // only, they'd fold under a photo that isn't there)
+                let kp = self.merge_prefs.kind(k);
+                if kp.merges_only || kp.hide_originals {
+                    p.insert("stack".into(), json!(false));
+                }
+            }
             let r = crate::merge::parse(k.command(), &params).and_then(|(mk, finish)| self.merge_now(mk, finish, &frames)).and_then(|info| {
                 let rid = info.get("id").and_then(Value::as_u64).map(PhotoId).ok_or_else(|| EngineError::Other("the merge made no photo".into()))?;
                 if k != g.kind {
