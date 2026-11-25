@@ -29,6 +29,7 @@
             doc.saveAs(dst, t, true);
             doc.close(SaveOptions.DONOTSAVECHANGES);
             ok++;
+            if (ok % 20 == 0) { try { app.purge(PurgeTarget.ALLCACHES); } catch (e2) {} } // keep RAM flat on long runs
         } catch (e) {
             bad++;
             log.writeln("fail " + parts[0] + ": " + e);
