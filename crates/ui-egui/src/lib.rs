@@ -10,6 +10,7 @@ pub mod accents;
 pub mod capture_time_dialog;
 pub mod control;
 pub mod credits;
+pub mod dial;
 pub mod display_p3;
 pub mod enhance;
 pub mod export_dialog;
@@ -818,7 +819,17 @@ impl LightcraftApp {
                 crate::widgets::forget_scroll_view(ctx);
             }
             let reply = req.reply.clone();
-            match control::handle(self, ctx, &req) {
+            let dial_line = dial::log_enabled() && dial::line_of(&req).is_some();
+            if dial_line {
+                dial::log(&format!("apply age_ms={:.2}", req.at.elapsed().as_secs_f64() * 1000.0));
+            }
+            let t0 = std::time::Instant::now();
+            let outcome = control::handle(self, ctx, &req);
+            if dial_line {
+                dial::applied(1);
+                dial::log(&format!("applied cost_ms={:.2}", t0.elapsed().as_secs_f64() * 1000.0));
+            }
+            match outcome {
                 control::Outcome::Done(v) => {
                     let _ = reply.send(v);
                 }

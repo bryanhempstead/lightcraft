@@ -328,3 +328,71 @@ fn exclusive_slots_run_one_job_at_a_time() {
     assert_eq!(got, vec![4, 1, 3, 5], "the newest waiting job ran next (priority first); the replaced one never");
     assert_eq!(most.load(Ordering::SeqCst), 1, "never two of the group at once");
 }
+
+/// A job submitted into its own group starts beside a running job of the slot's group (the loupe's
+/// draft beside a sharp render nobody wants any more), and two jobs of one group still never run
+/// side by side. Finishing one of two jobs of the same slot frees the right group.
+#[test]
+fn a_job_in_another_group_runs_beside_the_slots_running_job() {
+    let mut p: JobPool<u32, u32> = JobPool::new(4);
+    p.set_exclusive(Some(Arc::new(|s: &u32| (*s == 7).then_some(0))));
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let go_rx = Arc::new(std::sync::Mutex::new(go_rx));
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    let slow = {
+        let go_rx = go_rx.clone();
+        Box::new(move || {
+            let _ = started_tx.send(());
+            let _ = go_rx.lock().unwrap().recv_timeout(std::time::Duration::from_secs(30));
+            1u32
+        }) as Box<dyn FnOnce() -> u32 + Send>
+    };
+    // the sharp render (slot 7's own group 0) runs and waits on the gate
+    p.submit(7, 1, 100, slow);
+    started_rx.recv_timeout(std::time::Duration::from_secs(30)).expect("the sharp render started");
+    // a draft in group 10 starts at once, though slot 7 is busy
+    p.submit_in_group(7, 2, 100, Some(10), Box::new(|| 2));
+    let t0 = std::time::Instant::now();
+    let mut got = Vec::new();
+    while got.is_empty() && t0.elapsed().as_secs() < 30 {
+        if let Some(d) = p.try_recv() {
+            got.push(d.result);
+        }
+    }
+    assert_eq!(got, vec![2], "the draft ran while the sharp render was still running");
+    // the sharp render's group is still held: another job of group 0 waits for it
+    p.submit(7, 3, 100, Box::new(|| 3));
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(p.try_recv().is_none(), "a second group-0 job waits behind the running one");
+    go_tx.send(()).unwrap();
+    while got.len() < 3 && t0.elapsed().as_secs() < 30 {
+        if let Some(d) = p.try_recv() {
+            got.push(d.result);
+        }
+    }
+    got.sort();
+    assert_eq!(got, vec![1, 2, 3]);
+}
+
+/// A job that panics gives up its exclusive group (the next job of the group runs) and its worker
+/// keeps taking jobs; the panicked job has no result.
+#[test]
+fn a_panicking_job_releases_its_group() {
+    let mut p: JobPool<u32, u32> = JobPool::new(1);
+    p.submit_in_group(1, 1, 100, Some(10), Box::new(|| panic!("a render that panicked")));
+    p.submit_in_group(2, 2, 100, Some(10), Box::new(|| 22));
+    let t0 = std::time::Instant::now();
+    let mut got = Vec::new();
+    while got.is_empty() && t0.elapsed().as_secs() < 30 {
+        if let Some(d) = p.try_recv() {
+            got.push((d.slot, d.result));
+        }
+    }
+    assert_eq!(got, vec![(2, 22)], "the group's next job ran after the panic");
+    // (inline hosts too)
+    let mut q: JobPool<u32, u32> = JobPool::new(0);
+    q.submit_in_group(1, 1, 100, Some(10), Box::new(|| panic!("a render that panicked")));
+    q.submit_in_group(2, 2, 100, Some(10), Box::new(|| 22));
+    assert_eq!(q.run_inline(5), 2);
+    assert_eq!(q.try_recv().map(|d| d.result), Some(22));
+}

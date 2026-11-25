@@ -114,3 +114,22 @@ full `ui-egui` runs and 2 of 3 runs of the `headless::` subset (load 250–700);
    216 textures. Keep them only for the loupe slot, or render headless screenshots from the cache.
 5. **Memory peaks at 5.5 GB footprint** after develop drags and 1:1 on three raws (GPU stage
    caches); it trims back when idle.
+
+## Console dial latency (2026-11-24)
+
+`LIGHTCRAFT_DIAL_LOG=1` makes the app print `[dial]` lines on stderr (a Monogram line applied with its
+age since the socket thread queued it, a loupe draft requested / shown, with the dial lines applied so
+far); a script that sends `Exposure = ^0.02,-5,5` lines to `LIGHTCRAFT_MONOGRAM_PORT` at 3–200 lines/s
+and reads them back gives line → frame latency, frames/s during the spin and the displayed value's lag
+behind the dial. `LIGHTCRAFT_DIAL_LEGACY=1` renders turns the old way (drafts queued
+behind the sharp render) to compare.
+
+- Each dial line is applied on its own, in order (Lightroom's plugin does too, and Temp's step depends on
+  the value); applying costs 0.01–0.1 ms. Only rendering is coalesced: one loupe draft per frame, the
+  newest settings next (`render.rs`, exclusive `Main` group). Test:
+  `dial_lines_between_two_frames_are_each_applied_and_drawn_once`.
+- The loupe's sharp render is its own job-pool group (`SHARP_GROUP`): a detent turned 0.4–1 s after a
+  pause no longer waits for the pause's sharp render.
+- Measured on an M3 Pro, 2048 × 1122 pt window, 20 MB CR3 with texture / clarity / dehaze / NR edits:
+  GPU draft 13–33 ms, ~60 fps during a 60 lines/s spin, the picture 1–2 lines behind the dial, the sharp
+  render 400 ms after the last line (350 ms settle + render), nothing queued after the spin stops.
