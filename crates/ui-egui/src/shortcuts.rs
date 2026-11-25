@@ -282,6 +282,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if app.ui.view == crate::state::ViewMode::Galleries && crate::panels::galleries::keys(app, ctx) {
         return;
     }
+    // the merge. page: ← / → groups, ↩ / M merge., S send.back., ⌘A every group
+    if crate::merge_page::keys(app, ctx) {
+        return;
+    }
     // ← / → over a Collections row close / open its folders instead of moving the photo
     if crate::panels::left::collection_keys(app, ctx) {
         return;

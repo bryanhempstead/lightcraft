@@ -25,6 +25,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("interface", "Interface"),
     ("identity", "identity."),
     ("develop", "develop.view."),
+    ("merge", "merge."),
     ("shortcuts", "shortcuts."),
     ("controllers", "controllers."),
     ("cameras", "cameras."),
@@ -76,6 +77,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String) {
         "interface" => scrolling(ui, "settingsInterface", |ui| interface_tab(app, ui, &t)),
         "identity" => identity_tab(app, ui, &t),
         "develop" => develop_tab(app, ui, &t),
+        "merge" => scrolling(ui, "settingsMerge", |ui| merge_tab(app, ui, &t)),
         "shortcuts" => shortcuts_tab(app, ui, &t),
         "controllers" => controllers_tab(app, ui, &t),
         "cameras" => cameras_tab(app, ui, &t),
@@ -151,18 +153,7 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         row(ui, t, crate::i18n::tr("Location"), |ui| {
             ui.label(RichText::new(location).color(t.text));
         });
-        // merges.: found by themselves in the background, or only on find.
-        row(ui, t, "find merges:", |ui| {
-            let mut mode = app.ui.settings.merge_find;
-            if choices(ui, "settingsMergeFind", &[(crate::merges::FindMode::Auto, "auto."), (crate::merges::FindMode::Manual, "find.")], &mut mode) {
-                app.ui.settings.merge_find = mode;
-            }
-        });
-        hint(
-            ui,
-            t,
-            "auto.: brackets, panoramas and focus stacks are found in the background after imports and show under their folder and collection as merges.; find.: only when you click find. there. Nothing is merged until you say so.",
-        );
+        // (find merges: moved to Settings ▸ merge.)
         row(ui, t, "", |ui| {
             let can = app.services.pick_folder.is_some();
             let r = ui.add_enabled(can, egui::Button::new(crate::i18n::tr("Open Library…")));
@@ -1293,6 +1284,95 @@ fn develop_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         check(ui, "settings.videoDraft", &mut app.ui.settings.develop_view.video_draft, "Play HD video at draft quality");
         hint(ui, t, "These apply to the loupe in Develop (I / ⌘I cycle its overlay there); the Library loupe keeps its own on Interface.");
     }
+}
+
+// ------------------------------------------------------------------------------------- merge.
+
+/// Settings ▸ merge. (Bryan, 2026-11-24: "pick and choose by default for the different types of
+/// merges"): when merges are found and from which confidence they show; per kind where the merged
+/// photo shows, stack, auto settings, auto crop, projection, deghost, the originals.
+fn merge_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    use crate::merges::FindMode as F;
+    use lightcraft_engine::merge_find::Confidence as C;
+    if heading(ui, t, "settings.merge.general", "general.") {
+        row(ui, t, "find automatically:", |ui| {
+            let mut mode = app.ui.settings.merge_find;
+            if choices(ui, "settingsMergeFind", &[(F::Auto, "weddings."), (F::Every, "every.folder."), (F::Manual, "off.")], &mut mode) {
+                app.ui.settings.merge_find = mode;
+            }
+        });
+        hint(
+            ui,
+            t,
+            match app.ui.settings.merge_find {
+                F::Auto => "weddings.: brackets, panoramas and focus stacks are found in the background in folders named like a wedding; elsewhere when you click find. or recheck.merges. Nothing is merged until you say so.",
+                F::Every => "every.folder.: they are found in the background in every new or changed folder. Nothing is merged until you say so.",
+                F::Manual => "off.: only when you click find. in a merges. view (or recheck.merges. on a shoot).",
+            },
+        );
+        row(ui, t, "show from:", |ui| {
+            let mut from = app.ui.settings.merge.show_from;
+            if choices(ui, "settingsMergeShowFrom", &[(C::Maybe, "maybe."), (C::Likely, "likely."), (C::Sure, "sure.")], &mut from) {
+                app.ui.settings.merge.show_from = from;
+            }
+        });
+        hint(ui, t, "Groups less sure than this are not shown (the confidence. filter on the merge. page starts here).");
+    }
+    for (k, id, title) in [
+        (lightcraft_catalog::MergeType::Pano, "panorama", "panorama."),
+        (lightcraft_catalog::MergeType::Hdr, "hdr", "hdr."),
+        (lightcraft_catalog::MergeType::HdrPano, "hdrPanorama", "hdr.panorama."),
+        (lightcraft_catalog::MergeType::Stack, "focusStack", "focus.stack."),
+    ] {
+        if !heading(ui, t, &format!("settings.merge.{id}"), title) {
+            continue;
+        }
+        let p = app.ui.settings.merge.kind_mut(k);
+        let pre = format!("settingsMerge-{id}");
+        row(ui, t, "shows in:", |ui| {
+            choices(ui, &format!("{pre}-showIn"), &[(false, "both."), (true, "merges.only.")], &mut p.merges_only);
+        });
+        row(ui, t, "originals:", |ui| {
+            choices(ui, &format!("{pre}-originals"), &[(true, "hide."), (false, "keep.")], &mut p.hide_originals);
+        });
+        row(ui, t, "stack:", |ui| {
+            choices(ui, &format!("{pre}-stack"), &[(true, "on."), (false, "off.")], &mut p.stack);
+        });
+        hint(ui, t, "stack.: the merged photo on top of its frames, when they are kept and it shows in both.");
+        row(ui, t, "auto.settings:", |ui| {
+            choices(ui, &format!("{pre}-autoSettings"), &[(true, "on."), (false, "off.")], &mut p.auto_settings);
+        });
+        if matches!(k, lightcraft_catalog::MergeType::Pano | lightcraft_catalog::MergeType::HdrPano) {
+            row(ui, t, "auto.crop:", |ui| {
+                choices(ui, &format!("{pre}-autoCrop"), &[(true, "on."), (false, "off.")], &mut p.auto_crop);
+            });
+            row(ui, t, "projection:", |ui| {
+                let mut v = p.projection.clone();
+                let opts = [("auto", "auto."), ("spherical", "spherical."), ("cylindrical", "cylindrical."), ("perspective", "perspective.")];
+                let mut i = opts.iter().position(|(o, _)| *o == v).unwrap_or(0);
+                let list: Vec<(usize, &str)> = opts.iter().enumerate().map(|(i, (_, l))| (i, *l)).collect();
+                if choices(ui, &format!("{pre}-projection"), &list, &mut i) {
+                    v = opts.get(i).map_or("auto", |o| o.0).to_string();
+                    p.projection = v;
+                }
+            });
+        }
+        if matches!(k, lightcraft_catalog::MergeType::Hdr | lightcraft_catalog::MergeType::HdrPano) {
+            row(ui, t, "deghost:", |ui| {
+                let opts = [("none", "none."), ("low", "low."), ("medium", "medium."), ("high", "high.")];
+                let mut i = opts.iter().position(|(o, _)| *o == p.deghost).unwrap_or(0);
+                let list: Vec<(usize, &str)> = opts.iter().enumerate().map(|(i, (_, l))| (i, *l)).collect();
+                if choices(ui, &format!("{pre}-deghost"), &list, &mut i) {
+                    p.deghost = opts.get(i).map_or("none", |o| o.0).to_string();
+                }
+            });
+        }
+    }
+    hint(
+        ui,
+        t,
+        "Each merge starts from its kind's settings: merge. on the merge. page and in merges., and the Merge dialog (⌘⇧M). The merge. page can change them for a merge without changing these.",
+    );
 }
 
 // ------------------------------------------------------------------------------- Open Library…

@@ -32,6 +32,7 @@ pub mod lr_sync;
 pub mod menubar;
 pub mod menus;
 pub mod merge;
+pub mod merge_page;
 pub mod merges;
 pub mod pan_zoom;
 pub mod panels;
@@ -104,6 +105,8 @@ mod tests_masking;
 mod tests_media;
 #[cfg(test)]
 mod tests_merges;
+#[cfg(test)]
+mod tests_merge_page;
 #[cfg(test)]
 mod tests_metadata_views;
 #[cfg(test)]
@@ -1198,6 +1201,8 @@ impl LightcraftApp {
                 panels::right::show(self, ui);
             } else if self.ui.view == state::ViewMode::Galleries {
                 panels::galleries::right(self, ui);
+            } else if merge_page::on(self) {
+                merge_page::right(self, ui);
             } else {
                 panels::library_right::show(self, ui);
             }

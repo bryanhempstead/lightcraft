@@ -3,9 +3,10 @@
 //! wave that shows all the photos". The finding, the groups and what a merge does are the
 //! engine's ([`lightcraft_engine::merge_find`]); here:
 //!
-//! * the automatic finder ([`tick`]): with Settings ▸ General ▸ find merges: `auto.` (the default)
-//!   it looks in the background, off the UI thread, at folders whose photos changed (all of them
-//!   the first time, then after each import); with `find.` only when find. is clicked;
+//! * the automatic finder ([`tick`]): with Settings ▸ merge. ▸ find automatically: `weddings.`
+//!   (the default) or `every.folder.` it looks in the background, off the UI thread, at folders
+//!   whose photos changed (all of them the first time, then after each import); with `off.` only
+//!   when find. is clicked;
 //! * `merge.mergeGroups` in the app ([`run_ui`]): the groups go one at a time to the merge worker
 //!   ([`crate::merge::start_group`]); the window stays responsive;
 //! * the merges. view's bar ([`bar`]: find., all., none., merge., send.back., both., merges.only.,
@@ -33,15 +34,190 @@ use crate::LightcraftApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
-/// When merges are found (Settings ▸ General ▸ find merges:).
+/// When merges are found by themselves (Settings ▸ merge. ▸ find automatically:). The stored
+/// names (`auto`, `manual`) are those of ui.json files from before `every` was added.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FindMode {
-    /// auto.: in the background, by themselves (after imports, and once over the library).
+    /// weddings.: in the background, in folders named like a wedding (after imports, and once
+    /// over the library); the others only on find. / recheck.merges.
     #[default]
     Auto,
-    /// find.: only when find. is clicked in a merges. view.
+    /// every.folder.: in the background, in every new or changed folder.
+    Every,
+    /// off.: only when find. is clicked in a merges. view.
     Manual,
+}
+
+impl FindMode {
+    /// What `merge.findMode` answers.
+    pub fn id(self) -> &'static str {
+        match self {
+            FindMode::Auto => "auto",
+            FindMode::Every => "every",
+            FindMode::Manual => "manual",
+        }
+    }
+    /// Found by themselves (weddings. or every.folder.).
+    pub fn automatic(self) -> bool {
+        self != FindMode::Manual
+    }
+}
+
+/// How the merges. view lays out each group's frames (the bar's `layout.`, remembered in ui.json).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Layout {
+    /// waves.: a fan of overlapping cards on a gentle wave, spread side by side on hover.
+    #[default]
+    Waves,
+    /// grid.: every frame of a group in a plain grid.
+    Grid,
+    /// strip.: one row per group, the frames side by side, scrolling sideways.
+    Strip,
+    /// focus.: one group at a time, big (← / → or prev. / next. for the others).
+    Focus,
+}
+
+impl Layout {
+    pub const ALL: [Layout; 4] = [Layout::Waves, Layout::Grid, Layout::Strip, Layout::Focus];
+    pub fn id(self) -> &'static str {
+        match self {
+            Layout::Waves => "waves",
+            Layout::Grid => "grid",
+            Layout::Strip => "strip",
+            Layout::Focus => "focus",
+        }
+    }
+    pub fn tag(self) -> &'static str {
+        match self {
+            Layout::Waves => "waves.",
+            Layout::Grid => "grid.",
+            Layout::Strip => "strip.",
+            Layout::Focus => "focus.",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Layout> {
+        let s = s.trim().trim_end_matches('.');
+        Layout::ALL.into_iter().find(|l| l.id() == s)
+    }
+}
+
+/// The shape of the cards in the merges. view (the bar's `aspect.`, remembered in ui.json). Only
+/// the cards: the photo is fitted inside (letterboxed, never stretched or cropped) and the photos
+/// themselves — their crop, settings, merges — never change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CardAspect {
+    /// original.: each card the shape of its photo.
+    #[default]
+    #[serde(rename = "original")]
+    Original,
+    #[serde(rename = "square")]
+    Square,
+    #[serde(rename = "3:2")]
+    ThreeTwo,
+    #[serde(rename = "4:5")]
+    FourFive,
+    #[serde(rename = "16:9")]
+    SixteenNine,
+}
+
+impl CardAspect {
+    pub const ALL: [CardAspect; 5] = [CardAspect::Original, CardAspect::Square, CardAspect::ThreeTwo, CardAspect::FourFive, CardAspect::SixteenNine];
+    pub fn id(self) -> &'static str {
+        match self {
+            CardAspect::Original => "original",
+            CardAspect::Square => "square",
+            CardAspect::ThreeTwo => "3:2",
+            CardAspect::FourFive => "4:5",
+            CardAspect::SixteenNine => "16:9",
+        }
+    }
+    pub fn tag(self) -> &'static str {
+        match self {
+            CardAspect::Original => "original.",
+            CardAspect::Square => "square.",
+            CardAspect::ThreeTwo => "3:2.",
+            CardAspect::FourFive => "4:5.",
+            CardAspect::SixteenNine => "16:9.",
+        }
+    }
+    pub fn parse(s: &str) -> Option<CardAspect> {
+        let s = s.trim().trim_end_matches('.');
+        CardAspect::ALL.into_iter().find(|a| a.id() == s)
+    }
+    /// Width over height of every card (`None`: each its photo's).
+    pub fn ratio(self) -> Option<f32> {
+        match self {
+            CardAspect::Original => None,
+            CardAspect::Square => Some(1.0),
+            CardAspect::ThreeTwo => Some(1.5),
+            CardAspect::FourFive => Some(0.8),
+            CardAspect::SixteenNine => Some(16.0 / 9.0),
+        }
+    }
+    /// The cards' shapes for photos of shapes `aspects`.
+    pub fn cards(self, aspects: &[f32]) -> Vec<f32> {
+        match self.ratio() {
+            Some(r) => vec![r; aspects.len()],
+            None => aspects.to_vec(),
+        }
+    }
+}
+
+/// How the merges. view shows the groups on one size of screen (Bryan, 2026-11-24: his MacBook
+/// and his big display each keep their own): layout., aspect., per.row. and the kind. /
+/// confidence. picks. Kept per [`screen_bucket`] in ui.json (`AppSettings::merge_views`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MergeView {
+    pub layout: Layout,
+    pub aspect: CardAspect,
+    /// Frames side by side across the view (2–8): the cards' size.
+    pub per_row: u8,
+    /// The kinds shown (empty: every kind).
+    pub kinds: Vec<MergeType>,
+    /// The confidences shown (empty: every one from Settings ▸ merge. ▸ show from up).
+    pub confidences: Vec<Confidence>,
+}
+
+impl Default for MergeView {
+    fn default() -> Self {
+        MergeView { layout: Layout::Waves, aspect: CardAspect::Original, per_row: 4, kinds: Vec::new(), confidences: Vec::new() }
+    }
+}
+
+/// Frames per row: the fewest and the most.
+pub const PER_ROW: (u8, u8) = (2, 8);
+
+/// The size of screen a window `width` points wide is on: `small` (< 1300, a laptop), `medium`
+/// (1300–1800), `large` (1800–2600), `huge` (> 2600).
+pub fn screen_bucket(width: f32) -> &'static str {
+    if width < 1300.0 {
+        "small"
+    } else if width < 1800.0 {
+        "medium"
+    } else if width < 2600.0 {
+        "large"
+    } else {
+        "huge"
+    }
+}
+
+/// The screen size the window is on now (`medium` before the first frame).
+pub fn screen(app: &LightcraftApp) -> &str {
+    if app.merge.screen.is_empty() { "medium" } else { app.merge.screen.as_str() }
+}
+
+/// The view settings of this screen size.
+pub fn view_prefs(app: &LightcraftApp) -> MergeView {
+    app.ui.settings.merge_views.get(screen(app)).cloned().unwrap_or_default()
+}
+
+/// The view settings of this screen size, to change.
+pub fn view_prefs_mut(app: &mut LightcraftApp) -> &mut MergeView {
+    let key = screen(app).to_string();
+    app.ui.settings.merge_views.entry(key).or_default()
 }
 
 /// Seconds between two looks of the automatic finder.
@@ -87,6 +263,11 @@ pub fn show_scope(app: &mut LightcraftApp, scope: &Scope) -> Result<Value, Strin
 
 /// Per frame: land a finder run, start the automatic one, feed the merge worker.
 pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // which screen size the window is on: its layout., aspect. and per.row. are its own
+    let bucket = screen_bucket(ctx.content_rect().width());
+    if app.merge.screen != bucket {
+        app.merge.screen = bucket.to_string();
+    }
     // the merge. tab follows the sidebar: a folder / collection picked there shows its merges
     if app.merge_tab && app.session.source != lightcraft_engine::LibrarySource::Merges {
         let scope = scope_of_source(app);
@@ -97,7 +278,10 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(r) = app.session.merge_find_poll() {
         landed(app, ctx, r);
     }
-    if app.ui.settings.merge_find == FindMode::Auto && app.session.vision.background && !app.session.merge_find_running() && app.import.is_none() {
+    if app.session.merge_prefs != app.ui.settings.merge {
+        app.session.merge_prefs = app.ui.settings.merge.clone();
+    }
+    if app.ui.settings.merge_find.automatic() && app.session.vision.background && !app.session.merge_find_running() && app.import.is_none() {
         let now = ctx.input(|i| i.time);
         let key = egui::Id::new("merges-auto-at");
         // (time of the last look, the catalog it looked at): nothing changed, nothing to look at
@@ -105,7 +289,7 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
         let rev = app.session.catalog.revision;
         if last.is_none_or(|(t, r)| now - t >= AUTO_EVERY && r != rev) {
             ctx.data_mut(|d| d.insert_temp(key, (now, rev)));
-            if let Some(r) = app.session.merge_find_auto() {
+            if let Some(r) = app.session.merge_find_auto_in(app.ui.settings.merge_find == FindMode::Every) {
                 landed(app, ctx, r);
             }
         }
@@ -129,35 +313,76 @@ fn landed(app: &mut LightcraftApp, ctx: &egui::Context, r: Result<Value, lightcr
     }
 }
 
+/// What `merge.layout` / `merge.cardSize` answer: this screen size's view.
+fn layout_json(app: &LightcraftApp) -> Value {
+    let v = view_prefs(app);
+    json!({"layout": v.layout.id(), "aspect": v.aspect.id(), "perRow": v.per_row, "screen": screen(app)})
+}
+
 /// The app's own handling of merges. commands (`None`: the engine's): `merge.find` looks in the
 /// background, `merge.mergeGroups` queues the groups for the merge worker, `merge.findMode` is
 /// the setting, `merge.cardSize {size? | step?}` the cards' size (smaller. / bigger.).
 pub fn run_ui(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     match id {
         "merge.findMode" => Some(match p.get("mode").and_then(Value::as_str).map(|m| m.trim_end_matches('.')) {
-            Some("auto") => {
-                app.ui.settings.merge_find = FindMode::Auto;
-                Ok(json!({"mode": "auto"}))
+            Some(m) => {
+                let mode = match m {
+                    "auto" | "weddings" => FindMode::Auto,
+                    "every" | "every.folder" | "everyFolder" => FindMode::Every,
+                    "find" | "manual" | "off" => FindMode::Manual,
+                    other => return Some(Err(format!("merge.findMode: mode is weddings (auto), every or off (find), not `{other}`"))),
+                };
+                app.ui.settings.merge_find = mode;
+                Ok(json!({"mode": mode.id()}))
             }
-            Some("find" | "manual") => {
-                app.ui.settings.merge_find = FindMode::Manual;
-                Ok(json!({"mode": "manual"}))
-            }
-            None => Ok(json!({"mode": if app.ui.settings.merge_find == FindMode::Auto { "auto" } else { "manual" }})),
-            Some(other) => Err(format!("merge.findMode: mode is auto or find, not `{other}`")),
+            None => Ok(json!({"mode": app.ui.settings.merge_find.id()})),
         }),
-        // smaller. / bigger.: the cards' size (the grid's thumbnail size, as the bottom bar's slider)
-        "merge.cardSize" => {
-            let size = match (p.get("size").and_then(Value::as_f64), p.get("step").and_then(Value::as_f64)) {
-                (Some(s), _) => s as f32,
-                (None, Some(d)) => app.ui.thumb_size + d as f32,
-                (None, None) => return Some(Ok(json!({"size": app.ui.thumb_size}))),
+        // layout. / aspect.: how the view shows the groups (remembered in ui.json)
+        "merge.layout" => Some((|| {
+            let layout = match p.get("layout").and_then(Value::as_str) {
+                Some(l) => Some(Layout::parse(l).ok_or_else(|| format!("merge.layout: layout is waves, grid, strip or focus, not `{l}`"))?),
+                None => None,
             };
-            if !size.is_finite() {
-                return Some(Err("merge.cardSize: size is a number of points (90–480)".into()));
+            let aspect = match p.get("aspect").and_then(Value::as_str) {
+                Some(a) => Some(CardAspect::parse(a).ok_or_else(|| format!("merge.layout: aspect is original, square, 3:2, 4:5 or 16:9, not `{a}`"))?),
+                None => None,
+            };
+            let per_row = match p.get("perRow") {
+                Some(v) => Some(v.as_u64().filter(|n| (2..=8).contains(n)).ok_or("merge.layout: perRow is 2 to 8 frames")? as u8),
+                None => None,
+            };
+            let v = view_prefs_mut(app);
+            if let Some(l) = layout {
+                v.layout = l;
             }
-            app.ui.thumb_size = size.clamp(90.0, 480.0);
-            Some(Ok(json!({"size": app.ui.thumb_size})))
+            if let Some(a) = aspect {
+                v.aspect = a;
+            }
+            if let Some(n) = per_row {
+                v.per_row = n;
+            }
+            Ok(layout_json(app))
+        })()),
+        // Settings ▸ merge.: the defaults per kind (a partial `MergePrefs` laid over them) → all of them
+        "merge.settings" => Some(match p.as_object().filter(|o| !o.is_empty()) {
+            None => serde_json::to_value(&app.ui.settings.merge).map_err(|e| e.to_string()),
+            Some(_) => app.ui.settings.merge.patched(p).map(|m| {
+                app.ui.settings.merge = m;
+                app.session.merge_prefs = app.ui.settings.merge.clone();
+                serde_json::to_value(&app.ui.settings.merge).unwrap_or_default()
+            }),
+        }),
+        // smaller. / bigger.: one frame more / fewer per row (the cards' size)
+        "merge.cardSize" => {
+            let v = view_prefs_mut(app);
+            let n = match (p.get("perRow").and_then(Value::as_f64), p.get("step").and_then(Value::as_f64)) {
+                (Some(n), _) if n.is_finite() => n.round() as i64,
+                (None, Some(d)) if d.is_finite() => i64::from(v.per_row) - d.signum() as i64,
+                (None, None) => i64::from(v.per_row),
+                _ => return Some(Err("merge.cardSize: {perRow: 2–8} or {step: ±1}".into())),
+            };
+            v.per_row = n.clamp(i64::from(PER_ROW.0), i64::from(PER_ROW.1)) as u8;
+            Some(Ok(layout_json(app)))
         }
         "merge.find" if p.get("background").is_none() && app.session.vision.background => {
             let mut p = p.clone();
@@ -169,7 +394,7 @@ pub fn run_ui(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Val
             Some(app.session.execute(id, &p).map_err(|e| e.to_string()))
         }
         "merge.mergeGroups" if p.get("sync").and_then(Value::as_bool) != Some(true) => Some(queue(app, p)),
-        _ => None,
+        _ => crate::merge_page::run_ui(app, id, p),
     }
 }
 
@@ -189,6 +414,9 @@ fn queue(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     };
     let only: Vec<PhotoId> =
         p.get("frames").and_then(Value::as_array).map(|v| v.iter().filter_map(Value::as_u64).map(PhotoId).collect()).unwrap_or_default();
+    // `options`: the merge options (the Merge dialog's names) over each group's kind's defaults
+    let options = p.get("options").filter(|o| o.is_object());
+    let autos = p.get("autoSettings").and_then(Value::as_bool);
     let mut queued = 0;
     for id in &ids {
         let Some(g) = merge_find::group(&app.session.catalog, id).filter(|g| g.state == GroupState::Open) else { continue };
@@ -205,7 +433,19 @@ fn queue(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         if frames.len() < 2 {
             return Err(format!("{}: put two frames or more in the group to merge it", g.kind.tag()));
         }
-        app.merge.group_queue.push_back(crate::merge::GroupMerge { group: g.id.clone(), kind: k, frames });
+        let mut opts = crate::merge::page_options(app, k.command());
+        if let Some(o) = options {
+            let mut v = serde_json::to_value(&opts).map_err(|e| e.to_string())?;
+            if let (Some(base), Some(o)) = (v.as_object_mut(), o.as_object()) {
+                base.extend(o.iter().filter(|(k, _)| k.as_str() != "command").map(|(k, v)| (k.clone(), v.clone())));
+            }
+            opts = serde_json::from_value(v).map_err(|e| format!("merge.mergeGroups: options: {e}"))?;
+        }
+        if let Some(a) = autos {
+            opts.auto_settings = a;
+        }
+        opts.command = k.command().to_string();
+        app.merge.group_queue.push_back(crate::merge::GroupMerge { group: g.id.clone(), kind: k, frames, opts: Some(opts) });
         queued += 1;
     }
     if queued == 0 {
@@ -221,7 +461,7 @@ fn queue(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 }
 
 /// The open groups the selection touches (any of their frames picked).
-fn picked_groups(app: &LightcraftApp) -> Vec<MergeGroup> {
+pub(crate) fn picked_groups(app: &LightcraftApp) -> Vec<MergeGroup> {
     let sel = &app.session.selection.ids;
     merge_find::groups(&app.session.catalog)
         .into_iter()
@@ -243,26 +483,38 @@ pub const BAR_H: f32 = 40.0;
 /// merged photo, or nothing), merge. / send.back. for the picked groups, both. / merges.only. /
 /// unmerge. for the picked merged photos, smaller. / bigger. for the cards.
 pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    wrapped_band(ui, "merges:bar", |row| bar_buttons(app, row));
+}
+
+/// A band across the view (the bar, the filters): its controls in a row 8 px from its edges, 8 px
+/// apart, wrapping onto lines 10 px apart when the view is narrow; as tall as its lines.
+pub(crate) fn wrapped_band(ui: &mut egui::Ui, reg: &str, add: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), BAR_H), Sense::hover());
-    ui.painter().rect_filled(r, 0.0, t.canvas);
-    register(ui.ctx(), "merges:bar", r);
-    let mut row = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(Rect::from_min_max(pos2(r.left() + 16.0, r.top() + 8.0), pos2(r.right() - 16.0, r.bottom() - 8.0)))
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    row.spacing_mut().item_spacing.x = 8.0;
-    let ctx = ui.ctx().clone();
+    let full = ui.available_rect_before_wrap();
+    let top = ui.cursor().top();
+    let bg = ui.painter().add(egui::Shape::Noop);
+    let inner = Rect::from_min_max(pos2(full.left() + 16.0, top + 8.0), pos2(full.right() - 16.0, full.bottom().max(top + BAR_H)));
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true)));
+    row.spacing_mut().item_spacing = vec2(8.0, 10.0);
+    add(&mut row);
+    let bottom = (row.min_rect().bottom() + 8.0).max(top + BAR_H);
+    let r = Rect::from_min_max(pos2(full.left(), top), pos2(full.right(), bottom));
+    ui.painter().set(bg, egui::Shape::rect_filled(r, 0.0, t.canvas));
+    ui.allocate_rect(r, Sense::hover());
+    register(ui.ctx(), reg, r);
+}
+
+fn bar_buttons(app: &mut LightcraftApp, row: &mut egui::Ui) {
+    let ctx = row.ctx().clone();
     let running = app.session.merge_find_running();
     let find_label = if running { "finding…" } else { "find." };
-    let auto = app.ui.settings.merge_find == FindMode::Auto;
+    let auto = app.ui.settings.merge_find.automatic();
     let tip = if auto {
-        "Look for merges here now (they are also found by themselves in the background: Settings ▸ General ▸ find merges:)"
+        "Look for merges here now (they are also found by themselves in the background: Settings ▸ merge. ▸ find automatically:)"
     } else {
         "Look for merges here: panoramas (panorama.), brackets (hdr.), focus stacks (focus.stack.), HDR panoramas (hdr.panorama.)"
     };
-    if crate::widgets::text_button(&mut row, "mergesFind", find_label, running).on_hover_text(crate::i18n::tr(tip)).clicked() && !running {
+    if crate::widgets::text_button(row, "mergesFind", find_label, running).on_hover_text(crate::i18n::tr(tip)).clicked() && !running {
         let scope = app.session.merges_scope.clone().unwrap_or_default();
         match app.run("merge.find", json!({"scope": scope})) {
             Ok(v) if v.get("background").is_none() => {
@@ -273,33 +525,33 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             Err(e) => app.toast(&ctx, e),
         }
     }
-    gap(&mut row);
-    if crate::widgets::text_button(&mut row, "mergesAll", "all.", false)
+    gap(row);
+    if crate::widgets::text_button(row, "mergesAll", "all.", false)
         .on_hover_text(crate::i18n::tr("Pick every group and merged photo (⌘A)"))
         .clicked()
     {
         let ids: Vec<u64> = app.session.visible_cloned().iter().map(|p| p.0).collect();
         let _ = app.run("library.select", json!({"ids": ids}));
     }
-    if crate::widgets::text_button(&mut row, "mergesNone", "none.", false).on_hover_text(crate::i18n::tr("Pick nothing")).clicked() {
+    if crate::widgets::text_button(row, "mergesNone", "none.", false).on_hover_text(crate::i18n::tr("Pick nothing")).clicked() {
         let _ = app.run("library.select", json!({"ids": []}));
     }
-    gap(&mut row);
+    gap(row);
     let busy = app.merge.final_task.as_ref().is_some_and(|t| t.group.is_some());
     let waiting = app.merge.group_queue.len();
     let merge_label = if busy { format!("merging… {}", waiting + 1) } else { "merge.".to_string() };
-    if crate::widgets::text_button(&mut row, "mergesMerge", &merge_label, busy)
+    if crate::widgets::text_button(row, "mergesMerge", &merge_label, busy)
         .on_hover_text(crate::i18n::tr("Merge the picked groups, each as its kind, with the frames that are in it. The originals then leave the folder — not deleted — and the merged photo shows here and where they were"))
         .clicked()
     {
         let ids: Vec<String> = picked_groups(app).into_iter().map(|g| g.id).collect();
         if ids.is_empty() {
             app.toast(&ctx, crate::i18n::tr("Pick a group first: click its header"));
-        } else if let Err(e) = app.run("merge.mergeGroups", json!({"ids": ids})) {
+        } else if let Err(e) = app.run("merge.openGroups", json!({"ids": ids})) {
             app.toast(&ctx, e);
         }
     }
-    if crate::widgets::text_button(&mut row, "mergesSendBack", "send.back.", false)
+    if crate::widgets::text_button(row, "mergesSendBack", "send.back.", false)
         .on_hover_text(crate::i18n::tr(
             "Not a merge: the picked groups go back to their folder and are never suggested again (restore. under sent back. brings one back)",
         ))
@@ -312,7 +564,7 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             app.toast(&ctx, e);
         }
     }
-    gap(&mut row);
+    gap(row);
     let results = picked_results(app);
     for (id, label, tip, cmd, params) in [
         ("mergesBoth", "both.", "Show the picked merged photos here and in their folder and collections", "merge.showIn", json!({"where": "both"})),
@@ -331,7 +583,7 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             json!({}),
         ),
     ] {
-        if crate::widgets::text_button(&mut row, id, label, false).on_hover_text(crate::i18n::tr(tip)).clicked() {
+        if crate::widgets::text_button(row, id, label, false).on_hover_text(crate::i18n::tr(tip)).clicked() {
             if results.is_empty() {
                 app.toast(&ctx, crate::i18n::tr("Pick a merged photo first"));
                 continue;
@@ -343,12 +595,58 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     }
-    gap(&mut row);
+    gap(row);
+    let vp = view_prefs(app);
+    let layout = vp.layout;
+    let menu = crate::widgets::text_button(row, "mergesLayout", &format!("layout. {}", layout.tag()), false)
+        .on_hover_text(crate::i18n::tr("How the groups are laid out: waves., grid., strip. or focus. (remembered)"));
+    egui::Popup::menu(&menu).show(|ui| {
+        for l in Layout::ALL {
+            let r = ui.selectable_label(l == layout, l.tag());
+            register(ui.ctx(), format!("menu:mergesLayout-{}", l.id()), r.rect);
+            if r.clicked() {
+                let _ = app.run("merge.layout", json!({"layout": l.id()}));
+            }
+        }
+    });
+    let aspect = vp.aspect;
+    let menu = crate::widgets::text_button(row, "mergesAspect", &format!("aspect. {}", aspect.tag()), false)
+        .on_hover_text(crate::i18n::tr("The cards' shape (the photo is fitted inside; the photos never change)"));
+    egui::Popup::menu(&menu).show(|ui| {
+        for a in CardAspect::ALL {
+            let r = ui.selectable_label(a == aspect, a.tag());
+            register(ui.ctx(), format!("menu:mergesAspect-{}", a.id()), r.rect);
+            if r.clicked() {
+                let _ = app.run("merge.layout", json!({"aspect": a.id()}));
+            }
+        }
+    });
+    let menu = crate::widgets::text_button(row, "mergesPerRow", &format!("per.row. {}", vp.per_row), false)
+        .on_hover_text(crate::i18n::tr("Frames side by side across the view: the cards' size (smaller. / bigger. step it)"));
+    egui::Popup::menu(&menu).show(|ui| {
+        for n in PER_ROW.0..=PER_ROW.1 {
+            let r = ui.selectable_label(n == vp.per_row, format!("{n}."));
+            register(ui.ctx(), format!("menu:mergesPerRow-{n}"), r.rect);
+            if r.clicked() {
+                let _ = app.run("merge.layout", json!({"perRow": n}));
+            }
+        }
+    });
+    if layout == Layout::Focus {
+        for (id, label, tip, by) in [("mergesPrev", "prev.", "The group before (←)", -1), ("mergesNext", "next.", "The group after (→)", 1)] {
+            if crate::widgets::text_button(row, id, label, false).on_hover_text(crate::i18n::tr(tip)).clicked()
+                && let Err(e) = app.run("merge.step", json!({"by": by}))
+            {
+                app.toast(&ctx, e);
+            }
+        }
+    }
+    gap(row);
     for (id, label, tip, step) in [
-        ("mergesSmaller", "smaller.", "Smaller cards (the grid's size)", -40.0f32),
-        ("mergesBigger", "bigger.", "Bigger cards (the grid's size)", 40.0),
+        ("mergesSmaller", "smaller.", "Smaller cards: one frame more per row", -1.0f32),
+        ("mergesBigger", "bigger.", "Bigger cards: one frame fewer per row", 1.0),
     ] {
-        if crate::widgets::text_button(&mut row, id, label, false).on_hover_text(crate::i18n::tr(tip)).clicked()
+        if crate::widgets::text_button(row, id, label, false).on_hover_text(crate::i18n::tr(tip)).clicked()
             && let Err(e) = app.run("merge.cardSize", json!({"step": step}))
         {
             app.toast(&ctx, e);
@@ -365,22 +663,33 @@ fn gap(ui: &mut egui::Ui) {
 
 /// A group as the view draws it (worked out once per catalog revision).
 #[derive(Clone, Debug)]
-struct GroupView {
-    g: MergeGroup,
+pub(crate) struct GroupView {
+    pub g: MergeGroup,
     /// Its frames still in the library: in the group and taken out of it.
-    frames: Vec<PhotoId>,
-    aspects: Vec<f32>,
-    cameras: Vec<String>,
-    subfolders: Vec<String>,
-    reasons: String,
+    pub frames: Vec<PhotoId>,
+    pub aspects: Vec<f32>,
+    pub cameras: Vec<String>,
+    pub subfolders: Vec<String>,
+    pub reasons: String,
 }
 
 #[derive(Clone, Debug, Default)]
-struct ViewData {
-    open: Vec<GroupView>,
-    merged: Vec<PhotoId>,
-    merged_aspects: Vec<f32>,
-    sent: Vec<GroupView>,
+pub(crate) struct ViewData {
+    /// The open groups the filters let through (kind., confidence., camera.), in order.
+    pub open: Vec<GroupView>,
+    /// Open groups in the scope before the filters.
+    pub open_total: usize,
+    /// The cameras of the open groups in the scope (the camera. filter's choices).
+    pub cameras: Vec<String>,
+    /// Per kind: the open groups the kind. chip shows (the other filters applied).
+    pub kind_counts: std::collections::BTreeMap<MergeType, usize>,
+    /// Per confidence: the open groups the confidence. chip shows (the other filters applied).
+    pub conf_counts: std::collections::BTreeMap<Confidence, usize>,
+    /// What confidence. all. shows: from Settings ▸ merge. ▸ show from up.
+    pub conf_all: usize,
+    pub merged: Vec<PhotoId>,
+    pub merged_aspects: Vec<f32>,
+    pub sent: Vec<GroupView>,
 }
 
 fn group_view(cat: &lightcraft_catalog::Catalog, scope: &merge_find::Scope, g: MergeGroup, frames: Vec<PhotoId>) -> GroupView {
@@ -401,21 +710,59 @@ fn group_view(cat: &lightcraft_catalog::Catalog, scope: &merge_find::Scope, g: M
     GroupView { aspects: crate::panels::grid::aspects(cat, &frames), g, frames, cameras, subfolders, reasons: reasons.join("  ·  ") }
 }
 
-/// The view's groups, once per catalog revision and scope.
-fn view_data(app: &LightcraftApp, ctx: &egui::Context) -> Arc<ViewData> {
+/// The view's groups, once per catalog revision, scope and filters.
+pub(crate) fn view_data(app: &LightcraftApp, ctx: &egui::Context) -> Arc<ViewData> {
     let scope = app.session.merges_scope.clone().unwrap_or_default();
+    let filter = &app.merge.filter;
+    let vp = view_prefs(app);
+    let from = app.ui.settings.merge.show_from;
     let key = egui::Id::new("merges-view-data");
-    let rev = (app.session.catalog.revision, format!("{scope:?}"));
+    let rev = (app.session.catalog.revision, format!("{scope:?} {:?} {:?} {:?} {from:?}", filter.camera, vp.kinds, vp.confidences));
     if let Some((r, d)) = ctx.data(|d| d.get_temp::<((u64, String), Arc<ViewData>)>(key))
         && r == rev
     {
         return d;
     }
+    let d = Arc::new(compute_view_data(app));
+    ctx.data_mut(|m| m.insert_temp(key, (rev, d.clone())));
+    d
+}
+
+/// [`view_data`] worked out afresh (a command from outside a frame).
+pub(crate) fn compute_view_data(app: &LightcraftApp) -> ViewData {
+    let scope = app.session.merges_scope.clone().unwrap_or_default();
+    let filter = &app.merge.filter;
+    let vp = view_prefs(app);
+    let from = app.ui.settings.merge.show_from;
     let cat = &app.session.catalog;
     let mut d = ViewData::default();
     for run in merge_find::view(cat, &scope) {
         match run.group.as_deref().and_then(|id| merge_find::group(cat, id)) {
-            Some(g) => d.open.push(group_view(cat, &scope, g, run.ids)),
+            Some(g) => {
+                let gv = group_view(cat, &scope, g, run.ids);
+                d.open_total += 1;
+                for c in &gv.cameras {
+                    if !d.cameras.contains(c) {
+                        d.cameras.push(c.clone());
+                    }
+                }
+                let camera = filter.camera.as_ref().is_none_or(|c| gv.cameras.contains(c));
+                let kind = vp.kinds.is_empty() || vp.kinds.contains(&gv.g.kind);
+                let conf = crate::merge_page::confidence_shown(&vp.confidences, gv.g.confidence(), from);
+                // each chip counts what it would show with the other filters as they are
+                if camera && conf {
+                    *d.kind_counts.entry(gv.g.kind).or_default() += 1;
+                }
+                if camera && kind {
+                    *d.conf_counts.entry(gv.g.confidence()).or_default() += 1;
+                    if gv.g.confidence() >= from {
+                        d.conf_all += 1;
+                    }
+                }
+                if camera && kind && conf {
+                    d.open.push(gv);
+                }
+            }
             None => {
                 d.merged_aspects = crate::panels::grid::aspects(cat, &run.ids);
                 d.merged = run.ids;
@@ -426,8 +773,6 @@ fn view_data(app: &LightcraftApp, ctx: &egui::Context) -> Arc<ViewData> {
         let frames = g.live_all(cat);
         d.sent.push(group_view(cat, &scope, g, frames));
     }
-    let d = Arc::new(d);
-    ctx.data_mut(|m| m.insert_temp(key, (rev, d.clone())));
     d
 }
 
@@ -493,13 +838,44 @@ fn wave_layout(aspects: &[f32], card_h: f32, width: f32) -> Wave {
     Wave { stack, spread, stack_h: card_h + 2.0 * amp, spread_h: if n == 0 { 0.0 } else { y + h } }
 }
 
-fn lerp_rect(a: Rect, b: Rect, t: f32) -> Rect {
-    Rect::from_min_max(a.min.lerp(b.min, t), a.max.lerp(b.max, t))
+/// grid.: the cards in rows at their height, wrapping (nothing stacked).
+fn grid_layout(aspects: &[f32], card_h: f32, width: f32, per_row: usize) -> Wave {
+    let width = width.max(40.0);
+    let (mut x, mut y) = (0.0f32, 0.0f32);
+    let mut cells = Vec::with_capacity(aspects.len());
+    for (i, a) in aspects.iter().enumerate() {
+        let w = (card_h * a.clamp(0.4, 2.5)).min(width);
+        // (a card's width is rounded: 2 points of give)
+        if x > 0.0 && (x + w > width + 2.0 || i % per_row.max(1) == 0) {
+            x = 0.0;
+            y += card_h + CARD_GAP;
+        }
+        cells.push(Rect::from_min_size(pos2(x, y), vec2(w, card_h)));
+        x += w + CARD_GAP;
+    }
+    let h = if aspects.is_empty() { 0.0 } else { y + card_h };
+    Wave { stack: cells.clone(), spread: cells, stack_h: h, spread_h: h }
 }
 
-/// The cards' height: from the grid's size (the bottom bar's slider, smaller. / bigger.).
-fn card_h(app: &LightcraftApp) -> f32 {
-    (app.ui.thumb_size * 1.15).clamp(120.0, 440.0)
+/// strip.: the cards side by side in one row (the row scrolls sideways when longer than the view).
+fn strip_layout(aspects: &[f32], card_h: f32) -> Wave {
+    let mut x = 0.0f32;
+    let mut cells = Vec::with_capacity(aspects.len());
+    for a in aspects {
+        let w = card_h * a.clamp(0.4, 2.5);
+        cells.push(Rect::from_min_size(pos2(x, 0.0), vec2(w, card_h)));
+        x += w + CARD_GAP;
+    }
+    // room under the row for its sideways scroll bar
+    let h = card_h + STRIP_BAR;
+    Wave { stack: cells.clone(), spread: cells, stack_h: h, spread_h: h }
+}
+
+/// Room under a strip. row for its scroll bar.
+const STRIP_BAR: f32 = 14.0;
+
+fn lerp_rect(a: Rect, b: Rect, t: f32) -> Rect {
+    Rect::from_min_max(a.min.lerp(b.min, t), a.max.lerp(b.max, t))
 }
 
 /// The fold of a group (its triangle: the group shrinks to its header) and of its spread
@@ -550,8 +926,14 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
     let data = view_data(app, &ctx);
+    if data.open.is_empty() && data.open_total > 0 && data.merged.is_empty() {
+        let n = data.open_total;
+        let body = crate::i18n::tr_format!("{n} groups here are hidden by kind., confidence. or camera. above: all. shows them", n = n);
+        crate::panels::empty_message(ui, ui.max_rect(), "No merges match the filters", &body);
+        return;
+    }
     if data.open.is_empty() && data.merged.is_empty() && data.sent.is_empty() {
-        let body = if app.ui.settings.merge_find == FindMode::Auto {
+        let body = if app.ui.settings.merge_find.automatic() {
             "Panoramas, brackets and focus stacks show up here as LightCraft finds them. find. looks now"
         } else {
             "Click find. to look here for panoramas (panorama.), brackets (hdr.) and focus stacks (focus.stack.)"
@@ -561,20 +943,49 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     run_pending(app, &ctx);
     let ppp = ctx.pixels_per_point();
-    let ch = card_h(app);
+    let vp = view_prefs(app);
+    let (layout, aspect) = (vp.layout, vp.aspect);
     let outer = ui.available_width();
     let panel_w = (outer - 32.0).max(120.0);
     let inner_w = panel_w - 2.0 * PAD;
+    // per.row.: so many frames side by side across the view
+    let per_row = vp.per_row.clamp(PER_ROW.0, PER_ROW.1);
+    let cell_w = ((inner_w - CARD_GAP * f32::from(per_row - 1)) / f32::from(per_row)).max(40.0);
+    let ch = (cell_w / 1.5).round().max(40.0);
+    let h_for = |cards: &[f32]| {
+        let mean = if cards.is_empty() { 1.5 } else { cards.iter().map(|a| a.clamp(0.4, 2.5)).sum::<f32>() / cards.len() as f32 };
+        (cell_w / mean).round().clamp(40.0, 900.0)
+    };
+    // focus.: one group (the one picked, else the first), as big as the view lets it be
+    let open_groups: Vec<GroupView> = if layout == Layout::Focus {
+        let i = crate::merge_page::focus(app, &data.open).unwrap_or(0);
+        data.open.get(i).cloned().into_iter().collect()
+    } else {
+        data.open.clone()
+    };
+    let focus_h = (ui.available_height() - PAD * 2.0 - HEAD_H - 80.0).clamp(160.0, 900.0).round();
     let hovered_before: Option<String> = ctx.data(|d| d.get_temp::<Option<String>>(egui::Id::new("merges-hover"))).flatten();
     // lay out every block first (the scroll area needs the height)
     let mut blocks: Vec<(f32, Block, Wave, Arc<egui::Galley>)> = Vec::new();
     let mut y = 12.0f32;
-    for gv in &data.open {
+    for gv in &open_groups {
         let open = crate::folds::is_open(&ctx, &fold_id(&gv.g.id));
         let pinned = crate::folds::is_open_or(&ctx, &spread_id(&gv.g.id), false);
-        let target = if pinned || hovered_before.as_deref() == Some(gv.g.id.as_str()) { 1.0 } else { 0.0 };
+        let target = if layout != Layout::Waves || pinned || hovered_before.as_deref() == Some(gv.g.id.as_str()) { 1.0 } else { 0.0 };
         let tt = ctx.animate_value_with_time(egui::Id::new(("merges-wave", gv.g.id.as_str())), target, 0.2);
-        let wave = wave_layout(&gv.aspects, ch, inner_w);
+        let cards = aspect.cards(&gv.aspects);
+        let gh = h_for(&cards);
+        let wave = match layout {
+            Layout::Waves => wave_layout(&cards, gh, inner_w),
+            Layout::Grid => grid_layout(&cards, gh, inner_w, per_row.into()),
+            Layout::Strip => strip_layout(&cards, gh),
+            Layout::Focus => {
+                let mut w = wave_layout(&cards, focus_h, inner_w);
+                w.stack = w.spread.clone();
+                w.stack_h = w.spread_h;
+                w
+            }
+        };
         let reasons = ui.painter().layout(gv.reasons.clone(), t.font(11.5), t.text_dim, inner_w);
         let b = block(open, if open { reasons.size().y } else { 0.0 }, &wave, tt);
         let h = b.height;
@@ -584,7 +995,7 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let merged_top = y;
     let merged_open = crate::folds::is_open(&ctx, "merges.merged");
     let small_h = (ch * 0.75).round();
-    let merged_cells = if data.merged.is_empty() { Vec::new() } else { wave_layout(&data.merged_aspects, small_h, inner_w).spread };
+    let merged_cells = if data.merged.is_empty() { Vec::new() } else { wave_layout(&aspect.cards(&data.merged_aspects), small_h, inner_w).spread };
     if !data.merged.is_empty() {
         y += SECTION_H + 8.0;
         if merged_open {
@@ -595,7 +1006,7 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let sent_top = y;
     let sent_open = crate::folds::is_open_or(&ctx, "merges.sentBack", false);
     let sent_h = (ch * 0.45).round();
-    let sent_waves: Vec<Wave> = data.sent.iter().map(|g| wave_layout(&g.aspects, sent_h, inner_w)).collect();
+    let sent_waves: Vec<Wave> = data.sent.iter().map(|g| wave_layout(&aspect.cards(&g.aspects), sent_h, inner_w)).collect();
     if !data.sent.is_empty() {
         y += SECTION_H + 8.0;
         if sent_open {
@@ -613,16 +1024,21 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let origin = area.min + vec2(16.0, 0.0);
         let near = viewport.expand2(vec2(0.0, viewport.height() * 0.5));
         let order: Vec<(String, Vec<PhotoId>)> = data.open.iter().map(|g| (g.g.id.clone(), g.frames.clone())).collect();
-        for (gv, (top, b, wave, reasons)) in data.open.iter().zip(&blocks) {
+        let reveal = app.merge.reveal.take();
+        for (gv, (top, b, wave, reasons)) in open_groups.iter().zip(&blocks) {
             if b.t > 0.001 && b.t < 0.999 {
                 animating = true;
             }
             let rect = Rect::from_min_size(pos2(0.0, *top), vec2(panel_w, b.height));
+            // ← / → on the merge. page: the group picked comes into view
+            if reveal.as_deref() == Some(gv.g.id.as_str()) {
+                ui.scroll_to_rect(rect.translate(origin.to_vec2()), Some(egui::Align::Center));
+            }
             if !rect.intersects(near) {
                 continue;
             }
             let r = rect.translate(origin.to_vec2());
-            if group_block(app, ui, gv, r, b, wave, reasons.clone(), &order, ppp, &mut seen) {
+            if group_block(app, ui, gv, r, b, wave, reasons.clone(), &order, ppp, &mut seen, layout) {
                 hovered_now = Some(gv.g.id.clone());
             }
         }
@@ -706,7 +1122,7 @@ fn section_header(ui: &mut egui::Ui, fold: &str, reg: &str, title: &str, count: 
 }
 
 /// A small pill that says something (confidence, camera, subfolder): never a greyed control.
-fn chip(ui: &mut egui::Ui, id: &str, label: &str, dot: Option<Color32>) -> egui::Response {
+pub(crate) fn chip(ui: &mut egui::Ui, id: &str, label: &str, dot: Option<Color32>) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let g = ui.painter().layout_no_wrap(label.to_string(), t.font(11.5), t.text_label);
     let dot_w = if dot.is_some() { 12.0 } else { 0.0 };
@@ -728,7 +1144,7 @@ fn chip_width(ui: &egui::Ui, label: &str, dot: bool) -> f32 {
     ui.painter().layout_no_wrap(label.to_string(), t.font(11.5), t.text_label).size().x + 20.0 + if dot { 12.0 } else { 0.0 }
 }
 
-fn confidence_color(c: Confidence) -> Color32 {
+pub(crate) fn confidence_color(c: Confidence) -> Color32 {
     match c {
         Confidence::Sure => Color32::from_rgb(98, 186, 110),
         Confidence::Likely => Color32::from_rgb(222, 176, 72),
@@ -750,6 +1166,7 @@ fn group_block(
     order: &[(String, Vec<PhotoId>)],
     ppp: f32,
     seen: &mut std::collections::HashSet<PhotoId>,
+    layout: Layout,
 ) -> bool {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
@@ -832,11 +1249,11 @@ fn group_block(
         app.toast(&ctx, e);
     }
     if crate::widgets::text_button(&mut right, &format!("mergesGroupMerge-{}", g.id), merge_label, running || queued)
-        .on_hover_text(crate::i18n::tr("Merge this group, with the frames that are in it"))
+        .on_hover_text(crate::i18n::tr("Merge this group: the Merge box opens on its kind, with the frames that are in it"))
         .clicked()
         && !running
         && !queued
-        && let Err(e) = app.run("merge.mergeGroups", json!({"ids": [g.id]}))
+        && let Err(e) = app.run("merge.openGroups", json!({"ids": [g.id]}))
     {
         app.toast(&ctx, e);
     }
@@ -846,9 +1263,26 @@ fn group_block(
     p.galley(pos2(r.left() + PAD, r.top() + b.reasons_top), reasons, t.text_dim);
     // the wave: its empty area keeps it spread (or lets it fold back); hover spreads it
     let wr = Rect::from_min_size(pos2(r.left() + PAD, r.top() + b.wave_top), vec2(r.width() - 2.0 * PAD, b.wave_h));
-    let wave_resp = ui.interact(wr, egui::Id::new(("merges-wave-area", g.id.as_str())), Sense::click());
     register(&ctx, format!("mergeWave:{}", g.id), wr);
-    if wave_resp.clicked() {
+    if layout == Layout::Strip {
+        // one row, scrolling sideways when it is longer than the view
+        let content_w = wave.spread.last().map_or(0.0, |c| c.right());
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(wr).layout(egui::Layout::left_to_right(egui::Align::Min)));
+        egui::ScrollArea::horizontal().id_salt(("merges-strip", g.id.as_str())).auto_shrink([false, true]).show(&mut child, |ui| {
+            let (area, _) = ui.allocate_exact_size(vec2(content_w, wr.height() - STRIP_BAR), Sense::hover());
+            for (pid, c) in gv.frames.iter().zip(&wave.spread) {
+                let cr = c.translate(area.min.to_vec2());
+                if !cr.intersects(ui.clip_rect()) {
+                    continue;
+                }
+                seen.insert(*pid);
+                frame_card(app, ui, "", &g.id, *pid, g.photos.contains(pid), cr, ppp);
+            }
+        });
+        return false;
+    }
+    let wave_resp = ui.interact(wr, egui::Id::new(("merges-wave-area", g.id.as_str())), Sense::click());
+    if wave_resp.clicked() && layout == Layout::Waves {
         let id = spread_id(&g.id);
         let on = crate::folds::is_open_or(&ctx, &id, false);
         crate::folds::set(&ctx, &id, !on);
@@ -858,18 +1292,20 @@ fn group_block(
         let (Some(a), Some(s)) = (wave.stack.get(i), wave.spread.get(i)) else { continue };
         let cr = lerp_rect(*a, *s, b.t).translate(wr.min.to_vec2());
         seen.insert(*pid);
-        frame_card(app, ui, &g.id, *pid, g.photos.contains(pid), cr, ppp);
+        frame_card(app, ui, "", &g.id, *pid, g.photos.contains(pid), cr, ppp);
     }
     hovered
 }
 
 /// A frame of a group as a card: dimmed with a mark when taken out of the group (still a full
-/// control: a click puts it back).
-fn frame_card(app: &mut LightcraftApp, ui: &mut egui::Ui, gid: &str, pid: PhotoId, in_group: bool, r: Rect, ppp: f32) {
+/// control: a click puts it back). `place`: "" in the view (`mergeCard:…`), "Page" in the merge.
+/// page's right panel (`mergePageCard:…`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn frame_card(app: &mut LightcraftApp, ui: &mut egui::Ui, place: &str, gid: &str, pid: PhotoId, in_group: bool, r: Rect, ppp: f32) {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
-    let resp = ui.interact(r, egui::Id::new(("merge-card", gid, pid.0)), Sense::click());
-    register(&ctx, format!("mergeCard:{gid}:{}", pid.0), r);
+    let resp = ui.interact(r, egui::Id::new(("merge-card", place, gid, pid.0)), Sense::click());
+    register(&ctx, format!("merge{place}Card:{gid}:{}", pid.0), r);
     let p = ui.painter();
     p.rect_filled(r.translate(vec2(2.0, 3.0)), 4.0, Color32::from_black_alpha(110));
     crate::panels::grid::request_thumb(app, pid, crate::panels::grid::thumb_px(r.width().max(r.height()), ppp), 10);
@@ -898,10 +1334,22 @@ fn frame_card(app: &mut LightcraftApp, ui: &mut egui::Ui, gid: &str, pid: PhotoI
 }
 
 /// A card's picture (its thumbnail, or a placeholder while it renders), `tint`ed.
-fn card_image(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, r: Rect, tint: Color32) {
+pub(crate) fn card_image(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, r: Rect, tint: Color32) {
     match app.renderer.thumb(id) {
         Some(tex) => {
-            p.image(tex.tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
+            // fitted inside the card (letterboxed on a card of another shape), never stretched
+            let [w, h] = tex.tex.size();
+            let fit = if w > 0 && h > 0 {
+                let a = w as f32 / h as f32;
+                let (fw, fh) = if r.width() / r.height().max(1.0) > a { (r.height() * a, r.height()) } else { (r.width(), r.width() / a) };
+                Rect::from_center_size(r.center(), vec2(fw, fh))
+            } else {
+                r
+            };
+            if (fit.width() - r.width()).abs() > 1.0 || (fit.height() - r.height()).abs() > 1.0 {
+                p.rect_filled(r, 4.0, Color32::from_gray(22));
+            }
+            p.image(tex.tex.id(), fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
         }
         None => {
             p.rect_filled(r, 4.0, Color32::from_gray(46).linear_multiply(f32::from(tint.r()) / 255.0 * 0.5 + 0.5));
@@ -910,7 +1358,7 @@ fn card_image(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, r: Rect, tint
 }
 
 /// A card clicked once: after the double-click wait, the frame goes out of its group or back in.
-fn run_pending(app: &mut LightcraftApp, ctx: &egui::Context) {
+pub(crate) fn run_pending(app: &mut LightcraftApp, ctx: &egui::Context) {
     let key = egui::Id::new("merges-pending");
     let Some((gid, pid, at)) = ctx.data(|d| d.get_temp::<(String, u64, f64)>(key)) else { return };
     let now = ctx.input(|i| i.time);
@@ -938,7 +1386,7 @@ pub fn toggle_frame(app: &mut LightcraftApp, ctx: &egui::Context, gid: &str, pid
 
 /// A click on a group's header: its frames are picked (`library.select`); ⌘: added, or taken
 /// away when it was picked; ⇧: every group from the one clicked last.
-fn pick_group(app: &mut LightcraftApp, ctx: &egui::Context, gid: &str, frames: &[PhotoId], order: &[(String, Vec<PhotoId>)], m: egui::Modifiers) {
+pub(crate) fn pick_group(app: &mut LightcraftApp, ctx: &egui::Context, gid: &str, frames: &[PhotoId], order: &[(String, Vec<PhotoId>)], m: egui::Modifiers) {
     let anchor_key = egui::Id::new("merges-anchor");
     let ids = |v: &[PhotoId]| v.iter().map(|p| p.0).collect::<Vec<_>>();
     let r = if m.shift {

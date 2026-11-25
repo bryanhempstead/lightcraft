@@ -148,14 +148,18 @@ fn merges_specs() -> Vec<CommandSpec> {
             "Merge Groups",
             [],
             None,
-            "{ids: [group id], kind?: hdr|pano|stack|hdrPano (else each group's own), frames?: [photo id] (only these frames of each group, when two or more of it), autoSettings?: bool (true)} — merges.: merge each group into a DNG next to its first frame; its frames are then hidden from every view (not deleted, files untouched), the merged photo shows in merges. and where the frames were (their folder and collections), tagged with its kind → {merged: [{group, id, hidden}], failed: [{group, error}]}",
+            "{ids: [group id], kind?: hdr|pano|stack|hdrPano (else each group's own), frames?: [photo id] (only these frames of each group, when two or more of it), options?: {autoSettings, stack, autoCrop, projection, deghost, …} (over each kind's defaults, Settings ▸ merge.), autoSettings?: bool} — merges.: merge each group into a DNG next to its first frame; its frames are then hidden from every view (not deleted, files untouched; Settings ▸ merge. can keep them visible), the merged photo shows in merges. and where the frames were (their folder and collections; or merges. only), tagged with its kind → {merged: [{group, id, hidden}], failed: [{group, error}]}",
             can_merge,
             |s, p| {
                 let ids = group_ids("merge.mergeGroups", p)?;
                 let kind = kind_param("merge.mergeGroups", p, "kind")?;
                 let only: Vec<PhotoId> =
                     p.get("frames").and_then(Value::as_array).map(|v| v.iter().filter_map(Value::as_u64).map(PhotoId).collect()).unwrap_or_default();
-                s.merge_groups_now(&ids, kind, &only, bool_or(p, "autoSettings", false))
+                let mut options = p.get("options").filter(|o| o.is_object()).cloned().unwrap_or_else(|| json!({}));
+                if let (Some(a), Some(o)) = (p.get("autoSettings"), options.as_object_mut()) {
+                    o.insert("autoSettings".into(), a.clone());
+                }
+                s.merge_groups_now(&ids, kind, &only, &options)
             }
         ),
         cmd!(

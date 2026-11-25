@@ -55,6 +55,7 @@ pub mod media;
 pub mod memory;
 pub mod merge;
 pub mod merge_find;
+pub mod merge_prefs;
 pub mod originals;
 pub mod people;
 pub mod places;
@@ -380,6 +381,8 @@ pub struct Session {
     pub merge_find_job: Option<merge_find::FindJob>,
     /// merges.: folders the automatic finder read this session (folder → fingerprint).
     pub merge_scanned: std::collections::BTreeMap<String, u64>,
+    /// merges.: the defaults per kind (Settings ▸ merge.; the app sets them from its settings).
+    pub merge_prefs: merge_prefs::MergePrefs,
     /// LR-MAP-PLACES: place search (geocoder, answer cache) and keyword suggestions.
     pub places: places::Places,
     /// Favorites kept safe: hearted photos' originals copied to the keep folder ([`fav_keep`]).
@@ -521,6 +524,7 @@ impl Session {
             merges_scope: None,
             merge_find_job: None,
             merge_scanned: Default::default(),
+            merge_prefs: Default::default(),
             places: Default::default(),
             fav_keep: Default::default(),
         }
