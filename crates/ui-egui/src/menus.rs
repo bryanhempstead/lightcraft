@@ -2349,24 +2349,73 @@ pub fn delete_key(app: &mut LightcraftApp) -> bool {
     if targets.is_empty() {
         return false;
     }
+    app.ui.delete_kept = None;
+    if let Some(kept) = kept_among(app, &targets) {
+        app.ui.dialog = Some(Dialog::DeleteKept { count: targets.len(), kept, rejected: false });
+        return true;
+    }
+    // (a failed delete said why in a toast)
+    let _ = delete_continue(app, false);
+    true
+}
+
+/// Favorites kept safe: how many of `ids` have a kept copy, when this delete takes photos out of
+/// the library (not Recently Deleted, not just out of an album) — then it asks whether those go too.
+fn kept_among(app: &LightcraftApp, ids: &[lightcraft_catalog::PhotoId]) -> Option<usize> {
+    let in_album = matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_));
+    if matches!(app.ui.settings.delete_key, DeleteKey::Recent) || (app.ui.settings.delete_key == DeleteKey::Album && in_album) {
+        return None;
+    }
+    let cat = &app.session.catalog;
+    let n = ids.iter().filter_map(|id| cat.photo(*id)).filter(|p| lightcraft_engine::fav_keep::is_kept(cat, p)).count();
+    (n > 0).then_some(n)
+}
+
+/// The delete after the kept-copies question (or without one): ask., Confirm first, or at once.
+pub fn delete_continue(app: &mut LightcraftApp, rejected: bool) -> Result<Value, String> {
+    if rejected {
+        return delete_rejected_go(app);
+    }
+    let targets = app.session.targets(&json!({}));
+    if targets.is_empty() {
+        return Err(crate::i18n::tr("No photos selected.").into());
+    }
     if app.ui.settings.delete_key == DeleteKey::Ask {
         let copies = targets.iter().filter(|id| app.session.catalog.photo(**id).is_some_and(|p| p.copy_of.is_some())).count();
         app.ui.dialog = Some(Dialog::DeletePhotos { count: targets.len(), copies, rejected: false });
-        return true;
+        return Ok(Value::Null);
     }
     if app.ui.settings.confirm_delete {
         app.ui.dialog = Some(Dialog::ConfirmDelete { count: targets.len(), rejected: false });
-        return true;
+        return Ok(Value::Null);
     }
-    if let Err(e) = delete_now(app, false) {
-        app.toast_soon(e, 6.0);
+    let r = delete_now(app, false);
+    if let Err(e) = &r {
+        app.toast_soon(e.clone(), 6.0);
     }
-    true
+    r
 }
 
 /// Photo ▸ Delete Rejected Photos (⌘⌫): the view's rejects go the way the Delete key setting says
 /// (asking first with ask. or Confirm first).
 fn delete_rejected(app: &mut LightcraftApp) -> Result<Value, String> {
+    let r = app.session.execute("library.rejected", &json!({})).map_err(|e| e.to_string())?;
+    let count = r["count"].as_u64().unwrap_or(0) as usize;
+    if count == 0 {
+        return Err(crate::i18n::tr("There are no rejected photos here.").into());
+    }
+    app.ui.delete_kept = None;
+    let ids: Vec<lightcraft_catalog::PhotoId> =
+        r["ids"].as_array().map(|a| a.iter().filter_map(Value::as_u64).map(lightcraft_catalog::PhotoId).collect()).unwrap_or_default();
+    if let Some(kept) = kept_among(app, &ids) {
+        app.ui.dialog = Some(Dialog::DeleteKept { count, kept, rejected: true });
+        return Ok(json!({"count": count}));
+    }
+    delete_rejected_go(app)
+}
+
+/// Delete Rejected Photos after the kept-copies question.
+fn delete_rejected_go(app: &mut LightcraftApp) -> Result<Value, String> {
     let r = app.session.execute("library.rejected", &json!({})).map_err(|e| e.to_string())?;
     let count = r["count"].as_u64().unwrap_or(0) as usize;
     if count == 0 {
@@ -2408,12 +2457,14 @@ pub fn delete_now(app: &mut LightcraftApp, rejected: bool) -> Result<Value, Stri
         app.session.selection = lightcraft_engine::Selection { active: picked.first().copied(), ids: picked };
     }
     let n = ids.len() as u64;
+    // favorites kept safe: their kept copies go too only when the question said so
+    let kept_copies = app.ui.delete_kept.take().unwrap_or(false);
     let (r, text) = match app.ui.settings.delete_key {
         DeleteKey::Trash | DeleteKey::Ask => {
             let r = if rejected {
-                app.run("library.deleteRejected", json!({"fromDisk": true}))?
+                app.run("library.deleteRejected", json!({"fromDisk": true, "keptCopies": kept_copies}))?
             } else {
-                app.run("photo.deleteFromDisk", json!({"ids": ids}))?
+                app.run("photo.deleteFromDisk", json!({"ids": ids, "keptCopies": kept_copies}))?
             };
             let text = trash_message(&r);
             (r, text)
@@ -2423,7 +2474,7 @@ pub fn delete_now(app: &mut LightcraftApp, rejected: bool) -> Result<Value, Stri
             (r, crate::i18n::tr_format!("{what} moved to Recently Deleted", what = photos(n)))
         }
         DeleteKey::Album => {
-            let r = app.run("photo.removeFromAlbum", json!({"ids": ids}))?;
+            let r = app.run("photo.removeFromAlbum", json!({"ids": ids, "keptCopies": kept_copies}))?;
             let gone = r["removed"].as_u64().unwrap_or(n);
             let text = if r["fromLibrary"] == true {
                 let mut t = crate::i18n::tr_format!("{what} removed from the library (files kept)", what = photos(gone));

@@ -663,6 +663,9 @@ fn main() -> eframe::Result {
                     app.resume_left_off_at_launch();
                 }
             }
+            // favorites kept safe: copies go to the keep folder Settings names (LOT48 by default);
+            // not with --memory / LIGHTCRAFT_NO_PREFS (tests, scripts: nothing is written there)
+            app.fav_keep_live = !in_memory && std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none();
             // identity-plate images are copied here (not with --memory / LIGHTCRAFT_NO_PREFS: nothing is written)
             app.identity_dir =
                 (!in_memory && std::env::var_os("LIGHTCRAFT_NO_PREFS").is_none()).then(lightcraft_ui_egui::identity::default_dir).flatten();

@@ -313,6 +313,54 @@ fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             ),
         );
     }
+    favorites_section(app, ui, t);
+}
+
+/// Favorites kept safe (Bryan, 2026-11-24): a hearted photo's original + a sidecar with its edits
+/// are copied to the keep folder, so a deleted folder never takes a favorite with it.
+fn favorites_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    if !heading(ui, t, "settings.general.favorites", "Favorites") {
+        return;
+    }
+    row(ui, t, "keep:", |ui| {
+        let mut on = app.ui.settings.fav_keep;
+        if choices(ui, "settingsFavKeep", &[(true, "on."), (false, "off.")], &mut on) {
+            app.ui.settings.fav_keep = on;
+        }
+    });
+    row(ui, t, "folder:", |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut app.ui.settings.fav_keep_dir).hint_text(lightcraft_engine::fav_keep::DEFAULT_ROOT).desired_width(260.0),
+        );
+        register(ui.ctx(), "field:favKeepDir", r.rect);
+        if crate::widgets::text_button(ui, "favKeepChoose", "choose.", false).clicked() {
+            match app.services.pick_folder.as_mut().and_then(|pick| pick()) {
+                Some(d) => app.ui.settings.fav_keep_dir = d,
+                None if app.services.pick_folder.is_none() => app.toast(ui.ctx(), "Type the folder here: no folder picker in this window."),
+                None => {}
+            }
+        }
+        let default = app.ui.settings.fav_keep_dir.trim() == lightcraft_engine::fav_keep::DEFAULT_ROOT;
+        if crate::widgets::text_button(ui, "favKeepDefault", "lot48.", default).clicked() {
+            app.ui.settings.fav_keep_dir = lightcraft_engine::fav_keep::DEFAULT_ROOT.into();
+        }
+    });
+    row(ui, t, "", |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if crate::widgets::text_button(ui, "favKeepNow", "keep.now.", false).clicked() {
+            match app.run("fav.keep", json!({})) {
+                Ok(_) => app.toast(ui.ctx(), "Keeping every favorite still waiting"),
+                Err(e) => app.toast(ui.ctx(), e),
+            }
+        }
+        ui.label(RichText::new(crate::fav_keep_ui::summary(app)).size(11.0).color(t.text_label));
+    });
+    hint(
+        ui,
+        t,
+        "on.: a hearted photo's original file and an XMP sidecar with its edits are copied to <folder>/<shoot>/ (never over another file). If its folder is deleted or its disk is gone, the photo shows the kept copy and keeps its edits; when the original is back it switches back. Nothing leaves the folder unless you delete it: unhearting keeps the copy. While the disk is offline the copies wait and are made when it is back.",
+    );
 }
 
 // -------------------------------------------------------------------------------------- Import

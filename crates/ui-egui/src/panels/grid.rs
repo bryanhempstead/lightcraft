@@ -734,7 +734,12 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         if photo.favorite {
             // fav.: a heart after the flag (or where the flag would be), 10 px clear of it
             let hx = if app.ui.settings.grid_flags && photo.flag != Flag::None { x + 24.0 } else { x };
-            paint(p, Rect::from_min_size(pos2(hx, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::HeartFilled, t.fav);
+            let heart = Rect::from_min_size(pos2(hx, bar.center().y - 7.0), vec2(14.0, 14.0));
+            paint(p, heart, Icon::HeartFilled, t.fav);
+            // kept.: its original is kept safe in the keep folder (favorites kept safe)
+            if lightcraft_engine::fav_keep::is_kept(&app.session.catalog, &photo) {
+                crate::fav_keep_ui::kept_mark(p, &t, heart);
+            }
         }
         let mut right = bar.right();
         if photo.is_edited() && app.ui.settings.grid_edit_badge {

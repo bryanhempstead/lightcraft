@@ -509,6 +509,8 @@ impl Session {
         });
         // sidecars a crashed run left unwritten (deferred auto-write, `xmp_queue`)
         self.requeue_pending_sidecars();
+        // favorites kept safe: every favorite looked at again (copies a crash or an offline disk left)
+        self.fav_keep_opened();
         // forget untouched Local records of folders not browsed for a while (journaled at once)
         if self.forget_local_days > 0 {
             let plan = self.forget_local(false, None);
@@ -601,6 +603,8 @@ impl Session {
     pub fn persist_if_dirty(&mut self) {
         // deferred XMP auto-write: finished writes in, due ones out (records the sync status)
         self.poll_sidecars();
+        // favorites kept safe: a finished copy run in, the next one out
+        self.poll_fav_keep();
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
         if self.library.is_some() && !self.pending_log.is_empty() && !backing_off {
             let _ = self.persist();
@@ -629,6 +633,7 @@ impl Session {
         let _ = self.end_interaction();
         // queued XMP sidecars first: their sync records go in with the rest
         self.flush_sidecars();
+        self.fav_keep_closing();
         let persisted = self.persist();
         self.save_view();
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };

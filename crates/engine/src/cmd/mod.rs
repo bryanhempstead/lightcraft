@@ -184,6 +184,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(publish::specs());
         v.extend(video::specs());
         v.extend(people::specs());
+        v.extend(crate::fav_keep::specs());
         v
     })
 }

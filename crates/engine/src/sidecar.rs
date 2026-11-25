@@ -678,6 +678,13 @@ pub(crate) struct SidecarWrite {
 }
 
 impl SidecarWrite {
+    /// The same sidecar written beside another copy of the original (favorites kept safe:
+    /// [`crate::fav_keep`] writes it next to the kept copy).
+    pub(crate) fn beside(mut self, original: String) -> SidecarWrite {
+        self.original = original;
+        self
+    }
+
     pub(crate) fn run(self) -> Result<SidecarSaved> {
         let p = &*self.photo;
         let naming = match self.naming {

@@ -275,7 +275,7 @@ fn cells(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 if app.ui.settings.film_badges
                     && let Some(ph) = app.session.catalog.photo(*id)
                 {
-                    film_badges(p, &t, fr, ph);
+                    film_badges(p, &t, fr, ph, lightcraft_engine::fav_keep::is_kept(&app.session.catalog, ph));
                 }
                 // merges.: what made a merged photo, at the top right
                 if let Some(kind) = app.session.catalog.photo(*id).and_then(|ph| ph.merge_type()) {
@@ -316,7 +316,7 @@ fn cells(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
 }
 
 /// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Interface).
-fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo) {
+fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo, kept: bool) {
     use crate::icons::{Icon, paint};
     use lightcraft_catalog::Flag;
     let edited = ph.is_edited();
@@ -338,7 +338,11 @@ fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog:
     }
     if ph.favorite {
         let hx = if ph.flag == Flag::None { x } else { x + 18.0 };
-        paint(p, Rect::from_min_size(pos2(hx, y - 5.0), vec2(10.0, 10.0)), Icon::HeartFilled, t.fav);
+        let heart = Rect::from_min_size(pos2(hx, y - 5.0), vec2(10.0, 10.0));
+        paint(p, heart, Icon::HeartFilled, t.fav);
+        if kept {
+            crate::fav_keep_ui::kept_mark(p, t, heart);
+        }
     }
     if edited {
         paint(p, Rect::from_min_size(pos2(bar.right() - 13.0, y - 5.0), vec2(10.0, 10.0)), Icon::Sliders, t.text_label);
