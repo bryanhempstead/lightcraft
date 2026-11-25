@@ -62,6 +62,8 @@ mod tests_classic;
 #[cfg(test)]
 mod tests_collection_parts;
 #[cfg(test)]
+mod tests_crop_drag;
+#[cfg(test)]
 mod tests_curve;
 #[cfg(test)]
 mod tests_enhance_view;

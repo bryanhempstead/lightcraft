@@ -1747,9 +1747,23 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         let s = to_straight(n, d.crop.geometry.angle, frame);
         d.crop.geometry.rect.contains(Point::new(s.x.clamp(-1.0, 2.0), s.y))
     };
+    // the handle under `q`: a tick first, else anywhere along an edge (as in Lightroom)
+    let pick = |q: Pos2| {
+        handles.iter().position(|h| h.distance(q) < 12.0).or_else(|| {
+            // the nearest edge, so a thin crop's bottom band doesn't resolve to its top edge
+            (0..4)
+                .map(|e| {
+                    let (a, b) = (pts[e], pts[(e + 1) % 4]);
+                    let t = ((q - a).dot(b - a) / (b - a).length_sq().max(1e-6)).clamp(0.0, 1.0);
+                    (e, (a + (b - a) * t).distance(q))
+                })
+                .filter(|&(_, dist)| dist < 8.0)
+                .min_by(|x, y| x.1.total_cmp(&y.1))
+                .map(|(e, _)| e + 4)
+        })
+    };
     if let Some(hq) = resp.hover_pos() {
-        let near = handles.iter().position(|h| h.distance(hq) < 12.0);
-        ui.ctx().set_cursor_icon(match near {
+        ui.ctx().set_cursor_icon(match pick(hq) {
             Some(0 | 2) => egui::CursorIcon::ResizeNwSe,
             Some(1 | 3) => egui::CursorIcon::ResizeNeSw,
             Some(4 | 6) => egui::CursorIcon::ResizeVertical,
@@ -1762,16 +1776,19 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     if resp.double_clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && inside(q)
-        && !handles.iter().any(|h| h.distance(q) < 12.0)
+        && pick(q).is_none()
     {
         let _ = app.run("tool.done", json!({}));
         return;
     }
     if resp.drag_started()
-        && let Some(q) = resp.interact_pointer_pos()
+        && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
     {
+        // Pick by where the button went DOWN: by `drag_started` the pointer has already moved, so a
+        // quick drag on the bottom edge used to land inside the frame and move the whole crop
+        // (Bryan, 2026-11-24).
         let _ = app.run("develop.beginInteraction", json!({"label": "Crop"}));
-        app.gesture = Some(match handles.iter().position(|h| h.distance(q) < 12.0) {
+        app.gesture = Some(match pick(q) {
             Some(h) => Gesture::CropHandle { handle: h as u8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None if inside(q) => Gesture::CropHandle { handle: 8, start: d.crop.geometry.rect, angle: d.crop.geometry.angle },
             None => {

@@ -1,5 +1,14 @@
 # Progress — Bryan's LightCraft (his copy of storytold/lightcraft, ~/crafts/lightcraft)
 
+## 11-27 — Omega run sheet (Claude, written 2026-11-24 ~18:40) — the docket items 8 + 9 above as briefs
+Orchestrator reads this first on the 27th. Rust: every brief's Done-when includes `cargo test -p <crate>` + clippy clean for the crate touched.
+- [ ] **9a · merged DNG tint +7 vs frames −7** — engineer. Done when: a regression test on the LinearRaw WB path passes and `lightcraft-cli render` of a merged pano reads the same tint as its frames.
+- [x] **9b · Develop crop bottom-edge drag moves the whole crop** (warped pano) — done 11-24 (Claude). Cause: `crop_overlay` picked the handle from the pointer at `drag_started` (already moved), so a quick drag off the edge tick landed inside → Move. Now picks from `press_origin`, and the whole edge (8 px) is grabbable, cursor too. Test `tests_crop_drag.rs` (plain + perspective-warped, tick / along the edge, slow / one-step). Left: try on a real merged pano (needs.you).
+- [ ] **9c · `merge.` drop-down at top of Develop for merged photos** (change options → re-merge) — engineer, then reviewer. Done when: re-merge from the drop-down makes a new result with the changed option; screenshot + spacing audit.
+- [ ] **9d · Edit In → PhotoCraft → back keeps every setting** — builder (verify only, report diffs). Done when: before/after settings dump is identical, or the differing keys are listed here.
+- [ ] **8 · multiple exposure (`multi.exposure.` merge kind)** — big: `/effort xhigh`. scout first: PhotoCraft (~/crafts/photocraft) layer + blend-mode code we can reuse. Then engineer in slices (layers/blend/opacity → transform → mask → DNG/TIFF + recipe). Done when per slice: a test + a rendered result looked at.
+- [ ] **SB merge page** (branch `agent-mergepage`, ~/second-brain-mergepage) — engineer finishes layout./aspect./per.row. + merge box; reviewer vs LightCraft's merge page; orchestrator merges + one SB restart with his OK.
+
 Bryan wants LightCraft to replace Lightroom Classic for him: same shortcuts, presets, catalog data, devices.
 Rules are in AGENTS.md (never crash, everything is a command, *Fork rules*). Since 2026-10-09 this is his own fork
 (origin = bryanhempstead/lightcraft): Adobe's DNG SDK + his installed Adobe profiles are allowed at runtime, no Adobe
