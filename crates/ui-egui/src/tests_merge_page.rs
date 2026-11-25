@@ -189,6 +189,10 @@ fn the_merge_page_is_three_columns_with_the_picked_group_on_the_right() {
         other => panic!("the Merge box: {other:?}"),
     }
     assert_eq!(h.app.merge.dialog_groups, vec![next.id.clone()]);
+    h.settle(SETTLE);
+    let faults = crate::tests_panels::layout_faults(&h, widget(&h, "dialog:window"));
+    assert!(faults.is_empty(), "the Merge box: {faults:#?}");
+    shot(&mut h, "mergepage-6-box.png");
     assert_eq!(h.app.merge.ids, next.photos);
     // every other kind one click away in the same box
     for k in ["merge.hdr", "merge.panorama", "merge.hdrPanorama", "merge.focus"] {
