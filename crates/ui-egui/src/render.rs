@@ -132,6 +132,10 @@ struct Queued {
     job: RenderJob,
 }
 
+/// The job-pool group of the loupe's sharp (non-draft) renders: apart from the group the loupe's
+/// drafts and warm-ups share (see [`Renderer::with_worker_threads`]).
+const SHARP_GROUP: u32 = 10;
+
 /// The [`Slot::Prefetch`] number of [`Renderer::warm`]'s jobs (0 and 1 are the neighbours).
 pub const WARM_SLOT: u8 = 2;
 
@@ -169,6 +173,8 @@ pub struct Renderer {
     /// The views' native-resolution detail ([`Slot::Detail`], [`crate::tiles`]).
     pub tiles: HashMap<u8, crate::tiles::TileView>,
     pub last_main_ms: f64,
+    /// Loupe ([`Slot::Main`]) requests accepted (not already current or pending) since start.
+    pub main_requests: u64,
     /// Jobs finished since start (for inspect/perf).
     pub completed: u64,
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
@@ -245,6 +251,7 @@ impl Renderer {
             textures: HashMap::new(),
             tiles: HashMap::new(),
             last_main_ms: 0.0,
+            main_requests: 0,
             completed: 0,
             keep_pixels: false,
             display_p3: false,
@@ -330,6 +337,12 @@ impl Renderer {
         self.pending.insert(slot, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
         self.request_ids.insert(slot, job.request_id);
+        if slot == Slot::Main {
+            self.main_requests += 1;
+        }
+        if slot == Slot::Main && crate::dial::log_enabled() {
+            crate::dial::log(&format!("request key={}", job.key));
+        }
         // (an offload keeps its own per-view stage caches; the flag tells it to)
         let job = if matches!(slot, Slot::Main | Slot::Before | Slot::Hover | Slot::Detail(_)) {
             job.with_stages(self.stages.entry(slot).or_default().clone())
@@ -346,10 +359,15 @@ impl Renderer {
         let key = job.key;
         let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
         let p3 = self.display_p3;
-        self.pool.submit(
+        // the loupe's sharp render is a group of its own, so a draft (a dial turned again after a
+        // pause, while the sharp render of the pause is still running) never waits for it
+        let group = (slot == Slot::Main && job.request.quality != lightcraft_engine::pipeline::Quality::Draft && !crate::dial::legacy())
+            .then_some(SHARP_GROUP);
+        self.pool.submit_in_group(
             slot,
             key,
             priority,
+            group,
             Box::new(move || {
                 let r = if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
                 let prepared = Prepared::of(slot, &r, p3);
@@ -740,6 +758,9 @@ impl Renderer {
             }
             if slot == Slot::Main {
                 self.last_main_ms = ms;
+                if crate::dial::log_enabled() {
+                    crate::dial::log(&format!("land key={} render_ms={ms:.1} size={:?}", r.key, [img.width, img.height]));
+                }
             }
             changed = true;
         }

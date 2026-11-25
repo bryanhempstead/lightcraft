@@ -309,6 +309,14 @@ impl Headless {
         }
     }
 
+    /// Queue a control-protocol request without running a frame: several can arrive between two
+    /// frames, like a dial's lines. Its reply is sent by the next [`Self::step`].
+    pub fn queue(&mut self, method: &str, params: Value) -> std::sync::mpsc::Receiver<Value> {
+        let (req, rx) = ControlRequest::new(method, params);
+        let _ = self.control.send(req);
+        rx
+    }
+
     /// Send a control-protocol request (see [`crate::control`]) and run frames until it is
     /// answered, then until its input has been consumed. Returns `{"ok": …, "result"|"error": …}`.
     pub fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Value {

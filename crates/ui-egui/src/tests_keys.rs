@@ -1844,3 +1844,26 @@ fn macro_steps_do_not_auto_advance_and_setting_is_restored() {
     assert_eq!(h.app.session.active(), Some(first), "a macro step doesn't move on");
     assert!(h.app.ui.auto_advance, "Auto Advance is restored after the macro");
 }
+
+/// The dial lines that arrive between two frames each move the value, in order, and the loupe
+/// asks for one render of the result — not one per line (Bryan, 2026-11-24: a Monogram dial turn
+/// should feel as immediate as Lightroom's). Every line is answered, and none is merged with another.
+#[test]
+fn dial_lines_between_two_frames_are_each_applied_and_drawn_once() {
+    let mut h = demo();
+    h.request("ui.set", json!({"view": "detail"}), T);
+    assert!(h.settle(Duration::from_secs(20)), "the first render settled");
+    let id = h.app.session.active().unwrap();
+    let exposure = |h: &Headless| h.app.session.develop_of(id).unwrap().light.exposure;
+    let e0 = exposure(&h);
+    let main_requests = h.app.renderer.main_requests;
+    let replies: Vec<_> =
+        (0..12).map(|_| h.queue("engine.execute", json!({"command": "keys.lrinput", "params": {"line": "Exposure = ^0.05,-5,5"}}))).collect();
+    h.step();
+    for (i, r) in replies.iter().enumerate() {
+        let r = r.try_recv().unwrap_or_else(|_| panic!("line {i} not answered by the first frame"));
+        assert_eq!(r["ok"], true, "line {i}: {r}");
+    }
+    assert!((exposure(&h) - e0 - 0.6).abs() < 1e-6, "12 detents of 0.05: {}", exposure(&h));
+    assert_eq!(h.app.renderer.main_requests - main_requests, 1, "one loupe render for the 12 lines");
+}

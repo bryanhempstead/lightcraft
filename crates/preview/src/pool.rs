@@ -20,6 +20,9 @@ struct Entry<S, R> {
     key: u64,
     priority: u32,
     seq: u64,
+    /// Run one at a time with the others of this group, whatever the slot's own group says
+    /// ([`JobPool::submit_in_group`]).
+    group: Option<u32>,
     job: Job<R>,
 }
 
@@ -34,10 +37,10 @@ struct Shared<S, R> {
     cv: Condvar,
     shutdown: AtomicBool,
     on_done: Mutex<Option<Waker>>,
-    /// The groups whose jobs never run side by side, and the jobs running now with their group
-    /// (both read under `queue`'s lock).
+    /// The groups whose jobs never run side by side, and the jobs running now (by `seq`) with
+    /// their group (both read under `queue`'s lock).
     exclusive: Mutex<Option<Exclusive<S>>>,
-    running: Mutex<Vec<(S, Option<u32>)>>,
+    running: Mutex<Vec<(u64, Option<u32>)>>,
 }
 
 /// A finished job.
@@ -105,9 +108,12 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
             let _ = std::thread::Builder::new().name(format!("lc-job-{i}")).spawn(move || {
                 while let Some(e) = take(&shared, true) {
                     let t0 = std::time::Instant::now();
-                    let result = (e.job)();
+                    let (seq, job) = (e.seq, e.job);
+                    // a panicking job gives up its group (and the worker lives on); it has no result
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                    finished(&shared, seq);
+                    let Ok(result) = result else { continue };
                     let done = Done { slot: e.slot, key: e.key, result, ms: t0.elapsed().as_secs_f64() * 1000.0 };
-                    finished(&shared, e.slot);
                     if tx.send(done).is_err() {
                         break;
                     }
@@ -122,13 +128,21 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
 
     /// Queue `job` for `slot`, replacing a queued (not yet running) job for the same slot.
     pub fn submit(&mut self, slot: S, key: u64, priority: u32, job: Job<R>) {
+        self.submit_in_group(slot, key, priority, None, job);
+    }
+
+    /// [`Self::submit`] into `group` (`Some`): the job runs one at a time with the others of that
+    /// group instead of its slot's own ([`Self::set_exclusive`]) — the loupe's drafts and its
+    /// sharp render are one slot but two groups, so a draft needn't wait out a sharp render that
+    /// is no longer wanted (a console dial turned again 0.4 s after a pause).
+    pub fn submit_in_group(&mut self, slot: S, key: u64, priority: u32, group: Option<u32>, job: Job<R>) {
         self.start();
         self.seq += 1;
         let (lock, cv) = (&self.shared.queue, &self.shared.cv);
         let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
         q.retain(|e| e.slot != slot);
-        q.push(Entry { slot, key, priority, seq: self.seq, job });
-        cv.notify_one();
+        q.push(Entry { slot, key, priority, seq: self.seq, group, job });
+        cv.notify_all();
     }
 
     /// Change queued jobs' priorities: `f(slot, priority)` returns the new priority, or `None` to
@@ -189,10 +203,11 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         let mut ran = 0;
         while ran < n {
             let Some(e) = take(&self.shared, false) else { break };
-            let result = (e.job)();
-            finished(&self.shared, e.slot);
-            let _ = self.tx.send(Done { slot: e.slot, key: e.key, result, ms: 0.0 });
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(e.job));
+            finished(&self.shared, e.seq);
             ran += 1;
+            let Ok(result) = result else { continue };
+            let _ = self.tx.send(Done { slot: e.slot, key: e.key, result, ms: 0.0 });
         }
         ran
     }
@@ -208,11 +223,11 @@ fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<Ent
         }
         let exclusive = shared.exclusive.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let mut running = shared.running.lock().unwrap_or_else(|e| e.into_inner());
-        let group = |s: &S| exclusive.as_ref().and_then(|f| f(s));
-        let blocked = |e: &Entry<S, R>| group(&e.slot).is_some_and(|g| running.iter().any(|(_, r)| *r == Some(g)));
+        let group = |e: &Entry<S, R>| e.group.or_else(|| exclusive.as_ref().and_then(|f| f(&e.slot)));
+        let blocked = |e: &Entry<S, R>| group(e).is_some_and(|g| running.iter().any(|(_, r)| *r == Some(g)));
         if let Some(i) = q.iter().enumerate().filter(|(_, e)| !blocked(e)).max_by_key(|(_, e)| (e.priority, e.seq)).map(|(i, _)| i) {
             let e = q.swap_remove(i);
-            running.push((e.slot, group(&e.slot)));
+            running.push((e.seq, group(&e)));
             return Some(e);
         }
         drop(running);
@@ -223,11 +238,11 @@ fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<Ent
     }
 }
 
-/// A job for `slot` is done: a job of an exclusive slot waiting for it can start.
-fn finished<S: PartialEq, R>(shared: &Shared<S, R>, slot: S) {
+/// The job `seq` is done: a job of an exclusive group waiting for it can start.
+fn finished<S, R>(shared: &Shared<S, R>, seq: u64) {
     let _q = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
     let mut running = shared.running.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(i) = running.iter().position(|(s, _)| *s == slot) {
+    if let Some(i) = running.iter().position(|(s, _)| *s == seq) {
         running.swap_remove(i);
     }
     shared.cv.notify_all();
