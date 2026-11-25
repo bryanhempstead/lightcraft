@@ -90,6 +90,24 @@ impl MergeDialog {
     pub fn for_command(command: &str) -> MergeDialog {
         MergeDialog { command: command.into(), ..Default::default() }
     }
+    /// The options a merge of `command` starts with: its kind's defaults from Settings ▸ merge.
+    /// (stack, auto settings, auto crop, projection, deghost); best take has none of its own.
+    pub fn from_prefs(command: &str, prefs: &lightcraft_engine::merge_prefs::MergePrefs) -> MergeDialog {
+        let mut d = MergeDialog::for_command(command);
+        if let Some(k) = kind_of_command(command) {
+            let p = prefs.kind(k);
+            d.stack = p.stack;
+            d.auto_settings = p.auto_settings;
+            d.auto_crop = p.auto_crop;
+            if lightcraft_engine::merge_prefs::PROJECTIONS.contains(&p.projection.as_str()) {
+                d.projection = p.projection.clone();
+            }
+            if lightcraft_engine::merge_prefs::DEGHOSTS.contains(&p.deghost.as_str()) {
+                d.deghost = p.deghost.clone();
+            }
+        }
+        d
+    }
     pub fn title(&self) -> &'static str {
         match self.command.as_str() {
             "merge.panorama" => "Panorama Merge Preview",
@@ -154,6 +172,9 @@ pub struct GroupMerge {
     pub group: String,
     pub kind: lightcraft_catalog::MergeType,
     pub frames: Vec<PhotoId>,
+    /// The options it merges with (the merge. page's, or `merge.mergeGroups {options}`); `None`:
+    /// its kind's defaults (Settings ▸ merge.).
+    pub opts: Option<MergeDialog>,
 }
 
 /// Merge state of the app.
@@ -179,6 +200,18 @@ pub struct MergeState {
     pub group_queue: std::collections::VecDeque<GroupMerge>,
     /// How the dialog's preview is framed (dragged and zoomed; whole picture when it opens).
     pub view: crate::pan_zoom::PanZoom,
+    /// The merge. page's options per kind ("merge.hdr" …) once changed there; a kind not here
+    /// shows its defaults (Settings ▸ merge.).
+    pub page: std::collections::HashMap<String, MergeDialog>,
+    /// The merges. view's filters (kind., confidence., camera.).
+    pub filter: crate::merge_page::Filter,
+    /// A group to bring into view in the merges. view (← / → on the merge. page).
+    pub reveal: Option<String>,
+    /// The screen size the window is on (`crate::merges::screen_bucket`).
+    pub screen: String,
+    /// The Merge box opened for merges. groups: their ids (the first is the one it shows; the
+    /// rest are merged the same way when it is confirmed).
+    pub dialog_groups: Vec<String>,
 }
 
 /// The kinds the Merge… dialog switches between: (command, button label, hover text).
@@ -243,27 +276,79 @@ fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: b
     Ok(MergeTask { preview, job, options: options.clone(), progress, cancel, rx, group: None })
 }
 
-/// merges.: merge a group on the worker with the options last used for its kind (never stacked:
-/// its frames are hidden instead).
+/// merges.: merge a group on the worker with its options (the merge. page's, else its kind's
+/// defaults from Settings ▸ merge.).
 pub fn start_group(app: &mut LightcraftApp, g: &GroupMerge) -> Result<(), String> {
     if app.merge.final_task.is_some() {
         return Err("a merge is already running".into());
     }
     let command = g.kind.command();
-    let mut opts = app.merge.last.get(command).cloned().unwrap_or_else(|| MergeDialog::for_command(command));
-    opts.stack = false;
+    // (the settings as they are now: what merge_group_done reads when it lands)
+    app.session.merge_prefs = app.ui.settings.merge.clone();
+    let mut opts = g.opts.clone().unwrap_or_else(|| page_options(app, command));
+    opts.command = command.to_string();
+    // a stack only with the originals kept visible (hidden, they'd come back folded under it on
+    // unmerge.) and the merged photo in their folder (in merges. only, they'd fold away under a
+    // photo that isn't there)
+    let kp = app.ui.settings.merge.kind(g.kind);
+    if kp.merges_only || kp.hide_originals {
+        opts.stack = false;
+    }
     let mut task = spawn(app, &opts, &g.frames, false)?;
     task.group = Some((g.group.clone(), g.frames.clone()));
     app.merge.final_task = Some(task);
     Ok(())
 }
 
+/// The merge. page's options for `command` ("merge.hdr" …): changed there, else the defaults.
+pub fn page_options(app: &LightcraftApp, command: &str) -> MergeDialog {
+    app.merge.page.get(command).cloned().unwrap_or_else(|| MergeDialog::from_prefs(command, &app.ui.settings.merge))
+}
+
+/// The kind a merge command makes ("merge.hdr" → hdr.); best take: none.
+pub fn kind_of_command(command: &str) -> Option<lightcraft_catalog::MergeType> {
+    use lightcraft_catalog::MergeType as K;
+    match command {
+        "merge.hdr" => Some(K::Hdr),
+        "merge.panorama" => Some(K::Pano),
+        "merge.focus" => Some(K::Stack),
+        "merge.hdrPanorama" => Some(K::HdrPano),
+        _ => None,
+    }
+}
+
 /// Open the merge dialog for the selection.
 pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     let ids = app.session.targets(&json!({}));
+    open_ids(app, command, ids)
+}
+
+/// `merge.openGroups {ids}`: the Merge box for merges. groups — on the first one's frames and
+/// kind, its options from Settings ▸ merge. (as the merge. page shows them); confirmed, it merges
+/// that group and the other ones of its kind the same way.
+pub fn open_groups(app: &mut LightcraftApp, ids: &[String]) -> Result<Value, String> {
+    use lightcraft_engine::merge_find::{self, GroupState};
+    let groups: Vec<_> = ids.iter().filter_map(|id| merge_find::group(&app.session.catalog, id)).filter(|g| g.state == GroupState::Open).collect();
+    let first = groups.first().ok_or("no open merge group to merge")?;
+    let frames = app.session.merge_group_frames(first, &[]);
+    if frames.len() < 2 {
+        return Err(format!("{}: put two frames or more in the group to merge it", first.kind.tag()));
+    }
+    let command = first.kind.command();
+    let r = open_ids(app, command, frames)?;
+    let start = page_options(app, command);
+    if let Some(crate::state::Dialog::Merge { opts }) = app.ui.dialog.as_mut() {
+        *opts = start;
+    }
+    app.merge.dialog_groups = groups.iter().filter(|g| g.kind == first.kind).map(|g| g.id.clone()).collect();
+    Ok(json!({"photos": r["photos"], "groups": app.merge.dialog_groups.len()}))
+}
+
+fn open_ids(app: &mut LightcraftApp, command: &str, ids: Vec<PhotoId>) -> Result<Value, String> {
     if ids.len() < 2 {
         return Err("select at least 2 photos to merge".into());
     }
+    app.merge.dialog_groups.clear();
     app.merge.ids = ids;
     app.merge.error = None;
     app.merge.preview = None;
@@ -282,7 +367,12 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
     } else {
         command.to_string()
     };
-    let mut opts = app.merge.last.get(&command).cloned().unwrap_or_else(|| MergeDialog::for_command(&command));
+    // the kind's defaults (Settings ▸ merge.); Merge with Last Settings keeps the last ones
+    let mut opts = if command == "merge.take" {
+        app.merge.last.get(&command).cloned().unwrap_or_else(|| MergeDialog::for_command(&command))
+    } else {
+        MergeDialog::from_prefs(&command, &app.ui.settings.merge)
+    };
     if command == "merge.take" {
         opts.people.clear(); // other photos than last time
         load_faces(app, &mut opts);
@@ -349,6 +439,16 @@ pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value,
     }
     if let Some(t) = app.merge.preview_task.take() {
         t.cancel.store(true, Ordering::Relaxed);
+    }
+    // opened for merges. groups: they go to the merge worker with these options and this kind
+    let groups = std::mem::take(&mut app.merge.dialog_groups);
+    if let (false, Some(kind)) = (groups.is_empty(), kind_of_command(&opts.command)) {
+        let options = serde_json::to_value(opts).map_err(|e| e.to_string())?;
+        let r = app.run("merge.mergeGroups", json!({"ids": groups, "kind": kind.id(), "options": options}))?;
+        app.merge.last.insert(opts.command.clone(), opts.clone());
+        app.merge.last_kind = Some(opts.command.clone());
+        crate::merge_page::after_merge(app, &groups);
+        return Ok(json!({"started": true, "groups": r["queued"]}));
     }
     let ids = app.merge.ids.clone();
     let task = spawn(app, opts, &ids, false)?;
@@ -552,10 +652,8 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                     let r =
                         crate::widgets::text_button(ui, &format!("mergeKind-{cmd}"), label, opts.command == cmd).on_hover_text(crate::i18n::tr(tip));
                     if r.clicked() && opts.command != cmd {
-                        // keep the shared options, take this kind's own from its last use
-                        let keep = (opts.auto_settings, opts.stack);
-                        *opts = app.merge.last.get(cmd).cloned().unwrap_or_else(|| MergeDialog::for_command(cmd));
-                        (opts.auto_settings, opts.stack) = keep;
+                        // this kind's defaults (Settings ▸ merge.)
+                        *opts = MergeDialog::from_prefs(cmd, &app.ui.settings.merge);
                         if cmd == "merge.take" {
                             opts.people.clear();
                             load_faces(app, opts);
@@ -567,54 +665,85 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             if opts.command == "merge.take" {
                 take_picker(app, ui, opts);
             }
-            if opts.command == "merge.focus" {
-                ui.checkbox(&mut opts.align, crate::i18n::tr("Auto Align"))
-                    .on_hover_text(crate::i18n::tr("Line the photos up first (handheld, or focus breathing changes the scale)"));
-                ui.add_space(4.0);
-            }
-            if opts.is_pano() {
-                ui.label(egui::RichText::new(crate::i18n::tr("Projection")).color(t.text_label));
-                for (v, l) in [("auto", "Auto Select"), ("spherical", "Spherical"), ("cylindrical", "Cylindrical"), ("perspective", "Perspective")] {
-                    if ui.radio(opts.projection == v, l).clicked() {
-                        opts.projection = v.to_string();
-                    }
-                }
-                ui.add_space(4.0);
-                let mut bw = opts.boundary_warp;
-                if num(ui, &BOUNDARY_WARP, &mut bw) {
-                    opts.boundary_warp = bw.round();
-                }
-                ui.checkbox(&mut opts.fill_edges, crate::i18n::tr("Fill Edges"));
-                ui.checkbox(&mut opts.auto_crop, crate::i18n::tr("Auto Crop"));
-                ui.add_space(4.0);
-            }
-            if opts.is_hdr() {
-                ui.checkbox(&mut opts.align, crate::i18n::tr("Auto Align"));
-                ui.label(egui::RichText::new(crate::i18n::tr("Deghost Amount")).color(t.text_label));
-                ui.horizontal(|ui| {
-                    for (i, (v, l)) in [("none", "None"), ("low", "Low"), ("medium", "Med"), ("high", "High")].iter().enumerate() {
-                        if crate::widgets::text_button(ui, &format!("mergeDeghost-{i}"), l, opts.deghost == *v).clicked() {
-                            opts.deghost = v.to_string();
-                        }
-                    }
-                });
-                if opts.command == "merge.hdr" {
-                    ui.add_enabled_ui(opts.deghost != "none", |ui| ui.checkbox(&mut opts.show_overlay, crate::i18n::tr("Show Deghost Overlay")));
-                }
-                if opts.command == "merge.hdrPanorama" {
-                    let mut b = opts.bracket as f64;
-                    if num(ui, &BRACKET, &mut b) {
-                        opts.bracket = b.round() as u32;
-                    }
-                }
-                ui.add_space(4.0);
-            }
-            ui.checkbox(&mut opts.auto_settings, crate::i18n::tr("Auto Settings"));
-            ui.checkbox(&mut opts.stack, crate::i18n::tr("Create Stack"));
+            options(ui, opts, "merge");
             ui.add_space(8.0);
             ui.label(egui::RichText::new(crate::i18n::tr_format!("{} photos", app.merge.ids.len())).color(t.text_dim));
+            // opened for several merges. groups of one kind: the rest merge the same way
+            let more = app.merge.dialog_groups.len().saturating_sub(1);
+            if more > 0 && kind_of_command(&opts.command).is_some() {
+                let r = ui.label(
+                    egui::RichText::new(format!("and {more} more group{} of this kind, the same way", if more == 1 { "" } else { "s" })).color(t.text_dim),
+                );
+                crate::widgets::register(ui.ctx(), "label:mergeMoreGroups", r.rect);
+            }
         });
     });
+}
+
+/// The options of a merge of `opts.command`'s kind — the Merge dialog's, and the merge. page's
+/// inline (`pre`: the widget ids' prefix, `merge` / `mergePage`). Returns whether one changed.
+pub fn options(ui: &mut egui::Ui, opts: &mut MergeDialog, pre: &str) -> bool {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let before = opts.clone();
+    let check = |ui: &mut egui::Ui, id: &str, v: &mut bool, label: &str| {
+        let r = ui.checkbox(v, crate::i18n::tr(label));
+        crate::widgets::register(ui.ctx(), format!("check:{pre}.{id}"), r.rect);
+        r
+    };
+    // mutually exclusive buttons, 8 px apart, wrapped lines 10 px apart
+    let pick = |ui: &mut egui::Ui, id: &str, choices: &[(&str, &str)], v: &mut String| {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
+            for (i, (c, l)) in choices.iter().enumerate() {
+                if crate::widgets::text_button(ui, &format!("{pre}{id}-{i}"), l, v == c).clicked() {
+                    *v = c.to_string();
+                }
+            }
+        });
+    };
+    if opts.command == "merge.focus" {
+        check(ui, "align", &mut opts.align, "Auto Align")
+            .on_hover_text(crate::i18n::tr("Line the photos up first (handheld, or focus breathing changes the scale)"));
+        ui.add_space(4.0);
+    }
+    if opts.is_pano() {
+        ui.label(egui::RichText::new(crate::i18n::tr("Projection")).color(t.text_label));
+        pick(
+            ui,
+            "Projection",
+            &[("auto", "auto."), ("spherical", "spherical."), ("cylindrical", "cylindrical."), ("perspective", "perspective.")],
+            &mut opts.projection,
+        );
+        ui.add_space(4.0);
+        let mut bw = opts.boundary_warp;
+        if num(ui, &BOUNDARY_WARP, &mut bw) {
+            opts.boundary_warp = bw.round();
+        }
+        check(ui, "fillEdges", &mut opts.fill_edges, "Fill Edges");
+        check(ui, "autoCrop", &mut opts.auto_crop, "Auto Crop");
+        ui.add_space(4.0);
+    }
+    if opts.is_hdr() {
+        check(ui, "align", &mut opts.align, "Auto Align");
+        ui.label(egui::RichText::new(crate::i18n::tr("Deghost Amount")).color(t.text_label));
+        pick(ui, "Deghost", &[("none", "none."), ("low", "low."), ("medium", "medium."), ("high", "high.")], &mut opts.deghost);
+        if opts.command == "merge.hdr" {
+            // (never greyed: it shows once there is ghosting to show)
+            if opts.deghost != "none" {
+                check(ui, "showOverlay", &mut opts.show_overlay, "Show Deghost Overlay");
+            }
+        }
+        if opts.command == "merge.hdrPanorama" {
+            let mut b = opts.bracket as f64;
+            if num(ui, &BRACKET, &mut b) {
+                opts.bracket = b.round() as u32;
+            }
+        }
+        ui.add_space(4.0);
+    }
+    check(ui, "autoSettings", &mut opts.auto_settings, "Auto Settings");
+    check(ui, "stack", &mut opts.stack, "Create Stack");
+    *opts != before
 }
 
 /// Best take: which photo to start from, then per person their face in each photo — click the one

@@ -7,6 +7,28 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
 
 ## Open
 
+- [ ] (mergepage agent, 2026-11-24, branch `agent-mergepage`, worktree ~/crafts/lc-mergepage, NOT merged) **merge. page,
+  Settings ▸ merge., layouts per screen, the Merge box for groups** (work order items 2 + 3 and Bryan's later asks).
+  Page (`merge_page.rs`; on when the merge. tab shows a merges. view): left = sidebar, shoot/folder rows count their OPEN
+  merges and stay highlighted (`Counts::open_folder`); centre = bar (wraps; `layout.` waves./grid./strip./focus.,
+  `aspect.` original./square./3:2./4:5./16:9. — cards only, photo letterboxed, never touches a photo —, `per.row.` 2–8,
+  default 4, smaller./bigger. step it) + filter chips with counts (kind. all./panorama./hdr./focus.stack./hdr.panorama.,
+  confidence. all./sure./likely./maybe.: click only, ⌘ add/remove, ⇧ range; zero = quiet 0) + camera. menu; right =
+  picked group (prev./next., kind buttons, chips, reasons), frames. strip, options. = the Merge dialog's
+  (`merge::options`, shared), defaults. / merge.now.; footer merge. / send.back. merge. (footer, bar, a group's header, ↩,
+  M) opens the Merge box on the group's kind + frames, options from Settings ▸ merge. (or the panel's); several of one kind
+  → "and N more groups", confirmed → `merge.mergeGroups {kind, options}` for all, then the next group is picked.
+  layout./aspect./per.row./kind./confidence. are remembered per screen size (`AppSettings.mergeViews`: small < 1300 /
+  medium / large / huge > 2600 pt). Keys ←/→ ↩/M S ⌘A. Settings ▸ merge. (after develop.view.; find merges moved there):
+  find automatically weddings./every.folder./off., show from, per kind shows in / originals hide./keep. / stack /
+  auto.settings / auto.crop / projection / deghost → `AppSettings.merge` (engine `merge_prefs::MergePrefs` →
+  `Session::merge_prefs`): used by the Merge dialog's start, group merges (`merge_group_done`, `merge_groups_now`), the
+  auto finder (`merge_find_auto_in`), the view. `merge.mergeGroups {options}` (Second Brain's box) in app + engine,
+  documented in control-protocol.md. Topbar: the search field keeps clear of the 5-tab module picker. Decisions: the
+  dialog opens on the settings' defaults (Merge with Last Settings still uses the last); stack (default on, per the order) only
+  stacks a group merge whose originals are kept and shown in both. (hidden frames would come back folded on unmerge.); "denoise merged raws" not done.
+  Tests: `tests_merge_page.rs` (6), engine `merge_settings_decide_what_a_group_merge_does`, `merge_prefs` unit.
+
 - [ ] (WORK ORDER — Bryan 2026-11-24, for the next build; he is low on credits) **merge. tab, sequences, merge settings**
   Landed 11-24: `merge.` tab after develop. (`view.merges` → every group in the merges. view); ⌘⇧M = Merge… for the picked
   photos; auto finder skips shoots in Second Brain's pipeline (only find. looks there); near-duplicates (> 75 % overlap,

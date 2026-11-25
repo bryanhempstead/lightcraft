@@ -87,6 +87,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
                 sw = sw.min(2.0 * (full.center().x - menus_right)).max(200.0);
             }
+            // and right of it the filter button, then the module picker (five tabs since merge.)
+            sw = sw.min(2.0 * (full.right() - picker_width(ui) - 56.0 - full.center().x)).max(200.0);
             let search_left = full.center().x - sw / 2.0;
             let left_items = ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -265,6 +267,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
 /// The module picker, as Lightroom Classic draws it: plain text links with a thin divider; the
 /// module you're in bright, the other one dim (brighter on hover). Returns its left edge.
+/// How wide the module picker is (its labels at their widest, the dividers, its margin).
+fn picker_width(ui: &egui::Ui) -> f32 {
+    let t = Tokens::get(ui.ctx());
+    let labels = ["Galleries", "Map", "Merge", "Develop", "Library"];
+    let text: f32 = labels
+        .iter()
+        .map(|l| ui.painter().layout_no_wrap(format!("{}.", crate::i18n::tr(l).to_lowercase()), t.semibold(18.0), egui::Color32::WHITE).size().x + 8.0)
+        .sum();
+    text + 20.0 * (labels.len() - 1) as f32 + 12.0
+}
+
 pub fn module_picker(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect) -> f32 {
     let t = Tokens::get(ui.ctx());
     let mut x = full.right() - 12.0;

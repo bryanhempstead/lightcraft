@@ -394,9 +394,15 @@ pub struct AppSettings {
     pub trash_delete: Option<bool>,
     /// The album. choice fell back to Remove from Library outside an album and said so once.
     pub album_fallback_told: bool,
-    /// merges.: find photo merges by themselves in the background (auto., the default) or only
-    /// when find. is clicked (Settings ▸ General ▸ find merges:).
+    /// merges.: find photo merges by themselves in the background — in weddings (the default) or
+    /// every new folder — or only when find. is clicked (Settings ▸ merge. ▸ find automatically:).
     pub merge_find: crate::merges::FindMode,
+    /// merges.: the defaults per kind and the confidence groups are shown from (Settings ▸ merge.).
+    pub merge: lightcraft_engine::merge_prefs::MergePrefs,
+    /// merges.: how the view shows the groups — layout., aspect. (only the cards, never the
+    /// photos), per.row., the kind. / confidence. picks — per screen size
+    /// (`crate::merges::screen_bucket`: small / medium / large / huge).
+    pub merge_views: std::collections::BTreeMap<String, crate::merges::MergeView>,
     /// denoise.: offer Denoise on a raw shot at `denoise_hint_iso` or above (a small prompt in a
     /// corner of the photo preview; Settings ▸ General ▸ denoise:).
     pub denoise_hint: bool,
@@ -513,6 +519,8 @@ impl Default for AppSettings {
             trash_delete: None,
             album_fallback_told: false,
             merge_find: crate::merges::FindMode::Auto,
+            merge: Default::default(),
+            merge_views: Default::default(),
             denoise_hint: true,
             denoise_hint_iso: 3200,
             denoise_hint_corner: HintCorner::BottomRight,

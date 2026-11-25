@@ -23,7 +23,7 @@ use serde_json::json;
 use crate::headless::Headless;
 use crate::{LightcraftApp, Services};
 
-const T: Duration = Duration::from_secs(20);
+pub(crate) const T: Duration = Duration::from_secs(20);
 /// The merges. bar's buttons.
 const BAR: [&str; 10] = [
     "mergesFind",
@@ -37,7 +37,7 @@ const BAR: [&str; 10] = [
     "mergesSmaller",
     "mergesBigger",
 ];
-const SETTLE: Duration = Duration::from_secs(120);
+pub(crate) const SETTLE: Duration = Duration::from_secs(120);
 
 struct Fixture {
     h: Headless,
@@ -107,22 +107,22 @@ fn fixture(tag: &str) -> Fixture {
     Fixture { h, dir, frames: ids[..3].to_vec(), other: ids[3], album }
 }
 
-fn has(h: &Headless, id: &str) -> bool {
+pub(crate) fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
 
-fn widget(h: &Headless, id: &str) -> egui::Rect {
+pub(crate) fn widget(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
 
-fn click(h: &mut Headless, id: &str) {
+pub(crate) fn click(h: &mut Headless, id: &str) {
     let r = h.request("ui.clickWidget", json!({"id": id}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
     h.step();
     h.step();
 }
 
-fn shot(h: &mut Headless, name: &str) {
+pub(crate) fn shot(h: &mut Headless, name: &str) {
     if let Some(dir) = std::env::var_os("LIGHTCRAFT_TEST_SHOTS") {
         let p = std::path::Path::new(&dir).join(name);
         let r = h.request("ui.screenshot", json!({"path": p.to_string_lossy(), "headless": true}), T);
@@ -168,9 +168,14 @@ fn merges_are_found_shown_merged_and_tagged() {
     // the bar's buttons: one height, 8 px apart, inside the bar
     let bar = widget(h, "merges:bar");
     let mut bs: Vec<egui::Rect> = BAR.iter().map(|b| widget(h, &format!("button:{b}"))).collect();
-    bs.sort_by(|a, b| a.left().total_cmp(&b.left()));
+    // (a narrow view wraps the bar: per line, left to right; lines 10 px apart)
+    bs.sort_by(|a, b| a.top().total_cmp(&b.top()).then(a.left().total_cmp(&b.left())));
     for w in bs.windows(2) {
-        assert!(w[1].left() - w[0].right() >= 8.0 - 0.5, "{w:?}");
+        if (w[1].top() - w[0].top()).abs() < 0.5 {
+            assert!(w[1].left() - w[0].right() >= 8.0 - 0.5, "{w:?}");
+        } else {
+            assert!(w[1].top() - w[0].bottom() >= 10.0 - 0.5, "wrapped lines: {w:?}");
+        }
         assert!((w[1].height() - w[0].height()).abs() < 0.5);
     }
     assert!(bs.iter().all(|b| bar.contains_rect(*b) && b.top() - bar.top() >= 8.0 - 0.5), "{bar:?} {bs:?}");
@@ -191,7 +196,15 @@ fn merges_are_found_shown_merged_and_tagged() {
     h.app.run("merge.setKind", json!({"id": g.id, "kind": "hdr."})).unwrap();
 
     // merge.: on the worker; the originals leave, the merged photo comes in, tagged
+    // merge. opens the Merge box on the group's kind and frames; its OK merges the group
     click(h, &format!("button:mergesGroupMerge-{}", g.id));
+    match &h.app.ui.dialog {
+        Some(crate::state::Dialog::Merge { opts }) => assert_eq!(opts.command, "merge.hdr"),
+        other => panic!("the Merge box: {other:?}"),
+    }
+    assert_eq!(h.app.merge.ids, frames);
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
     assert!(
         h.step_until(Duration::from_secs(120), |h| merge_find::group(&h.app.session.catalog, &g.id).is_some_and(|g| g.state == GroupState::Merged)),
         "merged: {}",
@@ -256,7 +269,7 @@ fn manual_mode_waits_for_find() {
 
 /// A shoot folder with two camera subfolders: a panorama from the GR III (its shutter drifting) and
 /// a bracket from the M262, both in the shoot's one merges. pool.
-fn wave_fixture(tag: &str) -> (Headless, std::path::PathBuf) {
+pub(crate) fn wave_fixture(tag: &str) -> (Headless, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("lc-ui-mergewave-wedding-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let (m262, gr3) = (dir.join("M262"), dir.join("GR3"));
@@ -321,12 +334,12 @@ fn wave_fixture(tag: &str) -> (Headless, std::path::PathBuf) {
     (h, dir)
 }
 
-fn rect_of(h: &Headless, id: &str) -> Option<egui::Rect> {
+pub(crate) fn rect_of(h: &Headless, id: &str) -> Option<egui::Rect> {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r)
 }
 
 /// The cards of group `gid`, left to right as drawn.
-fn cards(h: &Headless, gid: &str) -> Vec<(u64, egui::Rect)> {
+pub(crate) fn cards(h: &Headless, gid: &str) -> Vec<(u64, egui::Rect)> {
     let pre = format!("mergeCard:{gid}:");
     h.app.widgets.iter().filter_map(|(w, r)| w.strip_prefix(&pre).and_then(|p| p.parse().ok()).map(|p| (p, *r))).collect()
 }
@@ -365,7 +378,7 @@ fn the_merges_view_is_a_stacked_wave_per_group() {
     let (pc, hc) = (cards(&h, &pano.id), cards(&h, &hdr.id));
     assert_eq!((pc.len(), hc.len()), (5, 3));
     assert!(overlapping(&pc), "stacked: the cards overlap {pc:?}");
-    assert!(pc.iter().all(|(_, r)| r.height() >= 140.0), "bigger than grid thumbnails: {pc:?}");
+    assert!(pc.iter().all(|(_, r)| r.height() >= 110.0), "big cards (4 frames per row): {pc:?}");
     let ys: Vec<f32> = pc.iter().map(|(_, r)| r.top()).collect();
     assert!(ys.iter().any(|y| (y - ys[0]).abs() > 2.0), "on a wave: {ys:?}");
     // the headers: kind, confidence, camera, subfolder, merge., send.back.
@@ -481,11 +494,11 @@ fn the_merges_view_is_a_stacked_wave_per_group() {
     assert_eq!(merge_find::group(&h.app.session.catalog, &hdr.id).unwrap().state, GroupState::Open);
     assert!(has(&h, &format!("group:merges:group:{}", hdr.id)));
     // smaller. / bigger.
-    let before = h.app.ui.thumb_size;
+    let before = crate::merges::view_prefs(&h.app).per_row;
     click(&mut h, "button:mergesBigger");
-    assert!(h.app.ui.thumb_size > before);
+    assert_eq!(crate::merges::view_prefs(&h.app).per_row, before - 1, "bigger.: one frame fewer per row");
     click(&mut h, "button:mergesSmaller");
-    assert!((h.app.ui.thumb_size - before).abs() < 0.5);
+    assert_eq!(crate::merges::view_prefs(&h.app).per_row, before);
     // the triangle folds a group to its header
     click(&mut h, &format!("fold:merges.group:{}", pano.id));
     h.settle(SETTLE);

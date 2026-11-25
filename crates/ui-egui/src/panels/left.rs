@@ -1992,6 +1992,14 @@ fn shoots_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
         return;
     }
     let chosen = app.session.library_folder.clone().filter(|_| app.session.source == LibrarySource::LibraryFolder);
+    // the merge. page: the folder its merges come from is the chosen one, and each shoot counts
+    // its open merges
+    let merge_page = crate::merge_page::on(app);
+    let merges_from = match (&app.session.merges_scope, merge_page) {
+        (Some(lightcraft_engine::merge_find::Scope::Folder { path, .. }), true) => Some(path.clone()),
+        _ => None,
+    };
+    let open_counts = merge_page.then(|| crate::merges::counts(app, ui.ctx()));
     let mut after_pinned = false;
     for r in rows {
         // a gap between the pinned shoots and the rest
@@ -2004,15 +2012,20 @@ fn shoots_section(app: &mut LightcraftApp, ui: &mut egui::Ui, viewport: Rect) {
         let gone = !cfg!(target_arch = "wasm32") && fs_cached(ui, "is-dir", &s.path, 10.0, is_dir) == Some(false);
         let disk_gone = gone && s.disk != "/" && fs_cached(ui, "is-dir", &s.disk, 10.0, is_dir) == Some(false);
         // narrowed to some of its folders or cameras: those rows are the chosen ones
-        let sel = chosen.as_deref().is_some_and(|c| same_folder(c, &s.path))
+        let sel = (chosen.as_deref().is_some_and(|c| same_folder(c, &s.path))
             && app.session.library_folder_subfolders == Some(s.deep)
-            && app.session.active_album_part().is_none();
+            && app.session.active_album_part().is_none())
+            || merges_from.as_deref().is_some_and(|c| same_folder(c, &s.path));
+        let count = open_counts.as_ref().map_or(s.count, |c| c.open_folder(&s.path, s.deep));
         // the dot stays the disk's; the shoot's color. label is a band behind the whole row
         let fill = app.session.catalog.folder_record(&s.path).and_then(|f| f.label).map(crate::theme::label_color);
         let extra = RowExtra { dim: gone, badge: None, dot: Some(disk_color(&tree, &s.disk)), accent: r.pinned, reserve: 0.0, fill };
-        let resp = row_ex(app, ui, &format!("shoot:{}", s.path), Icon::GridPhoto, &s.name, Some(&s.name), Some(s.count), sel, 0.0, &extra);
+        let resp = row_ex(app, ui, &format!("shoot:{}", s.path), Icon::GridPhoto, &s.name, Some(&s.name), Some(count), sel, 0.0, &extra);
         let disk = disk_label(ui, &s.disk, &s.disk_name);
         let mut tip = format!("{}\n{disk} · {} photo{}", s.name, s.count, if s.count == 1 { "" } else { "s" });
+        if merge_page {
+            tip.push_str(&format!(" · {count} merge{} to review", if count == 1 { "" } else { "s" }));
+        }
         if let Some(day) = s.latest.get(..10) {
             tip.push_str(&format!(" · last import or edit {day}"));
         }
@@ -2242,9 +2255,11 @@ fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, tree: &[FolderNode], 
         // a row whose path would cover other disks' photos too only opens and closes
         let selectable = n.selectable;
         let sel = selectable
-            && app.session.source == LibrarySource::LibraryFolder
-            && app.session.library_folder_subfolders.is_none()
-            && app.session.library_folder.as_deref().is_some_and(|f| same_folder(f, &n.path));
+            && ((app.session.source == LibrarySource::LibraryFolder
+                && app.session.library_folder_subfolders.is_none()
+                && app.session.library_folder.as_deref().is_some_and(|f| same_folder(f, &n.path)))
+                || (crate::merge_page::on(app)
+                    && matches!(&app.session.merges_scope, Some(lightcraft_engine::merge_find::Scope::Folder { path, .. }) if same_folder(path, &n.path))));
         // (checked off the UI thread, every few seconds: a disk can be asleep or gone)
         let gone = offline || (!cfg!(target_arch = "wasm32") && fs_cached(ui, "is-dir", &n.path, 10.0, is_dir) == Some(false));
         let (names, last) = if n.volume { (vec![n.name.as_str()], n) } else { chain(n) };
@@ -2271,7 +2286,14 @@ fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, tree: &[FolderNode], 
                 label = format!("★ {label}");
             }
             let dot = rec.label.map(crate::theme::label_color);
-            (Icon::Folder, label, RowExtra { dim: gone, dot, ..Default::default() }, Some(if subfolders { n.count } else { n.own }))
+            let photos = if subfolders { n.count } else { n.own };
+            // the merge. page: the open merges in it (with its folders when they are folded in)
+            let count = if crate::merge_page::on(app) {
+                crate::merges::counts(app, ui.ctx()).open_folder(&last.path, subfolders || !(open && !last.children.is_empty()))
+            } else {
+                photos
+            };
+            (Icon::Folder, label, RowExtra { dim: gone, dot, ..Default::default() }, Some(count))
         };
         let children = &last.children;
         let resp = row_ex(app, ui, &format!("libfolder:{}", n.path), icon, &name, Some(&name), count, sel, indent, &extra);
@@ -2324,7 +2346,10 @@ fn folder_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, tree: &[FolderNode], 
         if !n.volume {
             // merges.: one pool per shoot (a shoot folder with its camera subfolders M262, GR3 …);
             // a folder inside a shoot shows none of its own
-            if let Some((path, deep)) = merges_pool(app, &n.path, &last.path, open, !children.is_empty()) {
+            // (on the merge. page the folder row itself counts them and shows them)
+            if !crate::merge_page::on(app)
+                && let Some((path, deep)) = merges_pool(app, &n.path, &last.path, open, !children.is_empty())
+            {
                 let found = crate::merges::counts(app, ui.ctx()).folder(&path, deep);
                 if found > 0 {
                     merges_row(app, ui, lightcraft_engine::merge_find::Scope::Folder { path, deep }, found, indent + 16.0);
