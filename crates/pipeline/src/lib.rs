@@ -583,15 +583,21 @@ pub fn render_region(
     render_impl(Src::Shared(src), info, s, req, cache, Some(globals))
 }
 
-/// Long edge (px) of the analysis render ([`globals`]): fixed, so that every render of a photo,
-/// whatever its size, takes the same whole-photo statistics.
+/// Long edge (px) of the analysis render ([`globals`]) of a view that keeps it ([`analysis`] with a
+/// cache): fixed, so that every render of a photo, whatever its size, takes the same whole-photo
+/// statistics.
 pub const ANALYSIS_EDGE: usize = 1024;
 
-/// Whether `s` reads any whole-photo statistic ([`Globals`]).
-pub fn needs_globals(s: &DevelopSettings) -> bool {
+/// The smallest analysis render of a render that keeps nothing ([`analysis`] without a cache):
+/// small outputs (thumbnails) measure the photo no bigger than themselves.
+pub const ANALYSIS_MIN_EDGE: usize = 256;
+
+/// Whether `s` reads any whole-photo statistic ([`Globals`]); `adobe`: the photo renders on an Adobe
+/// base (whose default black reads the scene map's dark key, [`black_cr`]).
+pub fn needs_globals(s: &DevelopSettings, adobe: bool) -> bool {
     let e = s.effective();
     let sig = local::plane_sigmas(&e, 1000.0, Quality::Full);
-    let (map, haze) = scene_cr::needs(&e, true);
+    let (map, haze) = scene_cr::needs(&e, adobe);
     sig.base.is_some() || sig.dark.is_some() || local::dehaze_key_needed(&e) || map || haze
 }
 
@@ -606,11 +612,16 @@ pub fn needs_globals(s: &DevelopSettings) -> bool {
 /// output depth: the frame is the uncropped one at [`ANALYSIS_EDGE`] (or the source's own size, if
 /// smaller), at full quality.
 pub fn globals(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Globals {
-    if !needs_globals(s) {
+    globals_at(src, info, s, req, ANALYSIS_EDGE)
+}
+
+/// [`globals`] measured on an uncropped frame of long edge `edge` (or the source's, if smaller).
+pub fn globals_at(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, edge: usize) -> Globals {
+    if !needs_globals(s, info.adobe.is_some()) {
         return Globals::default();
     }
     let effective = s.effective();
-    let edge = ANALYSIS_EDGE.min(src.width.max(src.height)).max(1);
+    let edge = edge.min(src.width.max(src.height)).max(1);
     let req = RenderRequest { max_w: edge, max_h: edge, apply_crop: false, depth: req.depth, ..RenderRequest::fit(edge, edge) };
     let rendition = settings_for(&effective, &req);
     let plan = plan(src, info, &rendition, &req);
@@ -635,21 +646,51 @@ pub fn globals(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     Globals { tone_stats: prep.tone_stats, p99: prep.p99, air: prep.dark.is_some().then_some(prep.air), scene_map: prep.scene_map, haze: prep.haze }
 }
 
-/// [`globals`] for a render of `src` with `s`, kept in `cache` while the photo's scene-linear
-/// settings (everything but the crop, the per-pixel sliders and size) stay: a slider or crop drag
-/// doesn't measure the photo again. `None` when `s` reads no statistic.
+/// [`globals`] for a render of `src` with `s`, or `None` when the render takes its own frame's
+/// statistics (it reads none, or it shows the whole uncropped photo no bigger than an analysis).
+///
+/// With a `cache` (an interactive view) they are measured at [`ANALYSIS_EDGE`] and kept while the
+/// photo's scene-linear settings (everything but the crop, the per-pixel sliders and size) stay: a
+/// slider or crop drag doesn't measure the photo again. Without one (a thumbnail, an export, the
+/// CLI) the render can't keep them, so they are measured no bigger than the render itself
+/// (the power of two at or over its long edge, [`ANALYSIS_MIN_EDGE`] at least, [`ANALYSIS_EDGE`] at most): a cropped thumbnail costs about twice its own work, and a
+/// render of the uncropped photo up to [`ANALYSIS_EDGE`] none.
 pub fn analysis(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Option<Arc<Globals>> {
-    if !needs_globals(s) {
+    analyse(src, Some(src), info, s, req, cache)
+}
+
+fn analyse(src: &Rgb32f, shared: Option<&Arc<Rgb32f>>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Option<Arc<Globals>> {
+    if !needs_globals(s, info.adobe.is_some()) {
         return None;
     }
-    let key = hash_of((region::globals_key(s), format!("{info:?}"), req.depth == OutputDepth::F32Hdr));
-    if let Some(g) = cache.and_then(|c| c.analysis(src, key)) {
+    let e = s.effective();
+    let out = req.max_w.max(req.max_h);
+    let whole = req.region.is_none() && (!req.apply_crop || (e.crop.geometry.is_identity() && !e.crop.flip_h && !e.crop.flip_v));
+    if whole && out <= ANALYSIS_EDGE {
+        // the render measures its own frame, which is the whole photo: the same with or without a cache
+        return None;
+    }
+    let (Some(cache), Some(shared)) = (cache, shared) else {
+        // (a power of two, rounded up: a 512 px map's blocks are whole pixels of the 512 and 1024 px
+        // analyses, so a thumbnail's statistics and a view's agree to the resample)
+        let edge = out.max(1).next_power_of_two().clamp(ANALYSIS_MIN_EDGE, ANALYSIS_EDGE);
+        return Some(Arc::new(globals_at(src, info, s, req, edge)));
+    };
+    // (the scene-linear stage's key, less its geometry: also what only arrives later, generated
+    // pixels, and the layers made of other data)
+    let key = hash_of((
+        region::globals_key(s),
+        format!("{info:?}"),
+        req.depth == OutputDepth::F32Hdr,
+        spots::gen_state(&e.spots),
+        lens_blur::key(&e),
+        reflection::key(&e),
+    ));
+    if let Some(g) = cache.analysis(shared, key) {
         return Some(g);
     }
     let g = Arc::new(globals(src, info, s, req));
-    if let Some(c) = cache {
-        c.set_analysis(src, key, g.clone());
-    }
+    cache.set_analysis(shared, key, g.clone());
     Some(g)
 }
 
@@ -690,11 +731,8 @@ fn render_impl(
     // what depends on the whole photo comes from the whole, uncropped photo (see [`globals`]),
     // unless a region render brought them
     let own = match (globals, &src) {
-        (None, Src::Shared(a)) => analysis(a, info, edit, req, cache),
-        (None, Src::Borrowed(_)) => {
-            let g = self::globals(src_img, info, edit, req);
-            needs_globals(edit).then(|| Arc::new(g))
-        }
+        (None, Src::Shared(a)) => analyse(src_img, Some(a), info, edit, req, cache),
+        (None, Src::Borrowed(_)) => analyse(src_img, None, info, edit, req, None),
         _ => None,
     };
     let globals = globals.or(own.as_deref());

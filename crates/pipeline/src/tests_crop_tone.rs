@@ -9,7 +9,8 @@ use lightcraft_develop::DevelopSettings;
 use lightcraft_geom::Rect;
 use lightcraft_raster::{Rgb32f, Rgba8};
 
-use crate::{Quality, RenderRequest, SourceInfo, StageCache, render, render_cached};
+use crate::region::Region;
+use crate::{Quality, RenderRequest, SourceInfo, StageCache, render, render_cached, render_region};
 
 const W: usize = 1200;
 const H: usize = 800;
@@ -217,8 +218,154 @@ fn the_photo_is_measured_whole_whatever_the_frame() {
     let first = crate::analysis(&src, &info, &s, &req, Some(&cache)).expect("tone settings read statistics");
     let second = crate::analysis(&src, &info, &t, &RenderRequest::fit(300, 200), Some(&cache)).expect("tone settings read statistics");
     assert!(Arc::ptr_eq(&first, &second));
-    // and a cached render equals an uncached one
+    // and a cached render equals one given the same values
     let cached = render_cached(&src, &info, &t, &RenderRequest::fit(300, 200), &cache).image;
-    let fresh = render(&src, &info, &t, &RenderRequest::fit(300, 200)).image;
+    let fresh = render_region(&src, &info, &t, &RenderRequest::fit(300, 200), &first, None).image;
     assert_eq!(cached.data, fresh.data);
+}
+
+/// The edits the geometry tests below render: local base, Clarity and haze, all read off the
+/// photo's one map.
+fn tone_edits() -> DevelopSettings {
+    edits(|s| {
+        s.light.highlights = -50.0;
+        s.light.shadows = 40.0;
+        s.effects.clarity = 35.0;
+        s.effects.dehaze = 15.0;
+    })
+}
+
+/// A flipped crop reads the whole photo's map where it is mirrored: its pixels are the uncropped
+/// render's, mirrored (flip_h, flip_v, both).
+#[test]
+fn a_flipped_crop_does_not_change_the_tone_inside_it() {
+    let src = scene();
+    let info = SourceInfo::default();
+    let s = tone_edits();
+    let whole = render(&src, &info, &s, &RenderRequest { apply_crop: false, ..RenderRequest::fit(W, H) }).image;
+    let (cw, ch) = (W / 2, H / 2);
+    for (flip_h, flip_v) in [(true, false), (false, true), (true, true)] {
+        let mut c = s.clone();
+        c.crop.geometry.rect = Rect::new(0.0, 0.5, 0.5, 1.0);
+        c.crop.flip_h = flip_h;
+        c.crop.flip_v = flip_v;
+        let inside = render(&src, &info, &c, &RenderRequest::fit(cw, ch)).image;
+        // un-flip the crop and compare it with its place in the uncropped render
+        let mut undone = inside.clone();
+        for y in 0..ch {
+            for x in 0..cw {
+                let (sx, sy) = (if flip_h { cw - 1 - x } else { x }, if flip_v { ch - 1 - y } else { y });
+                undone.data[y * cw + x] = inside.data[sy * cw + sx];
+            }
+        }
+        let (mx, my) = (cw / 5, ch / 5);
+        let (worst, mean, l_whole, l_crop) = compare(&undone, (mx, my, cw - 2 * mx, ch - 2 * my), &whole, (mx, my + H / 2));
+        eprintln!("flip_h {flip_h} flip_v {flip_v}: max ΔE {worst:.3}, mean {mean:.3}, L* {l_whole:.3} / {l_crop:.3}");
+        assert!(worst < 0.6, "flip_h {flip_h} flip_v {flip_v}: max ΔE {worst:.3}");
+    }
+}
+
+/// A straightened crop and a smaller crop inside it (an integer number of pixels over, at the same
+/// scale) have the same tone where they overlap, though one has the sky and the other doesn't.
+#[test]
+fn a_straightened_crop_does_not_change_the_tone_inside_it() {
+    let src = scene();
+    let info = SourceInfo::default();
+    let mut big = tone_edits();
+    big.crop.geometry.angle = 3.0;
+    big.crop.geometry.rect = Rect::new(0.25, 0.3, 0.75, 0.9);
+    // the lower part of it: 300 px down at a 1:1 scale (the crop is 600 × 480 px)
+    let mut small = big.clone();
+    small.crop.geometry.rect = Rect::new(0.25, 0.3 + 300.0 / H as f64, 0.75, 0.9);
+    let (bw, bh) = (W / 2, (H as f64 * 0.6) as usize);
+    let a = render(&src, &info, &big, &RenderRequest::fit(bw, bh)).image;
+    let b = render(&src, &info, &small, &RenderRequest::fit(W / 2, bh - 300)).image;
+    assert_eq!((a.width, a.height, b.width, b.height), (bw, bh, bw, bh - 300));
+    let (mx, my) = (bw / 5, 80);
+    let (worst, mean, la, lb) = compare(&b, (mx, my, bw - 2 * mx, bh - 300 - 2 * my), &a, (mx, 300 + my));
+    eprintln!("straightened: max ΔE {worst:.3}, mean {mean:.3}, L* {la:.3} / {lb:.3}");
+    assert!(worst < 0.6, "straightened: max ΔE {worst:.3} (mean {mean:.3})");
+}
+
+/// A region (a window of the cropped, flipped, straightened render) equals the same pixels of the
+/// whole render of that crop.
+#[test]
+fn a_region_of_a_flipped_straightened_crop_equals_the_whole_render() {
+    let src = scene();
+    let info = SourceInfo::default();
+    let mut s = tone_edits();
+    s.crop.geometry.rect = Rect::new(0.15, 0.3, 0.9, 0.95);
+    s.crop.geometry.angle = -2.5;
+    s.crop.flip_v = true;
+    s.crop.flip_h = true;
+    let req = RenderRequest::fit(W, H);
+    let whole = render(&src, &info, &s, &req).image;
+    let g = crate::globals(&src, &info, &s, &req);
+    let tile = render_region(&src, &info, &s, &RenderRequest { region: Some(Region { x0: 0.4, y0: 0.3, x1: 0.7, y1: 0.7 }), ..req }, &g, None);
+    let px = tile.region.expect("a region render says where it goes");
+    let (mut worst, mut sum) = (0i32, 0i64);
+    for y in 0..px.h {
+        for x in 0..px.w {
+            let (p, q) = (whole.data[(px.y + y) * whole.width + px.x + x], tile.image.data[y * px.w + x]);
+            for c in 0..3 {
+                let d = (p[c] as i32 - q[c] as i32).abs();
+                worst = worst.max(d);
+                sum += d as i64;
+            }
+        }
+    }
+    let mean = sum as f64 / (px.w * px.h * 3) as f64;
+    assert!(worst <= 2 && mean < 0.05, "max {worst}, mean {mean:.3} at {px:?}");
+}
+
+/// A render that keeps nothing takes the statistics of its own frame when that is the whole photo
+/// (no second pass for a thumbnail), and measures no more than its own size otherwise.
+#[test]
+fn renders_without_a_cache_measure_no_more_than_they_need() {
+    let src = scene();
+    let info = SourceInfo::default();
+    let s = tone_edits();
+    // the whole photo, small: its own statistics
+    assert!(crate::analysis(&src, &info, &s, &RenderRequest::fit(256, 256), None).is_none());
+    assert!(crate::analysis(&src, &info, &s, &RenderRequest { apply_crop: false, ..RenderRequest::fit(256, 256) }, None).is_none());
+    // a crop: the whole photo's, at the output's size (not 1024)
+    let mut cropped = s.clone();
+    cropped.crop.geometry.rect = Rect::new(0.0, 0.5, 0.5, 1.0);
+    assert!(crate::analysis(&src, &info, &cropped, &RenderRequest::fit(256, 256), None).is_some());
+    // a view that keeps them: the whole photo, small, is the same with or without a cache; a crop has them
+    let cache = StageCache::default();
+    assert!(crate::analysis(&src, &info, &s, &RenderRequest::fit(256, 256), Some(&cache)).is_none());
+    assert!(crate::analysis(&src, &info, &cropped, &RenderRequest::fit(256, 256), Some(&cache)).is_some());
+    // nothing to measure: a JPEG with no tone edits, an Adobe raw with none
+    assert!(!crate::needs_globals(&DevelopSettings::default(), false));
+    assert!(crate::needs_globals(&DevelopSettings::default(), true), "an Adobe base reads the photo's dark key");
+    assert!(crate::analysis(&src, &info, &DevelopSettings::default(), &RenderRequest::fit(256, 256), Some(&cache)).is_none());
+}
+
+/// Generated pixels that arrive after the photo was measured replace the stand-in fill the
+/// measurement saw: the cached statistics are measured again.
+#[test]
+fn generated_pixels_arriving_later_measure_the_photo_again() {
+    let src = scene();
+    let info = SourceInfo::default();
+    let mut s = tone_edits();
+    let spot = lightcraft_develop::Spot {
+        mode: lightcraft_develop::SpotMode::Fill,
+        points: vec![lightcraft_geom::Point::new(0.8, 0.1)],
+        size: 0.1,
+        feather: 0.0,
+        generative: Some(lightcraft_develop::Generative { variation: 0, count: 1, key: "00000000000000cd".into(), quick: false }),
+        ..Default::default()
+    };
+    s.spots.push(spot.clone());
+    s.crop.geometry.rect = Rect::new(0.0, 0.0, 0.8, 1.0);
+    let cache = StageCache::default();
+    let req = RenderRequest::fit(300, 200);
+    let before = crate::analysis(&src, &info, &s, &req, Some(&cache)).expect("tone settings read statistics");
+    assert!(Arc::ptr_eq(&before, &crate::analysis(&src, &info, &s, &req, Some(&cache)).expect("kept")), "kept while nothing changes");
+    // the pixels arrive (the settings are the same)
+    let image = Rgb32f::from_fn(40, 40, |_, _| [0.01; 3]);
+    crate::spots::test_fill("00000000000000cd-0", crate::spots::GenFill { geometry: crate::spots::gen_geometry(&spot), rect: [0.7, 0.0, 0.9, 0.2], image });
+    let after = crate::analysis(&src, &info, &s, &req, Some(&cache)).expect("tone settings read statistics");
+    assert!(!Arc::ptr_eq(&before, &after), "measured again");
 }

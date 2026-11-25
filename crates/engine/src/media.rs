@@ -837,17 +837,27 @@ impl RenderJob {
 /// the CPU, reusing `stages` either way. Both produce the same image within 1–3 LSB (see
 /// `docs/gpu-pipeline.md`); `LIGHTCRAFT_GPU=0` or [`lightcraft_gpu::set_enabled`] forces the CPU.
 pub fn develop(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>, gpu: bool) -> Rendered {
+    // Without a stage cache the photo's whole-photo values are measured here, once, whichever
+    // renderer ends up rendering (a GPU that declines hands them to the CPU: no second pass).
+    let own = match stages {
+        None => lightcraft_pipeline::analysis(src, info, s, req, None),
+        Some(_) => None,
+    };
     // LUT profiles (creative Look tables, `.cube`) render on the GPU too (R03)
     if gpu
         && !s.masks.iter().any(|m| m.visible && m.refine > 0.0)
         && req.proof.is_none()
-        && let Some(r) = lightcraft_gpu::render(src, info, s, req, stages)
+        && let Some(r) = match &own {
+            Some(g) => lightcraft_gpu::render_region(src, info, s, req, g, None),
+            None => lightcraft_gpu::render(src, info, s, req, stages),
+        }
     {
         return r;
     }
-    match stages {
-        Some(st) => lightcraft_pipeline::render_cached(src, info, s, req, st),
-        None => lightcraft_pipeline::render(src, info, s, req),
+    match (stages, &own) {
+        (_, Some(g)) => lightcraft_pipeline::render_region(src, info, s, req, g, None),
+        (Some(st), None) => lightcraft_pipeline::render_cached(src, info, s, req, st),
+        (None, None) => lightcraft_pipeline::render(src, info, s, req),
     }
 }
 

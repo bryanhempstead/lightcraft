@@ -317,13 +317,6 @@ fn render_with(
     globals: Option<&lightcraft_pipeline::Globals>,
 ) -> Option<Rendered> {
     use lightcraft_pipeline::{OutputDepth, Overlay};
-    // what depends on the whole photo comes from the whole, uncropped photo, whatever this
-    // render's crop and size (`lightcraft_pipeline::globals`), unless a region render brought them
-    let own = match globals {
-        None => lightcraft_pipeline::analysis(src, info, s, req, stages),
-        Some(_) => None,
-    };
-    let globals = globals.or(own.as_deref());
     // Visualize HDR: the SDR render with the HDR rendition of the same request painted over it
     // (as `lightcraft_pipeline::render` does it)
     if let Overlay::HdrRange(display) = req.overlay
@@ -371,6 +364,14 @@ fn render_one(
         {
             return None;
         }
+        // what depends on the whole photo comes from the whole, uncropped photo, whatever this
+        // render's crop and size (`lightcraft_pipeline::globals`), unless a region render brought
+        // them (measured only now: a render the GPU declines above doesn't pay for it)
+        let own = match globals {
+            None => lightcraft_pipeline::analysis(src, info, s, req, stages),
+            Some(_) => None,
+        };
+        let globals = globals.or(own.as_deref());
         let s = &*lightcraft_pipeline::settings_for(s, req);
         let gpu = device()?;
         let ext = stages.map(|c| c.extension::<GpuStages>());
