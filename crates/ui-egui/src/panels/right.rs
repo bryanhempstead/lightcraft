@@ -410,19 +410,19 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal_wrapped(|ui| {
             // wrapped lines of a row sit ≥ 10 px apart (DESIGN.md §15)
             ui.spacing_mut().item_spacing.y = 10.0;
-            if text_button(ui, "cropFlipH", crate::i18n::tr("Flip H"), d.crop.flip_h).clicked() {
+            if text_button(ui, "cropFlipH", "flip.h.", d.crop.flip_h).clicked() {
                 let _ = app.run("photo.flipHorizontal", json!({}));
             }
-            if text_button(ui, "cropFlipV", crate::i18n::tr("Flip V"), d.crop.flip_v).clicked() {
+            if text_button(ui, "cropFlipV", "flip.v.", d.crop.flip_v).clicked() {
                 let _ = app.run("photo.flipVertical", json!({}));
             }
-            if text_button(ui, "cropSwapAspect", crate::i18n::tr("Swap Aspect (X)"), false).clicked() {
+            if text_button(ui, "cropSwapAspect", "swap.asp.", false).on_hover_text(crate::i18n::tr("Swap Aspect (X)")).clicked() {
                 let _ = app.run("crop.rotateAspect", json!({}));
             }
-            if text_button(ui, "cropReset", crate::i18n::tr("Reset"), false).clicked() {
+            if text_button(ui, "cropReset", "reset.", false).clicked() {
                 let _ = app.run("crop.reset", json!({}));
             }
-            if text_button(ui, "cropAsShot", crate::i18n::tr("as shot."), false)
+            if text_button(ui, "cropAsShot", "as.shot.", false)
                 .on_hover_text(crate::i18n::tr("The whole frame again: no crop, no straighten (a ratio keeps how punched in you are)"))
                 .clicked()
             {
