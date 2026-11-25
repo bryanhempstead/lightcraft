@@ -2035,15 +2035,19 @@ pub fn run_command(app: &mut crate::LightcraftApp, id: &str, p: &Value) -> Optio
         "keys.macro" => (|| {
             let steps = p.get("steps").and_then(Value::as_array).ok_or("keys.macro: missing `steps`")?.clone();
             let ctx = egui::Context::default();
+            if steps.iter().any(|st| st.get("command").and_then(Value::as_str) == Some("keys.macro")) {
+                return Err("keys.macro: a macro can't run a macro".into());
+            }
+            // one button = one photo: a flag/rating step inside a macro never Auto Advances (Bryan, 11-25:
+            // the Monogram B&W button = preset + unflag moved on to the next photo)
+            let auto_advance = std::mem::replace(&mut app.ui.auto_advance, false);
             let mut ran = 0;
             for st in steps.iter().take(64) {
                 let Some(cmd) = st.get("command").and_then(Value::as_str).filter(|c| !c.is_empty()) else { continue };
-                if cmd == "keys.macro" {
-                    return Err("keys.macro: a macro can't run a macro".into());
-                }
                 crate::shortcuts::dispatch(app, &ctx, cmd, st.get("params").cloned().unwrap_or(json!({})));
                 ran += 1;
             }
+            app.ui.auto_advance = auto_advance;
             Ok(json!({"ran": ran}))
         })(),
         "keys.send" => (|| {

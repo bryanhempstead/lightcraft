@@ -1810,3 +1810,21 @@ fn keymap_cycle_message_is_just_the_item_label() {
     assert_eq!(keymap_cycle_step(&mut h, "lc_cycle = ratio"), "As Shot");
     assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.clone()).as_deref(), Some("As Shot"));
 }
+
+/// A macro is one button = one photo: its flag/rating steps don't Auto Advance, and the user's
+/// Auto Advance setting comes back on afterwards.
+#[test]
+fn macro_steps_do_not_auto_advance_and_setting_is_restored() {
+    let mut h = demo();
+    // Auto Advance moves to the next visible photo, so start on one that has a successor
+    let vis = h.app.session.visible().to_vec();
+    assert!(vis.len() >= 2, "demo shows at least 2 photos");
+    let first = vis[0];
+    exec(&mut h, "library.select", json!({"ids": [first.0]}));
+    exec(&mut h, "photo.flag", json!({"flag": "pick"}));
+    h.app.ui.auto_advance = true;
+    exec(&mut h, "keys.macro", json!({"steps": [{"command": "photo.unflag"}]}));
+    assert_eq!(h.app.session.catalog.photo(first).unwrap().flag, lightcraft_catalog::Flag::None, "the macro's unflag ran");
+    assert_eq!(h.app.session.active(), Some(first), "a macro step doesn't move on");
+    assert!(h.app.ui.auto_advance, "Auto Advance is restored after the macro");
+}
