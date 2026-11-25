@@ -364,6 +364,14 @@ fn render_one(
         {
             return None;
         }
+        // what depends on the whole photo comes from the whole, uncropped photo, whatever this
+        // render's crop and size (`lightcraft_pipeline::globals`), unless a region render brought
+        // them (measured only now: a render the GPU declines above doesn't pay for it)
+        let own = match globals {
+            None => lightcraft_pipeline::analysis(src, info, s, req, stages),
+            Some(_) => None,
+        };
+        let globals = globals.or(own.as_deref());
         let s = &*lightcraft_pipeline::settings_for(s, req);
         let gpu = device()?;
         let ext = stages.map(|c| c.extension::<GpuStages>());

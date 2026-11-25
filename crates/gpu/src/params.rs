@@ -81,14 +81,13 @@ const FIELDS: &[(&str, usize)] = &[
     ("BW_CR_OFF", 1),
     // Camera Raw's scene tone map (`lightcraft_pipeline::scene_cr`, round 11): flags (1 map, 2
     // Clarity, 4 Highlights / Shadows, 8 positive Dehaze), the map in aux (A, B, then Clarity's
-    // four fits and guide, the haze density, the unit curves + pair), its size and scale, the
+    // four fits and guide, the haze density, the unit curves + pair), its size and where a render's pixels sit on it, the
     // global Shadows / Highlights and the airlight at this Exposure (ProPhoto)
     ("SC", 1),
     ("SC_OFF", 1),
     ("SC_MW", 1),
     ("SC_MH", 1),
-    ("SC_SX", 1),
-    ("SC_SY", 1),
+    ("SC_XF", 6),
     ("SC_CL_OFF", 1),
     ("SC_HZ_OFF", 1),
     ("SC_HS_OFF", 1),
@@ -414,8 +413,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.u("SC_OFF", sc_off as u32);
         p.u("SC_MW", t.map.w as u32);
         p.u("SC_MH", t.map.h as u32);
-        p.f("SC_SX", t.scale[0]);
-        p.f("SC_SY", t.scale[1]);
+        p.fs("SC_XF", &t.xf);
         p.u("SC_CL_OFF", sc_cl as u32);
         p.u("SC_HZ_OFF", sc_hz as u32);
         p.u("SC_HS_OFF", sc_hs as u32);

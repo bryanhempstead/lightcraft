@@ -975,8 +975,10 @@ fn sc_sample(x: u32, y: u32) -> ScS {
     let mw = pu(F_SC_MW);
     let mh = pu(F_SC_MH);
     // (a region render's pixels sit at WIN_X, WIN_Y of the whole render)
-    let fx = clamp((f32(x + pu(F_WIN_X)) + 0.5) * pf(F_SC_SX) - 0.5, 0.0, f32(mw - 1u));
-    let fy = clamp((f32(y + pu(F_WIN_Y)) + 0.5) * pf(F_SC_SY) - 0.5, 0.0, f32(mh - 1u));
+    let px = f32(x + pu(F_WIN_X)) + 0.5;
+    let py = f32(y + pu(F_WIN_Y)) + 0.5;
+    let fx = clamp(pf(F_SC_XF) * px + pf(F_SC_XF + 1u) * py + pf(F_SC_XF + 2u), 0.0, f32(mw - 1u));
+    let fy = clamp(pf(F_SC_XF + 3u) * px + pf(F_SC_XF + 4u) * py + pf(F_SC_XF + 5u), 0.0, f32(mh - 1u));
     let ix = u32(fx);
     let iy = u32(fy);
     let jx = min(ix + 1u, mw - 1u);

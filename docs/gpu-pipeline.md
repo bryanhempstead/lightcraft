@@ -229,11 +229,16 @@ over the preview in 512 px pieces. A region render (`RenderRequest::region`, `li
   clarity, dehaze, colour / luminance NR, the 6-level texture pyramid, sharpening), aligned to 64 px (the coarsest
   pyramid / subsampling grid), and grown to every spot box the region depends on, including the spots those read.
   Lens Blur, auto-sourced spots and windows over 60 % of the frame render the whole frame and cut the region from it.
-- **Whole-photo values** (`Globals`): tone statistics, negative Dehaze's percentile and the airlight from a
-  preview-size pass over the preview source; Camera Raw's scene map and haze (block means, so resolution-dependent)
-  from block means of the native render made in 512-row bands (`region::scene_means`, never a full-size buffer). Kept
-  in the view's stage cache under `region::globals_key`, which ignores the per-pixel sliders: an Exposure, tone or
-  colour drag at 1:1 re-runs only the per-pixel stage of the same window.
+- **Whole-photo values** (`Globals`): tone statistics, negative Dehaze's percentile, the airlight, and Camera Raw's
+  scene map and haze, all measured on the whole *uncropped* photo (`lightcraft_pipeline::globals`: the
+  `apply_crop = false` frame at a fixed 1024 px long edge, from the preview source), never on a crop, so a crop, a
+  straighten angle, a flip or a render's size never changes the tone of the pixels inside it (Camera Raw measures the
+  whole image and crops afterwards). The scene map is one grid over the uncropped photo (`MapBase::whole`); a render
+  finds its pixels on it through an affine (`SceneTone::framed`, GPU `SC_XF`) built from `Frame::out_to_norm`, window
+  offset included. Every render takes them the same way: a view's stage cache keeps them (`analysis`), a render with
+  no cache measures them itself, no bigger than its own size, and a render of the whole photo up to 1024 px takes its
+  own frame's. Kept in the view's stage cache under `region::globals_key`, which ignores the crop and the per-pixel
+  sliders: an Exposure, tone or colour drag, or a crop drag, re-runs only the per-pixel stage of the same window.
 - **Levels.** Native resolution at 1:1 and closer (region renders); between the preview size and 1:1 the half / quarter
   resolution render whole (`tiles::level`).
 - **Accuracy** (`crates/pipeline/src/tests_region.rs`, `crates/gpu/tests/region.rs`, `crates/ui-egui/src/tests_zoom.rs`):
