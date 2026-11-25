@@ -1905,21 +1905,18 @@ pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, Str
     // LightCraft's own one-shots: `lc_cmd = <command id> [JSON params]` (Merge…, Match Brightness,
     // Auto Align… — what Lightroom's console list has no input for)
     if name == "lc_cmd" {
-        let steps = split_chain(rest);
-        if steps.len() > 1 {
-            return run_chain(app, &steps);
-        }
-        let (cmd, params) = parse_step(rest).map_err(|e| format!("{line}: {e}"))?;
-        crate::shortcuts::dispatch(app, &ctx, cmd, params);
-        return Ok(json!({"run": cmd}));
+        return run_chain(app, &split_chain(rest));
     }
     // `reset = <tool>`: the local tools (Lightroom's "Reset Spot Removal", "Reset Gradients"…) and the crop
     if name == "reset" {
-        if let Some(&(_, tool)) = LR_RESET_TOOLS.iter().find(|(l, _)| l.eq_ignore_ascii_case(rest)) {
-            return app.run("develop.resetLocalTool", json!({"tool": tool}));
-        }
-        if rest.eq_ignore_ascii_case("crop") {
-            return app.run("crop.reset", json!({}));
+        let tool = LR_RESET_TOOLS.iter().find(|(l, _)| l.eq_ignore_ascii_case(rest)).map(|&(_, tool)| tool);
+        if tool.is_some() || rest.eq_ignore_ascii_case("crop") {
+            // a slider the hand has just let go of is its own history step, not part of this one
+            settle_console(app);
+            return match tool {
+                Some(tool) => app.run("develop.resetLocalTool", json!({"tool": tool})),
+                None => app.run("crop.reset", json!({})),
+            };
         }
     }
     if let Some(&(_, keys)) = LR_TRIGGER_KEYS.iter().find(|(l, _)| l.eq_ignore_ascii_case(line)) {
@@ -1961,30 +1958,205 @@ pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, Str
     if rest.is_empty() || rest == "reset" {
         return reset_target(app, &target);
     }
+    // `name = +` / `-` (a small step) and `++` / `--` (one native nudge)
+    if matches!(rest, "+" | "-" | "++" | "--") {
+        return step_input(app, name, &target, rest.starts_with('+'), rest.len() == 2);
+    }
+    // every number has to be one: `nan`, `inf` and words are refused, not turned into a reset
+    let numbers = dial.map(|(_, r)| r).unwrap_or(rest);
+    if let Some(bad) = numbers.split(',').map(str::trim).find(|x| x.parse::<f64>().ok().is_none_or(|v| !v.is_finite())) {
+        return Err(format!("{name}: `{bad}` is not a finite number"));
+    }
+    // the colour wheels' dials turn the wheel, not one of its axes (Monogram's `wheelConversion`)
+    if let (Some((sign, _)), Some((wheel, axis)), [d, ..]) = (dial, lr_wheel(name), nums.as_slice()) {
+        return wheel_turn(app, wheel, axis, sign * d.abs());
+    }
     let control = match target {
         Target::Local(key) => return local_input(app, name, key, dial, &nums),
         Target::Control(control) => control,
     };
     match (dial, nums.as_slice()) {
-        (Some((sign, _)), [d, ..]) => {
-            // Monogram's own increment per detent; the crop pseudo controls move in LightCraft's units
-            let delta = if control.starts_with("crop.") && control != "crop.angle" { app.keymap.steps(control)[0] } else { *d };
-            nudge(app, control, sign * delta.abs())
+        // `lc_set_<id> = 0.5`: the value itself, in the control's own units
+        (None, [v]) if name.starts_with(LC_SET) => set_control(app, control, *v),
+        // the crop's pseudo controls move in LightCraft's own units
+        (Some((sign, _)), [_, ..]) if control.starts_with("crop.") && control != "crop.angle" => {
+            nudge(app, control, sign * app.keymap.steps(control)[0].abs())
         }
-        (None, [v, min, max]) => {
-            let t = (v / 255.0).clamp(0.0, 1.0);
-            let spec = lightcraft_develop::controls::find(control);
-            let value = if control == "wb.temp" { spec.map(|s| crate::widgets::track_value(s, t)).unwrap_or(5500.0) } else { min + t * (max - min) };
-            let value = spec.map(|s| value.clamp(s.min.min(s.max), s.max.max(s.min))).unwrap_or(value);
-            console_begin(app, control);
-            let r = app.run("develop.set", json!({"control": control, "value": value}));
-            if r.is_ok() {
-                hud(app, control);
-            }
-            r
+        (Some((sign, _)), [d, line @ ..]) => {
+            let cur = current_value(app, control).ok_or_else(|| format!("{name}: no value to turn (no photo, or no such element)"))?;
+            set_control(app, control, dial_value(control, cur, sign * d.abs(), line_range(line)))
         }
+        (None, [pos]) => pot_input(app, name, control, *pos, None),
+        (None, [pos, min, max]) => pot_input(app, name, control, *pos, Some((*min, *max))),
         _ => Err(format!("{line}: no value")),
     }
+}
+
+/// The range a dial / pot line carries (`^d,min,max`, `pos,min,max`), if it has one that is a range.
+fn line_range(nums: &[f64]) -> Option<(f64, f64)> {
+    match nums {
+        [min, max] if min < max => Some((*min, *max)),
+        _ => None,
+    }
+}
+
+/// A control's range narrowed to the line's: Monogram's `max(lineMin, controlMin)`..`min(lineMax, controlMax)`
+/// (the control's own when the line has none, or the two don't overlap).
+fn clamped_range(spec: &lightcraft_develop::ControlSpec, line: Option<(f64, f64)>) -> (f64, f64) {
+    let (smin, smax) = (spec.min.min(spec.max), spec.max.max(spec.min));
+    match line {
+        Some((a, b)) if a.max(smin) < b.min(smax) => (a.max(smin), b.min(smax)),
+        _ => (smin, smax),
+    }
+}
+
+/// How far one Temperature dial detent moves, per unit of the input's step (Lightroom's Temperature
+/// steps get coarser as it gets bluer): 25 up to 8000 K, 50 up to 10000, 100 up to 14000, 400 beyond.
+fn temp_scale(kelvin: f64) -> f64 {
+    match kelvin {
+        k if k <= 8000.0 => 25.0,
+        k if k <= 10000.0 => 50.0,
+        k if k <= 14000.0 => 100.0,
+        _ => 400.0,
+    }
+}
+
+/// Round to `decimals` places.
+fn round_to(v: f64, decimals: u8) -> f64 {
+    let m = 10f64.powi(i32::from(decimals));
+    (v * m).round() / m
+}
+
+/// A dial detent of `d` (signed, in Monogram's units) on `cur`: Temperature moves [`temp_scale`] times
+/// as far; the sum is rounded to the control's precision, then held to the narrower of the line's
+/// range and the control's.
+fn dial_value(control: &str, cur: f64, d: f64, line: Option<(f64, f64)>) -> f64 {
+    let Some(spec) = lightcraft_develop::controls::find(control) else { return cur + d };
+    let d = if control == "wb.temp" { d * temp_scale(cur) } else { d };
+    let (lo, hi) = clamped_range(spec, line);
+    round_to(cur + d, spec.decimals).clamp(lo, hi)
+}
+
+/// The control's value as the active photo has it now (an As Shot white balance reads the camera's).
+fn current_value(app: &crate::LightcraftApp, control: &str) -> Option<f64> {
+    let id = app.session.active()?;
+    let d = app.session.develop_of(id)?;
+    if matches!(control, "wb.temp" | "wb.tint") && d.wb.mode == lightcraft_develop::WbMode::AsShot {
+        let info = app.session.source_info(id);
+        return Some(if control == "wb.temp" { info.as_shot_temp } else { info.as_shot_tint });
+    }
+    lightcraft_develop::controls::get(&d, control)
+}
+
+/// Monogram's Temperature track: even below 7400 K, logarithmic above (1250 K per unit of `p`).
+fn temp_track(k: f64) -> f64 {
+    if k <= 7400.0 { (k - 2000.0) / 1250.0 } else { (1250.0 * ((k - 7400.0) / 1250.0 + 1.0).ln() + 5400.0) / 1250.0 }
+}
+
+/// The Temperature at hardware position `pos` (0–255) of a pot spanning `lo`..`hi` K.
+fn temp_pot(lo: f64, hi: f64, pos: f64) -> f64 {
+    let p = temp_track(lo) + (temp_track(hi) - temp_track(lo)) * pos / 255.0;
+    if p > 4.32 { 1250.0 * ((1250.0 * p + 2000.0 - 7400.0) / 1250.0).exp() + 6150.0 } else { 1250.0 * p + 2000.0 }
+}
+
+/// A pot's position, with the plugin's dead zones: the first 3 detents are the minimum, the last 3
+/// the maximum.
+fn pot_position(pos: f64) -> f64 {
+    if pos <= 3.0 {
+        0.0
+    } else if pos >= 252.0 {
+        255.0
+    } else {
+        pos
+    }
+}
+
+/// An absolute pot (`pos` or `pos,min,max`): linear across the line's range narrowed to the control's
+/// (Temperature on Monogram's own warped track), no pickup — it sets the value wherever the pot is.
+fn pot_input(app: &mut crate::LightcraftApp, name: &str, control: &str, pos: f64, line: Option<(f64, f64)>) -> Result<Value, String> {
+    let spec = lightcraft_develop::controls::find(control).ok_or_else(|| format!("{name}: no range to put a pot across"))?;
+    let (lo, hi) = clamped_range(spec, line);
+    let pos = pot_position(pos);
+    let value = if pos <= 0.0 {
+        lo
+    } else if pos >= 255.0 {
+        hi
+    } else if control == "wb.temp" {
+        temp_pot(lo, hi, pos)
+    } else {
+        lo + pos / 255.0 * (hi - lo)
+    };
+    set_control(app, control, value)
+}
+
+/// `name = +` / `-` (a step of a thousandth of the range, 25 at most) or `++` / `--` (one native
+/// nudge: what an arrow key moves), held to the control's range.
+fn step_input(app: &mut crate::LightcraftApp, name: &str, target: &Target, up: bool, native: bool) -> Result<Value, String> {
+    let sign = if up { 1.0 } else { -1.0 };
+    let (spec, cur): (&lightcraft_develop::ControlSpec, f64) = match target {
+        Target::Control(control) if control.starts_with("crop.") && *control != "crop.angle" => {
+            return nudge(app, control, sign * app.keymap.steps(control)[0].abs());
+        }
+        Target::Control(control) => (
+            lightcraft_develop::controls::find(control).ok_or_else(|| format!("{name}: no such control"))?,
+            current_value(app, control).ok_or_else(|| format!("{name}: no value to step (no photo, or no such element)"))?,
+        ),
+        Target::Local(key) => (
+            crate::panels::masking::LOCAL.iter().find(|s| s.id == *key).ok_or_else(|| format!("{name}: no mask slider"))?,
+            local_value(app, key).ok_or_else(|| no_mask(name))?,
+        ),
+    };
+    let new = if native {
+        crate::widgets::nudged(spec, cur, sign)
+    } else {
+        // (not rounded: a thousandth of a ±100 slider is a fifth of a step)
+        (cur + sign * ((spec.max - spec.min) * 0.001).min(25.0)).clamp(spec.min, spec.max)
+    };
+    match target {
+        Target::Control(control) => set_control(app, control, new),
+        Target::Local(key) => local_set(app, key, new),
+    }
+}
+
+/// The wheel and axis a Monogram colour-wheel input is: `ShadowsWheelX` → (`shadows`, `x`).
+fn lr_wheel(name: &str) -> Option<(&'static str, char)> {
+    let lower = name.to_ascii_lowercase();
+    let (wheel, axis) = lower.strip_suffix('x').map(|w| (w, 'x')).or_else(|| lower.strip_suffix('y').map(|w| (w, 'y')))?;
+    let wheel = wheel.strip_suffix("wheel")?;
+    ["shadows", "midtones", "highlights", "global"].into_iter().find(|w| *w == wheel).map(|w| (w, axis))
+}
+
+/// A colour-wheel dial detent (Monogram's `wheelConversion`): the wheel's point is (sat·cos hue,
+/// sat·sin hue); X or Y moves by `d`, and back in polar form that sets hue and saturation together.
+fn wheel_turn(app: &mut crate::LightcraftApp, wheel: &str, axis: char, d: f64) -> Result<Value, String> {
+    let (hue_id, sat_id) = (format!("grading.{wheel}.hue"), format!("grading.{wheel}.sat"));
+    let hue = current_value(app, &hue_id).ok_or("no photo to turn the wheel on")?;
+    let sat = current_value(app, &sat_id).ok_or("no photo to turn the wheel on")?;
+    let (mut x, mut y) = (sat * hue.to_radians().cos(), sat * hue.to_radians().sin());
+    if axis == 'x' {
+        x += d;
+    } else {
+        y += d;
+    }
+    let radius = x.hypot(y);
+    let new_sat = round_to(radius, 0).clamp(0.0, 100.0);
+    // a wheel at its centre has no angle: it keeps the hue it had
+    let new_hue = if radius < 1e-9 { hue } else { round_to(y.atan2(x).to_degrees().rem_euclid(360.0), 0).rem_euclid(360.0) };
+    console_begin(app, &hue_id);
+    let r = app.run("develop.set", json!({"values": {(hue_id.clone()): new_hue, (sat_id.clone()): new_sat}}))?;
+    say(app, format!("{wheel} {new_hue:.0}° {new_sat:.0}"));
+    Ok(r)
+}
+
+/// Set a develop control to `value` (clamped to its range) as a console drag, and show it.
+fn set_control(app: &mut crate::LightcraftApp, control: &str, value: f64) -> Result<Value, String> {
+    let value = lightcraft_develop::controls::find(control).map_or(value, |s| value.clamp(s.min.min(s.max), s.max.max(s.min)));
+    console_begin(app, control);
+    let r = app.run("develop.set", json!({"control": control, "value": value}));
+    if r.is_ok() {
+        hud(app, control);
+    }
+    r
 }
 
 /// What a Monogram input name addresses.
@@ -2007,9 +2179,7 @@ fn target_of<'a>(app: &crate::LightcraftApp, name: &'a str) -> Result<Option<Tar
         return Ok(Some(Target::Local(key)));
     }
     let Some(id) = name.strip_prefix(LC_SET) else { return Ok(lr_param(name).map(Target::Control)) };
-    if CROP_PSEUDO.contains(&id) {
-        return Ok(Some(Target::Control(id)));
-    }
+    // (the crop's `x` / `y` / `scale` only nudge: they have no value to set or reset, so they're no `lc_set_` control)
     if controls::find(id).is_none() {
         return Err(format!("{name}: no develop control `{id}` (develop.listControls lists them)"));
     }
@@ -2024,7 +2194,10 @@ fn target_of<'a>(app: &crate::LightcraftApp, name: &'a str) -> Result<Option<Tar
 /// Back to the default: a develop control resets, a mask slider goes to its default (0).
 fn reset_target(app: &mut crate::LightcraftApp, target: &Target) -> Result<Value, String> {
     match target {
-        Target::Control(control) => app.run("develop.resetControl", json!({"control": control})),
+        Target::Control(control) => {
+            settle_console(app);
+            app.run("develop.resetControl", json!({"control": control}))
+        }
         Target::Local(key) => {
             let default = crate::panels::masking::LOCAL.iter().find(|s| s.id == *key).map_or(0.0, |s| s.default);
             local_set(app, key, default)
@@ -2038,7 +2211,7 @@ fn local_input(app: &mut crate::LightcraftApp, name: &str, key: &'static str, di
     let spec = crate::panels::masking::LOCAL.iter().find(|s| s.id == key).ok_or_else(|| format!("{name}: no mask slider `{key}`"))?;
     let value = match (dial, nums) {
         (Some((sign, _)), [d, ..]) => spec.clamp(local_value(app, key).ok_or_else(|| no_mask(name))? + sign * d.abs()),
-        (None, [v, _min, _max]) => spec.min + (v / 255.0).clamp(0.0, 1.0) * (spec.max - spec.min),
+        (None, [v] | [v, _, _]) => spec.min + (pot_position(*v) / 255.0).clamp(0.0, 1.0) * (spec.max - spec.min),
         _ => return Err(format!("{name}: no value")),
     };
     local_set(app, key, value)
@@ -2085,29 +2258,46 @@ fn split_chain(text: &str) -> Vec<&str> {
     steps
 }
 
-/// `<command id> [JSON params]`.
+/// `<command id> [JSON params]`; an empty step is an error.
 fn parse_step(step: &str) -> Result<(&str, Value), String> {
-    match step.trim().split_once(' ') {
+    let step = step.trim();
+    if step.is_empty() {
+        return Err("a step is empty".into());
+    }
+    match step.split_once(' ') {
         Some((c, p)) => Ok((c, serde_json::from_str(p.trim()).map_err(|e| format!("`{step}`: {e}"))?)),
-        None => Ok((step.trim(), json!({}))),
+        None => Ok((step, json!({}))),
     }
 }
 
-/// Run the steps of an `lc_cmd` chain in order; the first one that fails stops it and is reported.
-fn run_chain(app: &mut crate::LightcraftApp, steps: &[&str]) -> Result<Value, String> {
-    // every step parses before any runs: a typo in the last one must not leave the first half done
-    let parsed = steps.iter().map(|s| parse_step(s)).collect::<Result<Vec<_>, _>>().map_err(|e| format!("lc_cmd: {e}"))?;
-    let mut results = Vec::new();
-    for (n, (cmd, params)) in parsed.into_iter().enumerate() {
-        if cmd.is_empty() {
-            return Err(format!("lc_cmd: step {} is empty", n + 1));
-        }
-        match app.run(cmd, params) {
-            Ok(r) => results.push(json!({"run": cmd, "result": r})),
-            Err(e) => return Err(format!("lc_cmd: step {} `{cmd}` failed ({n} ran before it): {e}", n + 1)),
-        }
+/// A console slider the hand has just let go of is its own history step: end it before a one-shot
+/// command runs, so the command doesn't fold into it. (A mouse drag in progress is left alone.)
+fn settle_console(app: &mut crate::LightcraftApp) {
+    if app.console_drag.is_some() {
+        end_console_move(app);
     }
-    Ok(json!({"ran": results.len(), "results": results}))
+}
+
+/// Run the steps of an `lc_cmd` line (one command, or several split at ` ; `) in order, each the way
+/// a key runs it (`shortcuts::dispatch`: aliases, culling keys…); the first one that fails stops the
+/// chain and is reported. Every step parses before any runs.
+fn run_chain(app: &mut crate::LightcraftApp, steps: &[&str]) -> Result<Value, String> {
+    let parsed =
+        steps.iter().enumerate().map(|(n, s)| parse_step(s).map_err(|e| format!("lc_cmd: step {}: {e}", n + 1))).collect::<Result<Vec<_>, _>>()?;
+    let ctx = egui::Context::default();
+    let mut ran = Vec::new();
+    for (n, (cmd, params)) in parsed.into_iter().enumerate() {
+        settle_console(app);
+        if let Err(e) = crate::shortcuts::dispatch_checked(app, &ctx, cmd, params) {
+            return Err(if steps.len() > 1 {
+                format!("lc_cmd: step {} `{cmd}` failed ({n} ran before it): {e}", n + 1)
+            } else {
+                format!("lc_cmd: `{cmd}` failed: {e}")
+            });
+        }
+        ran.push(cmd);
+    }
+    Ok(if let [cmd] = ran.as_slice() { json!({"run": cmd}) } else { json!({"ran": ran.len(), "commands": ran}) })
 }
 
 /// Monogram's "adobe" protocol line (what it sends Photoshop / Premiere integrations, and LightCraft's
@@ -2128,7 +2318,10 @@ pub fn lr_input_json(app: &mut crate::LightcraftApp, line: &str) -> Result<Value
     let is_cycle = name.starts_with("lc_cycle_");
     if a(8) == 1.0 && (a(1) > 0.0 || a(2) > 0.0) {
         let d = a(2) - a(1);
-        return lr_input(app, &format!("{name} = {}{},{},{}", if d < 0.0 { 'v' } else { '^' }, d.abs(), a(6), a(7)));
+        let sign = if d < 0.0 { 'v' } else { '^' };
+        // a line with no range (both -1) is a dial with just its step
+        let range = if a(6) == -1.0 && a(7) == -1.0 { String::new() } else { format!(",{},{}", a(6), a(7)) };
+        return lr_input(app, &format!("{name} = {sign}{}{range}", d.abs()));
     }
     if a(6) != -1.0 || a(7) != -1.0 {
         let (lo, hi, val) = (a(6), a(7), a(5));
@@ -2146,14 +2339,7 @@ pub fn lr_input_json(app: &mut crate::LightcraftApp, line: &str) -> Result<Value
             }
             Target::Control(control) => control,
         };
-        let spec = lightcraft_develop::controls::find(control);
-        let value = spec.map(|s| val.clamp(s.min.min(s.max), s.max.max(s.min))).unwrap_or(val);
-        console_begin(app, control);
-        let r = app.run("develop.set", json!({"control": control, "value": value}));
-        if r.is_ok() {
-            hud(app, control);
-        }
-        return r;
+        return if val.is_finite() { set_control(app, control, val) } else { Err(format!("{name}: not a finite number")) };
     }
     // a one-shot: `flag = pick`, `Exposure = reset`, a preset… or a slider input pressed = reset it
     if !rest.is_empty() {
@@ -2233,6 +2419,14 @@ fn matching_item(app: &crate::LightcraftApp, items: &[CycleItem], prefer: Option
         "develop.wb" => it.params.get("mode").is_some_and(|m| Some(m) == wb_now.as_ref()),
         _ => false,
     };
+    // an unedited, unlocked photo is on "original" / As Shot, whatever position was stepped to last
+    // (it may be an item of the same ratio, left behind by a crop reset)
+    if d.crop.aspect.is_none() && now.is_some() {
+        let as_shot = |it: &CycleItem| matches!(it.params.get("aspect").and_then(Value::as_str), Some("original" | "asShot"));
+        if let Some(i) = items.iter().position(|it| as_shot(it) && matches(it)) {
+            return Some(i);
+        }
+    }
     prefer.filter(|&i| items.get(i).is_some_and(matches)).or_else(|| items.iter().position(matches))
 }
 

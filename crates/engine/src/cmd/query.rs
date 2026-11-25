@@ -183,7 +183,10 @@ pub fn specs() -> Vec<CommandSpec> {
             "{section?} — the catalog of every develop control, no photo needed: {count, controls: [{id, label, section, sectionLabel, min, max, default, step, decimals, indexed}]}; an indexed control (`pointColor.hueShift`, `redEye.pupilSize`) has `indexed: true` and is addressed per list element as `pointColor.<n>.hueShift`",
             always,
             |_, p| {
-                let sec = p.get("section").and_then(|v| serde_json::from_value::<lightcraft_develop::Section>(v.clone()).ok());
+                let sec = match p.get("section").filter(|v| !v.is_null()) {
+                    Some(v) => Some(serde_json::from_value::<lightcraft_develop::Section>(v.clone()).map_err(|_| bad("develop.listControls", format!("unknown section {v} (see `section` of any control)")))?),
+                    None => None,
+                };
                 let controls: Vec<Value> = CONTROLS
                     .iter()
                     .map(|c| (c, false))

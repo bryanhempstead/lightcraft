@@ -57,3 +57,38 @@ fn reset_local_tool_removes_one_kind_in_one_undo_step() {
     assert!(s.execute("develop.resetLocalTool", &json!({"tool": "nope"})).is_err());
     assert!(s.execute("develop.resetLocalTool", &json!({})).is_err());
 }
+
+#[test]
+fn list_controls_refuses_an_unknown_section() {
+    let mut s = Session::with_demo();
+    let e = s.execute("develop.listControls", &json!({"section": "nope"})).unwrap_err().to_string();
+    assert!(e.contains("unknown section"), "{e}");
+    assert!(s.execute("develop.listControls", &json!({"section": null})).is_ok());
+}
+
+#[test]
+fn reset_local_tool_goes_by_the_first_component_and_takes_empty_masks() {
+    use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    // a linear mask with a subtracted brush, a brush mask with an added linear, and a mask with no component
+    let comp = |op, shape| MaskComponent { name: None, op, invert: false, shape };
+    let linear = || MaskShape::Linear { start: lightcraft_geom::Point::new(0.5, 0.2), end: lightcraft_geom::Point::new(0.5, 0.6) };
+    let brush = || MaskShape::Brush { strokes: vec![] };
+    let mut d = active_dev(&s);
+    let a = d.next_mask_id();
+    let (b, c) = (a + 1, a + 2);
+    d.masks.push(Mask { id: a, components: vec![comp(MaskOp::Add, linear()), comp(MaskOp::Subtract, brush())], ..Default::default() });
+    d.masks.push(Mask { id: b, components: vec![comp(MaskOp::Add, brush()), comp(MaskOp::Add, linear())], ..Default::default() });
+    d.masks.push(Mask { id: c, components: vec![], ..Default::default() });
+    s.set_develop(id, d, "test").unwrap();
+    s.active_mask = Some(a);
+    let r = s.execute("develop.resetLocalTool", &json!({"tool": "linear"})).unwrap();
+    assert_eq!((r["removed"].clone(), r["kinds"]["linear"].clone(), r["kinds"]["empty"].clone()), (json!(2), json!(1), json!(1)), "{r}");
+    let left: Vec<u32> = active_dev(&s).masks.iter().map(|m| m.id).collect();
+    assert_eq!(left, vec![b], "the brush-first mask stays");
+    assert_eq!(s.active_mask, None, "the selected mask went with it");
+    let r = s.execute("develop.resetLocalTool", &json!({"tool": "brush"})).unwrap();
+    assert_eq!(r["kinds"]["brush"], 1);
+    assert!(active_dev(&s).masks.is_empty());
+}

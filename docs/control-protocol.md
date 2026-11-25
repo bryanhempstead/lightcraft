@@ -91,13 +91,25 @@ Monogram's Lightroom integration sends one text line per move; LightCraft reads 
 (hardware 0–255 across the range), a dial `^0.05,min,max` (up) / `v0.05,min,max` (down, a digit follows the `v`:
 `lc_cycle = vertical` is a list name, not a dial), or nothing / `reset` (a plain press: back to the default).
 
+- **The numbers do what Monogram's Lightroom plugin does** (decoded from its bytecode), each line one change on the
+  value read just then: a **dial** `^d,min,max` adds `d` (Temperature: `d` × 25 K up to 8000 K, ×50 to 10000, ×100
+  to 14000, ×400 beyond), rounds to the control's decimals, and holds the result to the narrower of the line's range
+  and the control's; an absolute **pot** `pos,min,max` (or a bare `pos`: the control's range) is linear across that
+  range with dead zones (`pos` ≤ 3 is the minimum, ≥ 252 the maximum), never picks up, and Temperature rides
+  Monogram's warped track (128 of 255 on 2000–50000 K is ≈ 6943 K); `name = +` / `-` steps a thousandth of the range
+  (25 at most), `++` / `--` one native nudge; a colour wheel's dial turns the wheel: the point (sat·cos hue,
+  sat·sin hue) moves `d` along X or Y and comes back as hue and saturation together (a wheel's pot is still X =
+  saturation, Y = hue).
 - **Lightroom names** (`Exposure`, `Tint`, …; the table is `LR_PARAMS`): the colour-grading wheels
   `ShadowsWheelX/Y`, `MidtonesWheelX/Y`, `HighlightsWheelX/Y`, `GlobalWheelX/Y` (X = the wheel's saturation 0–100,
   Y = its hue 0–360) and `ParametricShadowSplit` / `ParametricMidtoneSplit` / `ParametricHighlightSplit` are in it.
 - **`lc_set_<control id> = …`: every develop control.** The id is any `id` of `develop.listControls`, indexed ones
-  too: `lc_set_hdr.maxEv = 128,0,5`, `lc_set_curve.splitMid = ^2,20,80`, `lc_set_pointColor.1.hueShift =` (reset).
-  An unknown id, or a list element that doesn't exist on the active photo (`pointColor.7.…`), is an error. It is
-  the same code path as the Lightroom names (a console drag: one history step once the hand is still).
+  too: `lc_set_hdr.maxEv = 128,0,5` (slider), `lc_set_curve.splitMid = ^2,20,80` (dial), `lc_set_light.exposure = 0.5`
+  (a bare number: the value itself, in the control's units, clamped to its range), `lc_set_pointColor.1.hueShift =`
+  (reset). An unknown id (`crop.x` / `crop.y` / `crop.scale` only nudge, so they aren't one), a list element that
+  doesn't exist on the active photo (`pointColor.7.…`), or a number that is not finite (`nan`, `inf`, a word) is an
+  error, never a reset. It is the same code path as the Lightroom names (a console drag: one history step once the
+  hand is still; a reset or a one-shot ends the drag first, so it is a step of its own).
 - **`local_*`: the mask sliders.** `local_Temperature`, `Tint`, `Exposure`, `Contrast`, `Highlights`, `Shadows`,
   `Whites`, `Blacks`, `Texture`, `Clarity`, `Hue`, `Saturation`, `Sharpness`, `LuminanceNoise`, `Moire`,
   `Defringe`, `Dehaze` set the same-named slider of the *selected* mask (`mask.select`; an error if none).
@@ -105,16 +117,18 @@ Monogram's Lightroom integration sends one text line per move; LightCraft reads 
   of the Lightroom plugin has no LightCraft slider.)
 - **`reset = <tool>`**: `spotremoval`, `redeye`, `gradient`, `circularGradient`, `brushing` run
   `develop.resetLocalTool {tool: spots|redEye|linear|radial|brush}` (deletes every one of that kind, one undo
-  step); `crop` runs `crop.reset`; `alldevelop` is ⌘⇧R.
-- **`lc_cmd = <command id> [JSON params]`** runs any command. Several commands separated by ` ; ` (a space, a
-  semicolon, a space; one inside a JSON string doesn't count) run in order: `lc_cmd = view.colorMixer {"mode":
-  "hue"} ; tool.targetedAdjustment {"target": "hue"}`. Every step is parsed before any runs; the first step that
-  fails stops the chain and is reported (`lc_cmd: step 2 \`…\` failed (1 ran before it): …`); the reply is
-  `{ran, results: [{run, result}]}`. A chain runs each step as a command (`engine.execute`'s result, errors
-  included); a single `lc_cmd` keeps the key path (culling keys, panel toggles) and reports no error.
+  step; a mask is of the kind of its first component, empty masks go with any mask tool → `{removed, kinds}`);
+  `crop` runs `crop.reset`; `alldevelop` is ⌘⇧R.
+- **`lc_cmd = <command id> [JSON params]`** runs any command, the way its key does (`shortcuts::dispatch`: key
+  aliases, culling and advance, panel toggles), and reports the error of a command that fails or doesn't exist.
+  Several commands separated by ` ; ` (a space, a semicolon, a space; one inside a JSON string doesn't count) run in
+  order: `lc_cmd = view.colorMixer {"mode": "hue"} ; tool.targetedAdjustment {"target": "hue"}`. Every step is
+  parsed before any runs (an empty step is an error); a slider move in progress is ended before each step; the
+  first step that fails stops the chain and is reported (`lc_cmd: step 2 \`…\` failed (1 ran before it): …`). The
+  reply is `{run}` for one command, `{ran, commands}` for a chain.
 - **`lc_cycle = <list>`**: step a cycle list (`keys.cycles`); the toast shows just the item's label.
 
-`develop.listControls {section?}` (no photo needed) → `{count, controls: [{id, label, section, sectionLabel, min,
+`develop.listControls {section?}` (no photo needed; an unknown section is an error) → `{count, controls: [{id, label, section, sectionLabel, min,
 max, default, step, decimals, indexed}]}`: one row per entry of `controls.rs`; an `indexed` row is a template
 (`pointColor.hueShift`, `redEye.pupilSize`) that addresses list element *n* as `pointColor.<n>.hueShift`.
 (`develop.controls` lists the photo's current values, with the elements that exist.)

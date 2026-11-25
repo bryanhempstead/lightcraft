@@ -1498,44 +1498,56 @@ pub fn specs() -> Vec<CommandSpec> {
             "Reset Local Adjustment Tool",
             [],
             None,
-            "{tool: spots|redEye|linear|radial|brush} — delete every spot, red eye correction or mask of that kind on the active photo (Monogram's `reset = spotremoval|redeye|gradient|circularGradient|brushing`); one undo step → {removed}",
+            "{tool: spots|redEye|linear|radial|brush} — delete every spot, red eye correction or mask of that kind on the active photo (Monogram's `reset = spotremoval|redeye|gradient|circularGradient|brushing`); one undo step; a mask counts by its first component (subtract components of another kind don't matter), masks with no component go with any mask tool → {removed, kinds: {spots|redEye|<tool>, empty?}}",
             has_active,
             |s, p| {
                 let c = "develop.resetLocalTool";
                 let tool = str_param(p, "tool").ok_or_else(|| bad(c, "missing tool (spots|redEye|linear|radial|brush)"))?.to_string();
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
-                let removed = match tool.as_str() {
-                    "spots" => std::mem::take(&mut d.spots).len(),
-                    "redEye" => std::mem::take(&mut d.red_eye).len(),
+                // what was removed, by kind (a mask is of the kind of its main, first component; masks with no component at all count as `empty`)
+                let mut kinds = serde_json::Map::new();
+                match tool.as_str() {
+                    "spots" => {
+                        kinds.insert("spots".into(), json!(std::mem::take(&mut d.spots).len()));
+                    }
+                    "redEye" => {
+                        kinds.insert("redEye".into(), json!(std::mem::take(&mut d.red_eye).len()));
+                    }
                     "linear" | "radial" | "brush" => {
-                        let of_kind = |m: &Mask| {
-                            !m.components.is_empty()
-                                && m.components.iter().all(|k| {
-                                    matches!(
-                                        (tool.as_str(), &k.shape),
-                                        ("linear", MaskShape::Linear { .. })
-                                            | ("radial", MaskShape::Radial { .. })
-                                            | ("brush", MaskShape::Brush { .. })
-                                    )
-                                })
-                        };
-                        let before = d.masks.len();
-                        d.masks.retain(|m| !of_kind(m));
-                        before - d.masks.len()
+                        let (mut of_kind, mut empty) = (0, 0);
+                        d.masks.retain(|m| match m.components.first().map(|k| &k.shape) {
+                            None => {
+                                empty += 1;
+                                false
+                            }
+                            Some(shape) => {
+                                let hit = matches!(
+                                    (tool.as_str(), shape),
+                                    ("linear", MaskShape::Linear { .. }) | ("radial", MaskShape::Radial { .. }) | ("brush", MaskShape::Brush { .. })
+                                );
+                                of_kind += usize::from(hit);
+                                !hit
+                            }
+                        });
+                        kinds.insert(tool.clone(), json!(of_kind));
+                        kinds.insert("empty".into(), json!(empty));
                     }
                     t => return Err(bad(c, format!("unknown tool {t:?} (spots|redEye|linear|radial|brush)"))),
                 };
+                let removed: u64 = kinds.values().filter_map(Value::as_u64).sum();
                 if removed > 0 {
-                    if s.active_mask.is_some_and(|a| !d.masks.iter().any(|m| m.id == a)) {
+                    let (mask_gone, spots) = (s.active_mask.is_some_and(|a| !d.masks.iter().any(|m| m.id == a)), tool == "spots");
+                    s.set_develop(id, d, "Reset Local Tool")?;
+                    // the selection moves only once the edit is in
+                    if mask_gone {
                         s.active_mask = None;
                     }
-                    if tool == "spots" {
+                    if spots {
                         s.active_spot = None;
                     }
-                    s.set_develop(id, d, "Reset Local Tool")?;
                 }
-                Ok(json!({"removed": removed}))
+                Ok(json!({"removed": removed, "kinds": kinds}))
             }
         ),
     ]

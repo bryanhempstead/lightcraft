@@ -376,6 +376,9 @@ pub struct LightcraftApp {
     pub midi_rx: Option<Receiver<Vec<u8>>>,
     /// A console / MIDI slider move in progress: its last tick and control ([`keymap::console_begin`]).
     pub console_drag: Option<(std::time::Instant, String)>,
+    /// The error of the latest [`LightcraftApp::run`] (`None` if it succeeded): what
+    /// [`shortcuts::dispatch_checked`] reports for a command that went through the key path.
+    pub last_run_error: Option<String>,
     /// H held down since, and whether the hold already ran H's binding ([`shortcuts`]' tap-or-hold).
     pub h_down: Option<(std::time::Instant, bool)>,
     /// The next H press is the hold's replay: the shortcuts get it ([`shortcuts`]' tap-or-hold).
@@ -482,6 +485,7 @@ impl LightcraftApp {
             keymap: keymap::Keymap::default(),
             midi_rx: None,
             console_drag: None,
+            last_run_error: None,
             h_down: None,
             h_replay: false,
             crop_touch: None,
@@ -530,6 +534,12 @@ impl LightcraftApp {
 
     /// Run a UI or engine command by id. The single entry point for every frontend path.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let r = self.run_command(id, params);
+        self.last_run_error = r.as_ref().err().cloned();
+        r
+    }
+
+    fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
         // merges.: the finder and merges in the background, the find mode setting
         if let Some(r) = merges::run_ui(self, id, &params) {
             if let Err(e) = &r {
