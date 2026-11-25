@@ -68,3 +68,23 @@ checkers, an edge and lines at Dehaze −25 / −50 / −100; flat two-level lay
 their original file name (`original`). Measurement switches: `LIGHTCRAFT_DZ_SP=sigma,key,offset,beta,alpha`
 (negative Dehaze's spatial variant, CPU only), `LIGHTCRAFT_HS_PAIR=c,shadows,highlights` (the H/S pair blend's
 fractions for one sign combination).
+
+New-camera check (`camera_check.py`): for each camera model in the LightCraft library (`catalog.snap`, read-only) with no
+check on file, one representative raw (the middle readable ISO <= 1600 frame; `--file` / `--photo-id` override) is cloned
+to scratch with sidecars and rendered by LightCraft (`lcrun.sh`; `ORACLE_BIN` another `oracle_render`, else the main
+checkout's release build) and compared with Camera Raw at identical settings, 1536 px: base (Adobe Standard, linear curve,
+sharpening / NR / lens off), Exposure -2 / +2, Whites +100, Shadows +100, Highlights -100, Temp 3000 / 7500 K (as-shot
+tint). Metrics are the 2026-11-25 slider study's: dE2000 mean / p95, L* per tone band, % clipped, "acts like CR N"
+(LightCraft's effect over Camera Raw's in the slider's band; Temp: neutral b*). A step is flagged at mean dE > 3, p95 > 8,
+clipped % differing by > 3 points or acts-like off by > 20 %. `--list` (models, raws, state, bank), `--model "RICOH GR III"`
+(substring), `--all-new`, `--force`. Records: `~/Library/Application Support/LightCraft/camera-checks.json`; `report.md` +
+`strip.jpg` per model in `compare/camera-checks/<model>/`; a flagged model adds a `needs-you.sh` test. item
+(`--no-needs-you`).
+Reference bank (for when Photoshop is gone): every Camera Raw render the check makes is kept in
+`~/Library/Application Support/LightCraft/reference/<model>/<step>.tif` + `index.json` (file, tint, per-step stats). A
+check compares against the bank and calls Photoshop (`hdr_ps.sh`, the shared lock) only for steps the bank lacks, then
+banks them; `--no-photoshop` uses the bank only and reports what is missing. A model with no bank and no Photoshop gets a
+base-only check against the embedded preview of Adobe's free DNG Converter (`/Applications/Adobe DNG Converter.app`;
+"base via DNG Converter preview, defaults incl. sharpening", less exact, redone in full later; if the app is missing it says
+to install it and skips). Photoshop is quit at the end of a run that used it when nobody holds the lock and no document is
+open (`--keep-photoshop`).
