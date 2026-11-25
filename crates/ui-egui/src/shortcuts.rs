@@ -263,7 +263,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 && !i.modifiers.alt
                 && [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight].iter().any(|k| i.key_pressed(*k))
         });
-        if arrows {
+        // Tab steps to the next slider (the slider reads it), not to hiding the panels
+        let tab = ctx.input(|i| !i.modifiers.command && !i.modifiers.alt && i.key_pressed(Key::Tab));
+        if arrows || tab {
             return;
         }
     }

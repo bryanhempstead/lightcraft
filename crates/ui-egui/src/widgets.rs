@@ -23,6 +23,7 @@ pub fn register(ctx: &egui::Context, id: impl Into<String>, rect: Rect) {
 /// scroll into it.
 const SCROLL_VIEW: &str = "lc-scroll-view";
 const REVEAL: &str = "lc-reveal";
+const REVEAL_SOFT: &str = "lc-reveal-soft";
 
 /// Call at the end of a scroll area's contents: notes its visible rect, and scrolls a widget asked
 /// for by [`ask_reveal`] into view (automation — `ui.clickWidget` on a control scrolled out of sight).
@@ -33,9 +34,33 @@ pub fn reveal_in_scroll(ui: &Ui) {
     let rect =
         ctx.data(|d| d.get_temp::<Registry>(egui::Id::new("lc-registry"))).and_then(|r| r.0.iter().rev().find(|(w, _)| *w == want).map(|(_, r)| *r));
     if let Some(r) = rect {
-        ui.scroll_to_rect_animation(r, Some(egui::Align::Center), egui::style::ScrollAnimation::none());
-        ctx.data_mut(|d| d.remove::<String>(egui::Id::new(REVEAL)));
+        // a soft request (Tab stepping to the next slider) leaves what is already in view alone
+        let soft = ctx.data(|d| d.get_temp::<bool>(egui::Id::new(REVEAL_SOFT))).unwrap_or(false);
+        if !(soft && ui.clip_rect().contains_rect(r)) {
+            ui.scroll_to_rect_animation(r, Some(egui::Align::Center), egui::style::ScrollAnimation::none());
+        }
+        ctx.data_mut(|d| {
+            d.remove::<String>(egui::Id::new(REVEAL));
+            d.remove::<bool>(egui::Id::new(REVEAL_SOFT));
+        });
     }
+}
+
+/// Scroll the widget registered as `id` into view in the next scrolling panel that ends with
+/// [`reveal_in_scroll`], even when its position isn't known yet (a section just opened).
+pub fn request_reveal(ctx: &egui::Context, id: &str) {
+    ctx.data_mut(|d| {
+        d.insert_temp(egui::Id::new(REVEAL), id.to_string());
+        d.remove::<bool>(egui::Id::new(REVEAL_SOFT));
+    });
+}
+
+/// [`request_reveal`], but it only scrolls when the widget is out of view.
+pub fn request_reveal_if_hidden(ctx: &egui::Context, id: &str) {
+    ctx.data_mut(|d| {
+        d.insert_temp(egui::Id::new(REVEAL), id.to_string());
+        d.insert_temp(egui::Id::new(REVEAL_SOFT), true);
+    });
 }
 
 /// Stop treating the last scroll view as one (a reveal that never happened).
@@ -287,7 +312,7 @@ pub fn unpick_slider(ctx: &egui::Context) {
     ctx.data_mut(|m| m.remove::<(String, u64)>(egui::Id::new(PICKED)));
 }
 
-fn pick_slider(ctx: &egui::Context, id: &str) {
+pub(crate) fn pick_slider(ctx: &egui::Context, id: &str) {
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|m| m.insert_temp(egui::Id::new(PICKED), (id.to_string(), pass)));
 }
@@ -339,7 +364,8 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let label_resp = ui.interact(label_rect, id.with("label"), Sense::click());
     register(ui.ctx(), format!("slider:{}", spec.id), track_rect);
     register(ui.ctx(), format!("sliderLabel:{}", spec.id), label_rect);
-    let order = note_order(ui.ctx(), spec.id);
+    // (a greyed-out slider isn't one to step to)
+    let order = if enabled { note_order(ui.ctx(), spec.id) } else { Vec::new() };
     if enabled && label_resp.clicked() {
         pick_slider(ui.ctx(), spec.id);
     }
@@ -458,6 +484,22 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
                 );
                 (keys.0, keys.1, keys.2, keys.3, shift)
             });
+            // Tab / Shift-Tab: down / up the sliders of this panel, round the end (Bryan, 2026-11-24)
+            // (Shift-Tab first: a plain Tab pattern would also take it)
+            let (back, tab) = ui.input_mut(|i| {
+                let back = i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab);
+                (back, !back && i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
+            });
+            if tab || back {
+                let panel = crate::device_cmds::panel_of_slider(spec.id);
+                let same: Vec<&String> = order.iter().filter(|o| crate::device_cmds::panel_of_slider(o) == panel).collect();
+                if let Some(i) = same.iter().position(|o| o.as_str() == spec.id) {
+                    let n = same.len();
+                    let next = same[if back { (i + n - 1) % n } else { (i + 1) % n }].clone();
+                    pick_slider(ui.ctx(), &next);
+                    request_reveal_if_hidden(ui.ctx(), &format!("slider:{next}"));
+                }
+            }
             // the wheel, wherever the pointer is (taken for this slider before the panels; read
             // outside input_mut — the context's lock isn't re-entrant)
             let wheel: f32 = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new(PICKED_WHEEL))).unwrap_or(0.0);

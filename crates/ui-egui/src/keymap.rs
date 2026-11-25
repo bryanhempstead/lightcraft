@@ -281,12 +281,12 @@ pub fn default_cycles() -> BTreeMap<String, Vec<CycleItem>> {
         "cropAspect".to_string(),
         vec![
             crop("As Shot", "original"),
-            crop("1 × 1", "1x1"),
-            crop("4 × 5", "4x5"),
-            crop("4 × 3", "4x3"),
-            crop("3 × 2", "3x2"),
-            crop("16 × 9", "16x9"),
-            crop("21 × 9", "21x9"),
+            crop("1x1", "1x1"),
+            crop("4x5", "4x5"),
+            crop("4x3", "4x3"),
+            crop("3x2", "3x2"),
+            crop("16x9", "16x9"),
+            crop("21x9", "21x9"),
         ],
     );
     let wb = |label: &str, mode: &str| CycleItem { label: label.into(), command: "develop.wb".into(), params: json!({"mode": mode}) };

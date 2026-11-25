@@ -10,6 +10,7 @@ pub mod accents;
 pub mod capture_time_dialog;
 pub mod control;
 pub mod credits;
+pub mod device_cmds;
 pub mod display_p3;
 pub mod enhance;
 pub mod export_dialog;
@@ -65,6 +66,8 @@ mod tests_collection_parts;
 mod tests_crop_drag;
 #[cfg(test)]
 mod tests_curve;
+#[cfg(test)]
+mod tests_device_cmds;
 #[cfg(test)]
 mod tests_enhance_view;
 #[cfg(test)]
@@ -1007,6 +1010,7 @@ impl LightcraftApp {
         }
         self.last_time = now;
         self.drain_control(ctx);
+        device_cmds::frame(self, ctx);
         self.apply_settings(ctx);
         if !self.synthetic.is_empty() {
             ctx.request_repaint();

@@ -648,12 +648,12 @@ fn monogram_lightroom_lines_drive_lightcraft() {
     assert_eq!(h.app.session.catalog.photo(h.app.session.active().unwrap()).unwrap().flag, lightcraft_catalog::Flag::Pick);
     // cycle by slider: the top of the throw = the last crop ratio (21 × 9); same zone again does nothing
     let r = line(&mut h, "lc_cycle_cropAspect = 255,0,1");
-    assert_eq!(r["label"], "21 × 9", "{r}");
+    assert_eq!(r["label"], "21x9", "{r}");
     assert_eq!(line(&mut h, "lc_cycle_cropAspect = 250,0,1")["unchanged"], true);
     assert!(dev(&h).crop.aspect.is_some());
     // cycle by dial: next wraps to the first (As Shot), previous back to 21 × 9
     assert_eq!(line(&mut h, "lc_cycle_cropAspect = ^1,0,1")["label"], "As Shot");
-    assert_eq!(line(&mut h, "lc_cycle_cropAspect = v1,0,1")["label"], "21 × 9");
+    assert_eq!(line(&mut h, "lc_cycle_cropAspect = v1,0,1")["label"], "21x9");
     // a user list replaces the built-in one
     exec(&mut h, "keys.set", json!({"cycles": {"cropAspect": [{"label": "5 × 7", "command": "crop.aspect", "params": {"aspect": "5x7"}}]}}));
     assert_eq!(line(&mut h, "lc_cycle_cropAspect = 10,0,1")["label"], "5 × 7");
@@ -667,7 +667,7 @@ fn monogram_lightroom_lines_drive_lightcraft() {
     assert_eq!(dev(&h).light.contrast, 0.0, "pressed = reset");
     exec(&mut h, "keys.set", json!({"cycles": {}}));
     let r = j(&mut h, json!({"input": "lc_cycle_cropAspect = ", "argv": [250, -1, -1, -1, -1, 0.99, 0, 1, -1]}));
-    assert_eq!(r["label"], "21 × 9", "top of the slider: {r}");
+    assert_eq!(r["label"], "21x9", "top of the slider: {r}");
     // junk doesn't panic
     let _ = h.request("engine.execute", json!({"command": "keys.lrinput", "params": {"line": "{\"input\": 3}"}}), T);
     let _ = h.request("engine.execute", json!({"command": "keys.lrinput", "params": {"line": "nonsense"}}), T);

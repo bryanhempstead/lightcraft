@@ -59,6 +59,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
                 _ => super::edit::show(app, ui, id),
             }
+            crate::widgets::reveal_in_scroll(ui);
         });
         crate::widgets::set_classic_rows(ui.ctx(), false);
         footer(app, ui, Rect::from_min_max(pos2(full.left(), body.bottom()), full.max));
