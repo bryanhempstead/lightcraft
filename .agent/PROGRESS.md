@@ -65,6 +65,12 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
      the merge page. Build on open source rather than from scratch: PhotoCraft (~/crafts/photocraft, his Photoshop fork)
      already has layers + blend modes — reuse its compositing code; or libvips `composite` (PDF blend modes) / the
      W3C compositing spec formulas. Second Brain shows them too (after 11-27).
+  9. (docket 11-27) After a merge: a `merge.` drop-down at the top of Develop for merged photos to change the merge
+     options and re-merge (Bryan); the merged DNG's tint reads +7 where its frames read −7 (same AsShotNeutral and
+     matrices — check the LinearRaw WB path); Edit In → PhotoCraft → back keeps every setting (verify the round trip);
+     Develop crop: dragging the BOTTOM edge moves the whole crop up instead of cropping (Bryan saw it on a merged pano —
+     likely the constrain-to-image clamp on a warped panorama); merge-page + finder builders (branches agent-mergepage /
+     agent-finder) merge when they land.
   PAUSED until 11-27 (Bryan: LightCraft only until then): Second Brain merge page — branch `agent-mergepage` in
   ~/second-brain-mergepage (8f770c6 page + a WIP commit); still to add there: layout./aspect./per.row. per screen size and
   the merge box (match LightCraft's), then merge into Second Brain + one restart with his OK. Cameras in the library
