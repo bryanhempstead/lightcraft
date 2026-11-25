@@ -5,10 +5,14 @@
 //! * **Finding** ([`plan`] + [`decide`]): in each folder, photos in capture order; frames from one
 //!   camera, lens and focal length taken close together form a run. Frames of a run whose exposure
 //!   steps (shutter or exposure compensation, at one aperture and ISO) are brackets (`hdr.`).
-//!   Frames at one exposure are looked at as small grey thumbnails ([`Thumb`]): overlapping but
-//!   shifted framing → `pano.`; one framing whose sharp area moves (or a recorded focus distance
-//!   that steps) → `stack.`; brackets repeated at shifted framings → `hdr.pano.`. A burst (same
-//!   framing, same focus) is nothing.
+//!   Every pairing is verified by feature matching on the 512 px source ([`Thumb`], [`verify`]:
+//!   the merge crate's detector, a RANSAC homography, the aligned detail compared): frames it
+//!   can't confirm are unrelated, never a merge. Overlapping but shifted framing moving one way
+//!   → `pano.` (three frames; two only with a strong match overlapping ≤ 50 %, alone in the
+//!   run); one framing whose recorded focus distance steps (or, without one, a tripod-steady
+//!   sweep of four frames or more) → `stack.`; brackets fired back to back and aligned tightly
+//!   → `hdr.`; brackets repeated at shifted framings → `hdr.pano.`. A burst, or one scene
+//!   reframed back and forth (a wedding's sequence), is nothing.
 //! * **Groups** are library records (`merge.group.<id>`, journaled with the catalog): kind,
 //!   frames, state (open / merged / dismissed) and the merged photo. A group that shares a frame
 //!   with one found before — a skipped one included — is never suggested again.
@@ -23,7 +27,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use lightcraft_catalog::{AlbumId, Catalog, MediaKind, MergeMark, MergeType, Op, Photo, PhotoId};
-use lightcraft_raster::Rgb32f;
+use lightcraft_geom::Point;
+use lightcraft_merge::features::{self, Features};
+use lightcraft_merge::ransac::{self, Model};
+use lightcraft_raster::blur::gaussian;
+use lightcraft_raster::resample::{Filter, fit};
+use lightcraft_raster::{Plane, Rgb32f};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -578,9 +587,10 @@ pub fn counts(cat: &Catalog) -> Counts {
 // 1. **Time** ([`plan`]): per folder, frames from one body, lens and focal length fired close
 //    together form a run. Exposure never splits a run: a handheld panorama in aperture priority
 //    drifts a little from frame to frame.
-// 2. **Similarity** ([`decide`]): every run's frames are compared as small grey thumbnails
-//    ([`link`]): the same framing, or overlapping after a shift (panorama neighbours), or
-//    unrelated. Frames of one framing make a *position*: a bracket when their exposures step, a
+// 2. **Similarity** ([`decide`]): every run's neighbouring frames are matched by their feature
+//    points ([`seen`] / [`verify`]; Bryan 11-24: the 64 px thumbnail correlation of before
+//    matched a canyon with a person on a path): the same framing, or overlapping after a shift
+//    (panorama neighbours), or unrelated. Frames of one framing make a *position*: a bracket when their exposures step, a
 //    focus stack when the sharp area moves, else a burst. Positions linked by shifts are a
 //    panorama — an HDR panorama when they are brackets. So a "bracket" whose frames are shifted
 //    is a panorama, and a burst is nothing.
@@ -820,6 +830,8 @@ fn plan_run(run: &[Shot], out: &mut Plan) {
             && distinct(&biases, 0.25)
             && distinct(&levels, 0.25)
             && spread(&biases) >= MIN_SPREAD
+            // a bracket is fired back to back (two shots seconds apart are two photos)
+            && run.windows(2).all(|w| w[1].t - w[0].t <= BRACKET_GAP + w[0].shutter.unwrap_or(0.0).min(30.0))
         {
             out.sure.push(Candidate {
                 kind: MergeType::Hdr,
@@ -866,18 +878,47 @@ fn focus_text(d: &[f32]) -> String {
     }
 }
 
-/// A photo as the finder looks at it: a small grey thumbnail (64 px wide) and where it is sharp
-/// (4 × 4 tiles of detail, summing to 1).
-#[derive(Clone, Debug, PartialEq)]
+/// A photo as the finder looks at it: a small grey thumbnail (64 px wide), where it is sharp
+/// (4 × 4 tiles of detail, summing to 1), and — what every pairing is verified with — its grey
+/// at ≤ 512 px (exposure-normalised, so brackets compare), that image's fine detail, and its
+/// feature points (the merge crate's detector, the one real panorama / HDR merges align with).
+#[derive(Clone, Debug)]
 pub struct Thumb {
     pub w: usize,
     pub h: usize,
     pub px: Vec<f32>,
     pub sharp: [f32; 16],
+    /// Grey, median brought to 18 %, gamma-encoded 0…1, ≤ [`VERIFY_EDGE`] px.
+    pub work: Plane,
+    /// `work` less its blur (σ 3 px): the detail two frames of one scene share.
+    pub detail: Plane,
+    pub feat: Features,
 }
 
 const THUMB_W: usize = 64;
 const SHARP_W: usize = 256;
+/// Long edge of the image pairings are verified on (the 512 px source the finder loads).
+pub const VERIFY_EDGE: usize = 512;
+/// Most feature points kept per frame.
+const MAX_FEATURES: usize = 600;
+
+/// `img`'s grey at ≤ [`VERIFY_EDGE`] px, exposure-normalised (median → 18 %) and gamma-encoded.
+fn work_plane(img: &Rgb32f) -> Option<Plane> {
+    if img.width < 4 || img.height < 4 || img.data.len() < img.width.saturating_mul(img.height) {
+        return None;
+    }
+    let small = if img.width.max(img.height) > VERIFY_EDGE { fit(img, VERIFY_EDGE, VERIFY_EDGE, Filter::Box) } else { img.clone() };
+    let lum = small.map(|[r, g, b]| {
+        let l = 0.2627 * r + 0.678 * g + 0.0593 * b;
+        if l.is_finite() { l.max(0.0) } else { 0.0 }
+    });
+    let step = (lum.data.len() / 20_000).max(1);
+    let mut v: Vec<f32> = lum.data.iter().step_by(step).copied().filter(|l| *l > 1e-6).collect();
+    v.sort_by(f32::total_cmp);
+    let med = v.get(v.len() / 2).copied().unwrap_or(0.18).max(1e-6);
+    let gain = 0.18 / med;
+    Some(lum.map(|l| (l * gain).clamp(0.0, 1.0).powf(1.0 / 2.2)))
+}
 
 /// Box-downscale `img`'s luminance (perceptual) to `tw` wide.
 fn grey(img: &Rgb32f, tw: usize) -> Option<(usize, usize, Vec<f32>)> {
@@ -919,8 +960,183 @@ impl Thumb {
         }
         let total: f32 = tiles.iter().sum();
         let sharp = if total > 1e-6 && total.is_finite() { tiles.map(|v| v / total) } else { [1.0 / 16.0; 16] };
-        Some(Thumb { w, h, px, sharp })
+        let work = work_plane(img)?;
+        let blur = gaussian(&work, 3.0);
+        let detail = work.zip_map(&blur, |a, b| a - b);
+        let feat = if work.width.min(work.height) >= 64 { features::detect(&work, MAX_FEATURES) } else { Features::default() };
+        Some(Thumb { w, h, px, sharp, work, detail, feat })
     }
+}
+
+/// What feature matching says of two frames ([`verify`]): `b` against `a`, in `a`'s frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pair {
+    /// Putative matches (ratio test, mutual) and those the motion explains (RANSAC inliers).
+    pub matches: usize,
+    pub inliers: usize,
+    /// `b`'s content is `a`'s moved by (`dx`, `dy`), fractions of the frame (as [`Link`]).
+    pub dx: f64,
+    pub dy: f64,
+    /// Share of `a`'s frame that `b` shows too.
+    pub overlap: f64,
+    /// Zoom (1 = none) and in-plane turn (degrees) of the motion at the frame's centre.
+    pub scale: f64,
+    pub turn: f64,
+    /// Correlation of the two frames' fine detail where they overlap, once aligned (−1…1): a
+    /// still scene ~0.6–0.9, people who moved or another scene ≲ 0.3.
+    pub ncc: f64,
+    /// Share of the overlap's 4 × 4 cells holding an inlier (matches spread over it, not one
+    /// lamp in a corner).
+    pub cover: f64,
+}
+
+impl Pair {
+    pub fn shift(&self) -> f64 {
+        self.dx.abs().max(self.dy.abs())
+    }
+    /// The motion is a camera's between two frames of one scene: enough matches agree, spread
+    /// over the overlap, no zoom or tilt to speak of, and the aligned detail agrees.
+    pub fn verified(&self) -> bool {
+        self.inliers >= MIN_INLIERS
+            && self.inliers as f64 > 8.0 + 0.3 * self.matches as f64
+            && (self.scale - 1.0).abs() <= 0.12
+            && self.turn.abs() <= 6.0
+            && self.cover >= 0.3
+            && self.ncc >= MIN_NCC
+            && self.overlap >= MIN_PANO_OVERLAP
+    }
+}
+
+/// Fewest inliers a verified pairing has.
+const MIN_INLIERS: usize = 20;
+/// Least detail correlation a verified pairing has.
+const MIN_NCC: f64 = 0.35;
+/// Least / most share of the frame panorama neighbours have in common: more is the same
+/// picture reframed (a wedding's back-to-back shots), not a panorama. (Bryan's own Lightroom
+/// panoramas overlap 35–88 %; a chain of three frames or more moving one way may overlap up to
+/// 75 %, two frames alone at most [`PAIR_PANO_OVERLAP`].)
+const MIN_PANO_OVERLAP: f64 = 0.15;
+const MAX_PANO_OVERLAP: f64 = 0.75;
+/// A two-frame panorama needs this many inliers (and ≤ 50 % overlap): with one link there is
+/// no chain to back it up.
+const PAIR_PANO_INLIERS: usize = 50;
+const PAIR_PANO_OVERLAP: f64 = 0.5;
+/// Frames of one bracket: aligned within this share of the frame, their detail agreeing at
+/// least this well, fired at most this many seconds apart (after the exposure).
+const BRACKET_SHIFT: f64 = 0.03;
+const BRACKET_NCC: f64 = 0.5;
+const BRACKET_GAP: f64 = 3.0;
+
+/// How `b`'s framing lies against `a`'s, verified by feature matching ([`verify`]): the same
+/// framing (a shift < 6 %), shifted (overlapping, a camera turned), or different — which is also
+/// what anything the features can't confirm is.
+pub fn seen(a: &Thumb, b: &Thumb) -> Link {
+    let Some(p) = verify(a, b) else { return Link::NONE };
+    let rel = if !p.verified() {
+        Relation::Different
+    } else if p.shift() < SAME_SHIFT && (p.scale - 1.0).abs() <= 0.05 && p.turn.abs() <= 3.0 {
+        Relation::Same
+    } else {
+        Relation::Shifted
+    };
+    Link { rel, dx: p.dx, dy: p.dy, score: p.ncc, overlap: p.overlap, inliers: p.inliers }
+}
+
+/// Match `b` against `a` (both from [`Thumb::of`] at one size): features matched and a
+/// homography fitted (RANSAC), then how it moves the frame and how well the aligned detail agrees.
+/// `None`: another shape, or too few matches to fit anything.
+pub fn verify(a: &Thumb, b: &Thumb) -> Option<Pair> {
+    let (w, h) = (a.work.width, a.work.height);
+    if w != b.work.width || h != b.work.height || w < 16 || h < 16 {
+        return None;
+    }
+    let m = features::match_features(&a.feat, &b.feat, 0.8);
+    if m.len() < 8 {
+        return None;
+    }
+    let pa: Vec<Point> = m.iter().filter_map(|(i, _)| a.feat.points.get(*i)).map(|p| Point::new(f64::from(p.x), f64::from(p.y))).collect();
+    let pb: Vec<Point> = m.iter().filter_map(|(_, j)| b.feat.points.get(*j)).map(|p| Point::new(f64::from(p.x), f64::from(p.y))).collect();
+    let fit = ransac::ransac(Model::Homography, &pa, &pb, 2.5, 8, 0x5eed)?;
+    let hm = fit.h;
+    let (wf, hf) = (w as f64, h as f64);
+    let c = Point::new(wf / 2.0, hf / 2.0);
+    let hc = hm.apply(c);
+    // zoom and turn where the frames overlap (the inliers' middle): a panorama's homography
+    // stretches toward the far edge, not where the two frames meet
+    let k = fit.inliers.len().max(1) as f64;
+    let (mx, my) = fit.inliers.iter().filter_map(|i| pa.get(*i)).fold((0.0, 0.0), |(x, y), p| (x + p.x / k, y + p.y / k));
+    let o = Point::new(mx, my);
+    let ho = hm.apply(o);
+    let (ex, ey) = (hm.apply(Point::new(o.x + 10.0, o.y)), hm.apply(Point::new(o.x, o.y + 10.0)));
+    let (e1, e2) = ((ex.x - ho.x, ex.y - ho.y), (ey.x - ho.x, ey.y - ho.y));
+    let det = e1.0 * e2.1 - e1.1 * e2.0;
+    let scale = det.abs().sqrt() / 10.0;
+    let turn = e1.1.atan2(e1.0).to_degrees();
+    if !(hc.x.is_finite() && hc.y.is_finite() && scale.is_finite() && det > 0.0) {
+        return None;
+    }
+    let inside = |q: Point| q.x >= 0.0 && q.y >= 0.0 && q.x < wf && q.y < hf;
+    // the overlap: a grid over a's frame whose points land in b's; inlier cover over its cells
+    let mut cells = [(false, false); 16];
+    let mut hit = 0usize;
+    let g = 24usize;
+    for gy in 0..g {
+        for gx in 0..g {
+            let p = Point::new((gx as f64 + 0.5) * wf / g as f64, (gy as f64 + 0.5) * hf / g as f64);
+            if inside(hm.apply(p)) {
+                hit += 1;
+                if let Some(cell) = cells.get_mut((gy * 4 / g) * 4 + gx * 4 / g) {
+                    cell.0 = true;
+                }
+            }
+        }
+    }
+    for k in &fit.inliers {
+        if let Some(p) = pa.get(*k) {
+            let (cx, cy) = (((p.x / wf) * 4.0).clamp(0.0, 3.0) as usize, ((p.y / hf) * 4.0).clamp(0.0, 3.0) as usize);
+            if let Some(cell) = cells.get_mut(cy * 4 + cx) {
+                cell.1 = true;
+            }
+        }
+    }
+    let in_overlap = cells.iter().filter(|c| c.0).count();
+    let cover = if in_overlap > 0 { cells.iter().filter(|c| c.0 && c.1).count() as f64 / in_overlap as f64 } else { 0.0 };
+    // the detail of a against b's, aligned
+    let (mut sa, mut sb, mut saa, mut sbb, mut sab, mut n) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
+    for y in (0..h).step_by(2) {
+        for x in (0..w).step_by(2) {
+            let q = hm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            if q.x < 1.0 || q.y < 1.0 || q.x > wf - 1.0 || q.y > hf - 1.0 {
+                continue;
+            }
+            let va = f64::from(a.detail.data.get(y * w + x).copied().unwrap_or(0.0));
+            let vb = f64::from(features::bilinear(&b.detail, q.x as f32, q.y as f32));
+            sa += va;
+            sb += vb;
+            saa += va * va;
+            sbb += vb * vb;
+            sab += va * vb;
+            n += 1.0;
+        }
+    }
+    let ncc = if n >= 64.0 {
+        let (ma, mb) = (sa / n, sb / n);
+        let (va, vb) = (saa / n - ma * ma, sbb / n - mb * mb);
+        if va > 1e-9 && vb > 1e-9 { ((sab / n - ma * mb) / (va * vb).sqrt()).clamp(-1.0, 1.0) } else { 0.0 }
+    } else {
+        0.0
+    };
+    Some(Pair {
+        matches: m.len(),
+        inliers: fit.inliers.len(),
+        dx: (c.x - hc.x) / wf,
+        dy: (c.y - hc.y) / hf,
+        overlap: hit as f64 / (g * g) as f64,
+        scale,
+        turn,
+        ncc: if ncc.is_finite() { ncc } else { 0.0 },
+        cover,
+    })
 }
 
 /// How two frames' framing relates.
@@ -945,10 +1161,15 @@ pub struct Link {
     pub score: f64,
     /// Share of the frame they have in common.
     pub overlap: f64,
+    /// Feature matches the motion explains ([`seen`]; 0 from the thumbnails alone).
+    pub inliers: usize,
 }
 
 impl Link {
-    const NONE: Link = Link { rel: Relation::Different, dx: 0.0, dy: 0.0, score: 0.0, overlap: 0.0 };
+    const NONE: Link = Link { rel: Relation::Different, dx: 0.0, dy: 0.0, score: 0.0, overlap: 0.0, inliers: 0 };
+    pub fn shift(&self) -> f64 {
+        self.dx.abs().max(self.dy.abs())
+    }
 }
 
 /// A shift below this (fraction of the frame) is the same framing.
@@ -1044,14 +1265,14 @@ pub fn link(a: &Thumb, b: &Thumb) -> Link {
         Relation::Different
     };
     match rel {
-        Relation::Same => Link { rel, dx: fx, dy: fy, score: r.max(zero_r), overlap },
-        _ => Link { rel, dx: fx, dy: fy, score: r, overlap },
+        Relation::Same => Link { rel, dx: fx, dy: fy, score: r.max(zero_r), overlap, inliers: 0 },
+        _ => Link { rel, dx: fx, dy: fy, score: r, overlap, inliers: 0 },
     }
 }
 
-/// How `b`'s framing relates to `a`'s ([`link`]).
+/// How `b`'s framing relates to `a`'s, verified by feature matching ([`seen`]).
 pub fn relation(a: &Thumb, b: &Thumb) -> Relation {
-    link(a, b).rel
+    seen(a, b).rel
 }
 
 /// Whether the sharp area moves across frames of one framing (a focus stack, not a burst).
@@ -1064,6 +1285,14 @@ pub fn focus_moves(thumbs: &[&Thumb]) -> bool {
         }
     }
     most >= 0.3
+}
+
+/// Whether the sharp area moves one way through the frames: it moves ([`focus_moves`]) and each
+/// frame's sharp area is farther from the first frame's than the one before.
+pub fn focus_sweeps(thumbs: &[&Thumb]) -> bool {
+    let Some(first) = thumbs.first() else { return false };
+    let d: Vec<f32> = thumbs.iter().map(|t| t.sharp.iter().zip(first.sharp.iter()).map(|(x, y)| (x - y).abs()).sum()).collect();
+    focus_moves(thumbs) && d.windows(2).all(|w| w[1] >= w[0] - 0.02)
 }
 
 /// Frames of one framing (indexes into a run).
@@ -1082,7 +1311,52 @@ enum PosKind {
     Burst,
 }
 
-/// Step 2 + 3: what a run is, from its thumbnails (a missing one leaves the metadata to judge).
+/// A focus stack without recorded focus distances (a manual lens) is only believed from a
+/// tripod: frames this still (share of the frame) whose detail agrees this well (focus moving
+/// changes the detail, so not more).
+const STEADY_SHIFT: f64 = 0.01;
+const STEADY_NCC: f64 = 0.5;
+/// A link this well matched is strong (for `sure.`).
+const STRONG_INLIERS: usize = 40;
+const STRONG_NCC: f64 = 0.6;
+
+/// Steps 2 + 3 over a [`Plan`]: the merges it is sure of, then each run looked at, its frames
+/// loaded by `load` one run at a time (`None`: `cancelled`). Also says whether any frame was
+/// read (worth not reading again).
+pub fn look_all(plan: &Plan, mut load: impl FnMut(PhotoId) -> Option<Thumb>, cancelled: impl Fn() -> bool) -> Option<(Vec<Candidate>, bool)> {
+    let mut found = plan.sure.clone();
+    let mut looked = false;
+    for l in &plan.looks {
+        let mut thumbs = HashMap::new();
+        for id in l.photos() {
+            if cancelled() {
+                return None;
+            }
+            if let Some(t) = load(id) {
+                thumbs.insert(id, t);
+            }
+        }
+        looked |= !thumbs.is_empty();
+        found.extend(decide(l, &thumbs));
+    }
+    Some((found, looked))
+}
+
+/// A link that can join two panorama positions: verified, shifted, overlapping 15–60 %.
+fn pano_link(l: &Link) -> bool {
+    l.rel == Relation::Shifted && (MIN_PANO_OVERLAP..=MAX_PANO_OVERLAP).contains(&l.overlap)
+}
+
+/// Every link moves the frame the same way (along the chain's main direction, within ~45°).
+fn one_way(chain: &[Link]) -> bool {
+    let (sx, sy): (f64, f64) = chain.iter().fold((0.0, 0.0), |(x, y), l| (x + l.dx, y + l.dy));
+    let norm = sx.hypot(sy);
+    norm > 1e-9 && chain.iter().all(|l| (l.dx * sx + l.dy * sy) / norm >= 0.7 * l.dx.hypot(l.dy))
+}
+
+/// Step 2 + 3: what a run is, from its frames ([`Thumb`]s; a missing one leaves the metadata to
+/// judge). Every pairing is verified by feature matching ([`seen`]): frames it can't confirm
+/// are unrelated, never a merge.
 pub fn decide(look: &Look, thumbs: &HashMap<PhotoId, Thumb>) -> Vec<Candidate> {
     let s = &look.shots;
     let n = s.len();
@@ -1091,7 +1365,7 @@ pub fn decide(look: &Look, thumbs: &HashMap<PhotoId, Thumb>) -> Vec<Candidate> {
     }
     let link_of = |a: usize, b: usize| -> Option<Link> {
         match (s.get(a).and_then(|x| thumbs.get(&x.id)), s.get(b).and_then(|x| thumbs.get(&x.id))) {
-            (Some(x), Some(y)) => Some(link(x, y)),
+            (Some(x), Some(y)) => Some(seen(x, y)),
             _ => None,
         }
     };
@@ -1100,24 +1374,24 @@ pub fn decide(look: &Look, thumbs: &HashMap<PhotoId, Thumb>) -> Vec<Candidate> {
     let mut pos: Vec<Position> = vec![Position { frames: vec![0], checked: true }];
     for (k, l) in links.iter().enumerate() {
         let f = k + 1;
-        let rel = l.map(|l| l.rel);
         let Some(cur) = pos.last_mut() else { break };
-        let join = match rel {
-            Some(Relation::Shifted) => false,
-            Some(Relation::Same) => joins(s, &cur.frames, f, false),
-            // the pixels can't tell (or there are none): a bracket by its metadata only
-            _ => joins(s, &cur.frames, f, true),
+        let join = match l {
+            Some(l) if l.rel == Relation::Same => joins(s, &cur.frames, f, Some(l)),
+            // shifted, unrelated, or nothing the features could confirm: another position
+            Some(_) => false,
+            // no pixels to look at: a bracket by its metadata only
+            None => joins(s, &cur.frames, f, None),
         };
         if join {
             cur.frames.push(f);
-            if rel != Some(Relation::Same) {
+            if l.is_none() {
                 cur.checked = false;
             }
         } else {
             pos.push(Position { frames: vec![f], checked: true });
         }
     }
-    let kinds: Vec<PosKind> = pos.iter().map(|p| classify(s, p, thumbs)).collect();
+    let kinds: Vec<PosKind> = pos.iter().map(|p| classify(s, p, thumbs, &links)).collect();
     // panoramas: positions linked by shifts
     let mut out = Vec::new();
     let mut i = 0;
@@ -1129,66 +1403,62 @@ pub fn decide(look: &Look, thumbs: &HashMap<PhotoId, Thumb>) -> Vec<Candidate> {
             let (Some(&last), Some(&next)) = (a.frames.last(), b.frames.first()) else { break };
             let mut l = links.get(last).copied().flatten();
             // brackets: the boundary frames differ in exposure; their first frames match better
-            if l.is_none_or(|l| l.rel != Relation::Shifted)
+            if l.is_none_or(|l| !pano_link(&l))
                 && let Some(&first) = a.frames.first()
                 && first != last
             {
-                l = link_of(first, next).filter(|l| l.rel == Relation::Shifted).or(l);
+                l = link_of(first, next).filter(pano_link).or(l);
             }
             match l {
-                Some(l) if l.rel == Relation::Shifted => {
+                Some(l) if pano_link(&l) => {
                     chain.push(l);
                     j += 1;
                 }
                 _ => break,
             }
         }
-        // frames that overlap nearly all the way (> 75 %, or > 60 % for just two) are the same
-        // picture nudged — a wedding's back-to-back shots, a sequence — not a panorama
-        let nudged = chain.iter().any(|l| l.overlap > 0.75) || (j == i + 1 && chain.iter().any(|l| l.overlap > 0.6));
-        if j > i && !nudged {
-            out.push(panorama(look, pos.get(i..=j).unwrap_or(&[]), kinds.get(i..=j).unwrap_or(&[]), &chain));
-        } else if j > i {
-        } else if let (Some(p), Some(k)) = (pos.get(i), kinds.get(i)) {
-            let shots: Vec<Shot> = p.frames.iter().filter_map(|f| s.get(*f).cloned()).collect();
-            let photos: Vec<PhotoId> = shots.iter().map(|x| x.id).collect();
-            match k {
-                PosKind::Bracket => {
-                    let stepped = shots.iter().all(|x| x.bias.is_some())
-                        && spread(&shots.iter().filter_map(|x| x.bias).map(f64::from).collect::<Vec<_>>()) >= MIN_SPREAD;
-                    let wide = spread(&shots.iter().map(Shot::level).collect::<Vec<_>>()) >= 1.5;
-                    let confidence = match (p.checked, stepped || wide) {
-                        (true, true) => Confidence::Sure,
-                        (true, false) | (false, true) => Confidence::Likely,
-                        (false, false) => Confidence::Maybe,
-                    };
-                    let framing = if p.checked { "same framing" } else { "framing could not be compared" };
-                    out.push(Candidate {
-                        kind: MergeType::Hdr,
-                        photos,
-                        folder: look.folder.clone(),
-                        confidence,
-                        reasons: vec![span_text(&shots), exposures_text(&shots), framing.into()],
-                    });
+        // the chain cut where it turns back (frames shifted back and forth are one scene
+        // reframed): each one-way stretch on its own
+        let mut stretches: Vec<(usize, usize)> = Vec::new();
+        let mut a0 = i;
+        for k in 0..chain.len() {
+            if a0 > i + k {
+                continue;
+            }
+            if !one_way(chain.get(a0 - i..=k).unwrap_or(&[])) {
+                stretches.push((a0, i + k));
+                a0 = i + k + 1;
+            }
+        }
+        stretches.push((a0, j));
+        let mut used = vec![false; j + 1 - i];
+        for (a, b) in stretches {
+            if b <= a {
+                continue;
+            }
+            let links_ab = chain.get(a - i..b - i).unwrap_or(&[]);
+            // two frames alone: not when the scene was shot again around them (a sequence)
+            if b == a + 1 {
+                let before = pos.get(a).and_then(|p| p.frames.first()).and_then(|f| f.checked_sub(1)).and_then(|k| links.get(k).copied().flatten());
+                let after = pos.get(b).and_then(|p| p.frames.last()).and_then(|k| links.get(*k).copied().flatten());
+                if before.into_iter().chain(after).any(|l| l.rel != Relation::Different) {
+                    continue;
                 }
-                PosKind::Stack => {
-                    let dists: Vec<f32> = shots.iter().filter_map(|x| x.dist).collect();
-                    let recorded = dists.len() == shots.len() && distinct_dists(&dists) >= 3;
-                    let (confidence, why) = if recorded {
-                        (if p.checked { Confidence::Sure } else { Confidence::Likely }, focus_text(&dists))
-                    } else {
-                        (Confidence::Likely, "the sharp area moves across the frame".to_string())
-                    };
-                    out.push(Candidate {
-                        kind: MergeType::Stack,
-                        photos,
-                        folder: look.folder.clone(),
-                        confidence,
-                        reasons: vec![span_text(&shots), why, "same framing, one exposure".into()],
-                    });
+            }
+            if let Some(c) = panorama(look, pos.get(a..=b).unwrap_or(&[]), kinds.get(a..=b).unwrap_or(&[]), links_ab) {
+                out.push(c);
+                for u in used.iter_mut().take(b + 1 - i).skip(a - i) {
+                    *u = true;
                 }
-                // a burst (same framing, focus and exposure) or a lone frame: nothing
-                PosKind::Single | PosKind::Burst => {}
+            }
+        }
+        // the rest: each position for what it is alone
+        for (q, u) in (i..=j).zip(&used) {
+            if !*u
+                && let (Some(p), Some(k)) = (pos.get(q), kinds.get(q))
+                && let Some(c) = alone(look, p, *k, &links)
+            {
+                out.push(c);
             }
         }
         i = j + 1;
@@ -1196,27 +1466,79 @@ pub fn decide(look: &Look, thumbs: &HashMap<PhotoId, Thumb>) -> Vec<Candidate> {
     out
 }
 
-/// Whether frame `f` joins the position `frames` (its last frame and `f` are one framing, or —
-/// `meta_only` — the pixels couldn't tell): a burst or focus stack grows at one exposure, a
-/// bracket with each new exposure.
-fn joins(s: &[Shot], frames: &[usize], f: usize, meta_only: bool) -> bool {
+/// A position that is no part of a panorama: a bracket (`hdr.`), a focus stack, or nothing.
+fn alone(look: &Look, p: &Position, k: PosKind, links: &[Option<Link>]) -> Option<Candidate> {
+    let shots: Vec<Shot> = p.frames.iter().filter_map(|f| look.shots.get(*f).cloned()).collect();
+    let photos: Vec<PhotoId> = shots.iter().map(|x| x.id).collect();
+    let strong =
+        p.frames.windows(2).all(|w| links.get(w[0]).copied().flatten().is_some_and(|l| l.inliers >= STRONG_INLIERS && l.score >= STRONG_NCC));
+    match k {
+        PosKind::Bracket => {
+            let stepped = shots.iter().all(|x| x.bias.is_some())
+                && spread(&shots.iter().filter_map(|x| x.bias).map(f64::from).collect::<Vec<_>>()) >= MIN_SPREAD;
+            let wide = spread(&shots.iter().map(Shot::level).collect::<Vec<_>>()) >= 1.5;
+            let confidence = match (p.checked, stepped || wide) {
+                (true, true) if strong => Confidence::Sure,
+                (true, _) | (false, true) => Confidence::Likely,
+                (false, false) => Confidence::Maybe,
+            };
+            let framing = if p.checked { "same framing" } else { "framing could not be compared" };
+            Some(Candidate {
+                kind: MergeType::Hdr,
+                photos,
+                folder: look.folder.clone(),
+                confidence,
+                reasons: vec![span_text(&shots), exposures_text(&shots), framing.into()],
+            })
+        }
+        PosKind::Stack => {
+            let dists: Vec<f32> = shots.iter().filter_map(|x| x.dist).collect();
+            let recorded = dists.len() == shots.len() && distinct_dists(&dists) >= 3;
+            let (confidence, why) = if recorded {
+                (if p.checked { Confidence::Sure } else { Confidence::Likely }, focus_text(&dists))
+            } else {
+                (Confidence::Likely, "the sharp area sweeps across the frame, tripod-steady".to_string())
+            };
+            Some(Candidate {
+                kind: MergeType::Stack,
+                photos,
+                folder: look.folder.clone(),
+                confidence,
+                reasons: vec![span_text(&shots), why, "same framing, one exposure".into()],
+            })
+        }
+        // a burst (same framing, focus and exposure) or a lone frame: nothing
+        PosKind::Single | PosKind::Burst => None,
+    }
+}
+
+/// Whether frame `f` joins the position `frames` (its last frame and `f` are one framing by the
+/// verified `link`, or — `None` — there were no pixels to look at): a burst or focus stack grows
+/// at one exposure, a bracket with each new exposure, fired back to back and aligned tightly.
+fn joins(s: &[Shot], frames: &[usize], f: usize, link: Option<&Link>) -> bool {
     let (Some(first), Some(last), Some(new)) = (frames.first().and_then(|i| s.get(*i)), frames.last().and_then(|i| s.get(*i)), s.get(f)) else {
         return false;
     };
     let flat = frames.iter().filter_map(|i| s.get(*i)).all(|x| x.same_exposure(first));
-    if !meta_only && flat && new.same_exposure(first) {
+    if link.is_some() && flat && new.same_exposure(first) {
         return true;
     }
     if frames.len() >= MAX_BRACKET || !new.same_base(first) || (frames.len() >= 2 && flat) {
         return false;
     }
-    let step = if meta_only { 0.6 } else { 0.3 };
+    let step = if link.is_none() { 0.6 } else { 0.3 };
     let distinct = frames.iter().filter_map(|i| s.get(*i)).all(|x| (new.level() - x.level()).abs() >= step);
-    // a bracket by metadata alone is fired fast
-    distinct && (!meta_only || new.t - last.t <= 2.0 + last.shutter.unwrap_or(0.0).min(30.0))
+    let gap = new.t - last.t;
+    let exposure = last.shutter.unwrap_or(0.0).min(30.0);
+    match link {
+        // a bracket by metadata alone is fired fast
+        None => distinct && gap <= 2.0 + exposure,
+        // two shots of one scene seconds apart at another exposure are two photos, not a bracket
+        Some(l) => distinct && gap <= BRACKET_GAP + exposure && l.shift() <= BRACKET_SHIFT && l.score >= BRACKET_NCC,
+    }
 }
 
-fn classify(s: &[Shot], p: &Position, thumbs: &HashMap<PhotoId, Thumb>) -> PosKind {
+fn classify(s: &[Shot], p: &Position, thumbs: &HashMap<PhotoId, Thumb>, links: &[Option<Link>]) -> PosKind {
     let shots: Vec<&Shot> = p.frames.iter().filter_map(|f| s.get(*f)).collect();
     let Some(first) = shots.first() else { return PosKind::Single };
     if shots.len() < 2 {
@@ -1232,49 +1554,60 @@ fn classify(s: &[Shot], p: &Position, thumbs: &HashMap<PhotoId, Thumb>) -> PosKi
         if dists.len() == shots.len() && distinct_dists(&dists) >= 3 {
             return PosKind::Stack;
         }
-        let ts: Vec<&Thumb> = shots.iter().filter_map(|x| thumbs.get(&x.id)).collect();
-        if ts.len() == shots.len() && focus_moves(&ts) {
-            return PosKind::Stack;
+        // no focus distance recorded (a manual lens): sharpness alone only from a tripod-steady
+        // run of four or more whose sharp area sweeps one way (a burst of people is never one)
+        if dists.is_empty() && shots.len() >= 4 {
+            let steady = p.frames.windows(2).all(|w| {
+                links.get(w[0]).copied().flatten().is_some_and(|l| l.rel == Relation::Same && l.shift() <= STEADY_SHIFT && l.score >= STEADY_NCC)
+            });
+            let ts: Vec<&Thumb> = shots.iter().filter_map(|x| thumbs.get(&x.id)).collect();
+            if steady && ts.len() == shots.len() && focus_sweeps(&ts) {
+                return PosKind::Stack;
+            }
         }
     }
     PosKind::Burst
 }
 
-/// A chain of positions linked by shifts: a panorama, or an HDR panorama when most of its
-/// positions are brackets.
-fn panorama(look: &Look, pos: &[Position], kinds: &[PosKind], chain: &[Link]) -> Candidate {
+/// A chain of positions linked by verified shifts: a panorama, or an HDR panorama when most of its
+/// positions are brackets — or nothing: frames shifted back and forth are one scene reframed (a
+/// sequence), and two frames alone need a strong match overlapping at most half.
+fn panorama(look: &Look, pos: &[Position], kinds: &[PosKind], chain: &[Link]) -> Option<Candidate> {
     let shots: Vec<Shot> = pos.iter().flat_map(|p| p.frames.iter()).filter_map(|f| look.shots.get(*f).cloned()).collect();
     let photos: Vec<PhotoId> = shots.iter().map(|x| x.id).collect();
     let brackets = kinds.iter().filter(|k| **k == PosKind::Bracket).count();
     let hdr = brackets >= 2 && brackets * 2 >= pos.len();
-    // how sure: every overlap a clear match, moving one way
-    let strong = chain.iter().all(|l| l.score >= 0.8 && l.overlap >= 0.3);
-    let medium = chain.iter().all(|l| l.score >= 0.65);
-    let one_way = chain.windows(2).all(|w| w[0].dx * w[1].dx + w[0].dy * w[1].dy > 0.0);
-    let mut confidence = if strong && ((chain.len() >= 2 && one_way) || chain.iter().all(|l| l.score >= 0.9)) {
-        Confidence::Sure
-    } else if medium {
-        Confidence::Likely
+    let one_way = one_way(chain);
+    if chain.is_empty() || !one_way {
+        return None;
+    }
+    let strong = chain.iter().all(|l| l.inliers >= STRONG_INLIERS && l.score >= STRONG_NCC);
+    let mut confidence = if chain.len() >= 2 {
+        if strong { Confidence::Sure } else { Confidence::Likely }
     } else {
-        Confidence::Maybe
+        let l = chain.first()?;
+        if !hdr && (l.inliers < PAIR_PANO_INLIERS || l.overlap > PAIR_PANO_OVERLAP) {
+            return None;
+        }
+        if strong { Confidence::Likely } else { Confidence::Maybe }
     };
     let mut reasons = vec![span_text(&shots)];
     let mean_overlap = chain.iter().map(|l| l.overlap).sum::<f64>() / chain.len().max(1) as f64;
     let pct = ((mean_overlap * 20.0).round() * 5.0) as i64;
     reasons.push(format!("each frame overlaps the last by ~{pct} %"));
     let (sx, sy): (f64, f64) = chain.iter().fold((0.0, 0.0), |(x, y), l| (x + l.dx, y + l.dy));
-    if one_way {
-        reasons.push(
-            if sx.abs() >= sy.abs() {
-                if sx >= 0.0 { "frames move left → right" } else { "frames move right → left" }
-            } else if sy >= 0.0 {
-                "frames move top → bottom"
-            } else {
-                "frames move bottom → top"
-            }
-            .into(),
-        );
-    }
+    reasons.push(
+        if sx.abs() >= sy.abs() {
+            if sx >= 0.0 { "frames move left → right" } else { "frames move right → left" }
+        } else if sy >= 0.0 {
+            "frames move top → bottom"
+        } else {
+            "frames move bottom → top"
+        }
+        .into(),
+    );
+    let fewest = chain.iter().map(|l| l.inliers).min().unwrap_or(0);
+    reasons.push(format!("{fewest}+ matched points between neighbours"));
     if hdr {
         let first: Vec<Shot> = pos.first().map(|p| p.frames.iter().filter_map(|f| look.shots.get(*f).cloned()).collect()).unwrap_or_default();
         reasons.push(format!("a bracket at each of {} positions", pos.len()));
@@ -1292,7 +1625,7 @@ fn panorama(look: &Look, pos: &[Position], kinds: &[PosKind], chain: &[Link]) ->
             reasons.push(format!("exposure drifts by {} stop (auto exposure): still one panorama", trim_num((drift * 10.0).round() / 10.0)));
         }
     }
-    Candidate { kind: if hdr { MergeType::HdrPano } else { MergeType::Pano }, photos, folder: look.folder.clone(), confidence, reasons }
+    Some(Candidate { kind: if hdr { MergeType::HdrPano } else { MergeType::Pano }, photos, folder: look.folder.clone(), confidence, reasons })
 }
 
 /// A folder's fingerprint for the automatic finder: changes when its photos do.
@@ -1371,56 +1704,44 @@ impl Session {
         self.merge_find_ids(&ids, background, BTreeMap::new())
     }
 
+    /// What the finder finds among `ids`, to the end (no groups stored): [`plan`], then each
+    /// run's frames looked at ([`look_all`]).
+    pub fn merge_find_candidates(&mut self, ids: &[PhotoId]) -> Vec<Candidate> {
+        let plan = plan(&self.catalog, ids);
+        look_all(&plan, |id| self.source_now(id, crate::media::SourceLevel::Thumb).ok().and_then(|img| Thumb::of(&img)), || false)
+            .map(|(f, _)| f)
+            .unwrap_or_default()
+    }
+
     fn merge_find_ids(&mut self, ids: &[PhotoId], background: bool, scanned: BTreeMap<String, u64>) -> Result<Value> {
         let plan = plan(&self.catalog, ids);
         let load = plan.to_load();
         if !background || load.is_empty() {
-            let mut thumbs = HashMap::new();
-            for id in load {
-                if let Ok(img) = self.source_now(id, crate::media::SourceLevel::Thumb)
-                    && let Some(t) = Thumb::of(&img)
-                {
-                    thumbs.insert(id, t);
-                }
-            }
-            let mut found = plan.sure.clone();
-            for l in &plan.looks {
-                found.extend(decide(l, &thumbs));
-            }
-            return self.merge_found(found, scanned, !thumbs.is_empty());
+            let (found, looked) =
+                look_all(&plan, |id| self.source_now(id, crate::media::SourceLevel::Thumb).ok().and_then(|img| Thumb::of(&img)), || false)
+                    .unwrap_or_default();
+            return self.merge_found(found, scanned, looked);
         }
         // a new run replaces one still looking
         self.merge_find_job = None;
-        let mut work: Vec<(PhotoId, crate::media::SourceRef)> = Vec::new();
+        let mut work: HashMap<PhotoId, crate::media::SourceRef> = HashMap::new();
         for id in &load {
             if let Some(p) = self.catalog.photo(*id).cloned() {
-                work.push((*id, self.media.source_ref(&p, crate::media::SourceLevel::Thumb)));
+                work.insert(*id, self.media.source_ref(&p, crate::media::SourceLevel::Thumb));
             }
         }
         let total = work.len();
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = std::sync::mpsc::channel();
-        let (c, sure, looks) = (cancel.clone(), plan.sure.clone(), plan.looks.clone());
+        let c = cancel.clone();
         std::thread::Builder::new()
             .name("merge-find".into())
             .spawn(move || {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let mut thumbs = HashMap::new();
-                    for (id, src) in work {
-                        if c.load(Ordering::Relaxed) {
-                            return None;
-                        }
-                        if let Ok(img) = crate::memory::in_background(|| src.load())
-                            && let Some(t) = Thumb::of(&img)
-                        {
-                            thumbs.insert(id, t);
-                        }
-                    }
-                    let mut found = sure;
-                    for l in &looks {
-                        found.extend(decide(l, &thumbs));
-                    }
-                    Some((found, !thumbs.is_empty()))
+                    // one run's frames at a time: memory stays one run's worth
+                    let load =
+                        |id: PhotoId| work.get(&id).and_then(|src| crate::memory::in_background(|| src.load()).ok()).and_then(|img| Thumb::of(&img));
+                    look_all(&plan, load, || c.load(Ordering::Relaxed))
                 }));
                 if let Ok(Some(found)) = r {
                     let _ = tx.send(found);
@@ -1966,13 +2287,22 @@ mod tests {
         assert!(focus_moves(&[&near, &same, &far]));
         assert!(!focus_moves(&[&a, &same, &same]));
         let mut thumbs = HashMap::new();
-        for (id, th) in [1, 2, 3].iter().zip([near, same.clone(), far]) {
+        for (id, th) in [1, 2, 3, 4].iter().zip([near.clone(), same.clone(), same.clone(), far.clone()]) {
             thumbs.insert(PhotoId(*id), th);
         }
-        let stack = run_of(&[(1, 0.0, "1/60", None), (2, 1.0, "1/60", None), (3, 2.0, "1/60", None)]);
+        // without recorded focus distances, three frames whose sharp area moves are not enough
+        // (Bryan 11-24: back-to-back shots of people were called focus stacks) …
+        let three = run_of(&[(1, 0.0, "1/60", None), (2, 1.0, "1/60", None), (4, 2.0, "1/60", None)]);
+        assert!(decide(&three, &thumbs).is_empty());
+        // … four tripod-steady frames whose sharp area sweeps one way are
+        let stack = run_of(&[(1, 0.0, "1/60", None), (2, 1.0, "1/60", None), (3, 2.0, "1/60", None), (4, 3.0, "1/60", None)]);
         let got = decide(&stack, &thumbs);
-        assert_eq!(kinds(&got), vec![(MergeType::Stack, vec![PhotoId(1), PhotoId(2), PhotoId(3)])]);
+        assert_eq!(kinds(&got), vec![(MergeType::Stack, (1..=4).map(PhotoId).collect())]);
         assert_eq!(got[0].confidence, Confidence::Likely);
+        // the sharp area going back and forth is no sweep
+        thumbs.insert(PhotoId(5), near.clone());
+        let back = run_of(&[(1, 0.0, "1/60", None), (4, 1.0, "1/60", None), (5, 2.0, "1/60", None), (2, 3.0, "1/60", None)]);
+        assert!(decide(&back, &thumbs).is_empty());
         // a panorama: shifted frames at one exposure
         for (k, id) in [11, 12, 13].iter().enumerate() {
             thumbs.insert(PhotoId(*id), t(&scene(480, 320, 150.0 * k as f32, false, false)));
@@ -2038,31 +2368,57 @@ mod tests {
         assert!(got[0].reasons.contains(&"a bracket at each of 3 positions".to_string()), "{:?}", got[0].reasons);
     }
 
-    /// A borderline panorama (little overlap, a poor match) is found as maybe. rather than missed;
-    /// two unrelated frames fired together are nothing.
+    /// Two frames alone are a panorama only on a strong verified match overlapping at most half
+    /// (Bryan 11-24: candids fired seconds apart were "2-frame panoramas"): a clean third in
+    /// common is; the same third half hidden by something else is nothing, and so are two
+    /// unrelated frames fired together — or two frames overlapping two thirds (one picture
+    /// reframed).
     #[test]
-    fn borderline_panoramas_are_maybe_and_unrelated_frames_nothing() {
+    fn two_frame_panoramas_need_a_strong_match_and_unrelated_frames_are_nothing() {
         let t = |img: &Rgb32f| Thumb::of(img).unwrap();
         let mut thumbs = HashMap::new();
         thumbs.insert(PhotoId(1), t(&scene(480, 320, 0.0, false, false)));
-        // a third of the frame in common, and noisy
+        thumbs.insert(PhotoId(4), t(&scene(480, 320, 300.0, false, false)));
+        let got = decide(&run_of(&[(1, 0.0, "1/250", None), (4, 2.0, "1/250", None)]), &thumbs);
+        assert_eq!(kinds(&got), vec![(MergeType::Pano, vec![PhotoId(1), PhotoId(4)])], "{got:?}");
+        assert_eq!(got[0].confidence, Confidence::Likely, "two frames are never sure: {:?}", got[0]);
+        // a third of the frame in common, half of it hidden by something else (a person
+        // walking by): the features can't confirm it
         let base = scene(480, 320, 300.0, false, false);
-        // half of it hidden by something else (clouds moving, a person walking by)
         let noisy = Rgb32f::from_fn(480, 320, |x, y| {
             let n = 0.2 * ((x as f32 * 0.09).sin() * (y as f32 * 0.07).cos()) + 0.1 * ((x as f32 * 0.023 + y as f32 * 0.051).sin());
             base.data[y * 480 + x].map(|v| (v * 0.6 + n).max(0.0))
         });
         thumbs.insert(PhotoId(2), t(&noisy));
-        let got = decide(&run_of(&[(1, 0.0, "1/250", None), (2, 2.0, "1/250", None)]), &thumbs);
-        assert_eq!(kinds(&got), vec![(MergeType::Pano, vec![PhotoId(1), PhotoId(2)])], "{got:?}");
-        assert!(got[0].confidence < Confidence::Sure, "{:?}", got[0]);
+        assert!(decide(&run_of(&[(1, 0.0, "1/250", None), (2, 2.0, "1/250", None)]), &thumbs).is_empty());
         // something else entirely: a different scene
         let other = Rgb32f::from_fn(480, 320, |x, y| {
             let v = 0.3 + 0.2 * ((x as f32 * 0.21).sin() * (y as f32 * 0.17).cos());
             [v, v, v]
         });
         thumbs.insert(PhotoId(3), t(&other));
+        assert_eq!(relation(&thumbs[&PhotoId(1)], &thumbs[&PhotoId(3)]), Relation::Different);
         assert!(decide(&run_of(&[(1, 0.0, "1/250", None), (3, 2.0, "1/250", None)]), &thumbs).is_empty());
+        // two thirds in common: the same picture reframed
+        thumbs.insert(PhotoId(5), t(&scene(480, 320, 160.0, false, false)));
+        assert!(decide(&run_of(&[(1, 0.0, "1/250", None), (5, 1.0, "1/250", None)]), &thumbs).is_empty());
+    }
+
+    /// Frames shifted back and forth are one scene reframed (a wedding sequence), not a panorama;
+    /// the same frames shifted one way are.
+    #[test]
+    fn back_and_forth_is_a_sequence_one_way_a_panorama() {
+        let t = |img: &Rgb32f| Thumb::of(img).unwrap();
+        let mut thumbs = HashMap::new();
+        for (id, off) in [(1u64, 0.0f32), (2, 200.0), (3, 400.0), (4, 60.0)] {
+            thumbs.insert(PhotoId(id), t(&scene(480, 320, off, false, false)));
+        }
+        let one_way = run_of(&[(1, 0.0, "1/250", None), (2, 1.0, "1/250", None), (3, 2.0, "1/250", None)]);
+        assert_eq!(kinds(&decide(&one_way, &thumbs)), vec![(MergeType::Pano, (1..=3).map(PhotoId).collect())]);
+        // right, back left, right again
+        let back = run_of(&[(1, 0.0, "1/250", None), (2, 1.0, "1/250", None), (4, 2.0, "1/250", None), (3, 3.0, "1/250", None)]);
+        let got = decide(&back, &thumbs);
+        assert!(got.is_empty(), "{got:?}");
     }
 
     #[test]
@@ -2071,7 +2427,9 @@ mod tests {
         let nan = Rgb32f::from_fn(40, 30, |_, _| [f32::NAN, f32::INFINITY, -1.0]);
         let t = Thumb::of(&nan).unwrap();
         assert_eq!(relation(&t, &t), Relation::Different);
-        let bad = Thumb { w: 10, h: 10, px: vec![0.0; 3], sharp: [0.0; 16] };
+        let bad =
+            Thumb { w: 10, h: 10, px: vec![0.0; 3], sharp: [0.0; 16], work: Plane::new(10, 10), detail: Plane::new(3, 3), feat: Features::default() };
+        assert!(verify(&bad, &bad).is_none());
         assert_eq!(relation(&bad, &bad), Relation::Different);
     }
 

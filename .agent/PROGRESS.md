@@ -7,6 +7,20 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
 
 ## Open
 
+- [ ] (finder agent, 2026-11-24, branch `agent-finder`, worktree ~/crafts/lc-finder, NOT merged) **merge finder verified
+  by feature matching on his real photos** (Bryan: only ~1-2 of 18 found groups were right; "things … that don't have
+  overlap … still marked"). `merge_find.rs`: `Thumb` also holds the 512 px exposure-normalised grey, its detail and its
+  MOPS features (merge crate); `verify` / `seen` = matches + RANSAC homography + inlier cover + aligned-detail NCC;
+  anything unconfirmed is unrelated (never a merge). Brackets: fired ≤ 3 s apart, aligned ≤ 3 %; stacks without focus
+  data: ≥ 4 tripod-steady frames sweeping one way; panoramas: one-way chains (15–75 % overlap), cut where they turn
+  back; 2 frames only with ≥ 50 inliers, ≤ 50 % overlap, no other view of the scene beside them; `sure.` needs strong
+  links. `look_all` loads one run at a time (bounded memory); `Session::merge_find_candidates`. Eval harness
+  `crates/engine/examples/merge_eval.rs` (read-only: catalog copy + truth.json). 18 judged groups: every `none` /
+  `sequence` → nothing (#14 L1003365 no-overlap pair: no feature fit at all), #12 (hdr) found, #7 (hdr?) not (its
+  frames are reframed). Left: recall on his own Lightroom panoramas is 3/28 — most are 2 frames overlapping 65–88 %,
+  which pixels can't tell from a reframed sequence (truth #11/#16): his call, or the coming `sequence.` kind. #4's
+  frames are the ones he merged himself as L1003340-Pano.dng, though the sheet judged them a sequence.
+
 - [ ] (WORK ORDER — Bryan 2026-11-24, for the next build; he is low on credits) **merge. tab, sequences, merge settings**
   Landed 11-24: `merge.` tab after develop. (`view.merges` → every group in the merges. view); ⌘⇧M = Merge… for the picked
   photos; auto finder skips shoots in Second Brain's pipeline (only find. looks there); near-duplicates (> 75 % overlap,
