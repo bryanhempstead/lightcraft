@@ -42,7 +42,7 @@ fn ids_of(v: &Value) -> Vec<PhotoId> {
 fn brackets(tag: &str) -> (Session, std::path::PathBuf, Vec<PhotoId>, PhotoId, lightcraft_catalog::AlbumId) {
     let dir = temp_dir(tag);
     let mut paths = Vec::new();
-    for (i, b) in lightcraft_merge::synth::bracket_dngs(240, 160, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
+    for (i, b) in lightcraft_merge::synth::bracket_dngs(480, 320, &[-2.0, 0.0, 2.0]).unwrap().into_iter().enumerate() {
         let p = dir.join(format!("IMG_{i}.dng"));
         std::fs::write(&p, b).unwrap();
         paths.push(p.to_string_lossy().to_string());
@@ -244,9 +244,10 @@ fn pano_files(dir: &std::path::Path, prefix: &str, yaws: &[f64], evs: &[f32]) ->
 fn a_drifting_handheld_panorama_is_a_panorama_not_an_hdr() {
     let dir = temp_dir("drift");
     let mut s = Session::new().with_fs();
-    // the shutter steps a whole stop per frame: in the metadata alone, a bracket
+    // the shutter steps a whole stop per frame: in the metadata alone, a bracket (auto exposure
+    // turning into the shade: the frames come out about as bright)
     let shutters = ["1/500", "1/250", "1/125"];
-    let ids = import(&mut s, pano_files(&dir, "D_", &[-25.0, 0.0, 25.0], &[-1.0, 0.0, 1.0]));
+    let ids = import(&mut s, pano_files(&dir, "D_", &[-25.0, 0.0, 25.0], &[-0.3, 0.0, 0.3]));
     for (i, id) in ids.iter().enumerate() {
         exif(&mut s, *id, &format!("2026-11-20T12:00:0{}", i * 2), shutters[i], None);
     }

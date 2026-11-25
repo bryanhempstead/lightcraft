@@ -73,23 +73,37 @@ shoots is panoramas (handheld, aperture priority), so finding them readily comes
   1. *Time* (`plan`): per folder and camera, in capture order, frames from one body / lens / focal
      length taken a few seconds apart (5 s plus the exposure) form a run. Exposure never splits a
      run: a handheld panorama's shutter drifts.
-  2. *Similarity* (`decide`, `link`): every run's frames are compared as 64 px grey thumbnails —
-     best shift (coarse then fine, up to 75 % of the frame, ≥ 20 % overlap, the correlation
-     normalized so exposure doesn't matter, a peak check so a smooth sky matches nothing). Frames
+  2. *Similarity* (`decide`, `seen` / `verify`; rebuilt 11-24 on Bryan's real shoots, where the
+     old 64 px thumbnail correlation had matched a canyon with a person on a path): every pair of
+     neighbouring frames is verified by feature matching on the 512 px source the finder loads —
+     the merge crate's own detector (`features::detect`, exposure-normalised grey), matches,
+     a RANSAC homography, then: ≥ 20 inliers passing Brown & Lowe's test, spread over the
+     overlap, no zoom (± 12 %) or tilt (≤ 6°) to speak of, ≥ 15 % overlap, and the two frames'
+     fine detail correlating ≥ 0.35 once aligned (people who moved, or another scene, fail).
+     Anything it can't confirm is unrelated — never a merge at any confidence. Verified frames
      of one framing (shift < 6 %) make a *position*: a bracket when the exposures step (≥ 0.9 EV
-     in all), a focus stack when the sharp 4 × 4 tiles move (or a recorded focus distance steps),
-     else a burst. Positions linked by shifts are a `panorama.` — `hdr.panorama.` when most of
-     them are brackets. So a "bracket" whose frames are shifted is a panorama, and bursts are
-     nothing. Where the pixels can't tell (no thumbnail, heavy clipping) a bracket fired quickly
-     with distinct exposures still counts, as `maybe.` / `likely.`.
-  3. *Classify + score*: each group gets `confidence` — `sure.` (every overlap a clear match moving
-     one way; a bracket at one framing whose camera stepped the compensation or that spans ≥ 1.5
-     EV), `likely.`, `maybe.` (a borderline panorama is `maybe.` rather than missed) — and its
-     `reasons` in plain words ("5 frames in 2.1 s", "each frame overlaps the last by ~40 %",
-     "frames move left → right", "exposure drifts by 0.7 stop (auto exposure): still one
-     panorama", "exposures −2 / 0 / +2", "same framing", "focus moves near → far").
+     in all) and the frames were fired back to back (≤ 3 s plus the exposure) aligned within
+     3 % with their detail agreeing ≥ 0.5 — two shots of one scene seconds apart are two photos;
+     a focus stack when a recorded focus distance steps (three or more), or — no focus distance
+     recorded (a manual Leica lens) — four or more tripod-steady frames (≤ 1 % apart) whose sharp
+     4 × 4 tiles sweep one way; else a burst (nothing). Positions linked by verified shifts
+     (15–75 % overlap) moving one way are a `panorama.` (`hdr.panorama.` when most are
+     brackets); a chain that turns back is cut into its one-way stretches. Two frames alone are a
+     panorama only with ≥ 50 inliers, ≤ 50 % overlap, and no other view of the scene beside them
+     in the run (a wedding's reframed sequence). Where there are no pixels at all (no source), a
+     bracket fired quickly with distinct exposures still counts, as `maybe.` / `likely.`.
+  3. *Classify + score*: each group gets `confidence` — `sure.` (three positions or more, every
+     link ≥ 40 inliers and detail ≥ 0.6; a bracket so matched whose camera stepped the
+     compensation or that spans ≥ 1.5 EV), `likely.` (verified; two-frame panoramas are never
+     sure), `maybe.` — and its `reasons` in plain words ("5 frames in 2.1 s", "each frame
+     overlaps the last by ~40 %", "frames move left → right", "120+ matched points between
+     neighbours", "exposure drifts by 0.7 stop (auto exposure): still one panorama",
+     "exposures −2 / 0 / +2", "same framing", "focus moves near → far").
+  Evaluation on real photos: `cargo run --release -p lightcraft-engine --example merge_eval --
+  <copy of catalog.snap> <truth.json> [--lr-panos]` (read-only; prints truth vs verdict per
+  group and every pair's match numbers; `--lr-panos` checks Lightroom's own `-Pano.dng` merges).
   Metadata alone settles two cases without pixels: a lone bracket whose camera stepped the
-  exposure compensation, and one framing at three or more recorded focus distances.
+  exposure compensation (fired back to back), and one framing at three or more recorded focus distances.
 - **One pool per shoot**: a shoot folder with camera subfolders (M262, GR3, X-T2 …) is one
   merges. pool (`Scope::Folder {deep: true}`, the shoots of `lightcraft_catalog::shoots`); the
   sidebar's `merges.` row sits on the shoot folder and its subfolders get none. A group never
