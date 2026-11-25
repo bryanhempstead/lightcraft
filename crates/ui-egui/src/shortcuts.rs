@@ -402,6 +402,15 @@ pub fn dispatch(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: 
     }
 }
 
+/// [`dispatch`], reporting the error of the command the key path ended up running (an unknown id,
+/// a command that refuses): the `lc_cmd` console input, one command or a chain. A key path that runs
+/// no command (a toggle of the UI) is `Ok`.
+pub fn dispatch_checked(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: serde_json::Value) -> Result<(), String> {
+    app.last_run_error = None;
+    dispatch(app, ctx, id, params);
+    app.last_run_error.take().map_or(Ok(()), Err)
+}
+
 /// Rating/flag/label keys: in Compare/Survey they act on the active photo only; Shift+key or Auto
 /// Advance then moves on (next candidate in Compare, next photo elsewhere).
 fn cull(app: &mut LightcraftApp, id: &str, mut params: serde_json::Value, advance: bool) {

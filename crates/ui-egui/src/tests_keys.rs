@@ -852,7 +852,11 @@ fn copy_relative_and_paste_asks_merge_or_replace_masks() {
     exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
     key(&mut h, "V", json!({"cmd": true}));
     h.step();
-    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::PasteSettings { groups, .. }) if groups.iter().any(|g| g == "masks")), "{:?}", h.app.ui.dialog);
+    assert!(
+        matches!(&h.app.ui.dialog, Some(crate::state::Dialog::PasteSettings { groups, .. }) if groups.iter().any(|g| g == "masks")),
+        "{:?}",
+        h.app.ui.dialog
+    );
     for _ in 0..8 {
         h.step();
     }
@@ -1519,7 +1523,13 @@ fn cmd_c_copies_everything_and_cmd_v_asks_what_to_paste() {
 fn cmd_shift_e_exports_the_picked_photos() {
     let mut h = demo();
     let menus = crate::menus::menu_entries(&h.app);
-    let owners = |sc: &str| -> Vec<String> { menus.iter().filter(|e| e.shortcut.as_deref().map(crate::keymap::canonical) == Some(crate::keymap::canonical(sc))).map(|e| e.id.clone()).collect() };
+    let owners = |sc: &str| -> Vec<String> {
+        menus
+            .iter()
+            .filter(|e| e.shortcut.as_deref().map(crate::keymap::canonical) == Some(crate::keymap::canonical(sc)))
+            .map(|e| e.id.clone())
+            .collect()
+    };
     assert_eq!(owners("Cmd+Shift+E"), ["dialog.export"]);
     assert_eq!(owners("Cmd+E"), ["photo.editInExternal"]);
     assert_eq!(owners("Cmd+V"), ["dialog.pasteSettings"]);
@@ -1620,7 +1630,12 @@ fn zoom_turn(h: &mut Headless, line: &str, detents: usize, pause: Option<(usize,
         }
         if let Some((r, uv, tex)) = h.app.reframe_drawn.get() {
             t.drawn += 1;
-            let (pw, ph) = h.app.session.active().and_then(|id| h.app.session.catalog.photo(id)).map_or((1, 1), |p| (p.width.max(1) as usize, p.height.max(1) as usize));
+            let (pw, ph) = h
+                .app
+                .session
+                .active()
+                .and_then(|id| h.app.session.catalog.photo(id))
+                .map_or((1, 1), |p| (p.width.max(1) as usize, p.height.max(1) as usize));
             let develop = h.app.session.develop_of(id).unwrap_or_default();
             let (cw, ch) = lightcraft_pipeline::native_output_size(pw, ph, &develop);
             let want = cw / ch;
@@ -1639,11 +1654,7 @@ fn zoom_turn(h: &mut Headless, line: &str, detents: usize, pause: Option<(usize,
                 t.stretched.push(format!("{what}: the picture moved / resized: {first:?} → {r:?}"));
             }
         }
-        let ok = if crop_tool {
-            h.app.renderer.textures.get(&Slot::Main).is_some_and(|x| x.photo == id)
-        } else {
-            showing_cut(h)
-        };
+        let ok = if crop_tool { h.app.renderer.textures.get(&Slot::Main).is_some_and(|x| x.photo == id) } else { showing_cut(h) };
         if ok {
             *armed = true;
         } else if *armed {
@@ -1691,7 +1702,8 @@ fn zoom_setup(angle: f64, rect: [f64; 4], crop_tool: bool) -> Headless {
         exec(&mut h, "panel.crop", json!({}));
     }
     let sharp = |h: &Headless| {
-        h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.quick.is_none() && Some(t.key) != h.app.reframe_key) && !h.app.renderer.is_pending(Slot::Main)
+        h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.quick.is_none() && Some(t.key) != h.app.reframe_key)
+            && !h.app.renderer.is_pending(Slot::Main)
     };
     assert!(h.step_until(T, sharp), "first render: {}", h.app.renderer.diagnose());
     h.settle(T);
@@ -1726,7 +1738,11 @@ fn crop_zoom_turn_survives_pauses() {
     assert!(t.keys.len() <= 2, "{} renders asked for in one turn: {:?}", t.keys.len(), t.keys);
     assert!(t.stretched.is_empty(), "{} stretched frames, first: {:?}", t.stretched.len(), t.stretched.first());
     // and when the dial really stops, the sharp render of the final crop replaces the cut
-    assert!(h.step_until(T, |h| h.app.session.interaction.is_none() && !h.app.renderer.is_pending(crate::render::Slot::Main) && !showing_cut(h)), "{}", h.app.renderer.diagnose());
+    assert!(
+        h.step_until(T, |h| h.app.session.interaction.is_none() && !h.app.renderer.is_pending(crate::render::Slot::Main) && !showing_cut(h)),
+        "{}",
+        h.app.renderer.diagnose()
+    );
 }
 
 /// Zooming out of a straightened crop to the image's limit: the crop's centre slides towards the

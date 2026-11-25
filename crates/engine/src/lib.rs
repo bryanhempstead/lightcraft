@@ -1246,6 +1246,8 @@ mod tests_capture_time;
 #[cfg(test)]
 mod tests_color;
 #[cfg(test)]
+mod tests_control_catalog;
+#[cfg(test)]
 mod tests_delete;
 #[cfg(test)]
 mod tests_dng_export;

@@ -171,3 +171,8 @@ in CI: it may lag behind the workspace; see README → Quick start.
   GitHub profiles). Never hand-edit `contributors.json`.
 - Maintainers refresh the stats with `python3 ../../craftrules/scripts/contributors.py .` (it also
   re-verifies who wrote each `people.toml` entry; `--check` only verifies).
+
+## Omega — how a job runs here (RULES.md §9, since 2026-11-24)
+Orchestrator (Opus) plans + checks; workers do it: `scout` find · `builder` small exact change · `engineer` hard/multi-file · `reviewer` diff vs brief.
+Every brief: goal · files to read · **Done when:** one of this file's Toolbox commands (test / live check / screenshot). Re-run it before accepting.
+Memory: `.agent/PROGRESS.md` (where we are) · `.agent/DECISIONS.md` (settled, dated, why) · Gotchas above (known issues). Read first, write last.
