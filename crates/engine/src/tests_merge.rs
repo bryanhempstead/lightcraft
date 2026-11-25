@@ -93,6 +93,41 @@ fn panorama_command_with_auto_crop() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The crop dragged in the Merge dialog (`crop: [x0, y0, x1, y1]`) is the merged photo's crop, in
+/// place of the auto-crop one; a malformed one is an error, never a panic.
+#[test]
+fn panorama_merge_with_a_given_crop_uses_it() {
+    let dir = temp_dir("pano-crop");
+    let mut paths = Vec::new();
+    for (i, v) in lightcraft_merge::synth::pano_views(480, 360, 420.0, &[-25.0, 0.0, 25.0]).unwrap().into_iter().enumerate() {
+        let img = v.to_srgb8();
+        let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let p = dir.join(format!("P_{i}.png"));
+        std::fs::write(&p, png).unwrap();
+        paths.push(p.to_string_lossy().to_string());
+    }
+    let mut s = Session::new().with_fs();
+    let ids = import(&mut s, paths);
+    // (a different projection the second time: the same pixels would be skipped as a duplicate)
+    for (auto, projection) in [(true, "cylindrical"), (false, "spherical")] {
+        let r = s
+            .execute("merge.panorama", &json!({"ids": ids, "projection": projection, "autoCrop": auto, "autoSettings": false, "crop": [0.1, 0.2, 0.8, 0.9]}))
+            .unwrap();
+        let id = lightcraft_catalog::PhotoId(r["id"].as_u64().unwrap());
+        let rect = s.develop_of(id).unwrap().crop.geometry.rect;
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(near(rect.x0, 0.1) && near(rect.y0, 0.2) && near(rect.x1, 0.8) && near(rect.y1, 0.9), "auto {auto}: {rect:?}");
+    }
+    // hostile values are errors
+    for bad in [json!([0.5, 0.5, 0.5, 0.9]), json!([0.8, 0.2, 0.1, 0.9]), json!([0.1, 0.2, 0.8]), json!("crop"), json!([0.1, "x", 0.8, 0.9]), json!([0.1, 0.2, 0.8, null])] {
+        assert!(crate::merge::parse("merge.panorama", &json!({"crop": bad})).is_err(), "{bad}");
+    }
+    // null / missing: none; out-of-range numbers are kept inside the picture
+    assert_eq!(crate::merge::parse("merge.panorama", &json!({"crop": null})).unwrap().1.crop, None);
+    assert_eq!(crate::merge::parse("merge.panorama", &json!({"crop": [-1, 0.2, 7, 0.9]})).unwrap().1.crop, Some([0.0, 0.2, 1.0, 0.9]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn focus_merge_command_creates_and_imports_a_dng() {
     let dir = temp_dir("focus");

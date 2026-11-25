@@ -41,6 +41,11 @@ pub struct MergeDialog {
     pub base: usize,
     /// Best take: the people found, and the photo each one's face comes from.
     pub people: Vec<TakePick>,
+    /// The merged photo's crop the user dragged on the preview (normalized `[x0, y0, x1, y1]`);
+    /// `None`: untouched — the auto-crop frame when `auto_crop` is on, else the whole picture. It
+    /// is an overlay: changing it never re-renders the preview ([`same_render`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop: Option<[f64; 4]>,
 }
 
 /// One person in a best take.
@@ -82,8 +87,14 @@ impl Default for MergeDialog {
             bracket: 0,
             base: 0,
             people: Vec::new(),
+            crop: None,
         }
     }
+}
+
+/// Do two sets of options render the same preview? (The crop frame is drawn over it by the dialog.)
+pub fn same_render(a: &MergeDialog, b: &MergeDialog) -> bool {
+    MergeDialog { crop: b.crop, ..a.clone() } == *b
 }
 
 impl MergeDialog {
@@ -209,6 +220,10 @@ pub struct MergeState {
     pub reveal: Option<String>,
     /// The screen size the window is on (`crate::merges::screen_bucket`).
     pub screen: String,
+    /// The crop frame's aspect lock (a key of [`ASPECTS`]); `None`: free.
+    pub crop_aspect: Option<&'static str>,
+    /// A crop drag in progress: the handle grabbed and the frame it started from.
+    pub crop_drag: Option<(lightcraft_geom::CropHandle, [f64; 4])>,
     /// The Merge box opened for merges. groups: their ids (the first is the one it shows; the
     /// rest are merged the same way when it is confirmed).
     pub dialog_groups: Vec<String>,
@@ -354,6 +369,8 @@ fn open_ids(app: &mut LightcraftApp, command: &str, ids: Vec<PhotoId>) -> Result
     app.merge.preview = None;
     app.merge.preview_pixels = None;
     app.merge.view = Default::default();
+    app.merge.crop_aspect = None;
+    app.merge.crop_drag = None;
     if let Some(t) = app.merge.preview_task.take() {
         t.cancel.store(true, Ordering::Relaxed);
     }
@@ -432,6 +449,13 @@ pub fn set_view(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     Ok(json!({"zoom": app.merge.view.zoom, "center": [app.merge.view.center.x, app.merge.view.center.y]}))
 }
 
+/// Keep a started merge's options for Merge with Last Settings: all but the crop frame, which
+/// belongs to the photos it was dragged on.
+pub(crate) fn remember_last(app: &mut LightcraftApp, opts: &MergeDialog) {
+    app.merge.last.insert(opts.command.clone(), MergeDialog { crop: None, ..opts.clone() });
+    app.merge.last_kind = Some(opts.command.clone());
+}
+
 /// Start the full-resolution merge (the dialog's Merge button / `ui.dialog.confirm`).
 pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value, String> {
     if app.merge.final_task.is_some() {
@@ -443,18 +467,17 @@ pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value,
     // opened for merges. groups: they go to the merge worker with these options and this kind
     let groups = std::mem::take(&mut app.merge.dialog_groups);
     if let (false, Some(kind)) = (groups.is_empty(), kind_of_command(&opts.command)) {
-        let options = serde_json::to_value(opts).map_err(|e| e.to_string())?;
+        // (one crop frame doesn't fit several groups)
+        let options = serde_json::to_value(MergeDialog { crop: opts.crop.filter(|_| groups.len() == 1), ..opts.clone() }).map_err(|e| e.to_string())?;
         let r = app.run("merge.mergeGroups", json!({"ids": groups, "kind": kind.id(), "options": options}))?;
-        app.merge.last.insert(opts.command.clone(), opts.clone());
-        app.merge.last_kind = Some(opts.command.clone());
+        remember_last(app, opts);
         crate::merge_page::after_merge(app, &groups);
         return Ok(json!({"started": true, "groups": r["queued"]}));
     }
     let ids = app.merge.ids.clone();
     let task = spawn(app, opts, &ids, false)?;
     app.merge.final_task = Some(task);
-    app.merge.last.insert(opts.command.clone(), opts.clone());
-    app.merge.last_kind = Some(opts.command.clone());
+    remember_last(app, opts);
     Ok(json!({"started": true, "photos": ids.len()}))
 }
 
@@ -481,7 +504,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     match &dialog_opts {
         Some(opts) => {
             let current = app.merge.preview_task.as_ref().map(|t| &t.options).or(app.merge.preview.as_ref().map(|p| &p.2));
-            let stale = current != Some(opts) && !last_failed_matches(app, opts);
+            let stale = !current.is_some_and(|c| same_render(c, opts)) && !last_failed_matches(app, opts);
             if stale {
                 if let Some(t) = app.merge.preview_task.take() {
                     t.cancel.store(true, Ordering::Relaxed);
@@ -579,26 +602,220 @@ pub fn next_group(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 fn last_failed_matches(app: &LightcraftApp, opts: &MergeDialog) -> bool {
-    app.merge.failed_options.as_ref() == Some(opts)
+    app.merge.failed_options.as_ref().is_some_and(|f| same_render(f, opts))
 }
 
-/// The dialog body (options on the left, preview on the right).
+/// The options column's width, and the gap between it and the preview.
+const OPTIONS_W: f32 = 220.0;
+const GAP: f32 = 12.0;
+/// What is kept clear between the window and the screen's edges.
+const SCREEN_GAP: f32 = 24.0;
+/// The window's side margins (`dialogs::show`'s frame).
+const FRAME_X: f32 = 32.0;
+
+/// The preview pane: 520 × 360, shrunk (never under 360 wide) so the whole dialog fits the screen.
+pub fn preview_box(ctx: &egui::Context) -> egui::Vec2 {
+    let room = ctx.content_rect().width() - 2.0 * SCREEN_GAP - FRAME_X - OPTIONS_W - GAP;
+    let w = if room.is_finite() { room.clamp(360.0, 520.0).floor() } else { 520.0 };
+    egui::vec2(w, (w * 360.0 / 520.0).round())
+}
+
+/// The dialog's content width: the preview, the gap, the options.
+pub fn dialog_width(ctx: &egui::Context) -> f32 {
+    preview_box(ctx).x + GAP + OPTIONS_W
+}
+
+/// The shapes the crop frame can be locked to (`free.`: none; `original.`: the picture's own).
+pub const ASPECTS: [&str; 7] = ["free.", "original.", "1:1", "3:2", "4:3", "16:9", "2:1"];
+
+/// The width / height ratio (in pixels) a key of [`ASPECTS`] locks the frame to, for a picture of
+/// `size` pixels; `None` for `free.`.
+pub fn aspect_ratio(key: &str, size: [usize; 2]) -> Option<f64> {
+    let (w, h) = (size[0] as f64, size[1] as f64);
+    let r = match key {
+        "original." if w > 0.0 && h > 0.0 => w / h,
+        "1:1" => 1.0,
+        "3:2" => 3.0 / 2.0,
+        "4:3" => 4.0 / 3.0,
+        "16:9" => 16.0 / 9.0,
+        "2:1" => 2.0,
+        _ => return None,
+    };
+    Some(r)
+}
+
+/// A crop frame (`[x0, y0, x1, y1]`, normalized) that lies inside the picture and has a size.
+fn valid_crop(c: &[f64; 4]) -> bool {
+    c.iter().all(|v| v.is_finite()) && c[0] >= 0.0 && c[1] >= 0.0 && c[2] <= 1.0 && c[3] <= 1.0 && c[2] - c[0] > 1e-3 && c[3] - c[1] > 1e-3
+}
+
+/// The crop frame the preview shows: the one dragged, else the auto-crop one (`auto.crop.` on and
+/// found), else the whole picture.
+pub fn crop_frame(opts: &MergeDialog, info: &Value) -> [f64; 4] {
+    if let Some(c) = opts.crop.filter(valid_crop) {
+        return c;
+    }
+    if opts.auto_crop
+        && let Some(a) = info.get("crop").and_then(Value::as_array)
+    {
+        let n: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
+        if let [x, y, w, h] = n[..] {
+            let c = [x, y, x + w, y + h];
+            if valid_crop(&c) {
+                return c;
+            }
+        }
+    }
+    [0.0, 0.0, 1.0, 1.0]
+}
+
+/// The largest frame of pixel ratio `ratio` inside `frame` (on a `size`-pixel picture), centred on it.
+pub fn fit_aspect(frame: [f64; 4], ratio: f64, size: [usize; 2]) -> [f64; 4] {
+    let (w, h) = (size[0] as f64, size[1] as f64);
+    if !(ratio.is_finite() && ratio > 0.0 && w > 0.0 && h > 0.0 && valid_crop(&frame)) {
+        return frame;
+    }
+    let (fw, fh) = ((frame[2] - frame[0]) * w, (frame[3] - frame[1]) * h);
+    let (nw, nh) = if fw / fh > ratio { (fh * ratio, fh) } else { (fw, fw / ratio) };
+    let (cx, cy) = ((frame[0] + frame[2]) / 2.0, (frame[1] + frame[3]) / 2.0);
+    let (hw, hh) = (nw / w / 2.0, nh / h / 2.0);
+    [cx - hw, cy - hh, cx + hw, cy + hh]
+}
+
+/// The crop frame on screen: where the preview's picture is drawn and the frame in it.
+#[derive(Clone, Copy)]
+struct CropGeo {
+    img: egui::Rect,
+    frame: [f64; 4],
+}
+
+impl CropGeo {
+    fn rect(&self) -> egui::Rect {
+        let (w, h) = (f64::from(self.img.width()), f64::from(self.img.height()));
+        let p = |x: f64, y: f64| egui::pos2(self.img.left() + (x * w) as f32, self.img.top() + (y * h) as f32);
+        egui::Rect::from_min_max(p(self.frame[0], self.frame[1]), p(self.frame[2], self.frame[3]))
+    }
+    /// The picture's whole area is the frame (nothing to move: a drag inside pans).
+    fn is_full(&self) -> bool {
+        self.frame.iter().zip([0.0, 0.0, 1.0, 1.0]).all(|(a, b)| (a - b).abs() < 1e-6)
+    }
+    /// The 8 handles' positions: corners clockwise from the top-left, then the edges' middles
+    /// (top, right, bottom, left) — [`lightcraft_geom::CropHandle::from_index`]'s numbering.
+    fn handles(&self) -> [egui::Pos2; 8] {
+        let r = self.rect();
+        let c = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()];
+        std::array::from_fn(|i| if i < 4 { c[i % 4] } else { c[(i - 4) % 4].lerp(c[(i - 3) % 4], 0.5) })
+    }
+    /// The handle under `q`: a tick first, else anywhere along an edge, else (a frame smaller than
+    /// the picture) its inside moves it. `None`: not the frame.
+    fn pick(&self, q: egui::Pos2) -> Option<lightcraft_geom::CropHandle> {
+        use lightcraft_geom::CropHandle as H;
+        let hs = self.handles();
+        if let Some((i, _)) = hs.iter().enumerate().map(|(i, h)| (i, h.distance(q))).filter(|(_, d)| *d < 12.0).min_by(|a, b| a.1.total_cmp(&b.1)) {
+            return H::from_index(i as u8);
+        }
+        let edge = (0..4usize)
+            .filter_map(|e| {
+                let (a, b) = (*hs.get(e)?, *hs.get((e + 1) % 4)?);
+                let t = ((q - a).dot(b - a) / (b - a).length_sq().max(1e-6)).clamp(0.0, 1.0);
+                Some((e, (a + (b - a) * t).distance(q)))
+            })
+            .filter(|&(_, d)| d < 8.0)
+            .min_by(|x, y| x.1.total_cmp(&y.1));
+        if let Some((e, _)) = edge {
+            return H::from_index(e as u8 + 4);
+        }
+        (!self.is_full() && self.rect().contains(q)).then_some(H::Move)
+    }
+    /// `q` as a point of the picture (0..1 each way).
+    fn norm(&self, q: egui::Pos2) -> lightcraft_geom::Point {
+        let (w, h) = (self.img.width().max(1e-3), self.img.height().max(1e-3));
+        lightcraft_geom::Point::new(f64::from((q.x - self.img.left()) / w), f64::from((q.y - self.img.top()) / h))
+    }
+}
+
+fn crop_cursor(h: lightcraft_geom::CropHandle) -> egui::CursorIcon {
+    use lightcraft_geom::CropHandle as H;
+    match h {
+        H::TopLeft | H::BottomRight => egui::CursorIcon::ResizeNwSe,
+        H::TopRight | H::BottomLeft => egui::CursorIcon::ResizeNeSw,
+        H::Top | H::Bottom => egui::CursorIcon::ResizeVertical,
+        H::Left | H::Right => egui::CursorIcon::ResizeHorizontal,
+        H::Move => egui::CursorIcon::Move,
+    }
+}
+
+/// Draw the crop frame over the preview: the picture dimmed outside it, the frame, a tick on each
+/// corner and edge (Bryan's crop green, on a dark shadow so it reads on any picture).
+fn paint_crop(ui: &egui::Ui, pane: egui::Rect, g: &CropGeo) {
+    let p = ui.painter_at(pane);
+    let f = g.rect();
+    let shade = egui::Color32::from_black_alpha(150);
+    if !g.is_full() {
+        let i = g.img;
+        for r in [
+            egui::Rect::from_min_max(i.left_top(), egui::pos2(i.right(), f.top())),
+            egui::Rect::from_min_max(egui::pos2(i.left(), f.bottom()), i.right_bottom()),
+            egui::Rect::from_min_max(egui::pos2(i.left(), f.top()), egui::pos2(f.left(), f.bottom())),
+            egui::Rect::from_min_max(egui::pos2(f.right(), f.top()), egui::pos2(i.right(), f.bottom())),
+        ] {
+            if r.width() > 0.0 && r.height() > 0.0 {
+                p.rect_filled(r, 0.0, shade);
+            }
+        }
+    }
+    let dark = egui::Color32::from_black_alpha(140);
+    p.rect_stroke(f, 0.0, egui::Stroke::new(3.0, dark), egui::StrokeKind::Middle);
+    p.rect_stroke(f, 0.0, egui::Stroke::new(1.0, crate::theme::CROP), egui::StrokeKind::Middle);
+    for (i, h) in g.handles().iter().enumerate() {
+        crate::widgets::register(ui.ctx(), format!("mergeCropHandle:{i}"), egui::Rect::from_center_size(*h, egui::vec2(14.0, 14.0)));
+        let s = if i < 4 { 12.0 } else { 9.0 };
+        for (w, grow, c) in [(5.0, 2.0, dark), (3.0, 0.0, crate::theme::CROP)] {
+            p.rect_filled(egui::Rect::from_center_size(*h, egui::vec2(s + grow, w)), 0.0, c);
+            p.rect_filled(egui::Rect::from_center_size(*h, egui::vec2(w, s + grow)), 0.0, c);
+        }
+    }
+}
+
+/// The dialog body: its title, the preview (with the crop frame over it) on the left, the options on
+/// the right.
 pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) {
     let t = crate::theme::Tokens::get(ui.ctx());
+    let pbox = preview_box(ui.ctx());
+    ui.set_width(dialog_width(ui.ctx()));
+    // the title, centred in the window (its own: the window has no title bar)
+    ui.vertical_centered(|ui| {
+        let r = ui.label(egui::RichText::new(crate::i18n::tr(opts.title())).font(t.semibold(14.0)).color(t.text));
+        crate::widgets::register(ui.ctx(), "label:mergeTitle", r.rect);
+    });
+    ui.add_space(12.0);
     ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
         // preview
         ui.vertical(|ui| {
-            let box_size = egui::vec2(520.0, 360.0);
-            let (rect, _) = ui.allocate_exact_size(box_size, egui::Sense::hover());
+            ui.set_width(pbox.x);
+            let (rect, _) = ui.allocate_exact_size(pbox, egui::Sense::hover());
             ui.painter().rect_filled(rect, 4.0, t.canvas);
             crate::widgets::register(ui.ctx(), "merge.preview", rect);
-            // drag to look around, scroll or pinch to zoom (crate::pan_zoom)
             let size = app.merge.preview.as_ref().map_or([0, 0], |p| p.1);
+            let info = app.merge.preview.as_ref().map_or(Value::Null, |p| p.3.clone());
+            // the crop frame (panoramas), where it is on the picture as framed now
+            let crop_on = opts.is_pano() && size[0] > 0 && size[1] > 0;
+            let geo = |view: &crate::pan_zoom::PanZoom, opts: &MergeDialog| CropGeo {
+                img: view.clamped(rect, size).image_rect(rect, size),
+                frame: crop_frame(opts, &info),
+            };
+            let g0 = geo(&app.merge.view, opts);
+            // drag to look around (not from the crop frame), scroll or pinch to zoom (crate::pan_zoom)
             let mut view = app.merge.view;
-            crate::pan_zoom::interact(ui, rect, "mergePreview", size, &mut view);
+            let resp = crate::pan_zoom::interact_unless(ui, rect, "mergePreview", size, &mut view, &|q| crop_on && g0.pick(q).is_some());
             app.merge.view = view;
             if let Some((tex, size, _, _)) = &app.merge.preview {
                 crate::pan_zoom::paint(ui, rect, tex.id(), *size, &view);
+            }
+            if crop_on {
+                crop_drag(app, ui, &resp, opts, &g0, size);
+                paint_crop(ui, rect, &geo(&view, opts));
             }
             if let Some(task) = &app.merge.preview_task {
                 let (f, stage) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();
@@ -613,8 +830,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             if let Some(e) = &app.merge.error {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, e, t.font(13.0), t.text);
             }
-            let info = app.merge.preview.as_ref().map(|p| p.3.clone());
-            if let Some(info) = info {
+            if app.merge.preview.is_some() {
                 let txt = if opts.command == "merge.take" {
                     let n = opts.people.iter().filter(|p| p.from != opts.base).count();
                     format!(
@@ -637,15 +853,17 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                         info["ev"].as_array().map(|a| a.iter().filter_map(Value::as_f64).map(|v| format!("{v:+.1}")).collect()).unwrap_or_default();
                     crate::i18n::tr_format!("{} photos · exposures {} EV", ev.len(), ev.join(" / "))
                 };
-                ui.label(egui::RichText::new(txt).color(t.text_dim));
+                // wrapped lines 10 px apart
+                ui.spacing_mut().item_spacing.y = 10.0;
+                ui.add(egui::Label::new(egui::RichText::new(txt).color(t.text_dim)).wrap());
             }
         });
-        ui.add_space(12.0);
+        ui.add_space(GAP);
         // options
         ui.vertical(|ui| {
-            ui.set_width(220.0);
+            ui.set_width(OPTIONS_W);
             // the kind: switch between the merges without closing the dialog
-            ui.label(egui::RichText::new(crate::i18n::tr("Merge")).color(t.text_label));
+            ui.label(egui::RichText::new(crate::i18n::tr("merge.")).color(t.text_label));
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 10.0);
                 for (cmd, label, tip) in KINDS {
@@ -654,6 +872,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                     if r.clicked() && opts.command != cmd {
                         // this kind's defaults (Settings ▸ merge.)
                         *opts = MergeDialog::from_prefs(cmd, &app.ui.settings.merge);
+                        app.merge.crop_aspect = None;
                         if cmd == "merge.take" {
                             opts.people.clear();
                             load_faces(app, opts);
@@ -665,8 +884,18 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             if opts.command == "merge.take" {
                 take_picker(app, ui, opts);
             }
+            let auto_crop = opts.auto_crop;
             options(ui, opts, "merge");
-            ui.add_space(8.0);
+            // auto.crop. again: back to the frame it computes (or the whole picture)
+            if opts.auto_crop != auto_crop {
+                opts.crop = None;
+                app.merge.crop_aspect = None;
+            }
+            if opts.is_pano() {
+                ui.add_space(12.0);
+                crop_section(app, ui, opts);
+            }
+            ui.add_space(12.0);
             ui.label(egui::RichText::new(crate::i18n::tr_format!("{} photos", app.merge.ids.len())).color(t.text_dim));
             // opened for several merges. groups of one kind: the rest merge the same way
             let more = app.merge.dialog_groups.len().saturating_sub(1);
@@ -678,6 +907,75 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             }
         });
     });
+}
+
+/// The crop frame's mouse handling on the preview: the handle under where the button went down
+/// (corner, edge anywhere along its length, or inside) is dragged by [`lightcraft_geom::drag_crop`],
+/// which keeps it inside the picture and on the aspect lock.
+fn crop_drag(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, opts: &mut MergeDialog, g: &CropGeo, size: [usize; 2]) {
+    if resp.drag_started()
+        && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
+    {
+        app.merge.crop_drag = g.pick(q).map(|h| (h, g.frame));
+    }
+    if let Some((handle, start)) = app.merge.crop_drag {
+        if resp.dragged()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let grab = ui.input(|i| i.pointer.press_origin()).map_or_else(|| g.norm(q), |o| g.norm(o));
+            let ratio = app.merge.crop_aspect.and_then(|k| aspect_ratio(k, size));
+            let from = lightcraft_geom::CropGeometry { rect: lightcraft_geom::Rect::new(start[0], start[1], start[2], start[3]), angle: 0.0 };
+            let r = lightcraft_geom::drag_crop(from, handle, grab, g.norm(q), size[0] as f64, size[1] as f64, ratio).rect;
+            let c = [r.x0, r.y0, r.x1, r.y1];
+            if valid_crop(&c) {
+                opts.crop = Some(c);
+            }
+            ui.ctx().set_cursor_icon(crop_cursor(handle));
+        }
+        if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
+            app.merge.crop_drag = None;
+        }
+    } else if resp.hovered()
+        && let Some(q) = resp.hover_pos()
+        && let Some(h) = g.pick(q)
+    {
+        ui.ctx().set_cursor_icon(crop_cursor(h));
+    }
+}
+
+/// `crop.`: the shape the crop frame is locked to (an aspect. menu: free., the picture's own, …).
+/// Picking one fits the largest frame of that shape in the frame there is, centred on it.
+fn crop_section(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(crate::i18n::tr("crop.")).color(t.text_label));
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let btn = crate::widgets::text_button(ui, "mergeAspect", "aspect.", app.merge.crop_aspect.is_some())
+            .on_hover_text(crate::i18n::tr("The shape of the crop frame: drag its corners, edges or inside on the preview"));
+        ui.label(egui::RichText::new(crate::i18n::tr(app.merge.crop_aspect.unwrap_or("free."))).color(t.text_dim));
+        let close = egui::Popup::default_response_id(&btn);
+        egui::Popup::menu(&btn).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            for key in ASPECTS {
+                let picked = app.merge.crop_aspect.unwrap_or("free.") == key;
+                if crate::widgets::text_button(ui, &format!("mergeAspect-{key}"), key, picked).clicked() {
+                    pick_aspect(app, opts, key);
+                    egui::Popup::close_id(ui.ctx(), close);
+                }
+            }
+        });
+    });
+}
+
+/// Lock the crop frame to `key` of [`ASPECTS`] and fit it in the frame there is now.
+pub fn pick_aspect(app: &mut LightcraftApp, opts: &mut MergeDialog, key: &'static str) {
+    let Some((size, info)) = app.merge.preview.as_ref().map(|p| (p.1, p.3.clone())) else { return };
+    let Some(ratio) = aspect_ratio(key, size) else {
+        app.merge.crop_aspect = None;
+        return;
+    };
+    app.merge.crop_aspect = Some(key);
+    opts.crop = Some(fit_aspect(crop_frame(opts, &info), ratio, size));
 }
 
 /// The options of a merge of `opts.command`'s kind — the Merge dialog's, and the merge. page's
@@ -702,12 +1000,11 @@ pub fn options(ui: &mut egui::Ui, opts: &mut MergeDialog, pre: &str) -> bool {
         });
     };
     if opts.command == "merge.focus" {
-        check(ui, "align", &mut opts.align, "Auto Align")
+        check(ui, "align", &mut opts.align, "auto.align.")
             .on_hover_text(crate::i18n::tr("Line the photos up first (handheld, or focus breathing changes the scale)"));
-        ui.add_space(4.0);
     }
     if opts.is_pano() {
-        ui.label(egui::RichText::new(crate::i18n::tr("Projection")).color(t.text_label));
+        ui.label(egui::RichText::new(crate::i18n::tr("projection.")).color(t.text_label));
         pick(
             ui,
             "Projection",
@@ -719,18 +1016,17 @@ pub fn options(ui: &mut egui::Ui, opts: &mut MergeDialog, pre: &str) -> bool {
         if num(ui, &BOUNDARY_WARP, &mut bw) {
             opts.boundary_warp = bw.round();
         }
-        check(ui, "fillEdges", &mut opts.fill_edges, "Fill Edges");
-        check(ui, "autoCrop", &mut opts.auto_crop, "Auto Crop");
-        ui.add_space(4.0);
+        check(ui, "fillEdges", &mut opts.fill_edges, "fill.edges.").on_hover_text(crate::i18n::tr("Fill the empty edges of the stitched picture"));
+        check(ui, "autoCrop", &mut opts.auto_crop, "auto.crop.").on_hover_text(crate::i18n::tr("Crop to the largest frame with no empty edges (again: back to it)"));
     }
     if opts.is_hdr() {
-        check(ui, "align", &mut opts.align, "Auto Align");
-        ui.label(egui::RichText::new(crate::i18n::tr("Deghost Amount")).color(t.text_label));
+        check(ui, "align", &mut opts.align, "auto.align.");
+        ui.label(egui::RichText::new(crate::i18n::tr("deghost.")).color(t.text_label));
         pick(ui, "Deghost", &[("none", "none."), ("low", "low."), ("medium", "medium."), ("high", "high.")], &mut opts.deghost);
         if opts.command == "merge.hdr" {
             // (never greyed: it shows once there is ghosting to show)
             if opts.deghost != "none" {
-                check(ui, "showOverlay", &mut opts.show_overlay, "Show Deghost Overlay");
+                check(ui, "showOverlay", &mut opts.show_overlay, "deghost.overlay.");
             }
         }
         if opts.command == "merge.hdrPanorama" {
@@ -741,8 +1037,8 @@ pub fn options(ui: &mut egui::Ui, opts: &mut MergeDialog, pre: &str) -> bool {
         }
         ui.add_space(4.0);
     }
-    check(ui, "autoSettings", &mut opts.auto_settings, "Auto Settings");
-    check(ui, "stack", &mut opts.stack, "Create Stack");
+    check(ui, "autoSettings", &mut opts.auto_settings, "auto.settings.");
+    check(ui, "stack", &mut opts.stack, "stack.").on_hover_text(crate::i18n::tr("Stack the merged photo on top of the photos it was made from"));
     *opts != before
 }
 
@@ -832,7 +1128,7 @@ fn super_thumb_request(app: &mut LightcraftApp, id: PhotoId) {
 
 const BOUNDARY_WARP: lightcraft_develop::ControlSpec = lightcraft_develop::ControlSpec {
     id: "merge.boundaryWarp",
-    label: "Boundary Warp",
+    label: "warp.",
     section: lightcraft_develop::Section::Light,
     min: 0.0,
     max: 100.0,
@@ -843,7 +1139,7 @@ const BOUNDARY_WARP: lightcraft_develop::ControlSpec = lightcraft_develop::Contr
 };
 const BRACKET: lightcraft_develop::ControlSpec = lightcraft_develop::ControlSpec {
     id: "merge.bracket",
-    label: "Photos per bracket (0 = auto)",
+    label: "bracket.",
     section: lightcraft_develop::Section::Light,
     min: 0.0,
     max: 9.0,
@@ -853,8 +1149,16 @@ const BRACKET: lightcraft_develop::ControlSpec = lightcraft_develop::ControlSpec
     track: lightcraft_develop::Track::Plain,
 };
 
+/// A slider row lined up with the checkboxes above and below it (the slider widget pads its row
+/// for the side panels: 24 pt in, 22 out; Classic rows 12 and 20).
 fn num(ui: &mut egui::Ui, spec: &lightcraft_develop::ControlSpec, v: &mut f64) -> bool {
-    match crate::widgets::slider(ui, spec, *v, true, None).value {
+    let (pad_l, pad_r) = if crate::widgets::classic_rows(ui.ctx()) { (12.0, 20.0) } else { (24.0, 22.0) };
+    let at = ui.cursor().min;
+    let w = ui.available_width();
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(at - egui::vec2(pad_l, 0.0), egui::vec2(w + pad_l + pad_r, 1000.0))));
+    let out = crate::widgets::slider(&mut child, spec, *v, true, None);
+    ui.allocate_space(egui::vec2(w, child.min_rect().height()));
+    match out.value {
         Some(n) => {
             *v = n;
             true

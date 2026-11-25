@@ -66,6 +66,14 @@ pub struct Tracker {
     pub resume_at_launch: bool,
     /// When (egui time) a spot was last recorded and not yet written to `ui.json`.
     changed_at: Option<f64>,
+    /// The active photo is only there by default (the first photo of a folder just opened, the
+    /// launch photo, the one Develop picked with none active): looking at it isn't work, so it is
+    /// not written down until the user picks a photo or edits something.
+    fallback: Option<PhotoId>,
+    /// `library.select` ran since the last frame: a photo the user chose (or a script did).
+    pub(crate) user_select: bool,
+    /// The photo `enter_develop` picked because none was active ([`note_auto_select`]).
+    auto: Option<PhotoId>,
 }
 
 /// How long after a new spot `ui.json` is written (seconds).
@@ -115,13 +123,28 @@ pub fn source_key(app: &LightcraftApp) -> String {
     }
 }
 
+/// The view on screen as a spot records it: `grid`, `square`, `detail` (the Library loupe), `edit`
+/// (Develop), `compare`, `survey`, `people`, `map`, `galleries`. Older spots only know the first
+/// three.
 fn view_name(app: &LightcraftApp) -> String {
     match app.ui.view {
-        ViewMode::PhotoGrid | ViewMode::SquareGrid => "grid",
-        _ if app.ui.module == crate::state::Module::Develop => "edit",
-        _ => "detail",
+        ViewMode::PhotoGrid => "grid",
+        ViewMode::SquareGrid => "square",
+        ViewMode::Compare => "compare",
+        ViewMode::Survey => "survey",
+        ViewMode::People => "people",
+        ViewMode::Map => "map",
+        ViewMode::Galleries => "galleries",
+        ViewMode::Detail | ViewMode::Reference if app.ui.module == crate::state::Module::Develop => "edit",
+        ViewMode::Reference => "edit",
+        ViewMode::Detail => "detail",
     }
     .into()
+}
+
+/// `enter_develop` picked `id` because no photo was active: that is a default, not a choice.
+pub fn note_auto_select(app: &mut LightcraftApp, id: PhotoId) {
+    app.left_off.auto = Some(id);
 }
 
 /// The engine's resume point for a source (Lightroom's last edit after a migration), if the
@@ -203,14 +226,50 @@ pub fn tick(app: &mut LightcraftApp, now: f64) {
     let undo = app.session.undo.len();
     let view = view_name(app);
     let state = (format!("{lib}|{source}"), active, undo, view.clone());
-    if app.left_off.seen.as_ref() == Some(&state) {
+    // taken every frame, before any early return: a select that changed nothing (the active photo
+    // clicked again, none. on an empty selection) must not leave the flag up for a later frame
+    let user = std::mem::take(&mut app.left_off.user_select);
+    let auto = std::mem::take(&mut app.left_off.auto);
+    // the user picked the photo that was only there by default: now it is work
+    let adopted = user && active.is_some() && app.left_off.fallback == active;
+    if adopted {
+        app.left_off.fallback = None;
+    }
+    if app.left_off.seen.as_ref() == Some(&state) && !adopted {
         return;
     }
-    let first = app.left_off.seen.is_none();
+    let (first, prev_active, prev_undo) = match &app.left_off.seen {
+        Some((_, a, u, _)) => (false, *a, *u),
+        None => (true, None, 0),
+    };
     app.left_off.seen = Some(state);
+    // Which photo is only there by default? The one a folder opens on by itself, the launch photo,
+    // the one Develop picks with none active. A photo the user picked, or the one remembered for
+    // this place, is not; neither is any photo once something is edited.
+    if (changed || first || prev_active != active) && active.is_some() {
+        let remembered_here = active.is_some() && app.left_off.marker == active;
+        app.left_off.fallback = if user || remembered_here {
+            None
+        } else if changed || first || (auto.is_some() && auto == active) {
+            active
+        } else if prev_active != active {
+            None
+        } else {
+            app.left_off.fallback
+        };
+    }
+    let edited = !first && prev_undo != undo;
+    if edited {
+        app.left_off.fallback = None;
+    }
     let Some(id) = active else { return };
     // the first frame only looks (nothing has happened yet: don't move "last" to it)
     if first && app.ui.left_off.last.is_some() {
+        return;
+    }
+    // Opening a folder, a collection, or the merge. tab (which follows the sidebar) is a visit,
+    // not work: only a photo picked in it counts. A photo shown by default isn't either.
+    if (changed && !user && !edited) || app.left_off.fallback == Some(id) {
         return;
     }
     let spot = Spot { library: lib.clone(), source: source.clone(), photo: id.0, view, at: now_secs() };
@@ -241,9 +300,11 @@ fn resume_at_launch(app: &mut LightcraftApp) {
     match resume(app) {
         Ok(_) => {
             if keep_view {
-                app.ui.view = view;
+                // (a saved Develop module under a grid start-up view: the grid is the Library's)
+                // (the merge. page is a grid)
+                app.ui.view = if app.merge_tab && !matches!(view, ViewMode::PhotoGrid | ViewMode::SquareGrid) { ViewMode::PhotoGrid } else { view };
                 app.ui.right = right;
-                app.ui.module = module;
+                app.ui.module = crate::state::Module::of_view(app.ui.view).unwrap_or(module);
                 app.ui.sync_module();
             }
         }
@@ -293,11 +354,30 @@ pub fn resume(app: &mut LightcraftApp) -> Result<Value, String> {
         let _ = app.run("library.clearFilter", json!({}));
     }
     app.run("library.select", json!({"ids": [id.0]}))?;
-    match spot.view.as_str() {
+    // a merges. spot comes back as the merge. page: its tab on, the grid
+    let merges = spot.source.starts_with("merges:") && matches!(app.session.source, LibrarySource::Merges);
+    app.merge_tab = merges;
+    let view = if merges { "grid" } else { spot.view.as_str() };
+    let library = |app: &mut LightcraftApp, v: ViewMode| {
+        if app.ui.module != crate::state::Module::Library || app.ui.view != v {
+            crate::menus::enter_library(app, Some(v));
+        }
+    };
+    match view {
         "grid" => {
             if app.ui.module != crate::state::Module::Library || !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
                 crate::menus::enter_library(app, Some(ViewMode::PhotoGrid));
             }
+        }
+        "square" => library(app, ViewMode::SquareGrid),
+        "compare" => library(app, ViewMode::Compare),
+        "survey" => library(app, ViewMode::Survey),
+        "people" => library(app, ViewMode::People),
+        "map" => {
+            let _ = app.run("view.map", json!({}));
+        }
+        "galleries" => {
+            let _ = app.run("view.galleries", json!({}));
         }
         // Develop: the loupe with the develop panels
         "edit" => {

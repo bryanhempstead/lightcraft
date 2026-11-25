@@ -390,9 +390,12 @@ fn loupe_overlays_draw_outside_the_crop_tool_and_never_block_clicks() {
     // the thirds line is drawn on the photo's pixels
     let (x, y) = ((img.left() + img.width() / 3.0).round() as usize, (img.top() + img.height() * 0.55).round() as usize);
     let px = |c: &egui::ColorImage, x: usize, y: usize| c.pixels[y * c.size[0] + x];
-    let lum = |c: egui::Color32| c.r() as i32 + c.g() as i32 + c.b() as i32;
-    let near = (x.saturating_sub(1)..=x + 1).map(|x| lum(px(&shot, x, y)) - lum(px(&plain, x, y))).max().unwrap();
-    assert!(near > 30, "the thirds line brightens the photo at x = {x}: {near}");
+    // the crop green (#AACC00) shifts mostly green, so compare the largest per-channel change
+    let chg = |a: egui::Color32, b: egui::Color32| {
+        (a.r() as i32 - b.r() as i32).abs().max((a.g() as i32 - b.g() as i32).abs()).max((a.b() as i32 - b.b() as i32).abs())
+    };
+    let near = (x.saturating_sub(1)..=x + 1).map(|x| chg(px(&shot, x, y), px(&plain, x, y))).max().unwrap();
+    assert!(near > 30, "the thirds line changes the photo at x = {x}: {near}");
     // a click still zooms
     h.request("ui.clickWidget", json!({"id": "canvas:image"}), T);
     assert!(matches!(h.app.ui.zoom, Zoom::Percent(_)), "{:?}", h.app.ui.zoom);

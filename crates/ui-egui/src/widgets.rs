@@ -202,7 +202,7 @@ pub fn set_classic_rows(ctx: &egui::Context, on: bool) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("classic-slider-rows"), on));
 }
 
-fn classic_rows(ctx: &egui::Context) -> bool {
+pub(crate) fn classic_rows(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<bool>(egui::Id::new("classic-slider-rows"))).unwrap_or(false)
 }
 

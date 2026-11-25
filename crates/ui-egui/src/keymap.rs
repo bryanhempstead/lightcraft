@@ -1570,6 +1570,14 @@ fn hud(app: &mut crate::LightcraftApp, control: &str) {
 /// Move a develop control (or the crop: `crop.x` / `crop.y` / `crop.scale`) by `delta`.
 /// How long after the console's (or a MIDI controller's) last move its slider counts as let go.
 pub const CONSOLE_SETTLE: std::time::Duration = std::time::Duration::from_millis(350);
+/// … the crop dials': a zoom turn pauses longer than a slider's (a hand stopping to look), and
+/// letting go swaps the cut for the sharp render, which a short pause mid-turn made flash.
+pub const CROP_SETTLE: std::time::Duration = std::time::Duration::from_millis(700);
+
+/// How long `control`'s hardware must be still before its move counts as over.
+fn settle_of(control: &str) -> std::time::Duration {
+    if control.starts_with("crop.") { CROP_SETTLE } else { CONSOLE_SETTLE }
+}
 
 /// A console slider / dial (Monogram, MIDI) starts moving `control`: run it like a mouse drag —
 /// one interaction (draft renders, no history step / catalog write / XMP sidecar per tick), ended
@@ -1612,13 +1620,13 @@ fn end_console_move(app: &mut crate::LightcraftApp) {
 
 /// Once a frame: the console has been still long enough — commit its move as one history step.
 pub fn console_tick(app: &mut crate::LightcraftApp, ctx: &egui::Context) {
-    let Some((at, _)) = &app.console_drag else { return };
-    let idle = at.elapsed();
-    if idle >= CONSOLE_SETTLE || app.session.interaction.is_none() {
+    let Some((at, control)) = &app.console_drag else { return };
+    let (idle, settle) = (at.elapsed(), settle_of(control));
+    if idle >= settle || app.session.interaction.is_none() {
         end_console_move(app);
         ctx.request_repaint();
     } else {
-        ctx.request_repaint_after(CONSOLE_SETTLE - idle);
+        ctx.request_repaint_after(settle - idle);
     }
 }
 

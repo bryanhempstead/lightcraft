@@ -29,6 +29,9 @@ pub fn label_toast_colors(label: lightcraft_catalog::ColorLabel) -> (Color32, Co
     (Color32::WHITE.lerp_to_gamma(label_color(label), 0.3), Color32::from_rgb(36, 24, 24))
 }
 
+/// Crop frame, handles, guides and straighten line: Second Brain's neon green (--ac #AACC00, Bryan 2026-11-24).
+pub const CROP: Color32 = Color32::from_rgb(170, 204, 0);
+
 #[derive(Clone, Copy, Debug)]
 pub struct Tokens {
     /// Top bar, side panels, bottom bar, tool strip.

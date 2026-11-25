@@ -31,12 +31,32 @@ const SETTINGS_HASH_ENTRIES: usize = 1024;
 #[derive(Default)]
 struct SettingsHashes {
     entries: HashMap<PhotoId, (Weak<DevelopSettings>, u64)>,
+    /// The last photo's hash of its settings without the crop ([`Self::get_uncropped`]).
+    uncropped: Option<(PhotoId, Weak<DevelopSettings>, u64)>,
     order: VecDeque<PhotoId>,
     #[cfg(test)]
     computations: usize,
 }
 
 impl SettingsHashes {
+    /// [`Self::get`] with the crop (rectangle, angle, flips, Constrain Crop) left out.
+    fn get_uncropped(&mut self, id: PhotoId, settings: &Arc<DevelopSettings>) -> u64 {
+        if let Some((pid, old, hash)) = &self.uncropped
+            && *pid == id
+            && old.as_ptr() == Arc::as_ptr(settings)
+        {
+            return *hash;
+        }
+        let mut s = (**settings).clone();
+        s.crop.geometry = lightcraft_geom::CropGeometry::default();
+        s.crop.flip_h = false;
+        s.crop.flip_v = false;
+        s.geometry.constrain_crop = false;
+        let hash = s.hash64();
+        self.uncropped = Some((id, Arc::downgrade(settings), hash));
+        hash
+    }
+
     fn get(&mut self, id: PhotoId, settings: &Arc<DevelopSettings>) -> u64 {
         if let Some((old, hash)) = self.entries.get(&id)
             && old.as_ptr() == Arc::as_ptr(settings)
@@ -1012,6 +1032,16 @@ pub fn source_info(p: &Photo) -> SourceInfo {
     }
 }
 
+/// What a crop dial's turn keeps the same across its drafts ([`crate::Session::reframe_draft_job`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReframePin {
+    pub photo: PhotoId,
+    /// Long edge (px) of the uncropped draft.
+    pub edge: usize,
+    /// The decoded source it renders from.
+    pub level: SourceLevel,
+}
+
 impl crate::Session {
     /// Build a render job for `id` fitting `max_w × max_h`. `before` renders the unedited look.
     pub fn render_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, before: bool, apply_crop: bool) -> Option<RenderJob> {
@@ -1048,7 +1078,15 @@ impl crate::Session {
         let source_key = Hasher128::new().str(&content_key).finish();
         let content = source_key.0 as u64;
         // Temporary "before" settings must not replace the photo's cached develop hash.
-        let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
+        let settings_hash = if before {
+            settings.hash64()
+        } else if !apply_crop {
+            // the render leaves the crop out (the Crop tool shows the whole photo): moving it is not
+            // another picture, so it is not another key (every crop dial detent was a new render)
+            self.media.settings_hashes.get_uncropped(id, &settings)
+        } else {
+            self.media.settings_hashes.get(id, &settings)
+        };
         // Generative Remove pixels arriving (or going) render the photo afresh
         let settings_hash = settings_hash ^ crate::genremove::render_key(&settings);
         let key = settings_hash
@@ -1295,21 +1333,42 @@ impl crate::Session {
     /// is the same for every detent of the turn, so it renders once and the loupe draws each
     /// detent's crop out of it (`panels::detail`); every crop detent used to be a whole-pipeline
     /// render (~100 ms for an edited 24 MP raw, ~8 a second at best).
-    pub fn reframe_draft_job(&mut self, id: PhotoId, crop_long_edge: usize, view_long_edge: usize) -> Option<RenderJob> {
+    ///
+    /// `pin` holds the size and source level the turn's first call picked and every later call
+    /// keeps: both follow the crop (uncropped ÷ crop, the source a tight crop needs), so a zoom
+    /// turn changed the key at every detent, and each one meant a new render while the loupe drew
+    /// the previous texture (the whole uncropped photo) squeezed into the crop's frame. The caller
+    /// drops the pin when the turn is over.
+    pub fn reframe_draft_job(
+        &mut self,
+        id: PhotoId,
+        crop_long_edge: usize,
+        view_long_edge: usize,
+        pin: &mut Option<ReframePin>,
+    ) -> Option<RenderJob> {
         let p = self.catalog.photo(id)?.clone();
         let (pw, ph) = (p.width.max(1) as usize, p.height.max(1) as usize);
-        let (cw, ch) = lightcraft_pipeline::native_output_size(pw, ph, &p.develop);
         let mut s = (*p.develop).clone();
         s.crop.geometry = lightcraft_geom::CropGeometry::default();
         s.crop.flip_h = false;
         s.crop.flip_v = false;
         s.geometry.constrain_crop = false;
-        let (fw, fh) = lightcraft_pipeline::native_output_size(pw, ph, &s);
-        let ratio = (fw.max(fh) / cw.max(ch).max(1.0)).clamp(1.0, 16.0);
-        let ratio = if ratio.is_finite() { ratio } else { 1.0 };
-        let edge = ((crop_long_edge as f64 * ratio).ceil() as usize).clamp(8, SourceLevel::Preview.max_edge());
+        let kept = pin.filter(|k| k.photo == id);
+        let edge = match kept {
+            Some(k) => k.edge,
+            None => {
+                let (cw, ch) = lightcraft_pipeline::native_output_size(pw, ph, &p.develop);
+                let (fw, fh) = lightcraft_pipeline::native_output_size(pw, ph, &s);
+                let ratio = (fw.max(fh) / cw.max(ch).max(1.0)).clamp(1.0, 16.0);
+                let ratio = if ratio.is_finite() { ratio } else { 1.0 };
+                ((crop_long_edge as f64 * ratio).ceil() as usize).clamp(8, SourceLevel::Preview.max_edge())
+            }
+        };
         let mut job = self.preview_job(id, edge, edge, false, &s)?.draft();
-        let want = SourceLevel::for_size(source_edge_needed(&p, &p.develop, view_long_edge, true));
+        let want = match kept {
+            Some(k) => k.level,
+            None => SourceLevel::for_size(source_edge_needed(&p, &p.develop, view_long_edge, true)),
+        };
         if want != job.level
             && let r @ SourceRef::Loaded(_) = self.media.source_ref(&p, want)
         {
@@ -1319,6 +1378,7 @@ impl crate::Session {
         }
         // (a reframing draft of this photo, nothing else: `preview_job`'s key leaves the photo out)
         job.key ^= id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x7265_6672_616d_6521;
+        *pin = Some(ReframePin { photo: id, edge, level: job.level });
         Some(job)
     }
 

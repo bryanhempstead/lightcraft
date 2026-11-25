@@ -383,6 +383,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         _ => vec![area],
     };
     let main_area = *areas.last().unwrap_or(&area);
+    // (a crop dial's uncropped draft is drawn cut to the crop: its own aspect says nothing about the
+    // frame it is drawn into, and following it stretched the crop out of shape)
+    let main_is_cut = app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id && app.reframe_shows(t.key));
     let visible_texture_aspect = app
         .renderer
         .textures
@@ -390,7 +393,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         .filter(|t| t.photo == id)
         .or_else(|| app.renderer.textures.get(&Slot::Preview).filter(|t| t.photo == id))
         .or_else(|| app.renderer.thumb(id))
-        .map(|tex| tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32);
+        .map(|tex| tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32)
+        .filter(|_| !main_is_cut);
     // Follow the texture only where it really differs (an unsupported raw's embedded JPEG with
     // another crop): a texture's whole-pixel size is a little off the exact aspect, and the crop
     // tool's overlays need the frame's own geometry.
@@ -427,10 +431,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (rw, rh) = if aspect >= 1.0 { (want, (want as f32 / aspect) as usize) } else { ((want as f32 * aspect) as usize, want) };
     // the long edge of the sharp render (what source a draft shares with it)
     let view_edge = (target_rect.width().max(target_rect.height()) * ppp).min(max_edge) as usize;
+    if !(interacting && reframing) {
+        app.reframe_pin = None; // the turn is over: the next one sizes its own draft
+    }
     let job = if interacting && reframing {
         // one uncropped render for the whole turn; each detent's crop is drawn out of it (`draw`)
-        let job = app.session.reframe_draft_job(id, want.max(8), view_edge);
-        app.reframe_key = job.as_ref().map(|j| j.key);
+        let job = app.session.reframe_draft_job(id, want.max(8), view_edge, &mut app.reframe_pin);
+        app.note_reframe_key(job.as_ref().map(|j| j.key));
         job
     } else if interacting && !legacy {
         app.session.view_draft_job(id, rw.max(8), rh.max(8), !crop_tool, view_edge)
@@ -506,6 +513,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     let p = ui.painter_at(canvas);
     // the window's HDR output, lent to `draw` (which borrows the rest of `app` immutably)
+    app.reframe_drawn.set(None);
     let hdr_shown = std::cell::RefCell::new(app.hdr_view.take());
     // what a view slot shows: its own render of this photo, else the stand-ins (no blank frame
     // between photos, and the full render replaces them in place)
@@ -526,9 +534,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             (Some(px), Some(view)) => view.texture(&format!("{slot:?}"), px).unwrap_or(tex.tex.id()),
             _ => tex.tex.id(),
         };
-        if slot == Slot::Main && app.reframe_key == Some(tex.key) {
+        if slot == Slot::Main && app.reframe_shows(tex.key) {
             // a crop dial's uncropped draft: this detent's crop out of it
-            p.add(egui::Shape::mesh(crop_mesh(id, r, &frame)));
+            let mesh = crop_mesh(id, r, &frame);
+            app.reframe_drawn.set(Some((r, [0, 1, 2, 3].map(|i| mesh.vertices[i].uv), tex.size)));
+            p.add(egui::Shape::mesh(mesh));
             return what;
         }
         p.image(id, image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -676,7 +686,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // a crop dial turned outside the crop tool: the thirds over the (cropped) photo while it moves
     if !crop_tool && !show_before && crop_grid_on(app, ui.ctx()) {
         let p = ui.painter_at(main_area.intersect(canvas));
-        let guide = Stroke::new(0.8, Color32::from_white_alpha(150));
+        let guide = Stroke::new(0.8, crate::theme::CROP.gamma_multiply(0.6));
         for line in super::crop_overlay::paths(crate::state::CropOverlay::Thirds, 0, img_rect.width(), img_rect.height()) {
             p.add(egui::Shape::line(
                 line.into_iter().map(|(x, y)| img_rect.min + vec2(x * img_rect.width(), y * img_rect.height())).collect(),
@@ -1718,10 +1728,10 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         mesh.indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
     }
     p.add(mesh);
-    p.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, Color32::WHITE)));
+    p.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, crate::theme::CROP)));
     // overlay guides
     let lerp = |a: Pos2, b: Pos2, t: f32| a + (b - a) * t;
-    let guide = Stroke::new(0.8, Color32::from_white_alpha(150));
+    let guide = Stroke::new(0.8, crate::theme::CROP.gamma_multiply(0.6));
     // (u, v) across / down the (rotated) crop frame
     let at = |(u, v): (f32, f32)| pts[0] + (pts[1] - pts[0]) * u + (pts[3] - pts[0]) * v;
     let (cw, ch) = (pts[0].distance(pts[1]), pts[0].distance(pts[3]));
@@ -1739,8 +1749,8 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     for (i, h) in handles.iter().enumerate() {
         register(ui.ctx(), format!("cropHandle:{i}"), Rect::from_center_size(*h, vec2(14.0, 14.0)));
         let s = if i < 4 { 12.0 } else { 9.0 };
-        p.rect_filled(Rect::from_center_size(*h, vec2(s, 3.0)), 0.0, Color32::WHITE);
-        p.rect_filled(Rect::from_center_size(*h, vec2(3.0, s)), 0.0, Color32::WHITE);
+        p.rect_filled(Rect::from_center_size(*h, vec2(s, 3.0)), 0.0, crate::theme::CROP);
+        p.rect_filled(Rect::from_center_size(*h, vec2(3.0, s)), 0.0, crate::theme::CROP);
     }
     let inside = |q: Pos2| {
         let n = map.norm(q);
@@ -2499,7 +2509,7 @@ fn straighten_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     let Some(b) = resp.interact_pointer_pos().or(resp.hover_pos()) else { return };
     let p = ui.painter();
     p.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(140)));
-    p.line_segment([a, b], Stroke::new(1.5, Color32::WHITE));
+    p.line_segment([a, b], Stroke::new(1.5, crate::theme::CROP));
     if resp.drag_stopped() {
         app.gesture = None;
         let v = b - a;

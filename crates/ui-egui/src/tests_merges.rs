@@ -378,7 +378,7 @@ fn the_merges_view_is_a_stacked_wave_per_group() {
     let (pc, hc) = (cards(&h, &pano.id), cards(&h, &hdr.id));
     assert_eq!((pc.len(), hc.len()), (5, 3));
     assert!(overlapping(&pc), "stacked: the cards overlap {pc:?}");
-    assert!(pc.iter().all(|(_, r)| r.height() >= 110.0), "big cards (4 frames per row): {pc:?}");
+    assert!(pc.iter().all(|(_, r)| r.height() >= 70.0), "cards big enough inside a tile (4 groups per row): {pc:?}");
     let ys: Vec<f32> = pc.iter().map(|(_, r)| r.top()).collect();
     assert!(ys.iter().any(|y| (y - ys[0]).abs() > 2.0), "on a wave: {ys:?}");
     // the headers: kind, confidence, camera, subfolder, merge., send.back.
@@ -390,14 +390,13 @@ fn the_merges_view_is_a_stacked_wave_per_group() {
             format!("button:mergesGroupMerge-{}", g.id),
             format!("button:mergesGroupSendBack-{}", g.id),
             format!("chip:mergesCamera-{}-0", g.id),
-            format!("chip:mergesSubfolder-{}-1", g.id),
         ] {
             let r = widget(&h, &w);
             assert!(head.contains_rect(r.shrink(0.5)), "{w} inside its header {r:?} {head:?}");
             assert!((r.height() - 24.0).abs() < 0.5, "one control height: {w}");
         }
     }
-    assert_eq!(widget(&h, &format!("button:mergesKind-{}", pano.id)).width() > 0.0, true);
+    assert!(widget(&h, &format!("button:mergesKind-{}", pano.id)).width() > 0.0);
     let faults = crate::tests_panels::layout_faults(&h, h.app.canvas_rect.unwrap());
     assert!(faults.is_empty(), "{faults:#?}");
     shot(&mut h, "mergewave-1-stacked.png");
@@ -430,16 +429,22 @@ fn the_merges_view_is_a_stacked_wave_per_group() {
     assert!(!overlapping(&cards(&h, &pano.id)), "kept spread");
     assert!(crate::folds::is_open_or(&h.view.ctx, &format!("merges.spread:{}", pano.id), false));
 
-    // a click on a card takes the frame out (dimmed, still there); again puts it back
+    // a click on a card picks the frame; the ⊖ asks (out.of.group. leaves it dimmed, still there)
     let out = pano.photos[2];
     click(&mut h, &format!("mergeCard:{}:{}", pano.id, out.0));
+    assert_eq!(h.app.session.selection.ids, vec![out], "a click picks the frame");
+    assert_eq!(merge_find::group(&h.app.session.catalog, &pano.id).unwrap().photos.len(), 5, "and leaves the group alone");
+    click(&mut h, &format!("mergeMinus:{}:{}", pano.id, out.0));
+    click(&mut h, "button:mergesFrameOutOfGroup");
     assert!(h.step_until(T, |h| !merge_find::group(&h.app.session.catalog, &pano.id).unwrap().photos.contains(&out)), "taken out");
     h.settle(SETTLE);
+    assert!(h.app.session.catalog.photo(out).is_some(), "the photo itself stays");
     assert!(rect_of(&h, &format!("mergeCard:{}:{}", pano.id, out.0)).is_some(), "still shown");
     let faults = crate::tests_panels::layout_faults(&h, h.app.canvas_rect.unwrap());
     assert!(faults.is_empty(), "{faults:#?}");
     shot(&mut h, "mergewave-3-frame-out.png");
-    click(&mut h, &format!("mergeCard:{}:{}", pano.id, out.0));
+    click(&mut h, &format!("mergeMinus:{}:{}", pano.id, out.0));
+    click(&mut h, "button:mergesFrameOutOfGroup");
     assert!(h.step_until(T, |h| merge_find::group(&h.app.session.catalog, &pano.id).unwrap().photos.contains(&out)), "put back");
     // a double-click opens the photo, and changes nothing in the group (a while after the last
     // clicks: three quick clicks are a triple-click)
@@ -456,21 +461,25 @@ fn the_merges_view_is_a_stacked_wave_per_group() {
     h.settle(SETTLE);
 
     // groups are picked by their header: click, ⌘-click adds, again takes away, ⇧-click, none.
-    click(&mut h, &format!("group:merges:group:{}", hdr.id));
+    // (a click on the header's empty right end of its first line: the buttons fill the rest of a tile's)
+    let r = h.request("ui.clickWidget", json!({"id": format!("group:merges:group:{}", hdr.id), "fx": 0.98, "fy": 0.1}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
     assert_eq!(h.app.session.selection.ids, hdr.photos);
-    let r = h.request("ui.clickWidget", json!({"id": format!("group:merges:group:{}", pano.id), "cmd": true, "fx": 0.6}), T);
+    let r = h.request("ui.clickWidget", json!({"id": format!("group:merges:group:{}", pano.id), "cmd": true, "fx": 0.98, "fy": 0.1}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
     assert_eq!(h.app.session.selection.ids.len(), 8);
-    let r = h.request("ui.clickWidget", json!({"id": format!("group:merges:group:{}", hdr.id), "cmd": true, "fx": 0.6}), T);
+    let r = h.request("ui.clickWidget", json!({"id": format!("group:merges:group:{}", hdr.id), "cmd": true, "fx": 0.98, "fy": 0.1}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
     assert_eq!(h.app.session.selection.ids, pano.photos);
     click(&mut h, "button:mergesNone");
     assert!(h.app.session.selection.ids.is_empty());
-    let r = h.request("ui.clickWidget", json!({"id": format!("group:merges:group:{}", hdr.id), "shift": true, "fx": 0.6}), T);
+    let r = h.request("ui.clickWidget", json!({"id": format!("group:merges:group:{}", hdr.id), "shift": true, "fx": 0.98, "fy": 0.1}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
@@ -496,7 +505,7 @@ fn the_merges_view_is_a_stacked_wave_per_group() {
     // smaller. / bigger.
     let before = crate::merges::view_prefs(&h.app).per_row;
     click(&mut h, "button:mergesBigger");
-    assert_eq!(crate::merges::view_prefs(&h.app).per_row, before - 1, "bigger.: one frame fewer per row");
+    assert_eq!(crate::merges::view_prefs(&h.app).per_row, before - 1, "bigger.: one group fewer per row");
     click(&mut h, "button:mergesSmaller");
     assert_eq!(crate::merges::view_prefs(&h.app).per_row, before);
     // the triangle folds a group to its header

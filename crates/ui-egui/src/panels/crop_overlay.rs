@@ -238,7 +238,7 @@ pub fn loupe(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, 
     }
     let ctx = ui.ctx().clone();
     let p = ui.painter_at(clip);
-    let line = |a: f32| Stroke::new(1.0, Color32::from_white_alpha((a.clamp(0.0, 1.0) * 255.0) as u8));
+    let line = |a: f32| Stroke::new(1.0, crate::theme::CROP.gamma_multiply(a.clamp(0.0, 1.0)));
     let shadow = |a: f32| Stroke::new(1.0, Color32::from_black_alpha((a.clamp(0.0, 1.0) * 120.0) as u8));
     let at = |u: f32, v: f32| pos2(img.left() + u * img.width(), img.top() + v * img.height());
     // the layout image under the lines, fitted inside the photo
@@ -309,7 +309,7 @@ pub fn loupe(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, 
     let t = crate::theme::Tokens::get(&ctx);
     for (label, r) in &frames {
         p.rect_stroke(r.translate(vec2(1.0, 1.0)), 0.0, shadow(o.line_opacity), egui::StrokeKind::Inside);
-        p.rect_stroke(*r, 0.0, Stroke::new(1.5, Color32::from_white_alpha((o.line_opacity * 255.0) as u8)), egui::StrokeKind::Inside);
+        p.rect_stroke(*r, 0.0, Stroke::new(1.5, crate::theme::CROP.gamma_multiply(o.line_opacity.clamp(0.0, 1.0))), egui::StrokeKind::Inside);
         let g = p.layout_no_wrap(label.clone(), t.semibold(11.0), Color32::WHITE);
         let tag = Rect::from_min_size(r.left_top() + vec2(6.0, 6.0), g.size() + vec2(10.0, 4.0));
         p.rect_filled(tag, 3.0, Color32::from_black_alpha(150));
@@ -319,7 +319,7 @@ pub fn loupe(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, 
     // the guides: a vertical and a horizontal line, ⌘-drag to move them
     if o.guides {
         let q = at(o.guides_at.0, o.guides_at.1);
-        let s = Stroke::new(1.0, Color32::from_rgb(255, 214, 90));
+        let s = Stroke::new(1.0, crate::theme::CROP);
         for seg in [[pos2(q.x, img.top()), pos2(q.x, img.bottom())], [pos2(img.left(), q.y), pos2(img.right(), q.y)]] {
             p.line_segment([seg[0] + vec2(1.0, 1.0), seg[1] + vec2(1.0, 1.0)], shadow(0.8));
             p.line_segment(seg, s);

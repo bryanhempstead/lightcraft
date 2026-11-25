@@ -286,6 +286,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if crate::merge_page::keys(app, ctx) {
         return;
     }
+    // a merges. view with frames picked: ⌫ asks out.of.group. / remove. / del. (the ⊖'s question)
+    if crate::merges::delete_key(app, ctx) {
+        return;
+    }
     // ← / → over a Collections row close / open its folders instead of moving the photo
     if crate::panels::left::collection_keys(app, ctx) {
         return;

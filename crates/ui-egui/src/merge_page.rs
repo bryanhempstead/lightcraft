@@ -3,9 +3,9 @@
 //!
 //! * left: the sidebar as on library. (folders, shoots and collections pick the scope; on this tab
 //!   each shoot and folder row counts its open merges, `panels::left`);
-//! * centre: the merges. view ([`crate::merges::view`]) under its bar and the filters
-//!   ([`filters`]: kind. panorama. / hdr. / focus.stack. / hdr.panorama., confidence. sure. /
-//!   likely. / maybe., camera.);
+//! * centre: the merges. view ([`crate::merges::view`]) under its bar, whose row also holds the
+//!   filters ([`filter_menus`]: drop-downs kind. panorama. / hdr. / focus.stack. / hdr.panorama.,
+//!   confidence. sure. / likely. / maybe., camera.);
 //! * right ([`right`], in place of the Library right panel): the picked group — its kind,
 //!   confidence and reasons, its frames large in a strip, the Merge dialog's options for its kind
 //!   inline ([`crate::merge::options`]) — with `merge.` and `send.back.` at the bottom.
@@ -211,9 +211,10 @@ fn send_back_picked(app: &mut LightcraftApp) -> Result<Value, String> {
 /// filters now. kind. and confidence. are remembered per screen size.
 fn set_filter(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     let parse_conf = |s: &str| CONFIDENCES.into_iter().find(|c| c.id() == s.trim_end_matches('.'));
+    // null: every one; [] : none of them (nothing picked, no group shows)
     let kinds = match p.get("kinds") {
         None => None,
-        Some(Value::Null) => Some(Vec::new()),
+        Some(Value::Null) => Some((Vec::new(), false)),
         Some(Value::Array(a)) => {
             let mut out = Vec::new();
             for v in a {
@@ -223,13 +224,14 @@ fn set_filter(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
                     out.push(k);
                 }
             }
-            Some(out)
+            let none = out.is_empty();
+            Some((out, none))
         }
-        Some(_) => return Err("merge.filter: `kinds` is a list of kinds (or null for every kind)".into()),
+        Some(_) => return Err("merge.filter: `kinds` is a list of kinds (null for every kind, [] for none)".into()),
     };
     let mut confs = match p.get("confidences") {
         None => None,
-        Some(Value::Null) => Some(Vec::new()),
+        Some(Value::Null) => Some((Vec::new(), false)),
         Some(Value::Array(a)) => {
             let mut out = Vec::new();
             for v in a {
@@ -239,29 +241,34 @@ fn set_filter(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
                     out.push(c);
                 }
             }
-            Some(out)
+            let none = out.is_empty();
+            Some((out, none))
         }
-        Some(_) => return Err("merge.filter: `confidences` is a list (or null for every one)".into()),
+        Some(_) => return Err("merge.filter: `confidences` is a list (null for every one, [] for none)".into()),
     };
     if let Some(f) = p.get("from").and_then(Value::as_str) {
         let c = parse_conf(f).ok_or_else(|| format!("merge.filter: from is sure, likely or maybe, not `{f}`"))?;
-        confs = Some(CONFIDENCES.into_iter().filter(|x| *x >= c).collect());
+        confs = Some((CONFIDENCES.into_iter().filter(|x| *x >= c).collect(), false));
     }
     if p.get("clear").and_then(Value::as_bool) == Some(true) {
         app.merge.filter = Filter::default();
         let v = crate::merges::view_prefs_mut(app);
         v.kinds.clear();
         v.confidences.clear();
+        v.kinds_none = false;
+        v.confidences_none = false;
     }
     if let Some(c) = p.get("camera") {
         app.merge.filter.camera = c.as_str().filter(|s| !s.is_empty() && !s.starts_with("all")).map(str::to_string);
     }
     let v = crate::merges::view_prefs_mut(app);
-    if let Some(k) = kinds {
+    if let Some((k, none)) = kinds {
         v.kinds = k;
+        v.kinds_none = none;
     }
-    if let Some(c) = confs {
+    if let Some((c, none)) = confs {
         v.confidences = c;
+        v.confidences_none = none;
     }
     Ok(filter_json(app))
 }
@@ -269,8 +276,9 @@ fn set_filter(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 fn filter_json(app: &LightcraftApp) -> Value {
     let v = crate::merges::view_prefs(app);
     json!({
-        "kinds": v.kinds.iter().map(|k| k.id()).collect::<Vec<_>>(),
-        "confidences": v.confidences.iter().map(|c| c.id()).collect::<Vec<_>>(),
+        // (null: every one; []: none)
+        "kinds": if v.kinds.is_empty() && !v.kinds_none { Value::Null } else { json!(v.kinds.iter().map(|k| k.id()).collect::<Vec<_>>()) },
+        "confidences": if v.confidences.is_empty() && !v.confidences_none { Value::Null } else { json!(v.confidences.iter().map(|c| c.id()).collect::<Vec<_>>()) },
         "camera": app.merge.filter.camera,
     })
 }
@@ -309,18 +317,14 @@ pub fn keys(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
 
 // ------------------------------------------------------------------------------------ filters
 
-/// A filter chip: its label, then how many groups it shows (quiet; a 0 is a full-strength chip
-/// with a quiet 0, never greyed out). `button:{id}`.
-fn count_chip(ui: &mut egui::Ui, id: &str, label: &str, count: usize, active: bool) -> egui::Response {
+/// A drop-down button of the bar: its label and a ▾; `button:{id}` and `mergeFilter:{kind}`.
+fn drop_button(ui: &mut egui::Ui, id: &str, which: &str, label: &str, active: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
-    let font = t.semibold(11.5);
-    let lg = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), font.clone(), t.text);
-    let quiet = if active && t.tools_accent.is_some() { t.text } else { t.text_dim };
-    let cg = ui.painter().layout_no_wrap(count.to_string(), t.font(11.5), quiet);
-    let w = 9.0 + lg.size().x + 6.0 + cg.size().x + 9.0;
-    let (r, resp) = ui.allocate_exact_size(vec2(w.max(37.0), 24.0), Sense::click());
+    let galley = ui.painter().layout_no_wrap(crate::i18n::tr(label).to_string(), t.semibold(11.5), t.text);
+    let (r, resp) = ui.allocate_exact_size(vec2((galley.size().x + 18.0 + 18.0).max(37.0), 24.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label));
     register(ui.ctx(), format!("button:{id}"), r);
+    register(ui.ctx(), format!("mergeFilter:{which}"), r);
     let fill = if active {
         t.tools_accent.unwrap_or(t.pressed)
     } else if resp.hovered() {
@@ -328,95 +332,162 @@ fn count_chip(ui: &mut egui::Ui, id: &str, label: &str, count: usize, active: bo
     } else {
         t.button
     };
-    let p = ui.painter();
-    p.rect(r, 4.0, fill, Stroke::new(1.0, t.button_border), egui::StrokeKind::Inside);
     let text_c = if active && t.tools_accent.is_some() { crate::theme::text_on(fill) } else { t.text };
-    let x = r.left() + 9.0;
-    p.galley(pos2(x, r.center().y - lg.size().y / 2.0), lg.clone(), text_c);
-    p.galley(pos2(x + lg.size().x + 6.0, r.center().y - cg.size().y / 2.0), cg, quiet);
+    ui.painter().rect(r, 4.0, fill, Stroke::new(1.0, t.button_border), egui::StrokeKind::Inside);
+    ui.painter().galley(pos2(r.left() + 9.0, r.center().y - galley.size().y / 2.0), galley, text_c);
+    crate::folds::paint_triangle(ui, pos2(r.right() - 13.0, r.center().y), true, text_c);
     resp
 }
 
-/// The filters under the merges. bar, with how many groups each shows here: kind. and
-/// confidence. (click: only that one; ⌘-click adds / takes away; ⇧-click: the ones from the
-/// last clicked; all.: every one), camera. (a menu), and how many groups show.
-pub fn filters(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let ctx = ui.ctx().clone();
+/// Width of a filter menu's rows.
+const MENU_W: f32 = 220.0;
+
+/// A row of a filter menu: its label, then how many groups it shows (quiet; a 0 is a full-strength
+/// row with a quiet 0, never greyed out); the picked ones are filled. `menu:{id}`.
+fn menu_row(ui: &mut egui::Ui, id: &str, label: &str, count: Option<usize>, picked: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(MENU_W, 26.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, picked, label));
+    register(ui.ctx(), format!("menu:{id}"), r);
+    let r = r.shrink2(vec2(2.0, 1.0));
+    if picked {
+        ui.painter().rect_filled(r, 4.0, t.tools_accent.unwrap_or(t.pressed));
+    } else if resp.hovered() {
+        ui.painter().rect_filled(r, 4.0, t.hover);
+    }
+    let on_accent = picked && t.tools_accent.is_some();
+    let ink = if on_accent { crate::theme::text_on(t.tools_accent.unwrap_or(t.pressed)) } else { t.text };
+    let quiet = if on_accent { ink } else { t.text_dim };
+    let font = if picked { t.semibold(12.0) } else { t.font(12.0) };
+    ui.painter().text(pos2(r.left() + 10.0, r.center().y), egui::Align2::LEFT_CENTER, crate::i18n::tr(label), font, ink);
+    if let Some(n) = count {
+        ui.painter().text(pos2(r.right() - 10.0, r.center().y), egui::Align2::RIGHT_CENTER, n.to_string(), t.font(12.0), quiet);
+    }
+    resp
+}
+
+/// What a filter button says of its picks: `all.`, the one picked, or `3 picked.`.
+fn picks_label<K>(picked: &[K], none: bool, tag: impl Fn(&K) -> &'static str) -> String {
+    match picked {
+        [] if none => "none.".to_string(),
+        [] => "all.".to_string(),
+        [k] => tag(k).to_string(),
+        more => format!("{} picked.", more.len()),
+    }
+}
+
+/// The filters, drop-downs on the merges. bar's own row (right after find.): kind. and
+/// confidence. (click: only that one; ⌘-click adds / takes away; ⇧-click: the ones from the last
+/// clicked; all. / none.: every one), camera. (one camera), each row with how many groups it
+/// shows here, then how many groups show.
+pub fn filter_menus(app: &mut LightcraftApp, row: &mut egui::Ui) {
+    let ctx = row.ctx().clone();
     let data = crate::merges::view_data(app, &ctx);
     let vp = crate::merges::view_prefs(app);
-    crate::merges::wrapped_band(ui, "merges:filters", |row| {
-        let t = Tokens::get(row.ctx());
-        let label = |row: &mut egui::Ui, id: &str, text: &str| {
-            let g = row.painter().layout_no_wrap(crate::i18n::tr(text).to_string(), t.font(12.0), t.text_dim);
-            let (r, _) = row.allocate_exact_size(vec2(g.size().x, 24.0), Sense::hover());
-            register(row.ctx(), format!("label:{id}"), r);
-            row.painter().galley(pos2(r.left(), r.center().y - g.size().y / 2.0), g, t.text_dim);
-        };
-        label(row, "mergesFilterKind", "kind.");
-        let all_kinds: usize = data.kind_counts.values().sum();
-        if count_chip(row, "mergesKindAll", "all.", all_kinds, vp.kinds.is_empty()).on_hover_text(crate::i18n::tr("Every kind")).clicked() {
-            let _ = app.run("merge.filter", json!({"kinds": null}));
+    let t = Tokens::get(&ctx);
+    // kind.
+    let kinds_label = format!("kind. {}", picks_label(&vp.kinds, vp.kinds_none, |k| k.tag()));
+    let btn = drop_button(row, "mergesFilterKind", "kind", &kinds_label, !vp.kinds.is_empty() || vp.kinds_none)
+        .on_hover_text(crate::i18n::tr("Which kinds of merge show (click: only that one, ⌘-click: add or take away, ⇧-click: the run from the last one)"));
+    let close = egui::Popup::default_response_id(&btn);
+    egui::Popup::menu(&btn).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        let all: usize = data.kind_counts.values().sum();
+        let mut pick: Option<Vec<MergeType>> = None;
+        let mut none = false;
+        let mut keep_open = false;
+        if menu_row(ui, "mergesFilterKind-all", "all.", Some(all), vp.kinds.is_empty() && !vp.kinds_none).clicked() {
+            pick = Some(Vec::new());
         }
         for k in KIND_ORDER {
             let n = data.kind_counts.get(&k).copied().unwrap_or(0);
-            let r = count_chip(row, &format!("mergesKind{}", k.id()), k.tag(), n, vp.kinds.contains(&k))
-                .on_hover_text(crate::i18n::tr("Only this kind (⌘-click: add or take it away, ⇧-click: the kinds from the last one)"));
-            if r.clicked() {
-                let m = row.input(|i| i.modifiers);
-                let next = chip_click(&KIND_ORDER, &vp.kinds, app.merge.filter.anchor_kind, k, m);
+            if menu_row(ui, &format!("mergesFilterKind-{}", k.id()), k.tag(), Some(n), vp.kinds.contains(&k)).clicked() {
+                let m = ui.input(|i| i.modifiers);
+                keep_open = m.command || m.shift;
+                pick = Some(chip_click(&KIND_ORDER, &vp.kinds, app.merge.filter.anchor_kind, k, m));
                 app.merge.filter.anchor_kind = Some(k);
-                let ids: Vec<&str> = next.iter().map(|k| k.id()).collect();
-                let _ = app.run("merge.filter", json!({"kinds": if ids.is_empty() { Value::Null } else { json!(ids) }}));
             }
         }
-        row.add_space(8.0);
-        label(row, "mergesFilterConfidence", "confidence.");
-        let from = app.ui.settings.merge.show_from;
-        if count_chip(row, "mergesConfAll", "all.", data.conf_all, vp.confidences.is_empty())
+        if menu_row(ui, "mergesFilterKind-none", "none.", None, vp.kinds_none).clicked() {
+            pick = Some(Vec::new());
+            none = true;
+        }
+        if let Some(next) = pick {
+            let ids: Vec<&str> = next.iter().map(|k| k.id()).collect();
+            let _ = app.run("merge.filter", json!({"kinds": if ids.is_empty() && !none { Value::Null } else { json!(ids) }}));
+            if !keep_open {
+                egui::Popup::close_id(ui.ctx(), close);
+            }
+        }
+    });
+    // confidence.
+    let from = app.ui.settings.merge.show_from;
+    let conf_label = format!("confidence. {}", picks_label(&vp.confidences, vp.confidences_none, |c| c.tag()));
+    let btn = drop_button(row, "mergesFilterConfidence", "confidence", &conf_label, !vp.confidences.is_empty() || vp.confidences_none)
+        .on_hover_text(crate::i18n::tr("Which confidences show (click: only that one, ⌘-click: add or take away, ⇧-click: the run from the last one)"));
+    let close = egui::Popup::default_response_id(&btn);
+    egui::Popup::menu(&btn).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        let mut pick: Option<Vec<Confidence>> = None;
+        let mut none = false;
+        let mut keep_open = false;
+        if menu_row(ui, "mergesFilterConfidence-all", "all.", Some(data.conf_all), vp.confidences.is_empty() && !vp.confidences_none)
             .on_hover_text(crate::i18n::tr(&format!("Every group from {} up (Settings ▸ merge. ▸ show from)", from.tag())))
             .clicked()
         {
-            let _ = app.run("merge.filter", json!({"confidences": null}));
+            pick = Some(Vec::new());
         }
         for c in CONFIDENCES {
-            let tip = match c {
-                Confidence::Sure => "Only the groups LightCraft is sure of (⌘-click: add or take away)",
-                Confidence::Likely => "Only the likely groups (⌘-click: add or take away)",
-                Confidence::Maybe => "Only the borderline groups (⌘-click: add or take away)",
-            };
             let n = data.conf_counts.get(&c).copied().unwrap_or(0);
-            if count_chip(row, &format!("mergesConf{}", c.id()), c.tag(), n, vp.confidences.contains(&c))
-                .on_hover_text(crate::i18n::tr(tip))
-                .clicked()
-            {
-                let m = row.input(|i| i.modifiers);
-                let next = chip_click(&CONFIDENCES, &vp.confidences, app.merge.filter.anchor_conf, c, m);
+            if menu_row(ui, &format!("mergesFilterConfidence-{}", c.id()), c.tag(), Some(n), vp.confidences.contains(&c)).clicked() {
+                let m = ui.input(|i| i.modifiers);
+                keep_open = m.command || m.shift;
+                pick = Some(chip_click(&CONFIDENCES, &vp.confidences, app.merge.filter.anchor_conf, c, m));
                 app.merge.filter.anchor_conf = Some(c);
-                let ids: Vec<&str> = next.iter().map(|c| c.id()).collect();
-                let _ = app.run("merge.filter", json!({"confidences": if ids.is_empty() { Value::Null } else { json!(ids) }}));
             }
         }
-        row.add_space(8.0);
-        let cam = app.merge.filter.camera.clone();
-        let cam_label = cam.as_ref().map_or_else(|| "camera.".to_string(), |c| format!("camera. {c}"));
-        let menu = crate::widgets::text_button(row, "mergesCamera", &cam_label, cam.is_some())
-            .on_hover_text(crate::i18n::tr("Only the groups shot with one camera"));
-        egui::Popup::menu(&menu).show(|ui| {
-            if ui.selectable_label(cam.is_none(), crate::i18n::tr("all.")).clicked() {
-                let _ = app.run("merge.filter", json!({"camera": null}));
+        if menu_row(ui, "mergesFilterConfidence-none", "none.", None, vp.confidences_none).clicked() {
+            pick = Some(Vec::new());
+            none = true;
+        }
+        if let Some(next) = pick {
+            let ids: Vec<&str> = next.iter().map(|c| c.id()).collect();
+            let _ = app.run("merge.filter", json!({"confidences": if ids.is_empty() && !none { Value::Null } else { json!(ids) }}));
+            if !keep_open {
+                egui::Popup::close_id(ui.ctx(), close);
             }
-            for c in &data.cameras {
-                if ui.selectable_label(cam.as_ref() == Some(c), c).clicked() {
-                    let _ = app.run("merge.filter", json!({"camera": c}));
-                }
-            }
-        });
-        row.add_space(8.0);
-        let n = data.open.len();
-        let count =
-            if n == data.open_total { format!("{n} group{}", if n == 1 { "" } else { "s" }) } else { format!("{n} of {} groups", data.open_total) };
-        label(row, "mergesFilterCount", &count);
+        }
     });
+    // camera.
+    let cam = app.merge.filter.camera.clone();
+    let cam_label = cam.as_ref().map_or_else(|| "camera.".to_string(), |c| format!("camera. {c}"));
+    let btn = drop_button(row, "mergesFilterCamera", "camera", &cam_label, cam.is_some())
+        .on_hover_text(crate::i18n::tr("Only the groups shot with one camera"));
+    let close = egui::Popup::default_response_id(&btn);
+    egui::Popup::menu(&btn).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        let mut pick: Option<Option<String>> = None;
+        if menu_row(ui, "mergesFilterCamera-all", "all.", Some(data.camera_all), cam.is_none()).clicked() {
+            pick = Some(None);
+        }
+        for (i, c) in data.cameras.iter().enumerate() {
+            let n = data.camera_counts.get(c).copied().unwrap_or(0);
+            if menu_row(ui, &format!("mergesFilterCamera-{i}"), c, Some(n), cam.as_ref() == Some(c)).clicked() {
+                pick = Some(if cam.as_ref() == Some(c) { None } else { Some(c.clone()) });
+            }
+        }
+        if menu_row(ui, "mergesFilterCamera-none", "none.", None, false).clicked() {
+            pick = Some(None);
+        }
+        if let Some(next) = pick {
+            let _ = app.run("merge.filter", json!({"camera": next}));
+            egui::Popup::close_id(ui.ctx(), close);
+        }
+    });
+    // how many groups show
+    let n = data.open.len();
+    let count = if n == data.open_total { format!("{n} group{}", if n == 1 { "" } else { "s" }) } else { format!("{n} of {} groups", data.open_total) };
+    let g = row.painter().layout_no_wrap(crate::i18n::tr(&count).to_string(), t.font(12.0), t.text_dim);
+    let (r, _) = row.allocate_exact_size(vec2(g.size().x, 24.0), Sense::hover());
+    register(&ctx, "label:mergesFilterCount", r);
+    row.painter().galley(pos2(r.left(), r.center().y - g.size().y / 2.0), g, t.text_dim);
 }
 
 /// Which of `order` a click on chip `k` leaves picked (empty: every one): click = only it (again:

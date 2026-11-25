@@ -92,15 +92,29 @@ impl PanZoom {
 /// or pinch to zoom around the pointer, double-click for the whole picture. Returns the response;
 /// `view` changes in place.
 pub fn interact(ui: &mut egui::Ui, pane: Rect, id: &str, size: [usize; 2], view: &mut PanZoom) -> egui::Response {
+    interact_unless(ui, pane, id, size, view, &|_| false)
+}
+
+/// [`interact`], except that a drag which went down where `not_a_pan` says (the Merge preview's
+/// crop frame and its handles) doesn't pan: the caller handles it.
+pub fn interact_unless(
+    ui: &mut egui::Ui,
+    pane: Rect,
+    id: &str,
+    size: [usize; 2],
+    view: &mut PanZoom,
+    not_a_pan: &dyn Fn(egui::Pos2) -> bool,
+) -> egui::Response {
     let resp = ui.interact(pane, egui::Id::new(("pan-zoom", id)), Sense::click_and_drag());
     crate::widgets::register(ui.ctx(), format!("preview:{id}"), pane);
     if size[0] == 0 || size[1] == 0 {
         return resp;
     }
-    if resp.dragged() {
+    let held = ui.input(|i| i.pointer.press_origin()).is_some_and(not_a_pan);
+    if resp.dragged() && !held {
         ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         *view = view.panned(pane, size, resp.drag_delta());
-    } else if resp.hovered() {
+    } else if resp.hovered() && !resp.dragged() {
         ui.ctx().set_cursor_icon(CursorIcon::Grab);
     }
     if resp.double_clicked() {

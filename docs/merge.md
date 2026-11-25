@@ -13,7 +13,7 @@ All algorithms are our own implementations from published papers (cited in the m
   `<name>-HDR.dng`, `-Pano.dng` or `-HDR-Pano.dng`, imported and selected.
 - **Commands** (CLI, MCP, control channel):
   - `merge.hdr {ids?, align=true, deghost=none|low|medium|high, autoSettings=true, stack=false, preview=false, showOverlay=false, previewPath?}`
-  - `merge.panorama {ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, fillEdges=false, autoSettings=true, maxMegapixels=40, preview, previewPath?}`
+  - `merge.panorama {ids?, projection=auto|spherical|cylindrical|perspective, boundaryWarp=0..100, autoCrop=false, crop=[x0,y0,x1,y1] (normalized; replaces the auto-crop rectangle — the dialog's draggable crop frame), fillEdges=false, autoSettings=true, maxMegapixels=40, preview, previewPath?}`
   - `merge.hdrPanorama {ids?, bracket=0 (from EXIF), …both sets of options}`
 - **CLI:** `lightcraft-cli merge hdr|panorama|hdr-panorama [options] FILES…`;
   `lightcraft-cli synth-merge hdr|panorama -o DIR` writes synthetic inputs (procedural scene).

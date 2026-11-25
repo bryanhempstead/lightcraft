@@ -106,6 +106,8 @@ mod tests_masking;
 #[cfg(test)]
 mod tests_media;
 #[cfg(test)]
+mod tests_merge_dialog;
+#[cfg(test)]
 mod tests_merges;
 #[cfg(test)]
 mod tests_merge_page;
@@ -382,6 +384,16 @@ pub struct LightcraftApp {
     /// The key of the loupe's uncropped crop-dial draft ([`lightcraft_engine::Session::reframe_draft_job`]):
     /// a Main texture with it is drawn cropped to the current crop.
     pub reframe_key: Option<u64>,
+    /// The keys of the last few uncropped crop-dial drafts: one still on screen while the next
+    /// renders (a new size, a new source) is drawn cut too, not as the whole photo in the crop's frame.
+    pub reframe_keys: Vec<u64>,
+    /// The size and source the turn's uncropped draft keeps ([`lightcraft_engine::Session::reframe_draft_job`]);
+    /// dropped when the crop dial lets go.
+    pub reframe_pin: Option<lightcraft_engine::media::ReframePin>,
+    /// What the last frame drew out of an uncropped crop-dial draft: the screen rect, the texture
+    /// coordinates of its four corners (top-left clockwise) and the texture's pixel size (tests check
+    /// that the photo is neither stretched nor squashed).
+    pub reframe_drawn: std::cell::Cell<Option<(egui::Rect, [egui::Pos2; 4], [usize; 2])>>,
     /// Control requests to handle again next frame (`control::Outcome::Retry`) and how often they were.
     pub control_retry: Vec<(ControlRequest, u8)>,
     /// The host's MIDI input status for the ctrl. page ("2 inputs: Monogram…", an error).
@@ -472,6 +484,9 @@ impl LightcraftApp {
             h_replay: false,
             crop_touch: None,
             reframe_key: None,
+            reframe_keys: Vec::new(),
+            reframe_pin: None,
+            reframe_drawn: std::cell::Cell::new(None),
             control_retry: Vec::new(),
             midi_status: String::new(),
             left_off: leftoff::Tracker::default(),
@@ -484,6 +499,24 @@ impl LightcraftApp {
     /// (the last spot's folder or album, the photo and the view) on the first frame.
     pub fn resume_left_off_at_launch(&mut self) {
         self.left_off.resume_at_launch = true;
+    }
+
+    /// Is a Main texture with `key` an uncropped crop-dial draft (drawn cut to the current crop)?
+    pub fn reframe_shows(&self, key: u64) -> bool {
+        self.reframe_key == Some(key) || self.reframe_keys.contains(&key)
+    }
+
+    /// The loupe asks for the uncropped draft `key` of a crop dial's turn.
+    pub fn note_reframe_key(&mut self, key: Option<u64>) {
+        self.reframe_key = key;
+        if let Some(k) = key
+            && !self.reframe_keys.contains(&k)
+        {
+            if self.reframe_keys.len() >= 6 {
+                self.reframe_keys.remove(0);
+            }
+            self.reframe_keys.push(k);
+        }
     }
 
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
@@ -511,6 +544,10 @@ impl LightcraftApp {
         let r = self.session.execute(id, &params).map_err(|e| e.to_string());
         if r.is_ok() && matches!(id, "library.source" | "library.browse") {
             leftoff::entered(self);
+        }
+        if r.is_ok() && id == "library.select" {
+            // a photo picked (left off.: this one is work, not a default)
+            self.left_off.user_select = true;
         }
         if r.is_ok() && id == "photo.label" {
             let label = params.get("label").and_then(Value::as_str).and_then(lightcraft_catalog::ColorLabel::parse);
@@ -1047,6 +1084,8 @@ impl LightcraftApp {
             // ui.json is written a second after the spot changes (the app's writer asks `save_due`)
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(leftoff::SAVE_DELAY + 0.05));
         }
+        // the merges. frame question: Esc closes it before any key acts; a stale one is dropped
+        merges::frame_menu_tick(self, ctx);
         if self.fonts_ready {
             shortcuts::handle(self, ctx);
         }

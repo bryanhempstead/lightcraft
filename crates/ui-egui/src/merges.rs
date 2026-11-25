@@ -9,14 +9,16 @@
 //!   when find. is clicked;
 //! * `merge.mergeGroups` in the app ([`run_ui`]): the groups go one at a time to the merge worker
 //!   ([`crate::merge::start_group`]); the window stays responsive;
-//! * the merges. view's bar ([`bar`]: find., all., none., merge., send.back., both., merges.only.,
-//!   unmerge., smaller., bigger.) and the view itself ([`view`]): a panel per group — kind (a
-//!   menu), confidence, camera and subfolder, frames, reasons, merge. / send.back. — with its
-//!   frames as a fan of overlapping cards on a gentle wave that spreads side by side on hover
-//!   (kept spread by a click on its empty area); a click on a card takes the frame out of the
-//!   group or puts it back (`merge.setFrames`), a double-click opens it; then the merged photos,
-//!   then the groups sent back (restore.). Groups are picked by their header (click, ⌘-click,
-//!   ⇧-click, all. / none., ⌘A), which picks their frames (`library.select`);
+//! * the merges. view's bar ([`bar`]: find., the kind. / confidence. / camera. drop-downs with the
+//!   group count, all., none., merge., send.back., both., merges.only., unmerge., layout., aspect.,
+//!   per.row., smaller., bigger.) and the view itself ([`view`]): a tile per group, per.row. of them
+//!   across (Bryan, 2026-11-24: 4 by default) — kind (a menu), confidence, frames, merge. /
+//!   send.back., camera and subfolder, reasons — with its frames as a fan of overlapping cards on a
+//!   gentle wave that spreads side by side on hover (kept spread by a click on its empty area), or
+//!   grid. / strip. inside the tile; focus. is one big group. A click on a card takes the frame out
+//!   of the group or puts it back (`merge.setFrames`), a double-click opens it; then the merged
+//!   photos, then the groups sent back (restore.). Groups are picked by their header (click,
+//!   ⌘-click, ⇧-click, all. / none., ⌘A), which picks their frames (`library.select`);
 //! * the kind tag on thumbnails ([`tag`]: `hdr.`, `panorama.`, `focus.stack.`, `hdr.panorama.`).
 //!
 //! The sidebar's `merges.` rows are drawn by `panels::left` (under each shoot folder — its camera
@@ -173,21 +175,27 @@ impl CardAspect {
 pub struct MergeView {
     pub layout: Layout,
     pub aspect: CardAspect,
-    /// Frames side by side across the view (2–8): the cards' size.
+    /// Groups side by side across the view (2–8): each group is a tile, that many to a row.
     pub per_row: u8,
-    /// The kinds shown (empty: every kind).
+    /// The kinds shown (empty: every kind, unless `kinds_none`).
     pub kinds: Vec<MergeType>,
-    /// The confidences shown (empty: every one from Settings ▸ merge. ▸ show from up).
+    /// The confidences shown (empty: every one from Settings ▸ merge. ▸ show from up, unless
+    /// `confidences_none`).
     pub confidences: Vec<Confidence>,
+    /// none. in the kind. menu: no kind is picked, so no group shows (an empty `kinds` alone
+    /// still means all, as older ui.json files wrote it).
+    pub kinds_none: bool,
+    /// none. in the confidence. menu: no group shows.
+    pub confidences_none: bool,
 }
 
 impl Default for MergeView {
     fn default() -> Self {
-        MergeView { layout: Layout::Waves, aspect: CardAspect::Original, per_row: 4, kinds: Vec::new(), confidences: Vec::new() }
+        MergeView { layout: Layout::Waves, aspect: CardAspect::Original, per_row: 4, kinds: Vec::new(), confidences: Vec::new(), kinds_none: false, confidences_none: false }
     }
 }
 
-/// Frames per row: the fewest and the most.
+/// Groups per row: the fewest and the most.
 pub const PER_ROW: (u8, u8) = (2, 8);
 
 /// The size of screen a window `width` points wide is on: `small` (< 1300, a laptop), `medium`
@@ -348,7 +356,7 @@ pub fn run_ui(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Val
                 None => None,
             };
             let per_row = match p.get("perRow") {
-                Some(v) => Some(v.as_u64().filter(|n| (2..=8).contains(n)).ok_or("merge.layout: perRow is 2 to 8 frames")? as u8),
+                Some(v) => Some(v.as_u64().filter(|n| (2..=8).contains(n)).ok_or("merge.layout: perRow is 2 to 8 groups")? as u8),
                 None => None,
             };
             let v = view_prefs_mut(app);
@@ -372,7 +380,7 @@ pub fn run_ui(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Val
                 serde_json::to_value(&app.ui.settings.merge).unwrap_or_default()
             }),
         }),
-        // smaller. / bigger.: one frame more / fewer per row (the cards' size)
+        // smaller. / bigger.: one group more / fewer per row (the tiles' size)
         "merge.cardSize" => {
             let v = view_prefs_mut(app);
             let n = match (p.get("perRow").and_then(Value::as_f64), p.get("step").and_then(Value::as_f64)) {
@@ -479,14 +487,15 @@ fn picked_results(app: &LightcraftApp) -> Vec<u64> {
 /// Height of the merges. bar.
 pub const BAR_H: f32 = 40.0;
 
-/// The bar above a merges. view: find. (finding… while it looks), all. / none. (every group and
+/// The bar above a merges. view: find. (finding… while it looks), kind. / confidence. / camera.
+/// drop-downs and the group count, all. / none. (every group and
 /// merged photo, or nothing), merge. / send.back. for the picked groups, both. / merges.only. /
 /// unmerge. for the picked merged photos, smaller. / bigger. for the cards.
 pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     wrapped_band(ui, "merges:bar", |row| bar_buttons(app, row));
 }
 
-/// A band across the view (the bar, the filters): its controls in a row 8 px from its edges, 8 px
+/// A band across the view (the bar): its controls in a row 8 px from its edges, 8 px
 /// apart, wrapping onto lines 10 px apart when the view is narrow; as tall as its lines.
 pub(crate) fn wrapped_band(ui: &mut egui::Ui, reg: &str, add: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get(ui.ctx());
@@ -525,6 +534,8 @@ fn bar_buttons(app: &mut LightcraftApp, row: &mut egui::Ui) {
             Err(e) => app.toast(&ctx, e),
         }
     }
+    // the filters (kind., confidence., camera.) and the group count, on this same row
+    crate::merge_page::filter_menus(app, row);
     gap(row);
     if crate::widgets::text_button(row, "mergesAll", "all.", false)
         .on_hover_text(crate::i18n::tr("Pick every group and merged photo (⌘A)"))
@@ -622,7 +633,7 @@ fn bar_buttons(app: &mut LightcraftApp, row: &mut egui::Ui) {
         }
     });
     let menu = crate::widgets::text_button(row, "mergesPerRow", &format!("per.row. {}", vp.per_row), false)
-        .on_hover_text(crate::i18n::tr("Frames side by side across the view: the cards' size (smaller. / bigger. step it)"));
+        .on_hover_text(crate::i18n::tr("Groups side by side across the view: the tiles' size (smaller. / bigger. step it)"));
     egui::Popup::menu(&menu).show(|ui| {
         for n in PER_ROW.0..=PER_ROW.1 {
             let r = ui.selectable_label(n == vp.per_row, format!("{n}."));
@@ -643,8 +654,8 @@ fn bar_buttons(app: &mut LightcraftApp, row: &mut egui::Ui) {
     }
     gap(row);
     for (id, label, tip, step) in [
-        ("mergesSmaller", "smaller.", "Smaller cards: one frame more per row", -1.0f32),
-        ("mergesBigger", "bigger.", "Bigger cards: one frame fewer per row", 1.0),
+        ("mergesSmaller", "smaller.", "Smaller tiles: one group more per row", -1.0f32),
+        ("mergesBigger", "bigger.", "Bigger tiles: one group fewer per row", 1.0),
     ] {
         if crate::widgets::text_button(row, id, label, false).on_hover_text(crate::i18n::tr(tip)).clicked()
             && let Err(e) = app.run("merge.cardSize", json!({"step": step}))
@@ -687,6 +698,10 @@ pub(crate) struct ViewData {
     pub conf_counts: std::collections::BTreeMap<Confidence, usize>,
     /// What confidence. all. shows: from Settings ▸ merge. ▸ show from up.
     pub conf_all: usize,
+    /// Per camera: the open groups the camera. menu's row shows (the other filters applied).
+    pub camera_counts: std::collections::BTreeMap<String, usize>,
+    /// What camera. all. shows (the other filters applied).
+    pub camera_all: usize,
     pub merged: Vec<PhotoId>,
     pub merged_aspects: Vec<f32>,
     pub sent: Vec<GroupView>,
@@ -717,7 +732,7 @@ pub(crate) fn view_data(app: &LightcraftApp, ctx: &egui::Context) -> Arc<ViewDat
     let vp = view_prefs(app);
     let from = app.ui.settings.merge.show_from;
     let key = egui::Id::new("merges-view-data");
-    let rev = (app.session.catalog.revision, format!("{scope:?} {:?} {:?} {:?} {from:?}", filter.camera, vp.kinds, vp.confidences));
+    let rev = (app.session.catalog.revision, format!("{scope:?} {:?} {:?} {:?} {from:?} {} {}", filter.camera, vp.kinds, vp.confidences, vp.kinds_none, vp.confidences_none));
     if let Some((r, d)) = ctx.data(|d| d.get_temp::<((u64, String), Arc<ViewData>)>(key))
         && r == rev
     {
@@ -728,8 +743,16 @@ pub(crate) fn view_data(app: &LightcraftApp, ctx: &egui::Context) -> Arc<ViewDat
     d
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times [`compute_view_data`] ran on this thread (a test counts them).
+    pub(crate) static VIEW_DATA_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// [`view_data`] worked out afresh (a command from outside a frame).
 pub(crate) fn compute_view_data(app: &LightcraftApp) -> ViewData {
+    #[cfg(test)]
+    VIEW_DATA_CALLS.with(|c| c.set(c.get() + 1));
     let scope = app.session.merges_scope.clone().unwrap_or_default();
     let filter = &app.merge.filter;
     let vp = view_prefs(app);
@@ -747,11 +770,17 @@ pub(crate) fn compute_view_data(app: &LightcraftApp) -> ViewData {
                     }
                 }
                 let camera = filter.camera.as_ref().is_none_or(|c| gv.cameras.contains(c));
-                let kind = vp.kinds.is_empty() || vp.kinds.contains(&gv.g.kind);
-                let conf = crate::merge_page::confidence_shown(&vp.confidences, gv.g.confidence(), from);
+                let kind = !vp.kinds_none && (vp.kinds.is_empty() || vp.kinds.contains(&gv.g.kind));
+                let conf = !vp.confidences_none && crate::merge_page::confidence_shown(&vp.confidences, gv.g.confidence(), from);
                 // each chip counts what it would show with the other filters as they are
                 if camera && conf {
                     *d.kind_counts.entry(gv.g.kind).or_default() += 1;
+                }
+                if kind && conf {
+                    d.camera_all += 1;
+                    for c in &gv.cameras {
+                        *d.camera_counts.entry(c.clone()).or_default() += 1;
+                    }
                 }
                 if camera && kind {
                     *d.conf_counts.entry(gv.g.confidence()).or_default() += 1;
@@ -891,30 +920,41 @@ fn spread_id(gid: &str) -> String {
 const PAD: f32 = 12.0;
 const HEAD_H: f32 = 28.0;
 const BLOCK_GAP: f32 = 12.0;
+/// A tile's header: two lines (kind., confidence., frames / merge., send.back.) and, when the
+/// group has a camera or subfolder, a third with their chips, this far apart.
+pub(crate) const HEAD_LINE_GAP: f32 = 10.0;
+fn tile_head_h(gv: &GroupView) -> f32 {
+    let lines = if gv.cameras.is_empty() && gv.subfolders.is_empty() { 2.0 } else { 3.0 };
+    lines * HEAD_H + (lines - 1.0) * HEAD_LINE_GAP
+}
+/// The narrowest a group's tile gets (per.row. gives way to it on a narrow view): room for
+/// merge. and send.back. side by side.
+const MIN_TILE_W: f32 = 184.0;
+/// Lines of reasons a tile shows (the rest on hover).
+const TILE_REASON_LINES: usize = 2;
 const SECTION_H: f32 = 32.0;
 
 /// A group's pieces: header, reasons and wave, top to bottom (relative to the block's top).
 struct Block {
     height: f32,
+    head_h: f32,
     reasons_top: f32,
     wave_top: f32,
     wave_h: f32,
     t: f32,
 }
 
-fn block(open: bool, reasons_h: f32, wave: &Wave, t: f32) -> Block {
-    let reasons_top = PAD + HEAD_H + 6.0;
+fn block(open: bool, head_h: f32, reasons_h: f32, wave: &Wave, t: f32) -> Block {
+    let reasons_top = PAD + head_h + 6.0;
     if !open {
-        return Block { height: PAD + HEAD_H + PAD, reasons_top, wave_top: 0.0, wave_h: 0.0, t };
+        return Block { height: PAD + head_h + PAD, head_h, reasons_top, wave_top: 0.0, wave_h: 0.0, t };
     }
     let wave_top = reasons_top + reasons_h + BLOCK_GAP;
     // spreading never shrinks it (a pointer near its bottom would leave, and it would fold back)
     let wave_h = (wave.stack_h + (wave.spread_h - wave.stack_h) * t).max(wave.stack_h);
-    Block { height: wave_top + wave_h + PAD + 2.0, reasons_top, wave_top, wave_h, t }
+    Block { height: wave_top + wave_h + PAD + 2.0, head_h, reasons_top, wave_top, wave_h, t }
 }
 
-/// A click on a card waits this long for a second click (a double-click opens the photo).
-const DOUBLE_WAIT: f64 = 0.32;
 
 /// The merges. view (Bryan, 2026-11-24: not the grid — "a stacked wave that shows all the
 /// photos"): each open group is a panel with its header (kind, confidence, camera, subfolder,
@@ -930,6 +970,7 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let n = data.open_total;
         let body = crate::i18n::tr_format!("{n} groups here are hidden by kind., confidence. or camera. above: all. shows them", n = n);
         crate::panels::empty_message(ui, ui.max_rect(), "No merges match the filters", &body);
+        close_frame_menu(&ctx);
         return;
     }
     if data.open.is_empty() && data.merged.is_empty() && data.sent.is_empty() {
@@ -939,19 +980,31 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             "Click find. to look here for panoramas (panorama.), brackets (hdr.) and focus stacks (focus.stack.)"
         };
         crate::panels::empty_message(ui, ui.max_rect(), "No merges here", body);
+        close_frame_menu(&ctx);
         return;
     }
-    run_pending(app, &ctx);
     let ppp = ctx.pixels_per_point();
     let vp = view_prefs(app);
     let (layout, aspect) = (vp.layout, vp.aspect);
     let outer = ui.available_width();
     let panel_w = (outer - 32.0).max(120.0);
     let inner_w = panel_w - 2.0 * PAD;
-    // per.row.: so many frames side by side across the view
+    // per.row.: so many groups (tiles) side by side across the view; focus. is one big group
     let per_row = vp.per_row.clamp(PER_ROW.0, PER_ROW.1);
-    let cell_w = ((inner_w - CARD_GAP * f32::from(per_row - 1)) / f32::from(per_row)).max(40.0);
-    let ch = (cell_w / 1.5).round().max(40.0);
+    let tiled = layout != Layout::Focus;
+    let cols = if tiled { usize::from(per_row).min((((panel_w + BLOCK_GAP) / (MIN_TILE_W + BLOCK_GAP)).floor() as usize).max(1)) } else { 1 };
+    let tile_w = if tiled { ((panel_w - BLOCK_GAP * (cols - 1) as f32) / cols as f32).floor().max(MIN_TILE_W.min(panel_w)) } else { panel_w };
+    let tile_inner = tile_w - 2.0 * PAD;
+    // the frames' size inside a tile: a fan of cards 70 % of the tile wide, grid. two across,
+    // strip. a card and a bit
+    let cell_w = match layout {
+        Layout::Grid => ((tile_inner - CARD_GAP) / 2.0).max(40.0),
+        Layout::Strip => (tile_inner * 0.75).max(40.0),
+        _ => (tile_inner * 0.7).max(40.0),
+    };
+    // (merged. and sent back. keep frames-per-row cards: the old per.row. size)
+    let row_cell_w = ((inner_w - CARD_GAP * f32::from(per_row - 1)) / f32::from(per_row)).max(40.0);
+    let ch = (row_cell_w / 1.5).round().max(40.0);
     let h_for = |cards: &[f32]| {
         let mean = if cards.is_empty() { 1.5 } else { cards.iter().map(|a| a.clamp(0.4, 2.5)).sum::<f32>() / cards.len() as f32 };
         (cell_w / mean).round().clamp(40.0, 900.0)
@@ -965,9 +1018,9 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let focus_h = (ui.available_height() - PAD * 2.0 - HEAD_H - 80.0).clamp(160.0, 900.0).round();
     let hovered_before: Option<String> = ctx.data(|d| d.get_temp::<Option<String>>(egui::Id::new("merges-hover"))).flatten();
+    let wave_w = if tiled { tile_inner } else { inner_w };
     // lay out every block first (the scroll area needs the height)
-    let mut blocks: Vec<(f32, Block, Wave, Arc<egui::Galley>)> = Vec::new();
-    let mut y = 12.0f32;
+    let mut blocks: Vec<(Rect, Block, Wave, Arc<egui::Galley>)> = Vec::new();
     for gv in &open_groups {
         let open = crate::folds::is_open(&ctx, &fold_id(&gv.g.id));
         let pinned = crate::folds::is_open_or(&ctx, &spread_id(&gv.g.id), false);
@@ -976,21 +1029,36 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let cards = aspect.cards(&gv.aspects);
         let gh = h_for(&cards);
         let wave = match layout {
-            Layout::Waves => wave_layout(&cards, gh, inner_w),
-            Layout::Grid => grid_layout(&cards, gh, inner_w, per_row.into()),
+            Layout::Waves => wave_layout(&cards, gh, wave_w),
+            Layout::Grid => grid_layout(&cards, gh, wave_w, 2),
             Layout::Strip => strip_layout(&cards, gh),
             Layout::Focus => {
-                let mut w = wave_layout(&cards, focus_h, inner_w);
+                let mut w = wave_layout(&cards, focus_h, wave_w);
                 w.stack = w.spread.clone();
                 w.stack_h = w.spread_h;
                 w
             }
         };
-        let reasons = ui.painter().layout(gv.reasons.clone(), t.font(11.5), t.text_dim, inner_w);
-        let b = block(open, if open { reasons.size().y } else { 0.0 }, &wave, tt);
-        let h = b.height;
-        blocks.push((y, b, wave, reasons));
-        y += h + BLOCK_GAP;
+        let reasons = if tiled {
+            let mut job = egui::text::LayoutJob::simple(gv.reasons.clone(), t.font(11.5), t.text_dim, wave_w);
+            job.wrap.max_rows = TILE_REASON_LINES;
+            job.wrap.overflow_character = Some('…');
+            ui.painter().layout_job(job)
+        } else {
+            ui.painter().layout(gv.reasons.clone(), t.font(11.5), t.text_dim, wave_w)
+        };
+        let head_h = if tiled { tile_head_h(gv) } else { HEAD_H };
+        let b = block(open, head_h, if open { reasons.size().y } else { 0.0 }, &wave, tt);
+        blocks.push((Rect::NOTHING, b, wave, reasons));
+    }
+    // the tiles flow `cols` to a row, the tiles of a row as tall as the tallest
+    let mut y = 12.0f32;
+    for row in blocks.chunks_mut(cols) {
+        let row_h = row.iter().map(|(_, b, _, _)| b.height).fold(0.0, f32::max);
+        for (c, (rect, _, _, _)) in row.iter_mut().enumerate() {
+            *rect = Rect::from_min_size(pos2(c as f32 * (tile_w + BLOCK_GAP), y), vec2(tile_w, row_h));
+        }
+        y += row_h + BLOCK_GAP;
     }
     let merged_top = y;
     let merged_open = crate::folds::is_open(&ctx, "merges.merged");
@@ -1025,11 +1093,11 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let near = viewport.expand2(vec2(0.0, viewport.height() * 0.5));
         let order: Vec<(String, Vec<PhotoId>)> = data.open.iter().map(|g| (g.g.id.clone(), g.frames.clone())).collect();
         let reveal = app.merge.reveal.take();
-        for (gv, (top, b, wave, reasons)) in open_groups.iter().zip(&blocks) {
+        for (gv, (rect, b, wave, reasons)) in open_groups.iter().zip(&blocks) {
             if b.t > 0.001 && b.t < 0.999 {
                 animating = true;
             }
-            let rect = Rect::from_min_size(pos2(0.0, *top), vec2(panel_w, b.height));
+            let rect = *rect;
             // ← / → on the merge. page: the group picked comes into view
             if reveal.as_deref() == Some(gv.g.id.as_str()) {
                 ui.scroll_to_rect(rect.translate(origin.to_vec2()), Some(egui::Align::Center));
@@ -1038,7 +1106,7 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 continue;
             }
             let r = rect.translate(origin.to_vec2());
-            if group_block(app, ui, gv, r, b, wave, reasons.clone(), &order, ppp, &mut seen, layout) {
+            if group_block(app, ui, gv, r, b, wave, reasons.clone(), &order, ppp, &mut seen, layout, tiled) {
                 hovered_now = Some(gv.g.id.clone());
             }
         }
@@ -1096,6 +1164,7 @@ pub fn view(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ctx.request_repaint();
     }
     app.renderer.evict_thumbs(&seen, 600);
+    frame_menu(app, &ctx);
 }
 
 /// A foldable section header of the view (`merged.`, `sent back.`): triangle, title, count.
@@ -1167,6 +1236,7 @@ fn group_block(
     ppp: f32,
     seen: &mut std::collections::HashSet<PhotoId>,
     layout: Layout,
+    tiled: bool,
 ) -> bool {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
@@ -1175,15 +1245,25 @@ fn group_block(
     let p = ui.painter().clone();
     p.rect(r, 8.0, t.cell, Stroke::new(if picked { 2.0 } else { 1.0 }, if picked { t.accent } else { t.divider }), egui::StrokeKind::Inside);
     // the header: a click on it picks the group (⌘: add / remove, ⇧: the groups from the last one)
-    let head = Rect::from_min_size(r.min + vec2(PAD, PAD), vec2(r.width() - 2.0 * PAD, HEAD_H));
+    let head_h = b.head_h;
+    let head = Rect::from_min_size(r.min + vec2(PAD, PAD), vec2(r.width() - 2.0 * PAD, head_h));
+    register(&ctx, format!("mergeTile:{}", g.id), r);
     let head_resp = ui.interact(head, egui::Id::new(("merges-head", g.id.as_str())), Sense::click());
     register(&ctx, format!("group:merges:group:{}", g.id), head);
     if head_resp.clicked() {
         let m = ui.input(|i| i.modifiers);
         pick_group(app, &ctx, &g.id, &gv.frames, order, m);
     }
-    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(head).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    // a tile's header is two lines (kind., confidence. / merge., send.back., camera); the one big
+    // group of focus. keeps one
+    let line1 = Rect::from_min_size(head.min, vec2(head.width(), HEAD_H));
+    let line2 = Rect::from_min_size(head.min + vec2(0.0, HEAD_H + HEAD_LINE_GAP), vec2(head.width(), HEAD_H));
+    let line3 = Rect::from_min_size(head.min + vec2(0.0, 2.0 * (HEAD_H + HEAD_LINE_GAP)), vec2(head.width(), HEAD_H));
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(line1).layout(egui::Layout::left_to_right(egui::Align::Center)));
     row.spacing_mut().item_spacing.x = 8.0;
+    row.set_clip_rect(line1.intersect(ui.clip_rect()));
+    let conf = g.confidence();
+    let tb = |row: &egui::Ui, label: &str| chip_width(row, label, false).max(37.0);
     // the triangle folds the group to its header
     let open = crate::folds::triangle(&mut row, &fold_id(&g.id), 24.0);
     let kind = crate::widgets::text_button(&mut row, &format!("mergesKind-{}", g.id), g.kind.tag(), false)
@@ -1201,13 +1281,12 @@ fn group_block(
             }
         }
     });
-    let conf = g.confidence();
-    chip(&mut row, &format!("mergesConfidence-{}", g.id), conf.tag(), Some(confidence_color(conf))).on_hover_text(crate::i18n::tr(match conf {
+    let conf_tip = crate::i18n::tr(match conf {
         Confidence::Sure => "sure.: everything says it is this merge",
         Confidence::Likely => "likely.: most things say so",
         Confidence::Maybe => "maybe.: a borderline match — look before merging",
-    }));
-    // merge. / send.back. at the right; the chips give way to them
+    });
+    // merge. / send.back.
     let queued = app.merge.group_queue.iter().any(|q| q.group == g.id);
     let running = app.merge.final_task.as_ref().and_then(|t| t.group.as_ref()).is_some_and(|(q, _)| *q == g.id);
     let merge_label = if running {
@@ -1217,50 +1296,104 @@ fn group_block(
     } else {
         "merge."
     };
-    let tb = |label: &str| chip_width(&row, label, false).max(37.0);
-    let right_w = tb(merge_label) + tb("send.back.") + 8.0 + 8.0;
     let in_group = gv.frames.iter().filter(|f| g.photos.contains(f)).count();
     let count = if in_group == gv.frames.len() { format!("{} frames", gv.frames.len()) } else { format!("{in_group} of {} frames", gv.frames.len()) };
     let count_w = row.painter().layout_no_wrap(count.clone(), t.font(12.5), t.text_dim).size().x;
-    let limit = head.right() - right_w - count_w - 8.0;
     let mut chips: Vec<(String, String)> = gv.cameras.iter().map(|c| (format!("mergesCamera-{}", g.id), c.clone())).collect();
     chips.extend(gv.subfolders.iter().map(|s| (format!("mergesSubfolder-{}", g.id), s.clone())));
-    for (k, (id, label)) in chips.iter().enumerate() {
-        let w = chip_width(&row, label, false);
-        if row.cursor().left() + w > limit {
-            break;
+    let (merge_w, back_w) = (tb(&row, merge_label), tb(&row, "send.back."));
+    let draw_chips = |row: &mut egui::Ui, limit: f32| {
+        for (k, (id, label)) in chips.iter().enumerate() {
+            let w = chip_width(row, label, false);
+            if row.cursor().left() + w > limit {
+                break;
+            }
+            let tip = if id.starts_with("mergesCamera") { "The camera" } else { "The subfolder of the shoot" };
+            chip(row, &format!("{id}-{k}"), label, None).on_hover_text(crate::i18n::tr(tip));
         }
-        let tip = if id.starts_with("mergesCamera") { "The camera" } else { "The subfolder of the shoot" };
-        chip(&mut row, &format!("{id}-{k}"), label, None).on_hover_text(crate::i18n::tr(tip));
-    }
-    if row.cursor().left() + count_w <= head.right() - right_w {
-        let (cr, _) = row.allocate_exact_size(vec2(count_w, 24.0), Sense::hover());
-        row.painter().text(cr.left_center(), Align2::LEFT_CENTER, count, t.font(12.5), t.text_dim);
-    }
-    let mut right = row.new_child(egui::UiBuilder::new().max_rect(head).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    right.spacing_mut().item_spacing.x = 8.0;
-    if crate::widgets::text_button(&mut right, &format!("mergesGroupSendBack-{}", g.id), "send.back.", false)
-        .on_hover_text(crate::i18n::tr(
-            "Not a merge: its photos stay in their folder and it is never suggested again (restore. under sent back. brings it back)",
-        ))
-        .clicked()
-        && let Err(e) = app.run("merge.dismiss", json!({"ids": [g.id]}))
-    {
-        app.toast(&ctx, e);
-    }
-    if crate::widgets::text_button(&mut right, &format!("mergesGroupMerge-{}", g.id), merge_label, running || queued)
-        .on_hover_text(crate::i18n::tr("Merge this group: the Merge box opens on its kind, with the frames that are in it"))
-        .clicked()
-        && !running
-        && !queued
-        && let Err(e) = app.run("merge.openGroups", json!({"ids": [g.id]}))
-    {
-        app.toast(&ctx, e);
+    };
+    let merge_btn = |app: &mut LightcraftApp, ui: &mut egui::Ui| {
+        if crate::widgets::text_button(ui, &format!("mergesGroupMerge-{}", g.id), merge_label, running || queued)
+            .on_hover_text(crate::i18n::tr("Merge this group: the Merge box opens on its kind, with the frames that are in it"))
+            .clicked()
+            && !running
+            && !queued
+            && let Err(e) = app.run("merge.openGroups", json!({"ids": [g.id]}))
+        {
+            app.toast(&ctx, e);
+        }
+    };
+    let back_btn = |app: &mut LightcraftApp, ui: &mut egui::Ui| {
+        if crate::widgets::text_button(ui, &format!("mergesGroupSendBack-{}", g.id), "send.back.", false)
+            .on_hover_text(crate::i18n::tr(
+                "Not a merge: its photos stay in their folder and it is never suggested again (restore. under sent back. brings it back)",
+            ))
+            .clicked()
+            && let Err(e) = app.run("merge.dismiss", json!({"ids": [g.id]}))
+        {
+            app.toast(&ctx, e);
+        }
+    };
+    if tiled {
+        // line 1: confidence. (a dot alone when it doesn't fit), the frame count when there is room
+        let room = line1.right() - row.cursor().left();
+        let full_w = chip_width(&row, conf.tag(), true);
+        let dot_w = chip_width(&row, "", true);
+        if room >= full_w + 8.0 {
+            chip(&mut row, &format!("mergesConfidence-{}", g.id), conf.tag(), Some(confidence_color(conf))).on_hover_text(conf_tip);
+        } else if room >= dot_w + 8.0 {
+            chip(&mut row, &format!("mergesConfidence-{}", g.id), "", Some(confidence_color(conf))).on_hover_text(conf_tip);
+        }
+        if row.cursor().left() + count_w <= line1.right() {
+            let (cr, _) = row.allocate_exact_size(vec2(count_w, 24.0), Sense::hover());
+            row.painter().text(cr.left_center(), Align2::LEFT_CENTER, count, t.font(12.5), t.text_dim);
+        }
+        // line 2: merge., send.back.
+        let mut row2 = ui.new_child(egui::UiBuilder::new().max_rect(line2).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        row2.spacing_mut().item_spacing.x = 8.0;
+        row2.set_clip_rect(line2.intersect(ui.clip_rect()));
+        merge_btn(app, &mut row2);
+        if row2.cursor().left() + back_w <= line2.right() + 0.5 {
+            back_btn(app, &mut row2);
+        }
+        // line 3: the camera and subfolder chips, each shortened to the room left (full on hover)
+        if !chips.is_empty() {
+            let mut row3 = ui.new_child(egui::UiBuilder::new().max_rect(line3).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            row3.spacing_mut().item_spacing.x = 8.0;
+            row3.set_clip_rect(line3.intersect(ui.clip_rect()));
+            for (k, (id, label)) in chips.iter().enumerate() {
+                let room = line3.right() - row3.cursor().left();
+                if room < 48.0 {
+                    break;
+                }
+                let font = t.font(11.5);
+                let shown = crate::widgets::elide_head(label, room - 20.0, |s| row3.painter().layout_no_wrap(s.to_string(), font.clone(), t.text_label).size().x);
+                let tip = if id.starts_with("mergesCamera") { "The camera" } else { "The subfolder of the shoot" };
+                chip(&mut row3, &format!("{id}-{k}"), &shown, None).on_hover_text(format!("{label}\n{}", crate::i18n::tr(tip)));
+            }
+        }
+    } else {
+        chip(&mut row, &format!("mergesConfidence-{}", g.id), conf.tag(), Some(confidence_color(conf))).on_hover_text(conf_tip);
+        // merge. / send.back. at the right; the chips give way to them
+        let right_w = merge_w + back_w + 8.0 + 8.0;
+        draw_chips(&mut row, head.right() - right_w - count_w - 8.0);
+        if row.cursor().left() + count_w <= head.right() - right_w {
+            let (cr, _) = row.allocate_exact_size(vec2(count_w, 24.0), Sense::hover());
+            row.painter().text(cr.left_center(), Align2::LEFT_CENTER, count, t.font(12.5), t.text_dim);
+        }
+        let mut right = row.new_child(egui::UiBuilder::new().max_rect(line1).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        right.spacing_mut().item_spacing.x = 8.0;
+        back_btn(app, &mut right);
+        merge_btn(app, &mut right);
     }
     if !open {
         return false;
     }
-    p.galley(pos2(r.left() + PAD, r.top() + b.reasons_top), reasons, t.text_dim);
+    let reasons_rect = Rect::from_min_size(pos2(r.left() + PAD, r.top() + b.reasons_top), reasons.size());
+    p.galley(reasons_rect.min, reasons, t.text_dim);
+    if tiled && !gv.reasons.is_empty() {
+        ui.interact(reasons_rect, egui::Id::new(("merges-reasons", g.id.as_str())), Sense::hover()).on_hover_text(gv.reasons.clone());
+    }
     // the wave: its empty area keeps it spread (or lets it fold back); hover spreads it
     let wr = Rect::from_min_size(pos2(r.left() + PAD, r.top() + b.wave_top), vec2(r.width() - 2.0 * PAD, b.wave_h));
     register(&ctx, format!("mergeWave:{}", g.id), wr);
@@ -1297,39 +1430,346 @@ fn group_block(
     hovered
 }
 
-/// A frame of a group as a card: dimmed with a mark when taken out of the group (still a full
-/// control: a click puts it back). `place`: "" in the view (`mergeCard:…`), "Page" in the merge.
-/// page's right panel (`mergePageCard:…`).
+/// A frame of a group as a card: dimmed when taken out of the group (still a full control). Its ⊖
+/// (top-left), a right-click on it, or ⌫ with frames picked asks what to do with the picked frames
+/// ([`frame_menu`]: out.of.group., remove., del., cancel.). A click picks it (⌘-click adds / takes
+/// away, ⇧-click the run from the last), a double-click opens it. `place`: "" in the view
+/// (`mergeCard:…`), "Page" in the merge. page's right panel (`mergePageCard:…`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn frame_card(app: &mut LightcraftApp, ui: &mut egui::Ui, place: &str, gid: &str, pid: PhotoId, in_group: bool, r: Rect, ppp: f32) {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let resp = ui.interact(r, egui::Id::new(("merge-card", place, gid, pid.0)), Sense::click());
     register(&ctx, format!("merge{place}Card:{gid}:{}", pid.0), r);
+    let minus = Rect::from_center_size(r.left_top() + vec2(16.0, 16.0), vec2(MINUS_D, MINUS_D));
+    let minus_resp = ui.interact(minus, egui::Id::new(("merge-minus", place, gid, pid.0)), Sense::click());
+    register(&ctx, format!("merge{place}Minus:{gid}:{}", pid.0), minus);
     let p = ui.painter();
     p.rect_filled(r.translate(vec2(2.0, 3.0)), 4.0, Color32::from_black_alpha(110));
     crate::panels::grid::request_thumb(app, pid, crate::panels::grid::thumb_px(r.width().max(r.height()), ppp), 10);
     let tint = if in_group { Color32::WHITE } else { Color32::from_gray(80) };
     card_image(app, p, pid, r, tint);
-    let edge = if resp.hovered() { Stroke::new(2.0, t.text) } else { Stroke::new(1.0, Color32::from_black_alpha(160)) };
+    let picked = app.session.selection.contains(pid);
+    let edge = if picked {
+        Stroke::new(2.0, t.accent)
+    } else if resp.hovered() {
+        Stroke::new(2.0, t.text)
+    } else {
+        Stroke::new(1.0, Color32::from_black_alpha(160))
+    };
     p.rect_stroke(r, 4.0, edge, egui::StrokeKind::Inside);
-    if !in_group {
-        // the mark: a circle with a minus, at the card's top-left corner
-        let c = r.left_top() + vec2(16.0, 16.0);
-        p.circle(c, 9.0, Color32::from_black_alpha(200), Stroke::new(1.5, Color32::WHITE));
-        p.line_segment([c - vec2(4.5, 0.0), c + vec2(4.5, 0.0)], Stroke::new(2.0, Color32::WHITE));
-    }
+    // the ⊖ (a circle with a minus): opens the question; a frame already out shows it filled white
+    let (fill, ink) = if in_group { (Color32::from_black_alpha(if minus_resp.hovered() { 235 } else { 200 }), Color32::WHITE) } else { (Color32::WHITE, Color32::BLACK) };
+    let c = minus.center();
+    p.circle(c, MINUS_D / 2.0 - 2.0, fill, Stroke::new(1.5, if minus_resp.hovered() { t.accent } else { ink }));
+    p.line_segment([c - vec2(4.5, 0.0), c + vec2(4.5, 0.0)], Stroke::new(2.0, ink));
     let name = app.session.catalog.photo(pid).map(|p| format!("{}\n{}", p.file_name, merge_find::exposure_text(&p.meta))).unwrap_or_default();
-    let what = if in_group { "click: take it out of the group" } else { "taken out — click: put it back" };
-    let resp = resp.on_hover_text(format!("{name}\n{}\n{}", crate::i18n::tr(what), crate::i18n::tr("double-click: open it")));
-    if resp.double_clicked() {
-        ctx.data_mut(|d| d.remove::<(String, u64, f64)>(egui::Id::new("merges-pending")));
+    resp.clone().on_hover_text(format!("{name}\n{}", crate::i18n::tr("⊖ / right-click / ⌫: remove…")));
+    minus_resp.clone().on_hover_text(crate::i18n::tr("out of the group, remove or delete this frame (all the picked ones)…"));
+    if minus_resp.clicked() {
+        open_frame_menu(app, &ctx, pid, minus.left_bottom() + vec2(0.0, 6.0));
+    } else if resp.secondary_clicked() {
+        let at = ctx.input(|i| i.pointer.interact_pos()).unwrap_or(r.center());
+        open_frame_menu(app, &ctx, pid, at);
+    } else if resp.double_clicked() {
         let _ = app.run("library.select", json!({"ids": [pid.0]}));
         let _ = app.run("view.detail", json!({}));
     } else if resp.clicked() {
-        let now = ctx.input(|i| i.time);
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new("merges-pending"), (gid.to_string(), pid.0, now)));
-        ctx.request_repaint_after(std::time::Duration::from_secs_f64(DOUBLE_WAIT + 0.02));
+        let m = ui.input(|i| i.modifiers);
+        let mode = if m.shift {
+            "range"
+        } else if m.command {
+            "toggle"
+        } else {
+            "replace"
+        };
+        let _ = app.run("library.select", json!({"ids": [pid.0], "mode": mode}));
+    }
+}
+
+/// Size of a frame card's ⊖ (its hit area).
+const MINUS_D: f32 = 24.0;
+
+/// What the question over frames is asking.
+#[derive(Clone, Debug)]
+struct FrameMenu {
+    /// The frames it acts on (the picked ones when the clicked one is picked).
+    ids: Vec<u64>,
+    at: egui::Pos2,
+    /// Every one of them is out of its group: the first choice puts them back.
+    put_back: bool,
+    /// del.: asked once more (Settings ▸ Confirm first).
+    confirm: bool,
+    /// The pass that opened it (the click that opened it never closes it).
+    opened: u64,
+    /// How many merge groups those frames are in (the title says).
+    groups: usize,
+    /// The source (and merges scope) it was opened in: it closes when that changes.
+    source: String,
+    /// The last frame [`frame_menu`] drew it: not drawn for a frame (another module, tab or source,
+    /// the empty view) it closes ([`frame_menu_tick`]).
+    drawn: u64,
+}
+
+fn frame_menu_id() -> egui::Id {
+    egui::Id::new("merges-frame-menu")
+}
+
+/// The picked frames of the groups the view shows unfolded (a folded group, or one the focus.
+/// layout leaves out, is not on screen: ⊖ / ⌫ never act on what isn't seen).
+fn picked_frames(app: &LightcraftApp, ctx: &egui::Context) -> Vec<u64> {
+    let sel = &app.session.selection;
+    let data = view_data(app, ctx);
+    let shown: Vec<&GroupView> = if view_prefs(app).layout == Layout::Focus {
+        let i = crate::merge_page::focus(app, &data.open).unwrap_or(0);
+        data.open.get(i).into_iter().collect()
+    } else {
+        data.open.iter().collect()
+    };
+    let mut out: Vec<u64> = Vec::new();
+    for g in shown.into_iter().filter(|g| crate::folds::is_open(ctx, &fold_id(&g.g.id))) {
+        for f in &g.frames {
+            if sel.contains(*f) && !out.contains(&f.0) {
+                out.push(f.0);
+            }
+        }
+    }
+    out
+}
+
+/// Open the question for frame `pid` at `at`: it acts on every picked frame in view when `pid` is
+/// picked, else on `pid` alone (which it picks).
+fn open_frame_menu(app: &mut LightcraftApp, ctx: &egui::Context, pid: PhotoId, at: egui::Pos2) {
+    let ids = if app.session.selection.contains(pid) {
+        let ids = picked_frames(app, ctx);
+        if ids.contains(&pid.0) { ids } else { vec![pid.0] }
+    } else {
+        let _ = app.run("library.select", json!({"ids": [pid.0]}));
+        vec![pid.0]
+    };
+    start_frame_menu(app, ctx, ids, at);
+}
+
+pub(crate) fn start_frame_menu(app: &LightcraftApp, ctx: &egui::Context, ids: Vec<u64>, at: egui::Pos2) {
+    // (once: the view's groups are worked out from the catalog each time)
+    let data = compute_view_data(app);
+    let in_group = |id: u64| data.open.iter().any(|g| g.g.photos.iter().any(|p| p.0 == id));
+    let put_back = !ids.iter().any(|i| in_group(*i));
+    let groups = data.open.iter().filter(|g| g.frames.iter().any(|f| ids.contains(&f.0))).count();
+    let m = FrameMenu {
+        ids,
+        at,
+        put_back,
+        confirm: false,
+        opened: ctx.cumulative_pass_nr(),
+        groups,
+        source: crate::leftoff::source_key(app),
+        drawn: ctx.cumulative_frame_nr(),
+    };
+    ctx.data_mut(|d| d.insert_temp(frame_menu_id(), m));
+    ctx.request_repaint();
+}
+
+/// Close the question (if it is open).
+fn close_frame_menu(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<FrameMenu>(frame_menu_id()));
+}
+
+/// Is the question open?
+#[cfg(test)]
+pub(crate) fn frame_menu_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<FrameMenu>(frame_menu_id())).is_some()
+}
+
+/// Every frame, before the keys: Esc closes the question before any shortcut sees it, and a
+/// question that wasn't drawn last frame (the merges. view isn't on screen: another module, tab
+/// or source) or belongs to another source is dropped, so it never comes back later with old ids.
+pub fn frame_menu_tick(app: &LightcraftApp, ctx: &egui::Context) {
+    let Some(m) = ctx.data(|d| d.get_temp::<FrameMenu>(frame_menu_id())) else { return };
+    let esc = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    if esc || m.source != crate::leftoff::source_key(app) || ctx.cumulative_frame_nr() > m.drawn + 1 {
+        close_frame_menu(ctx);
+    }
+}
+
+/// ⌫ / Delete in a merges. view with frames picked: the same question as the ⊖ (true when it
+/// opened). A merged photo picked, or nothing: Delete does what it always does.
+pub fn delete_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
+    use egui::{Key, Modifiers};
+    if app.session.source != lightcraft_engine::LibrarySource::Merges
+        || !matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid)
+        || ctx.egui_wants_keyboard_input()
+    {
+        return false;
+    }
+    let pressed = ctx.input(|i| i.key_pressed(Key::Backspace) || i.key_pressed(Key::Delete)) && ctx.input(|i| i.modifiers == Modifiers::NONE);
+    if !pressed {
+        return false;
+    }
+    let ids = picked_frames(app, ctx);
+    if ids.is_empty() {
+        return false;
+    }
+    ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace) || i.consume_key(Modifiers::NONE, Key::Delete));
+    // under the first picked frame (where it is on screen), else the middle of the view
+    let at = app
+        .widgets
+        .iter()
+        .find(|(w, _)| ids.iter().any(|i| w.starts_with("mergeCard:") && w.ends_with(&format!(":{i}"))))
+        .map(|(_, r)| r.center_bottom())
+        .or_else(|| app.canvas_rect.map(|r| r.center()))
+        .unwrap_or(egui::pos2(200.0, 200.0));
+    start_frame_menu(app, ctx, ids, at);
+    true
+}
+
+/// The question over frames (small, at the ⊖ or the pointer): out.of.group. (the frame stays in
+/// the library and Develop as normal, only this merge group loses it — put.back. when they are
+/// already out), remove. (out of LightCraft, files kept: `photo.removeFromLibrary`), del. (the
+/// files to the Trash: `photo.deleteFromDisk`, asked once more with Settings ▸ Confirm first),
+/// cancel. (or Esc, or a click outside).
+fn frame_menu(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let Some(mut m) = ctx.data(|d| d.get_temp::<FrameMenu>(frame_menu_id())) else { return };
+    if m.source != crate::leftoff::source_key(app) {
+        close_frame_menu(ctx);
+        return;
+    }
+    m.drawn = ctx.cumulative_frame_nr();
+    ctx.data_mut(|d| d.insert_temp(frame_menu_id(), m.clone()));
+    let t = Tokens::get(ctx);
+    let n = m.ids.len();
+    let what = if n == 1 { "1 frame".to_string() } else { format!("{n} frames") };
+    let what = match m.groups {
+        0 => what,
+        1 => format!("{what} in 1 group"),
+        g => format!("{what} in {g} groups"),
+    };
+    let mut act: Option<&'static str> = None;
+    let area = egui::Area::new(egui::Id::new("merges-frame-menu-area"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(m.at)
+        .constrain(true)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(t.chrome)
+                .stroke(Stroke::new(1.0, t.divider))
+                .corner_radius(8.0)
+                .inner_margin(12.0)
+                .shadow(egui::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(90) })
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = vec2(8.0, 12.0);
+                    let title = if m.confirm { format!("move {what} to the trash?") } else { format!("{what} picked.") };
+                    let g = ui.painter().layout_no_wrap(title, t.font(12.0), t.text_dim);
+                    let (tr, _) = ui.allocate_exact_size(g.size(), Sense::hover());
+                    register(ui.ctx(), "label:mergesFrameMenuTitle", tr);
+                    ui.painter().galley(tr.min, g, t.text_dim);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        fn tip(s: &str) -> &str {
+                            crate::i18n::tr(s)
+                        }
+                        if m.confirm {
+                            if crate::widgets::text_button(ui, "mergesFrameDeleteYes", "del.", false)
+                                .on_hover_text(tip("The files go to the Trash (undo. brings them back)"))
+                                .clicked()
+                            {
+                                act = Some("delete");
+                            }
+                        } else {
+                            let (id, label, tt) = if m.put_back {
+                                ("mergesFrameOutOfGroup", "put.back.", "Back into the merge group")
+                            } else {
+                                ("mergesFrameOutOfGroup", "out.of.group.", "Out of this merge group only: the photo stays in the library and Develop as normal")
+                            };
+                            if crate::widgets::text_button(ui, id, label, false).on_hover_text(tip(tt)).clicked() {
+                                act = Some("group");
+                            }
+                            if crate::widgets::text_button(ui, "mergesFrameRemove", "remove.", false)
+                                .on_hover_text(tip("Remove from LightCraft: the files stay on disk"))
+                                .clicked()
+                            {
+                                act = Some("remove");
+                            }
+                            if crate::widgets::text_button(ui, "mergesFrameDelete", "del.", false)
+                                .on_hover_text(tip("Delete from the computer: the files go to the Trash"))
+                                .clicked()
+                            {
+                                act = Some("del");
+                            }
+                        }
+                        if crate::widgets::text_button(ui, "mergesFrameCancel", "cancel.", false).on_hover_text(tip("Do nothing (Esc)")).clicked() {
+                            act = Some("cancel");
+                        }
+                    });
+                });
+        });
+    register(ctx, "mergesFrameMenu", area.response.rect);
+    // Esc or a press outside closes it (not the press that opened it)
+    if act.is_none() {
+        let outside = ctx.cumulative_pass_nr() > m.opened
+            && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p)));
+        if outside || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            act = Some("cancel");
+        }
+    }
+    let Some(act) = act else { return };
+    let ids: Vec<u64> = m.ids.clone();
+    let end = close_frame_menu;
+    match act {
+        "group" => {
+            end(ctx);
+            set_frames_in_group(app, ctx, &ids, m.put_back);
+        }
+        "remove" => {
+            end(ctx);
+            match app.run("photo.removeFromLibrary", json!({"ids": ids})) {
+                Ok(r) => {
+                    let gone = r["removed"].as_u64().unwrap_or(n as u64);
+                    let text = format!("{gone} photo{} removed from the library (files kept)", if gone == 1 { "" } else { "s" });
+                    crate::menus::delete_toast(app, &r, text);
+                }
+                Err(e) => app.toast(ctx, e),
+            }
+        }
+        "del" if app.ui.settings.confirm_delete => {
+            m.confirm = true;
+            ctx.data_mut(|d| d.insert_temp(frame_menu_id(), m));
+        }
+        "del" | "delete" => {
+            end(ctx);
+            match app.run("photo.deleteFromDisk", json!({"ids": ids, "keptCopies": false})) {
+                Ok(r) => {
+                    let text = crate::menus::trash_message(&r);
+                    crate::menus::delete_toast(app, &r, text);
+                }
+                Err(e) => app.toast(ctx, e),
+            }
+        }
+        _ => end(ctx),
+    }
+}
+
+/// Take frames out of their merge groups (`merge.setFrames`), or, `put_back`, in again. The
+/// photos themselves are untouched.
+fn set_frames_in_group(app: &mut LightcraftApp, ctx: &egui::Context, ids: &[u64], put_back: bool) {
+    for gv in compute_view_data(app).open {
+        let mine: Vec<u64> = gv.frames.iter().map(|p| p.0).filter(|p| ids.contains(p)).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let mut photos: Vec<u64> = gv.g.photos.iter().map(|p| p.0).collect();
+        if put_back {
+            for p in mine {
+                if !photos.contains(&p) {
+                    photos.push(p);
+                }
+            }
+        } else {
+            photos.retain(|p| !mine.contains(p));
+        }
+        if let Err(e) = app.run("merge.setFrames", json!({"id": gv.g.id, "photos": photos})) {
+            app.toast(ctx, e);
+        }
     }
 }
 
@@ -1355,19 +1795,6 @@ pub(crate) fn card_image(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, r:
             p.rect_filled(r, 4.0, Color32::from_gray(46).linear_multiply(f32::from(tint.r()) / 255.0 * 0.5 + 0.5));
         }
     }
-}
-
-/// A card clicked once: after the double-click wait, the frame goes out of its group or back in.
-pub(crate) fn run_pending(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let key = egui::Id::new("merges-pending");
-    let Some((gid, pid, at)) = ctx.data(|d| d.get_temp::<(String, u64, f64)>(key)) else { return };
-    let now = ctx.input(|i| i.time);
-    if now - at < DOUBLE_WAIT {
-        ctx.request_repaint_after(std::time::Duration::from_secs_f64(DOUBLE_WAIT - (now - at) + 0.02));
-        return;
-    }
-    ctx.data_mut(|d| d.remove::<(String, u64, f64)>(key));
-    toggle_frame(app, ctx, &gid, PhotoId(pid));
 }
 
 /// Take frame `pid` out of group `gid`, or put it back (`merge.setFrames`).

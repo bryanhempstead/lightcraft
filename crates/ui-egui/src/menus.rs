@@ -333,6 +333,8 @@ pub fn enter_develop(app: &mut LightcraftApp) {
         && let Some(first) = app.session.visible_cloned().first().copied()
     {
         let _ = app.session.execute("library.select", &json!({"ids": [first.0]}));
+        // (a default, not a choice: left off. doesn't record it)
+        crate::leftoff::note_auto_select(app, first);
     }
 }
 

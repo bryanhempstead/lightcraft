@@ -182,10 +182,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::ExportExisting { .. } => "lightcraft-export-ask-dialog",
         // its own size: a small dialog shown before (Delete's question) doesn't narrow it
         Dialog::Settings { .. } => "lightcraft-settings-dialog",
+        // its own too: it is as wide as its preview and options, not as the last small dialog
+        Dialog::Merge { .. } => "lightcraft-merge-dialog",
         _ => "lightcraft-dialog",
     });
+    let merge = matches!(dlg, Dialog::Merge { .. });
     let shown = egui::Window::new(crate::i18n::tr(&title)).id(window_id)
         .collapsible(false)
+        // the Merge dialog draws its title centred itself
+        .title_bar(!merge)
         .resizable(import)
         .vscroll(import)
         .resize(|r| if import { r.default_height(crate::import::DIALOG_SIZE[1]) } else { r })
@@ -199,6 +204,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             Dialog::Export { .. } => crate::export_dialog::DIALOG_W,
             Dialog::ExportExisting { .. } => 460.0,
             Dialog::CaptureTime { .. } => 520.0,
+            Dialog::Merge { .. } => crate::merge::dialog_width(ctx),
             _ => 380.0,
         })
         .show(ctx, |ui| {
@@ -826,7 +832,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let cancel = match &dlg {
                     Dialog::SamModel { .. } if sam_running || sam_installed || sam_nowhere => "Close",
                     Dialog::SamModel { .. } => "Not Now",
-                    Dialog::SendToPipeline { .. } => "cancel.",
+                    Dialog::SendToPipeline { .. } | Dialog::Merge { .. } => "cancel.",
                     _ => "Cancel",
                 };
                 if !informational {
@@ -868,7 +874,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                         add_label = crate::i18n::tr_format!("{verb} {n} Photo{}", if n == 1 { "" } else { "s" }, verb = crate::i18n::tr(verb), n = n);
                         add_label.as_str()
                     }
-                    Dialog::Merge { .. } => "Merge",
+                    Dialog::Merge { .. } => "merge.",
                     Dialog::ConfirmDelete { .. } => "delete.",
                     Dialog::DeleteKept { .. } => "keep.",
                     Dialog::DeletePhotos { count, copies, .. } if count == copies => "remove.",

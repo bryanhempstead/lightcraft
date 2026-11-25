@@ -186,6 +186,24 @@ mod tests {
         assert!(k.is_within_image(300.0, 200.0));
     }
 
+    /// A console's zoom-out (`scaled` by 1.005 a detent) of a straightened crop sitting in a corner
+    /// slides it towards the photo's centre in small steps, never away from it, up to the limit.
+    #[test]
+    fn scaled_out_slides_towards_the_centre_in_small_steps() {
+        let (w, h) = (600.0, 400.0);
+        let mut c = CropGeometry { rect: Rect::new(0.62, 0.55, 0.92, 0.8), angle: 4.0 };
+        assert!(c.is_within_image(w, h));
+        let far = |c: &CropGeometry| (c.rect.center().x - 0.5).hypot(c.rect.center().y - 0.5);
+        for i in 0..400 {
+            let next = c.scaled(1.005, w, h).constrained(w, h);
+            assert!(next.is_within_image(w, h), "{i}");
+            assert!(far(&next) <= far(&c) + 1e-9, "{i}: {c:?} → {next:?}");
+            assert!((next.rect.center().x - c.rect.center().x).hypot(next.rect.center().y - c.rect.center().y) < 0.01, "{i}: jump");
+            c = next;
+        }
+        assert_eq!(c.scaled(1.005, w, h), c, "at the limit");
+    }
+
     /// The old console nudge slid a crop that left a straightened photo back with `constrained`,
     /// which pulls it towards the image centre on both axes: an x move also moved y.
     #[test]

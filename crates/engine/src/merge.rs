@@ -76,6 +76,8 @@ pub struct MergeFinish {
     pub stack: bool,
     /// Preview only: tint deghosted areas red.
     pub show_overlay: bool,
+    /// The merged photo's crop (normalized `[x0, y0, x1, y1]`), replacing the auto-crop one.
+    pub crop: Option<[f64; 4]>,
 }
 
 /// Reads a source photo's bytes (by catalog path).
@@ -304,18 +306,7 @@ fn render_preview(
             }
         }
     }
-    if let Some(c) = crop {
-        // draw the auto-crop frame
-        let (w, h) = (img.width as f64, img.height as f64);
-        let (x0, y0, x1, y1) = ((c[0] * w) as usize, (c[1] * h) as usize, ((c[0] + c[2]) * w) as usize, ((c[1] + c[3]) * h) as usize);
-        for y in y0..y1.min(img.height) {
-            for x in x0..x1.min(img.width) {
-                if y == y0 || y + 1 == y1 || x == x0 || x + 1 == x1 {
-                    img.data[y * img.width + x] = [255, 255, 255, 255];
-                }
-            }
-        }
-    }
+    // (the crop frame is drawn by the Merge dialog over the preview, so it can be dragged)
     Ok(img)
 }
 
@@ -370,8 +361,24 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
         auto_settings: p.get("autoSettings").and_then(Value::as_bool).unwrap_or(false),
         stack: p.get("stack").and_then(Value::as_bool).unwrap_or(false),
         show_overlay: p.get("showOverlay").and_then(Value::as_bool).unwrap_or(false),
+        crop: parse_crop(p.get("crop")).map_err(|m| bad(format!("crop: {m}")))?,
     };
     Ok((kind, finish))
+}
+
+/// `crop: [x0, y0, x1, y1]` (normalized): four finite numbers, kept inside the picture, at least
+/// a sliver wide and tall. `null` / missing: none.
+fn parse_crop(v: Option<&Value>) -> std::result::Result<Option<[f64; 4]>, String> {
+    let Some(v) = v.filter(|v| !v.is_null()) else { return Ok(None) };
+    let a = v.as_array().filter(|a| a.len() == 4).ok_or("is [x0, y0, x1, y1] (0..1)")?;
+    let mut c = [0.0; 4];
+    for (slot, n) in c.iter_mut().zip(a) {
+        *slot = n.as_f64().filter(|n| n.is_finite()).ok_or("is four numbers")?.clamp(0.0, 1.0);
+    }
+    if c[2] - c[0] < 1e-3 || c[3] - c[1] < 1e-3 {
+        return Err("is empty (x1 > x0 and y1 > y0)".into());
+    }
+    Ok(Some(c))
 }
 
 impl Session {
@@ -454,12 +461,16 @@ impl Session {
                 self.set_develop(id, d, "Settings from the Frames")?;
             }
         }
-        if let Some(c) = out.crop
+        // the crop the user dragged in the dialog, else the auto-crop one
+        let crop = job.finish.crop.map(|c| (lightcraft_geom::Rect::new(c[0], c[1], c[2], c[3]), "Crop")).or_else(|| {
+            out.crop.map(|c| (lightcraft_geom::Rect::from_xywh(c[0], c[1], c[2], c[3]), "Auto Crop"))
+        });
+        if let Some((rect, label)) = crop
             && let Some(d) = self.develop_of(id)
         {
             let mut d = (*d).clone();
-            d.crop.geometry.rect = lightcraft_geom::Rect::from_xywh(c[0], c[1], c[2], c[3]);
-            self.set_develop(id, d, "Auto Crop")?;
+            d.crop.geometry.rect = rect;
+            self.set_develop(id, d, label)?;
         }
         let mut info = out.info;
         info["id"] = json!(id.0);

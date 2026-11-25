@@ -1572,3 +1572,192 @@ fn cmd_shift_m_merges_the_picked_photos_with_a_guessed_kind() {
     assert_eq!(kind(&mut h, [90_001, 90_002]), "merge.hdr", "four stops apart");
     assert_eq!(kind(&mut h, [90_003, 90_004]), "merge.panorama", "one exposure");
 }
+
+// ------------------------------------------------------------------ crop-zoom dial: smooth turns
+
+/// What a Monogram crop-zoom turn did to the loupe (see [`zoom_turn`]).
+#[derive(Default)]
+struct ZoomTurn {
+    /// The keys the Main slot asked for or showed during the turn (the pre-turn sharp render's left out).
+    keys: std::collections::BTreeSet<u64>,
+    /// Frames (after the first draft was up) that did not show a cut of the current crop.
+    bad: Vec<String>,
+    /// The interaction ended before the last detent (a pause was taken for "let go").
+    ended_early: bool,
+    /// The crop's centre after each detent.
+    centres: Vec<(f64, f64)>,
+    /// Frames whose cut was stretched / squashed, or whose picture jumped or resized.
+    stretched: Vec<String>,
+    /// Frames that drew a cut.
+    drawn: usize,
+    /// The on-screen rect of the first cut.
+    first_rect: Option<egui::Rect>,
+}
+
+/// Is Main showing the crop dial's uncropped draft (drawn cut to the current crop)?
+fn showing_cut(h: &Headless) -> bool {
+    use crate::render::Slot;
+    h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == h.app.session.active().unwrap_or(t.photo) && h.app.reframe_shows(t.key))
+}
+
+/// A Monogram dial turn on `line` (`CropScale = ^0.5,-100,100` …): `detents` of them, a frame each
+/// (16 ms apart), `pause` = (every n detents, ms) a still spell with frames running. The first
+/// draft is waited for (a turn's one unavoidable lag), then every frame must show the cut.
+fn zoom_turn(h: &mut Headless, line: &str, detents: usize, pause: Option<(usize, u64)>, crop_tool: bool) -> ZoomTurn {
+    use crate::render::Slot;
+    use std::collections::BTreeSet;
+    let id = h.app.session.active().expect("active photo");
+    let sharp_key = h.app.renderer.textures.get(&Slot::Main).map(|t| t.key);
+    let mut t = ZoomTurn { keys: BTreeSet::new(), ..Default::default() };
+    let mut armed = false;
+    let look = |h: &mut Headless, t: &mut ZoomTurn, armed: &mut bool, what: &str| {
+        h.step();
+        if let Some(k) = h.app.renderer.wanted(Slot::Main).filter(|k| Some(*k) != sharp_key) {
+            t.keys.insert(k);
+        }
+        if h.app.session.interaction.is_none() {
+            return;
+        }
+        if let Some((r, uv, tex)) = h.app.reframe_drawn.get() {
+            t.drawn += 1;
+            let (pw, ph) = h.app.session.active().and_then(|id| h.app.session.catalog.photo(id)).map_or((1, 1), |p| (p.width.max(1) as usize, p.height.max(1) as usize));
+            let develop = h.app.session.develop_of(id).unwrap_or_default();
+            let (cw, ch) = lightcraft_pipeline::native_output_size(pw, ph, &develop);
+            let want = cw / ch;
+            let shown = f64::from(r.width() / r.height());
+            // the cut's top and left edges in the texture's own pixels
+            let px = |a: egui::Pos2, b: egui::Pos2| f64::from(((b.x - a.x) * tex[0] as f32).hypot((b.y - a.y) * tex[1] as f32));
+            let sampled = px(uv[0], uv[1]) / px(uv[0], uv[3]);
+            if (shown / want - 1.0).abs() > 0.005 {
+                t.stretched.push(format!("{what}: drawn {shown:.4} vs the crop's {want:.4}"));
+            }
+            if (sampled / want - 1.0).abs() > 0.005 {
+                t.stretched.push(format!("{what}: samples {sampled:.4} vs the crop's {want:.4} (texture {tex:?})"));
+            }
+            let first = *t.first_rect.get_or_insert(r);
+            if (r.size() - first.size()).abs().max_elem() > 1.0 || (r.center() - first.center()).abs().max_elem() > 1.0 {
+                t.stretched.push(format!("{what}: the picture moved / resized: {first:?} → {r:?}"));
+            }
+        }
+        let ok = if crop_tool {
+            h.app.renderer.textures.get(&Slot::Main).is_some_and(|x| x.photo == id)
+        } else {
+            showing_cut(h)
+        };
+        if ok {
+            *armed = true;
+        } else if *armed {
+            t.bad.push(format!("{what}: Main shows {:?}, reframe {:?}", h.app.renderer.textures.get(&Slot::Main).map(|x| x.key), h.app.reframe_key));
+        }
+    };
+    for k in 0..detents {
+        exec(h, "keys.lrinput", json!({"line": line}));
+        let c = crop_of(h).rect.center();
+        t.centres.push((c.x, c.y));
+        look(h, &mut t, &mut armed, &format!("detent {k}"));
+        if !armed && k == 0 {
+            // the first draft of the turn: its one render
+            let t0 = std::time::Instant::now();
+            while !armed && t0.elapsed() < T {
+                std::thread::sleep(Duration::from_millis(2));
+                look(h, &mut t, &mut armed, "first draft");
+            }
+            t.bad.clear();
+        }
+        std::thread::sleep(Duration::from_millis(16));
+        if let Some((n, ms)) = pause
+            && (k + 1) % n == 0
+            && k + 1 < detents
+        {
+            let t0 = std::time::Instant::now();
+            while t0.elapsed() < Duration::from_millis(ms) {
+                look(h, &mut t, &mut armed, &format!("pause after {k}"));
+                std::thread::sleep(Duration::from_millis(16));
+            }
+        }
+        if h.app.session.interaction.is_none() {
+            t.ended_early = true;
+        }
+    }
+    t
+}
+
+fn zoom_setup(angle: f64, rect: [f64; 4], crop_tool: bool) -> Headless {
+    use crate::render::Slot;
+    let mut h = demo();
+    h.request("ui.set", json!({"view": "detail", "module": "develop", "right": "edit"}), T);
+    exec(&mut h, "crop.set", json!({"rect": rect, "angle": angle}));
+    if crop_tool {
+        exec(&mut h, "panel.crop", json!({}));
+    }
+    let sharp = |h: &Headless| {
+        h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.quick.is_none() && Some(t.key) != h.app.reframe_key) && !h.app.renderer.is_pending(Slot::Main)
+    };
+    assert!(h.step_until(T, sharp), "first render: {}", h.app.renderer.diagnose());
+    h.settle(T);
+    h
+}
+
+/// Zooming in on the crop with the Monogram dial draws every detent out of ONE uncropped render:
+/// the size and key of that draft used to follow the crop (uncropped ÷ crop), so each detent asked
+/// for a new render and, until it came, Main showed the previous uncropped texture squeezed into the
+/// crop's frame (Bryan, 2026-11-24: "zooming into the crop on the Monogram glitches out").
+#[test]
+fn crop_zoom_turn_is_one_uncropped_render() {
+    let mut h = zoom_setup(0.0, [0.1, 0.2, 0.9, 0.65], false);
+    let t = zoom_turn(&mut h, "CropScale = ^0.5,-100,100", 30, None, false);
+    assert!(t.bad.is_empty(), "{} frames that were not the cut, first: {:?}", t.bad.len(), t.bad.first());
+    assert!(t.keys.len() <= 2, "{} renders asked for in one turn: {:?}", t.keys.len(), t.keys);
+    assert!(!t.ended_early, "one interaction");
+    assert!(t.drawn > 20, "cut frames drawn: {}", t.drawn);
+    assert!(t.stretched.is_empty(), "{} stretched frames, first: {:?}", t.stretched.len(), t.stretched.first());
+    let w = crop_of(&h).rect.width();
+    assert!(w < 0.8 * 0.9, "it zoomed in ({w})");
+}
+
+/// … also with short pauses in the turn (a hand that stops for 500 ms to look): the interaction
+/// lives on ([`crate::keymap::CROP_SETTLE`]), so no sharp-render swap and no second draft.
+#[test]
+fn crop_zoom_turn_survives_pauses() {
+    let mut h = zoom_setup(0.0, [0.1, 0.2, 0.9, 0.65], false);
+    let t = zoom_turn(&mut h, "CropScale = ^0.5,-100,100", 30, Some((6, 500)), false);
+    assert!(!t.ended_early, "a 500 ms pause is not letting go");
+    assert!(t.bad.is_empty(), "{} frames that were not the cut, first: {:?}", t.bad.len(), t.bad.first());
+    assert!(t.keys.len() <= 2, "{} renders asked for in one turn: {:?}", t.keys.len(), t.keys);
+    assert!(t.stretched.is_empty(), "{} stretched frames, first: {:?}", t.stretched.len(), t.stretched.first());
+    // and when the dial really stops, the sharp render of the final crop replaces the cut
+    assert!(h.step_until(T, |h| h.app.session.interaction.is_none() && !h.app.renderer.is_pending(crate::render::Slot::Main) && !showing_cut(h)), "{}", h.app.renderer.diagnose());
+}
+
+/// Zooming out of a straightened crop to the image's limit: the crop's centre slides towards the
+/// photo's centre, never away, in small steps (no jump), and the draft keeps showing the cut.
+#[test]
+fn crop_zoom_out_to_the_limit_slides_smoothly() {
+    let mut h = zoom_setup(4.0, [0.62, 0.55, 0.92, 0.8], false);
+    let t = zoom_turn(&mut h, "CropScale = v0.5,-100,100", 260, None, false);
+    // (it got to the photo's limit: one more detent changes nothing)
+    let at_limit = crop_of(&h);
+    exec(&mut h, "keys.lrinput", json!({"line": "CropScale = v0.5,-100,100"}));
+    assert_eq!(crop_of(&h), at_limit, "the zoom-out reached the limit");
+    assert!(t.bad.is_empty(), "{} frames that were not the cut, first: {:?}", t.bad.len(), t.bad.first());
+    assert!(t.stretched.is_empty(), "{} stretched frames, first: {:?}", t.stretched.len(), t.stretched.first());
+    let d = |c: (f64, f64)| ((c.0 - 0.5).powi(2) + (c.1 - 0.5).powi(2)).sqrt();
+    let mut worst: f64 = 0.0;
+    for (i, w) in t.centres.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        assert!(d(b) <= d(a) + 0.002, "detent {}: the centre moved away from the middle: {a:?} → {b:?}", i + 1);
+        worst = worst.max(((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt());
+    }
+    eprintln!("zoom-out: largest centre step {worst:.4}");
+    assert!(worst < 0.01, "the centre jumped {worst:.4} in one detent");
+}
+
+/// With the Crop panel open the loupe shows the whole photo: a zoom turn needs one draft at most
+/// (the crop is not in the picture): the draft of the turn's first detent, where every detent used to ask for a fresh one.
+#[test]
+fn crop_zoom_turn_with_the_crop_panel_open() {
+    let mut h = zoom_setup(0.0, [0.1, 0.1, 0.9, 0.9], true);
+    let t = zoom_turn(&mut h, "CropScale = ^0.5,-100,100", 30, None, true);
+    assert!(t.bad.is_empty(), "{} frames that were not the cut, first: {:?}", t.bad.len(), t.bad.first());
+    assert!(t.keys.len() <= 1, "{} renders asked for in one turn: {:?}", t.keys.len(), t.keys);
+}

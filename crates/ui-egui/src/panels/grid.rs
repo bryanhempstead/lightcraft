@@ -166,10 +166,9 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     if app.session.source == lightcraft_engine::LibrarySource::Merges {
-        // merges.: its own bar and its own view (each group a stacked wave of its frames); the
-        // filter bar doesn't apply to it
+        // merges.: its own bar (with its kind. / confidence. / camera. drop-downs) and its own view
+        // (each group a tile, a stacked wave of its frames); the filter bar doesn't apply to it
         crate::merges::bar(app, ui);
-        crate::merge_page::filters(app, ui);
         app.canvas_rect = Some(ui.max_rect());
         crate::merges::view(app, ui);
         return;
