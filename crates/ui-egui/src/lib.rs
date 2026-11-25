@@ -114,6 +114,8 @@ mod tests_merge_page;
 #[cfg(test)]
 mod tests_metadata_views;
 #[cfg(test)]
+mod tests_monogram;
+#[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
 mod tests_panels;

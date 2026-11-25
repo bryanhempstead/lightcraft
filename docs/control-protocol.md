@@ -51,6 +51,7 @@ mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 | `keys.import` | `{source: lrkeys\|superkeys\|monogram, path?, profile?, write?}` | Read LrKeys `bindings.json`, LrSuperKeys `Shortcuts.xml`+`SpeedKeys.xml`, or a Monogram `state.json` profile (read-only) into the keymap → `{mapped, skipped, …}`; `write` saves the generated Monogram profile |
 | `keys.midi` / `keys.learn` | `{midi: cc\|note, number, value?, channel?}` or `{bytes}` / `{on}` | A MIDI message as if from the MIDI input → what it did / MIDI learn |
 | super keys | `keys.nudge {control, dir, size: small\|large}` · `keys.macro {steps: [{command, params}]}` · `keys.send {keys}` · `preset.applyByName {name}` · `crop.nudge {x?, y?, scale?}` (engine: one axis only, about the centre) · `view.develop` · `view.colorMixer {mode}` · `view.resumeLastLeftOff` | Commands for keys, MIDI and the control channel (see `crates/ui-egui/src/keymap.rs`, `leftoff.rs`) |
+| Monogram inputs | `keys.lrinput {line}` · `develop.listControls {section?}` | One line of Monogram's Lightroom protocol (`keys.lrinput`) and the catalog of every develop control; see *Monogram console inputs* below |
 | merges. | `merge.find {path, deep?, background?}` · `merge.candidates {path, deep?, state?: open\|merged\|dismissed\|all}` · `merge.thumbs {ids, size?: 320, render?}` · `merge.mergeGroups {ids, kind?, frames?, options?}` (`options`: the Merge box's choices, camelCase — `projection: auto\|spherical\|cylindrical\|perspective`, `boundaryWarp: 0–100`, `autoCrop`, `crop: [x0, y0, x1, y1]` (normalized; the merged photo's crop, in place of the auto-crop one — the Merge box's draggable crop frame; also on `merge.hdr` / `merge.panorama` / …), `fillEdges`, `deghost: none\|low\|medium\|high`, `align`, `stack`, `autoSettings`, `bracket`; a missing key = Settings ▸ merge.'s default for the group's kind; in the app → `{queued}`, the groups merged one at a time on the worker) · `merge.dismiss {ids}` (send.back.) · `merge.restore {ids}` · `merge.setFrames {id, photos}` · `merge.setKind {id, kind: hdr\|pano\|stack\|hdrPano}` · `merge.showIn {ids, where: both\|merges}` · `merge.unmerge {ids}` · UI: `merge.findMode {mode: weddings (auto)\|every\|off (find)}`, `merge.settings {<partial Settings ▸ merge.: panorama\|hdr\|hdrPanorama\|focusStack: {mergesOnly, stack, autoSettings, autoCrop, projection, deghost, hideOriginals}, showFrom}}` → all of them, `merge.layout {layout?: waves\|grid\|strip\|focus, aspect?: original\|square\|3:2\|4:5\|16:9, perRow?: 2–8}` (`perRow`: groups per row, each group a tile, 4 by default; per screen size: small < 1300, medium, large, huge > 2600 points; aspect shapes only the cards), `merge.cardSize {perRow?\|step?: ±1}` (smaller. / bigger.), `merge.filter {kinds?, confidences?, from?, camera?, clear?}`, merge. page: `merge.step {by: ±1}` (← / →), `merge.mergePicked` (↩ / M: the Merge box for the picked groups), `merge.openGroups {ids}`, `merge.mergeNow` (no box), `merge.sendBackPicked` (S), `merge.pickAll` (⌘A) (all via `engine.execute`) | Found photo merges (`docs/merge.md`). A shoot folder with camera subfolders is one pool: pass `deep: true`. `merge.candidates` → `{groups: [Group], running}`, Group = `{id, kind, tag, photos (the frames merge. merges), state, result, folder, found, confidence: sure\|likely\|maybe, reasons: [string], frames: [{id, file, folder, subfolder (relative to the pool's folder, "" if none), camera, captured, exposure ("1/250 f/8 ISO 100"), inGroup}], cameras: [string], subfolders: [string]}`, oldest first. `merge.thumbs` → `{thumbs: {"<id>": "/abs/path.jpg"}}`: JPEGs from the thumbnail cache in `<library>/merges-thumbs/`, ids without a cached thumbnail left out (`render: true` renders them). `merge.setFrames` → `{id, photos, out}`; `merge.restore` → `{restored}`. Widgets: `mergeTile:<id>` (a group's tile), `group:merges:group:<id>` (header: picks the group), `mergeFilter:kind|confidence|camera` (the bar's drop-downs; rows `menu:mergesFilterKind-<kind>|all|none`, `…Confidence-<c>`, `…Camera-<n>`), `mergeWave:<id>`, `mergeCard:<id>:<photo>`, `button:mergesKind-<id>` / `mergesGroupMerge-<id>` / `mergesGroupSendBack-<id>` / `mergesRestore-<id>`, `chip:mergesConfidence-<id>`, `fold:merges.group:<id>` / `merges.spread:<id>` / `merges.sentBack`, bar `button:mergesFind` … `mergesBigger` |
 | fix notes | `notes.list {status?}` · `notes.add {text, shot?}` · `notes.send {ids?}` · `notes.markFixed {ids, note?}` · `notes.reopen` · `notes.edit` · `notes.remove` · `notes.select` · `notes.toggle {open?}` (all via `engine.execute`) | The notes. panel's notes about what isn't working and the fix requests it writes for the Claude session: `docs/fix-notes.md` |
 
@@ -82,6 +83,41 @@ to do: `ui.inspect` → `libraryProblem` is `{path, error, temporarySession, pen
 are `button:libraryRetry`, `button:libraryChoose`, `button:libraryTemporary` (Continue Without Saving) and
 `button:libraryQuit`. A temporary session shows a banner (`indicator:temporarySession`, `button:libraryReopen`) and
 writes nothing. `app.openLibrary` opening a library ends it.
+
+## Monogram console inputs
+
+Monogram's Lightroom integration sends one text line per move; LightCraft reads them with `keys.lrinput {line}`
+(`crates/ui-egui/src/keymap.rs`, `lr_input`). The number after `=` says how it moved: a slider `128,min,max`
+(hardware 0–255 across the range), a dial `^0.05,min,max` (up) / `v0.05,min,max` (down, a digit follows the `v`:
+`lc_cycle = vertical` is a list name, not a dial), or nothing / `reset` (a plain press: back to the default).
+
+- **Lightroom names** (`Exposure`, `Tint`, …; the table is `LR_PARAMS`): the colour-grading wheels
+  `ShadowsWheelX/Y`, `MidtonesWheelX/Y`, `HighlightsWheelX/Y`, `GlobalWheelX/Y` (X = the wheel's saturation 0–100,
+  Y = its hue 0–360) and `ParametricShadowSplit` / `ParametricMidtoneSplit` / `ParametricHighlightSplit` are in it.
+- **`lc_set_<control id> = …`: every develop control.** The id is any `id` of `develop.listControls`, indexed ones
+  too: `lc_set_hdr.maxEv = 128,0,5`, `lc_set_curve.splitMid = ^2,20,80`, `lc_set_pointColor.1.hueShift =` (reset).
+  An unknown id, or a list element that doesn't exist on the active photo (`pointColor.7.…`), is an error. It is
+  the same code path as the Lightroom names (a console drag: one history step once the hand is still).
+- **`local_*`: the mask sliders.** `local_Temperature`, `Tint`, `Exposure`, `Contrast`, `Highlights`, `Shadows`,
+  `Whites`, `Blacks`, `Texture`, `Clarity`, `Hue`, `Saturation`, `Sharpness`, `LuminanceNoise`, `Moire`,
+  `Defringe`, `Dehaze` set the same-named slider of the *selected* mask (`mask.select`; an error if none).
+  A slider spans LightCraft's own range, so Monogram's ±180 `local_Hue` covers ±100. (`local_ToningLuminance`
+  of the Lightroom plugin has no LightCraft slider.)
+- **`reset = <tool>`**: `spotremoval`, `redeye`, `gradient`, `circularGradient`, `brushing` run
+  `develop.resetLocalTool {tool: spots|redEye|linear|radial|brush}` (deletes every one of that kind, one undo
+  step); `crop` runs `crop.reset`; `alldevelop` is ⌘⇧R.
+- **`lc_cmd = <command id> [JSON params]`** runs any command. Several commands separated by ` ; ` (a space, a
+  semicolon, a space; one inside a JSON string doesn't count) run in order: `lc_cmd = view.colorMixer {"mode":
+  "hue"} ; tool.targetedAdjustment {"target": "hue"}`. Every step is parsed before any runs; the first step that
+  fails stops the chain and is reported (`lc_cmd: step 2 \`…\` failed (1 ran before it): …`); the reply is
+  `{ran, results: [{run, result}]}`. A chain runs each step as a command (`engine.execute`'s result, errors
+  included); a single `lc_cmd` keeps the key path (culling keys, panel toggles) and reports no error.
+- **`lc_cycle = <list>`**: step a cycle list (`keys.cycles`); the toast shows just the item's label.
+
+`develop.listControls {section?}` (no photo needed) → `{count, controls: [{id, label, section, sectionLabel, min,
+max, default, step, decimals, indexed}]}`: one row per entry of `controls.rs`; an `indexed` row is a template
+(`pointColor.hueShift`, `redEye.pupilSize`) that addresses list element *n* as `pointColor.<n>.hueShift`.
+(`develop.controls` lists the photo's current values, with the elements that exist.)
 
 ## Headless rendering (no window, no GPU)
 

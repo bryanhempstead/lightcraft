@@ -1761,3 +1761,52 @@ fn crop_zoom_turn_with_the_crop_panel_open() {
     assert!(t.bad.is_empty(), "{} frames that were not the cut, first: {:?}", t.bad.len(), t.bad.first());
     assert!(t.keys.len() <= 1, "{} renders asked for in one turn: {:?}", t.keys.len(), t.keys);
 }
+
+// Cycle lists by name: a list called `vertical` is not a dial, `v1` is; names with spaces resolve;
+// the step message is just the item's label.
+fn keymap_cycle_set(h: &mut Headless, list: &str, labels: &[&str]) {
+    let items: Vec<Value> = labels.iter().map(|l| json!({"label": l, "command": "crop.aspect", "params": {"aspect": "4x3"}})).collect();
+    exec(h, "keys.set", json!({"cycles": {(list): items}}));
+}
+
+fn keymap_cycle_step(h: &mut Headless, line: &str) -> Value {
+    crate::keymap::lr_input(&mut h.app, line).unwrap()["label"].clone()
+}
+
+#[test]
+fn keymap_cycle_list_named_vertical_steps_forward() {
+    let mut h = demo();
+    keymap_cycle_set(&mut h, "vertical", &["A", "B", "C"]);
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle = vertical"), "A");
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle = vertical"), "B");
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle = vertical"), "C");
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle_vertical = "), "A", "the name form wraps forward too");
+}
+
+#[test]
+fn keymap_cycle_real_dial_still_steps_backwards() {
+    let mut h = demo();
+    keymap_cycle_set(&mut h, "vertical", &["A", "B", "C"]);
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle = vertical"), "A");
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle_vertical = ^1,0,1"), "B");
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle_vertical = v3,0,1"), "A", "v + digit is a dial: back one");
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle_vertical = v1,0,1"), "C", "back wraps to the end");
+}
+
+#[test]
+fn keymap_cycle_list_name_with_spaces_resolves() {
+    let mut h = demo();
+    keymap_cycle_set(&mut h, "4x3 as shot crop", &["X", "Y"]);
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle = 4x3 as shot crop"), "X");
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle_4x3 as shot crop = ^1,0,1"), "Y");
+}
+
+#[test]
+fn keymap_cycle_message_is_just_the_item_label() {
+    let mut h = demo();
+    keymap_cycle_set(&mut h, "ratio", &["4 × 3", "As Shot"]);
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle = ratio"), "4 × 3");
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.clone()).as_deref(), Some("4 × 3"));
+    assert_eq!(keymap_cycle_step(&mut h, "lc_cycle = ratio"), "As Shot");
+    assert_eq!(h.app.ui.toast.as_ref().map(|t| t.0.clone()).as_deref(), Some("As Shot"));
+}

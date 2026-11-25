@@ -1493,6 +1493,51 @@ pub fn specs() -> Vec<CommandSpec> {
             s.set_develop(id, dd, "Delete Red Eye")?;
             ok()
         }),
+        cmd!(
+            "develop.resetLocalTool",
+            "Reset Local Adjustment Tool",
+            [],
+            None,
+            "{tool: spots|redEye|linear|radial|brush} — delete every spot, red eye correction or mask of that kind on the active photo (Monogram's `reset = spotremoval|redeye|gradient|circularGradient|brushing`); one undo step → {removed}",
+            has_active,
+            |s, p| {
+                let c = "develop.resetLocalTool";
+                let tool = str_param(p, "tool").ok_or_else(|| bad(c, "missing tool (spots|redEye|linear|radial|brush)"))?.to_string();
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
+                let removed = match tool.as_str() {
+                    "spots" => std::mem::take(&mut d.spots).len(),
+                    "redEye" => std::mem::take(&mut d.red_eye).len(),
+                    "linear" | "radial" | "brush" => {
+                        let of_kind = |m: &Mask| {
+                            !m.components.is_empty()
+                                && m.components.iter().all(|k| {
+                                    matches!(
+                                        (tool.as_str(), &k.shape),
+                                        ("linear", MaskShape::Linear { .. })
+                                            | ("radial", MaskShape::Radial { .. })
+                                            | ("brush", MaskShape::Brush { .. })
+                                    )
+                                })
+                        };
+                        let before = d.masks.len();
+                        d.masks.retain(|m| !of_kind(m));
+                        before - d.masks.len()
+                    }
+                    t => return Err(bad(c, format!("unknown tool {t:?} (spots|redEye|linear|radial|brush)"))),
+                };
+                if removed > 0 {
+                    if s.active_mask.is_some_and(|a| !d.masks.iter().any(|m| m.id == a)) {
+                        s.active_mask = None;
+                    }
+                    if tool == "spots" {
+                        s.active_spot = None;
+                    }
+                    s.set_develop(id, d, "Reset Local Tool")?;
+                }
+                Ok(json!({"removed": removed}))
+            }
+        ),
     ]
 }
 

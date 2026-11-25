@@ -175,6 +175,30 @@ pub fn specs() -> Vec<CommandSpec> {
                     .collect(),
             ))
         }),
+        cmd!(
+            query "develop.listControls",
+            "List Develop Control Catalog",
+            [],
+            None,
+            "{section?} — the catalog of every develop control, no photo needed: {count, controls: [{id, label, section, sectionLabel, min, max, default, step, decimals, indexed}]}; an indexed control (`pointColor.hueShift`, `redEye.pupilSize`) has `indexed: true` and is addressed per list element as `pointColor.<n>.hueShift`",
+            always,
+            |_, p| {
+                let sec = p.get("section").and_then(|v| serde_json::from_value::<lightcraft_develop::Section>(v.clone()).ok());
+                let controls: Vec<Value> = CONTROLS
+                    .iter()
+                    .map(|c| (c, false))
+                    .chain(controls::INDEXED.iter().map(|c| (c, true)))
+                    .filter(|(c, _)| sec.is_none_or(|x| x == c.section))
+                    .map(|(c, indexed)| {
+                        json!({
+                            "id": c.id, "label": c.label, "section": c.section, "sectionLabel": c.section.label(),
+                            "min": c.min, "max": c.max, "default": c.default, "step": c.step, "decimals": c.decimals, "indexed": indexed,
+                        })
+                    })
+                    .collect();
+                Ok(json!({"count": controls.len(), "controls": controls}))
+            }
+        ),
         cmd!(query "presets.list", "List Presets", [], None, "{}", always, |s, _| {
             Ok(Value::Array(s.presets.iter().map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": p.favorite, "builtin": p.builtin})).collect()))
         }),

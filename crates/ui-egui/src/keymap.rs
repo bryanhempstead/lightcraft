@@ -137,7 +137,19 @@ pub const LR_PARAMS: &[(&str, &str)] = &[
     ("ParametricLights", "curve.lights"),
     ("ParametricDarks", "curve.darks"),
     ("ParametricShadows", "curve.shadows"),
+    ("ParametricShadowSplit", "curve.splitShadows"),
+    ("ParametricMidtoneSplit", "curve.splitMid"),
+    ("ParametricHighlightSplit", "curve.splitHighlights"),
     ("CurveRefineSaturation", "curve.refineSaturation"),
+    // Monogram's colour-wheel inputs: X = the wheel's saturation (0–100), Y = its hue (0–360)
+    ("ShadowsWheelX", "grading.shadows.sat"),
+    ("ShadowsWheelY", "grading.shadows.hue"),
+    ("MidtonesWheelX", "grading.midtones.sat"),
+    ("MidtonesWheelY", "grading.midtones.hue"),
+    ("HighlightsWheelX", "grading.highlights.sat"),
+    ("HighlightsWheelY", "grading.highlights.hue"),
+    ("GlobalWheelX", "grading.global.sat"),
+    ("GlobalWheelY", "grading.global.hue"),
     ("SplitToningShadowHue", "grading.shadows.hue"),
     ("SplitToningShadowSaturation", "grading.shadows.sat"),
     ("ColorGradeShadowLum", "grading.shadows.lum"),
@@ -232,6 +244,32 @@ pub const LR_PARAMS: &[(&str, &str)] = &[
     ("CropPositionY", "crop.y"),
     ("CropScale", "crop.scale"),
 ];
+
+/// Monogram's Local Adjustments sliders → the `LocalAdjustments` field (and `panels::masking::LOCAL`
+/// spec key) they set on the selected mask.
+pub const LR_LOCAL: &[(&str, &str)] = &[
+    ("local_Temperature", "temp"),
+    ("local_Tint", "tint"),
+    ("local_Exposure", "exposure"),
+    ("local_Contrast", "contrast"),
+    ("local_Highlights", "highlights"),
+    ("local_Shadows", "shadows"),
+    ("local_Whites", "whites"),
+    ("local_Blacks", "blacks"),
+    ("local_Texture", "texture"),
+    ("local_Clarity", "clarity"),
+    ("local_Hue", "hue"),
+    ("local_Saturation", "saturation"),
+    ("local_Sharpness", "sharpness"),
+    ("local_LuminanceNoise", "noise"),
+    ("local_Moire", "moire"),
+    ("local_Defringe", "defringe"),
+    ("local_Dehaze", "dehaze"),
+];
+
+/// Monogram's `reset = <tool>` one-shots for the local tools → `develop.resetLocalTool`'s `tool`.
+const LR_RESET_TOOLS: &[(&str, &str)] =
+    &[("spotremoval", "spots"), ("redeye", "redEye"), ("gradient", "linear"), ("circularGradient", "radial"), ("brushing", "brush")];
 
 /// The pseudo controls `crop.nudge` moves (no absolute value).
 pub const CROP_PSEUDO: &[&str] = &["crop.x", "crop.y", "crop.scale"];
@@ -1848,7 +1886,9 @@ const LR_TRIGGER_KEYS: &[(&str, &str)] = &[
 /// (reverse-engineered from its encoder): `Exposure = 128,-10,10` (slider: hardware 0–255 + the
 /// input's range), `Exposure = ^0.05,-10,10` / `v0.05` (dial: Monogram's own step × detents),
 /// `Exposure = reset`, `set_preset = Name`, one-shot inputs (`flag = pick`…), and LightCraft's
-/// `lc_cycle = <list>` (slider: pick by position; dial: next / previous). Does what Lightroom's
+/// `lc_cycle = <list>` (slider: pick by position; dial: next / previous), `lc_set_<control id> = …`
+/// (any develop control, same forms as the Lightroom names; nothing after `=` resets it),
+/// `local_*` (the selected mask's sliders), `lc_cmd = a {…} ; b` (a chain). Does what Lightroom's
 /// Monogram plugin does, on the active photo.
 pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, String> {
     let line = line.trim();
@@ -1865,12 +1905,22 @@ pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, Str
     // LightCraft's own one-shots: `lc_cmd = <command id> [JSON params]` (Merge…, Match Brightness,
     // Auto Align… — what Lightroom's console list has no input for)
     if name == "lc_cmd" {
-        let (cmd, params) = match rest.split_once(' ') {
-            Some((c, p)) => (c, serde_json::from_str(p).map_err(|e| format!("{line}: {e}"))?),
-            None => (rest, json!({})),
-        };
+        let steps = split_chain(rest);
+        if steps.len() > 1 {
+            return run_chain(app, &steps);
+        }
+        let (cmd, params) = parse_step(rest).map_err(|e| format!("{line}: {e}"))?;
         crate::shortcuts::dispatch(app, &ctx, cmd, params);
         return Ok(json!({"run": cmd}));
+    }
+    // `reset = <tool>`: the local tools (Lightroom's "Reset Spot Removal", "Reset Gradients"…) and the crop
+    if name == "reset" {
+        if let Some(&(_, tool)) = LR_RESET_TOOLS.iter().find(|(l, _)| l.eq_ignore_ascii_case(rest)) {
+            return app.run("develop.resetLocalTool", json!({"tool": tool}));
+        }
+        if rest.eq_ignore_ascii_case("crop") {
+            return app.run("crop.reset", json!({}));
+        }
     }
     if let Some(&(_, keys)) = LR_TRIGGER_KEYS.iter().find(|(l, _)| l.eq_ignore_ascii_case(line)) {
         let (cmd, params) = keystroke_command(keys);
@@ -1897,17 +1947,24 @@ pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, Str
         return app.run("geometry.upright", json!({"mode": mode}));
     }
     // the numbers after the name: dial `^d,min,max` / `vd,…`, slider `v,min,max`
-    let dial = rest.strip_prefix('^').map(|r| (1.0, r)).or_else(|| rest.strip_prefix('v').map(|r| (-1.0, r)));
+    // a dial needs a digit right after the sign, so a cycle list named `vertical` is not a dial
+    let after = |sign: char| rest.strip_prefix(sign).filter(|r| r.starts_with(|c: char| c.is_ascii_digit()));
+    let dial = after('^').map(|r| (1.0, r)).or_else(|| after('v').map(|r| (-1.0, r)));
     let nums: Vec<f64> = dial.map(|(_, r)| r).unwrap_or(rest).split(',').filter_map(|x| x.trim().parse::<f64>().ok()).collect();
     if name == "lc_cycle" || name.starts_with("lc_cycle_") {
         let list = if name == "lc_cycle" { rest.split(',').next().unwrap_or("").trim() } else { name.trim_start_matches("lc_cycle_") };
         return cycle(app, list, dial.map(|(sign, _)| sign), if dial.is_none() { nums.first().copied() } else { None });
     }
-    if rest == "reset" {
-        let control = lr_param(name).ok_or_else(|| format!("{name}: no LightCraft slider"))?;
-        return app.run("develop.resetControl", json!({"control": control}));
+    // what the name addresses: a develop control (a Lightroom name, or `lc_set_<control id>`) or a mask slider
+    let target = target_of(app, name)?.ok_or_else(|| format!("{name}: no LightCraft slider for this Monogram input"))?;
+    // a plain press (`= reset`, or no numbers at all) puts it back to its default
+    if rest.is_empty() || rest == "reset" {
+        return reset_target(app, &target);
     }
-    let control = lr_param(name).ok_or_else(|| format!("{name}: no LightCraft slider for this Monogram input"))?;
+    let control = match target {
+        Target::Local(key) => return local_input(app, name, key, dial, &nums),
+        Target::Control(control) => control,
+    };
     match (dial, nums.as_slice()) {
         (Some((sign, _)), [d, ..]) => {
             // Monogram's own increment per detent; the crop pseudo controls move in LightCraft's units
@@ -1928,6 +1985,129 @@ pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, Str
         }
         _ => Err(format!("{line}: no value")),
     }
+}
+
+/// What a Monogram input name addresses.
+enum Target<'a> {
+    /// A develop control id (`light.exposure`; `crop.x` / `crop.y` / `crop.scale` nudge the crop).
+    Control(&'a str),
+    /// A `LocalAdjustments` field of the selected mask (key of `panels::masking::LOCAL`).
+    Local(&'static str),
+}
+
+/// Prefix of the generic control inputs: `lc_set_<control id> = …` reaches every control that
+/// `develop.listControls` lists, indexed ones too (`lc_set_pointColor.0.hueShift`).
+const LC_SET: &str = "lc_set_";
+
+/// The control or mask slider a Monogram input name addresses: `Ok(None)` = not one of ours, `Err` =
+/// `lc_set_` with an id that is no control (or an indexed one whose list element doesn't exist).
+fn target_of<'a>(app: &crate::LightcraftApp, name: &'a str) -> Result<Option<Target<'a>>, String> {
+    use lightcraft_develop::controls;
+    if let Some(&(_, key)) = LR_LOCAL.iter().find(|(l, _)| l.eq_ignore_ascii_case(name)) {
+        return Ok(Some(Target::Local(key)));
+    }
+    let Some(id) = name.strip_prefix(LC_SET) else { return Ok(lr_param(name).map(Target::Control)) };
+    if CROP_PSEUDO.contains(&id) {
+        return Ok(Some(Target::Control(id)));
+    }
+    if controls::find(id).is_none() {
+        return Err(format!("{name}: no develop control `{id}` (develop.listControls lists them)"));
+    }
+    // `pointColor.2.hueShift` names one list element: it has to exist on this photo
+    let listed = controls::CONTROLS.iter().any(|c| c.id == id);
+    if !listed && !app.session.active().and_then(|p| app.session.develop_of(p)).is_some_and(|d| controls::get(&d, id).is_some()) {
+        return Err(format!("{name}: no such list element on the active photo"));
+    }
+    Ok(Some(Target::Control(id)))
+}
+
+/// Back to the default: a develop control resets, a mask slider goes to its default (0).
+fn reset_target(app: &mut crate::LightcraftApp, target: &Target) -> Result<Value, String> {
+    match target {
+        Target::Control(control) => app.run("develop.resetControl", json!({"control": control})),
+        Target::Local(key) => {
+            let default = crate::panels::masking::LOCAL.iter().find(|s| s.id == *key).map_or(0.0, |s| s.default);
+            local_set(app, key, default)
+        }
+    }
+}
+
+/// Move a mask slider by Monogram's input: slider `v,min,max` (hardware 0–255 across the slider's own
+/// range, not Monogram's: its `local_Hue` is ±180, LightCraft's ±100), dial `^d` / `vd` (nudge).
+fn local_input(app: &mut crate::LightcraftApp, name: &str, key: &'static str, dial: Option<(f64, &str)>, nums: &[f64]) -> Result<Value, String> {
+    let spec = crate::panels::masking::LOCAL.iter().find(|s| s.id == key).ok_or_else(|| format!("{name}: no mask slider `{key}`"))?;
+    let value = match (dial, nums) {
+        (Some((sign, _)), [d, ..]) => spec.clamp(local_value(app, key).ok_or_else(|| no_mask(name))? + sign * d.abs()),
+        (None, [v, _min, _max]) => spec.min + (v / 255.0).clamp(0.0, 1.0) * (spec.max - spec.min),
+        _ => return Err(format!("{name}: no value")),
+    };
+    local_set(app, key, value)
+}
+
+fn no_mask(name: &str) -> String {
+    format!("{name}: no mask selected (pick one in the Masking panel)")
+}
+
+/// The selected mask's value of one local slider; `None` = no mask is selected.
+fn local_value(app: &crate::LightcraftApp, key: &str) -> Option<f64> {
+    let mask = app.session.active_mask?;
+    let d = app.session.develop_of(app.session.active()?)?;
+    d.masks.iter().find(|m| m.id == mask).map(|m| crate::panels::masking::local_get(&m.adjust, key))
+}
+
+/// Set one local slider on the selected mask, as a console drag (one history step once the hand is still).
+fn local_set(app: &mut crate::LightcraftApp, key: &str, value: f64) -> Result<Value, String> {
+    let Some(spec) = crate::panels::masking::LOCAL.iter().find(|s| s.id == key) else { return Err(format!("no mask slider `{key}`")) };
+    let Some(mask) = app.session.active_mask else { return Err(no_mask(key)) };
+    let value = spec.clamp(value);
+    console_begin(app, &format!("Mask {}", spec.label));
+    let r = app.run("mask.adjust", json!({"id": mask, "values": {key: value}}))?;
+    say(app, format!("Mask {} {}", crate::i18n::tr(spec.label), spec.format(value)));
+    Ok(r)
+}
+
+/// `a ; b ; c` → its steps, split at a ` ; ` that is not inside a JSON string.
+fn split_chain(text: &str) -> Vec<&str> {
+    let (mut steps, mut start, mut quoted, mut escaped) = (Vec::new(), 0, false, false);
+    for (i, c) in text.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if c == '\\' && quoted {
+            escaped = true;
+        } else if c == '"' {
+            quoted = !quoted;
+        } else if c == ';' && !quoted && text.get(..i).is_some_and(|t| t.ends_with(' ')) && text.get(i + 1..).is_some_and(|t| t.starts_with(' ')) {
+            steps.push(text.get(start..i).unwrap_or("").trim());
+            start = i + 1;
+        }
+    }
+    steps.push(text.get(start..).unwrap_or("").trim());
+    steps
+}
+
+/// `<command id> [JSON params]`.
+fn parse_step(step: &str) -> Result<(&str, Value), String> {
+    match step.trim().split_once(' ') {
+        Some((c, p)) => Ok((c, serde_json::from_str(p.trim()).map_err(|e| format!("`{step}`: {e}"))?)),
+        None => Ok((step.trim(), json!({}))),
+    }
+}
+
+/// Run the steps of an `lc_cmd` chain in order; the first one that fails stops it and is reported.
+fn run_chain(app: &mut crate::LightcraftApp, steps: &[&str]) -> Result<Value, String> {
+    // every step parses before any runs: a typo in the last one must not leave the first half done
+    let parsed = steps.iter().map(|s| parse_step(s)).collect::<Result<Vec<_>, _>>().map_err(|e| format!("lc_cmd: {e}"))?;
+    let mut results = Vec::new();
+    for (n, (cmd, params)) in parsed.into_iter().enumerate() {
+        if cmd.is_empty() {
+            return Err(format!("lc_cmd: step {} is empty", n + 1));
+        }
+        match app.run(cmd, params) {
+            Ok(r) => results.push(json!({"run": cmd, "result": r})),
+            Err(e) => return Err(format!("lc_cmd: step {} `{cmd}` failed ({n} ran before it): {e}", n + 1)),
+        }
+    }
+    Ok(json!({"ran": results.len(), "results": results}))
 }
 
 /// Monogram's "adobe" protocol line (what it sends Photoshop / Premiere integrations, and LightCraft's
@@ -1956,7 +2136,16 @@ pub fn lr_input_json(app: &mut crate::LightcraftApp, line: &str) -> Result<Value
             let t = if (hi - lo).abs() > 1e-12 { (val - lo) / (hi - lo) } else { 0.0 };
             return cycle(app, name.trim_start_matches("lc_cycle_"), None, Some(t * 255.0));
         }
-        let control = lr_param(&name).ok_or_else(|| format!("{name}: no LightCraft slider for this Monogram input"))?;
+        let target = target_of(app, &name)?.ok_or_else(|| format!("{name}: no LightCraft slider for this Monogram input"))?;
+        let control = match target {
+            // across the mask slider's own range, whatever range the input was drawn with
+            Target::Local(key) => {
+                let t = if (hi - lo).abs() > 1e-12 { ((val - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 0.0 };
+                let spec = crate::panels::masking::LOCAL.iter().find(|s| s.id == key);
+                return local_set(app, key, spec.map_or(val, |s| s.min + t * (s.max - s.min)));
+            }
+            Target::Control(control) => control,
+        };
         let spec = lightcraft_develop::controls::find(control);
         let value = spec.map(|s| val.clamp(s.min.min(s.max), s.max.max(s.min))).unwrap_or(val);
         console_begin(app, control);
@@ -1973,8 +2162,8 @@ pub fn lr_input_json(app: &mut crate::LightcraftApp, line: &str) -> Result<Value
     if is_cycle {
         return cycle(app, name.trim_start_matches("lc_cycle_"), Some(1.0), None);
     }
-    match lr_param(&name) {
-        Some(control) => app.run("develop.resetControl", json!({"control": control})),
+    match target_of(app, &name)? {
+        Some(target) => reset_target(app, &target),
         None => Err(format!("{input}: nothing to do in LightCraft")),
     }
 }
@@ -1988,7 +2177,10 @@ pub fn cycle(app: &mut crate::LightcraftApp, list: &str, dir: Option<f64>, hw: O
         return Err(format!("cycle list `{list}` is empty"));
     }
     let n = items.len();
-    let cur = app.keymap.cycle_pos.get(list).copied();
+    let stored = app.keymap.cycle_pos.get(list).copied();
+    // a button / dial steps on from what the active photo is on now (its crop aspect, its WB); a slider
+    // picks by position, and a list with no item that matches goes on from the position remembered
+    let cur = if hw.is_none() { matching_item(app, &items, stored).or(stored) } else { stored };
     let next = match (dir, hw) {
         (Some(d), _) => match cur {
             Some(c) => (c as i64 + if d < 0.0 { -1 } else { 1 }).rem_euclid(n as i64) as usize,
@@ -2004,16 +2196,44 @@ pub fn cycle(app: &mut crate::LightcraftApp, list: &str, dir: Option<f64>, hw: O
     let Some(item) = items.get(next) else { return Err("cycle: out of range".into()) };
     let ctx = egui::Context::default();
     crate::shortcuts::dispatch(app, &ctx, &item.command, if item.params.is_null() { json!({}) } else { item.params.clone() });
-    say(app, format!("{} {}", list_label(list), item.label));
+    say(app, item.label.clone());
     Ok(json!({"list": list, "index": next, "label": item.label, "command": item.command}))
 }
 
-fn list_label(list: &str) -> &str {
-    match list {
-        "cropAspect" => "Crop",
-        "whiteBalance" => "WB",
-        _ => list,
-    }
+/// The item of a cycle list that the active photo is on right now: `crop.aspect` items match the
+/// crop's locked ratio (long side / short side, so a rotated crop still counts; "original" is the photo's
+/// own ratio, and an uncropped, unlocked photo is on "original"), `develop.wb` items the white balance
+/// mode. Any other command (presets: LightCraft doesn't keep which one was applied) never matches. Of
+/// several matches (4×3 and "original" on a 4:3 photo) `prefer`, the item last stepped to, wins.
+fn matching_item(app: &crate::LightcraftApp, items: &[CycleItem], prefer: Option<usize>) -> Option<usize> {
+    let id = app.session.active()?;
+    let d = app.session.develop_of(id)?;
+    let dims = app.session.catalog.photo(id).map(|p| (f64::from(p.width), f64::from(p.height)));
+    let ratio = |a: f64, b: f64| (a > 0.0 && b > 0.0).then(|| a.max(b) / a.min(b));
+    let original = dims.and_then(|(w, h)| ratio(w, h));
+    let now = match d.crop.aspect {
+        Some((w, h)) => ratio(f64::from(w), f64::from(h)),
+        None if d.crop == lightcraft_develop::Crop::default() => original,
+        None => None,
+    };
+    let wb_now = serde_json::to_value(d.wb.mode).ok();
+    let matches = |it: &CycleItem| match it.command.as_str() {
+        "crop.aspect" => {
+            let want = match it.params.get("aspect") {
+                Some(Value::String(a)) if a == "original" || a == "asShot" => original,
+                Some(Value::String(a)) => a.split_once('x').and_then(|(x, y)| ratio(x.trim().parse().ok()?, y.trim().parse().ok()?)),
+                Some(Value::Array(v)) => match v.as_slice() {
+                    [x, y] => x.as_f64().zip(y.as_f64()).and_then(|(x, y)| ratio(x, y)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            matches!((now, want), (Some(a), Some(b)) if (a - b).abs() <= 2e-3 * b)
+        }
+        "develop.wb" => it.params.get("mode").is_some_and(|m| Some(m) == wb_now.as_ref()),
+        _ => false,
+    };
+    prefer.filter(|&i| items.get(i).is_some_and(matches)).or_else(|| items.iter().position(matches))
 }
 
 /// Commands of the keymap and its super keys; `None` = not one of them.
