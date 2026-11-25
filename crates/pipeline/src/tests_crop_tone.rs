@@ -369,3 +369,32 @@ fn generated_pixels_arriving_later_measure_the_photo_again() {
     let after = crate::analysis(&src, &info, &s, &req, Some(&cache)).expect("tone settings read statistics");
     assert!(!Arc::ptr_eq(&before, &after), "measured again");
 }
+
+/// A render of the whole uncropped photo above the analysis size measures it at a smaller size
+/// ([`crate::ANALYSIS_EDGE`]): on an Adobe base too (whose default black reads the scene map's dark
+/// key) it must look as if it measured its own frame, since a crop measuring the whole photo must
+/// not make the uncropped render drift from what it was.
+#[test]
+fn an_uncropped_render_matches_one_measuring_its_own_frame() {
+    use crate::adobe;
+    let src = scene();
+    let curve: Vec<f32> = (0..=adobe::CURVE_N).map(|i| (i as f32 / adobe::CURVE_N as f32).powf(0.45)).collect();
+    assert!(adobe::register_base(0xc20b_0001, adobe::Base { hue_sat: None, hue_sat_ev: 0.0, look: None, curve, black: 0.005 }));
+    let info = SourceInfo { raw: true, adobe: Some(0xc20b_0001), as_shot_temp: 5000.0, ..Default::default() };
+    assert!(W.max(H) > crate::ANALYSIS_EDGE, "the render is bigger than the analysis frame");
+    let mut variants = variants();
+    variants.insert(0, ("base", DevelopSettings::default()));
+    for (name, s) in variants {
+        let req = RenderRequest { apply_crop: false, ..RenderRequest::fit(W, H) };
+        let analysed = crate::analysis(&src, &info, &s, &req, None).expect("an Adobe base reads the photo's dark key");
+        let own = crate::globals_at(&src, &info, &s, &req, W.max(H));
+        let (a, b) = (analysed.scene_map.as_ref().expect("map"), own.scene_map.as_ref().expect("map"));
+        eprintln!("{name}: dark key {:.3} (analysis) vs {:.3} (own frame)", a.dark, b.dark);
+        assert!((a.dark - b.dark).abs() < 0.25, "{name}: dark key {:.3} vs {:.3}", a.dark, b.dark);
+        let new = render(&src, &info, &s, &req).image;
+        let old = render_region(&src, &info, &s, &req, &own, None).image;
+        let (worst, mean, l_new, l_old) = compare(&old, (0, 0, W, H), &new, (0, 0));
+        eprintln!("{name}: max ΔE {worst:.3}, mean ΔE {mean:.3}, mean L* {l_new:.3} vs {l_old:.3}");
+        assert!(mean < 0.3 && (l_new - l_old).abs() < 0.1, "{name}: mean ΔE {mean:.3}, L* {l_new:.2} vs {l_old:.2}");
+    }
+}

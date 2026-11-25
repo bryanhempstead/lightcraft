@@ -88,3 +88,9 @@ base-only check against the embedded preview of Adobe's free DNG Converter (`/Ap
 "base via DNG Converter preview, defaults incl. sharpening", less exact, redone in full later; if the app is missing it says
 to install it and skips). Photoshop is quit at the end of a run that used it when nobody holds the lock and no document is
 open (`--keep-photoshop`).
+
+Comparing builds: `vendor/` (the DNG SDK, LibRaw) is gitignored, so a fresh worktree builds **without** the Adobe base
+(cargo only warns "Adobe DNG SDK not found ... building without it"; `ln -s <main checkout>/vendor vendor` first, and a
+changed `vendor/` needs `touch crates/dng-sdk-sys/build.rs crates/libraw-sys/build.rs`). Such a binary renders every
+mid-tone different (R6 Whites +100: 23 % clipped with the SDK, 0 % without; base ΔE vs Camera Raw 1.1 → 1.8, Leica
+1.2 → 3.0): check `LIGHTCRAFT_PROFILE=1` prints `raw source (Adobe <model>)` before trusting a before / after.
