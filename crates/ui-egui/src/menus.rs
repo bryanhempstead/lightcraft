@@ -42,7 +42,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.topPanel", "Module Picker", Some("F5"), "Window>Panels"),
     ("view.sidePanels", "Side Panels", Some("Tab"), "Window>Panels"),
     ("view.allPanels", "All Panels", Some("Shift+Tab"), "Window>Panels"),
-    ("view.toolbar", "Toolbar", Some("T"), "View"),
+    ("view.toolbar", "Toolbar", Some("Cmd+Alt+Shift+T"), "View"),
     ("view.lightsOut", "Lights Out", None, "Window"),
     ("view.filmHeight", "Filmstrip Height", None, ""),
     ("view.solo", "Solo Mode", None, ""),

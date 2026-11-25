@@ -115,7 +115,11 @@ fn panel_keys_hide_and_show_like_classic() {
     assert!(has(&h, "button:filmstripShow"), "a hidden filmstrip leaves its triangle");
     click(&mut h, "button:filmstripShow");
     assert!(h.app.ui.filmstrip);
+    // plain T no longer hides the toolbar (a stray T took Bryan's grid / loupe buttons away); ⌘⌥⇧T does
     key(&mut h, "T", json!({}));
+    h.step();
+    assert!(h.app.ui.toolbar, "plain T leaves the toolbar alone");
+    key(&mut h, "T", json!({"cmd": true, "alt": true, "shift": true}));
     assert!(!h.app.ui.toolbar);
     h.step();
     assert!(!has(&h, "icon:detail"), "no toolbar");
