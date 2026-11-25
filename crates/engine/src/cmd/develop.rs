@@ -2,7 +2,7 @@
 
 use lightcraft_catalog::{Op, PhotoId, Version};
 use lightcraft_develop::{DevelopSettings, Preset, Section, SettingsGroup, Treatment, Upright, WbMode, controls};
-use lightcraft_geom::{CropGeometry, CropHandle, Point, Rect, crop_fit_angle, drag_crop};
+use lightcraft_geom::{CropGeometry, CropHandle, Point, Rect, drag_crop};
 use serde_json::{Value, json};
 
 use super::copy_subsets::{groups_param, masks_param, merge_masks_param, paste_base};
@@ -22,17 +22,31 @@ fn edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut DevelopSettin
     ok()
 }
 
+/// [`edit`] that may merge into the previous edit of the same `key` (one undo step, one History entry).
+fn edit_keyed(s: &mut Session, c: &str, label: &str, key: Option<&str>, f: impl FnOnce(&mut DevelopSettings) -> Result<()>) -> Result<Value> {
+    let id = active(s, c)?;
+    let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
+    f(&mut d)?;
+    s.set_develop_keyed(id, d, label, key)?;
+    ok()
+}
+
+/// An edit of the Crop tool: every one of them is part of the crop session (one undo step).
+fn edit_crop(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut DevelopSettings) -> Result<()>) -> Result<Value> {
+    edit_keyed(s, c, label, Some(crate::CROP_KEY), f)
+}
+
 fn section_param(p: &Value, c: &str) -> Result<Section> {
     let v = p.get("section").cloned().ok_or_else(|| bad(c, "missing `section`"))?;
     serde_json::from_value(v).map_err(|e| bad(c, e.to_string()))
 }
 
-/// Turn the crop to `angle`, keeping its size if it still fits, else shrinking it to fit.
+/// Turn the crop to `angle`: the same shape on the same subject, as big as it was (it grows back when
+/// the angle returns), shrunk and slid only as far as the rotated photo needs.
 fn straighten(d: &mut DevelopSettings, w: f64, h: f64, angle: f64) {
-    let r = d.crop.geometry.rect_px(w, h);
-    let fit = crop_fit_angle(w, h, angle, Some(r.width() / r.height()));
-    let cand = CropGeometry { rect: d.crop.geometry.rect, angle };
-    d.crop.geometry = if cand.is_within_image(w, h) { cand } else { fit };
+    let (g, f) = d.crop.geometry.turned(angle, d.crop.framing, w, h);
+    d.crop.geometry = g;
+    d.crop.framing = Some(f);
 }
 
 /// The level angle for photo `id` with settings `d` (its horizon or plumb lines), if it has one.
@@ -124,6 +138,20 @@ fn aspect_tuple(c: &str, x: f64, y: f64) -> Result<(u32, u32)> {
     Ok((a as u32, b as u32))
 }
 
+/// Give the crop the shape `ratio` (width / height in pixels) keeping how punched in it is and the
+/// subject it is centred on, so changing the ratio never starts over at the full frame, and cycling
+/// ratios returns to the same framing (the crop's remembered `framing`, while it still matches).
+fn reshape_crop(d: &mut DevelopSettings, w: f64, h: f64, ratio: f64) {
+    if !(ratio.is_finite() && ratio > 0.0 && w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return;
+    }
+    let g = d.crop.geometry;
+    let (punch, centre) = g.framing(d.crop.framing, w, h);
+    let next = CropGeometry::with_punch(g.angle, ratio, punch, centre, w, h);
+    d.crop.geometry = next;
+    d.crop.framing = Some(lightcraft_geom::Framing { result: next, punch, centre, width: next.rect.width() });
+}
+
 fn set_aspect(d: &mut DevelopSettings, w: f64, h: f64, aspect: Option<(u32, u32)>) {
     d.crop.aspect = aspect;
     let a = aspect.map(|(aw, ah)| {
@@ -131,8 +159,7 @@ fn set_aspect(d: &mut DevelopSettings, w: f64, h: f64, aspect: Option<(u32, u32)
         let (aw, ah) = (aw as f64, ah as f64);
         if (w >= h) == (aw >= ah) { aw / ah } else { ah / aw }
     });
-    let angle = d.crop.geometry.angle;
-    d.crop.geometry = crop_fit_angle(w, h, angle, a);
+    reshape_crop(d, w, h, a.unwrap_or(w / h));
 }
 
 /// The user preset named by `p.id` (built-ins can't be changed).
@@ -185,13 +212,18 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                 }
                 let label = if vals.len() == 1 { controls::find(&vals[0].0).map(|c| c.label).unwrap_or("Edit").to_string() } else { "Edit".into() };
-                let apply = |d: &mut DevelopSettings, info: &lightcraft_pipeline::SourceInfo| {
+                let apply = |d: &mut DevelopSettings, info: &lightcraft_pipeline::SourceInfo, dims: (f64, f64)| {
                     if d.wb.mode == WbMode::AsShot && vals.iter().any(|(k, _)| k == "wb.temp" || k == "wb.tint") {
                         d.wb.temp = info.as_shot_temp;
                         d.wb.tint = info.as_shot_tint;
                     }
                     for (k, v) in &vals {
-                        controls::set(d, k, *v);
+                        if k == "crop.angle" {
+                            // the angle turns the crop with it (never leaves the rotated photo)
+                            straighten(d, dims.0, dims.1, v.clamp(-45.0, 45.0));
+                        } else {
+                            controls::set(d, k, *v);
+                        }
                         if k == "wb.temp" || k == "wb.tint" {
                             d.wb.mode = WbMode::Custom;
                         }
@@ -205,7 +237,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         .filter_map(|(id, d)| {
                             let mut d = (*d).clone();
                             let info = s.source_info(id);
-                            apply(&mut d, &info);
+                            apply(&mut d, &info, crop_dims(s, id));
                             s.develop_op(id, d, &label)
                         })
                         .collect();
@@ -214,8 +246,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let id = active(s, "develop.set")?;
                 let info = s.source_info(id);
-                edit(s, "develop.set", &label, |d| {
-                    apply(d, &info);
+                let dims = crop_dims(s, id);
+                // one control's edits merge into one step (a dial turned with pauses, key nudges)
+                let key = (vals.len() == 1).then(|| crate::control_key(&vals[0].0, &label));
+                edit_keyed(s, "develop.set", &label, key.as_deref(), |d| {
+                    apply(d, &info, dims);
                     Ok(())
                 })
             }
@@ -224,8 +259,11 @@ pub fn specs() -> Vec<CommandSpec> {
             let c = str_param(p, "control").ok_or_else(|| bad("develop.adjust", "missing control"))?.to_string();
             let spec = controls::find(&c).ok_or_else(|| bad("develop.adjust", "unknown control"))?;
             let delta = f64_req(p, "delta", "develop.adjust")?;
-            let info = s.source_info(active(s, "develop.adjust")?);
-            edit(s, "develop.adjust", spec.label, |d| {
+            let aid = active(s, "develop.adjust")?;
+            let info = s.source_info(aid);
+            let dims = crop_dims(s, aid);
+            let key = crate::control_key(&c, spec.label);
+            edit_keyed(s, "develop.adjust", spec.label, Some(&key), |d| {
                 if c == "wb.temp" || c == "wb.tint" {
                     if d.wb.mode == WbMode::AsShot {
                         d.wb.temp = info.as_shot_temp;
@@ -234,7 +272,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     d.wb.mode = WbMode::Custom;
                 }
                 let v = controls::get(d, &c).unwrap_or(spec.default);
-                controls::set(d, &c, v + delta);
+                if c == "crop.angle" {
+                    straighten(d, dims.0, dims.1, (v + delta).clamp(-45.0, 45.0));
+                } else {
+                    controls::set(d, &c, v + delta);
+                }
                 Ok(())
             })
         }),
@@ -553,7 +595,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("crop.set", "Set Crop", [], None, "{rect?: [x0,y0,x1,y1] normalized in the straightened frame, angle?: degrees}", has_active, |s, p| {
             let id = active(s, "crop.set")?;
             let (w, h) = crop_dims(s, id);
-            edit(s, "crop.set", "Crop", |d| {
+            edit_crop(s, "crop.set", "Crop", |d| {
                 if let Some(a) = p.get("rect").and_then(Value::as_array) {
                     let v: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
                     if v.len() != 4 {
@@ -585,7 +627,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some("image") => true,
                     Some(other) => return Err(bad("crop.nudge", format!("unknown axes `{other}` (crop|image)"))),
                 };
-                edit(s, "crop.nudge", "Crop", |d| {
+                edit_crop(s, "crop.nudge", "Crop", |d| {
                     let (dx, dy) = if image_axes {
                         // the photo's axes, turned into the straightened frame the rect lives in
                         let a = d.crop.geometry.angle.to_radians();
@@ -721,7 +763,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     _ => return Err(bad("crop.drag", "`start` needs 4 numbers")),
                 };
-                edit(s, "crop.drag", "Crop", |d| {
+                edit_crop(s, "crop.drag", "Crop", |d| {
                     let start = CropGeometry { rect: given.unwrap_or(d.crop.geometry.rect), angle: d.crop.geometry.angle };
                     // A locked crop keeps the shape it has: the lock stores a width:height tuple whose
                     // orientation is reinterpreted per image, so the frame itself is the truth.
@@ -736,13 +778,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Straighten",
             [],
             None,
-            "{angle: degrees -45..45} — keeps the largest crop of the current aspect",
+            "{angle: degrees -45..45} or {delta: degrees to turn by (a console's CropAngle detent)} — turns only the angle: the crop keeps its shape, its centre and how punched in it is, shrinking (and sliding) only as far as the rotated photo needs, and growing back when the angle returns",
             has_active,
             |s, p| {
                 let id = active(s, "crop.straighten")?;
                 let (w, h) = crop_dims(s, id);
-                let angle = f64_req(p, "angle", "crop.straighten")?.clamp(-45.0, 45.0);
-                edit(s, "crop.straighten", "Straighten", |d| {
+                let cur = s.develop_of(id).map(|d| d.crop.geometry.angle).unwrap_or(0.0);
+                let angle = match p.get("delta") {
+                    Some(v) if p.get("angle").is_none() => cur + v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("crop.straighten", "`delta` must be a number"))?,
+                    _ => f64_req(p, "angle", "crop.straighten")?,
+                }
+                .clamp(-45.0, 45.0);
+                edit_crop(s, "crop.straighten", "Straighten", |d| {
                     straighten(d, w, h, angle);
                     Ok(())
                 })
@@ -775,7 +822,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Crop Aspect",
             [],
             None,
-            "{aspect: \"original\"|\"asShot\" (the camera's own framing: raws are decoded inside the in-camera crop, so the same as original)|\"free\"|\"current\" (lock the crop's present shape)|\"toggle\" (lock ↔ free)|\"1x1\"|\"4x5\"|\"8.5x11\"|\"5x7\"|\"2x3\"|\"4x3\"|\"16x9\"|\"16x10\"|[w,h]}",
+            "{aspect: \"original\"|\"asShot\" (the photo's own shape, the default aspect: raws are decoded inside the in-camera crop; like every ratio it keeps how punched in the crop is and the subject it is centred on, so it never resets to the full frame — `crop.resetToAsShot` does that)|\"free\"|\"current\" (lock the crop's present shape)|\"toggle\" (lock ↔ free)|\"1x1\"|\"4x5\"|\"8.5x11\"|\"5x7\"|\"2x3\"|\"4x3\"|\"16x9\"|\"16x10\"|[w,h]}",
             has_active,
             |s, p| {
                 let id = active(s, "crop.aspect")?;
@@ -788,7 +835,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 };
                 if lock_current {
                     // lock to the rectangle as it is: no refit
-                    return edit(s, "crop.aspect", "Lock Crop Aspect", |d| {
+                    return edit_crop(s, "crop.aspect", "Lock Crop Aspect", |d| {
                         let r = d.crop.geometry.rect_px(w, h);
                         d.crop.aspect = Some(((r.width() * 100.0).round().max(1.0) as u32, (r.height() * 100.0).round().max(1.0) as u32));
                         Ok(())
@@ -810,30 +857,77 @@ pub fn specs() -> Vec<CommandSpec> {
                     },
                     _ => return Err(bad("crop.aspect", "missing aspect")),
                 };
-                edit(s, "crop.aspect", "Crop Aspect", |d| {
+                let own_shape = matches!(p.get("aspect").and_then(Value::as_str), Some("original"));
+                edit_crop(s, "crop.aspect", "Crop Aspect", |d| {
                     if aspect.is_none() {
                         d.crop.aspect = None;
                     } else {
                         set_aspect(d, w, h, aspect);
+                        // the photo's own shape on the whole frame is the default state, not an edit
+                        let r = d.crop.geometry.rect;
+                        let whole = [r.x0, r.y0, 1.0 - r.x1, 1.0 - r.y1].iter().all(|v| v.abs() < 1e-9);
+                        if own_shape && whole && d.crop.geometry.angle == 0.0 {
+                            d.crop.geometry = Default::default();
+                            d.crop.aspect = None;
+                            d.crop.framing = None;
+                        }
                     }
                     Ok(())
                 })
             }
         ),
+        cmd!(
+            "crop.cancel",
+            "Cancel Crop",
+            [],
+            None,
+            "{} — Esc in the Crop tool: everything since the crop session began (every drag, dial turn, ratio and straighten) is reverted, no undo step left",
+            has_active,
+            |s, _| {
+                let changed = s.cancel_crop_session()?;
+                Ok(json!({"changed": changed}))
+            }
+        ),
+        cmd!(
+            "develop.endRun",
+            "End Edit Run",
+            [],
+            None,
+            "{} — the crop session or the run of one control's edits ends here: the next edit is an undo step of its own (Return / Done, leaving the Crop tool)",
+            always,
+            |s, _| {
+                s.end_merge_run();
+                ok()
+            }
+        ),
         cmd!("crop.rotateAspect", "Rotate Crop Aspect", [], Some("X"), "{}", has_active, |s, _| {
             let id = active(s, "crop.rotateAspect")?;
             let (w, h) = crop_dims(s, id);
-            edit(s, "crop.rotateAspect", "Rotate Crop", |d| {
+            edit_crop(s, "crop.rotateAspect", "Rotate Crop", |d| {
                 let r = d.crop.geometry.rect_px(w, h);
                 let a = r.height() / r.width();
                 d.crop.aspect = d.crop.aspect.map(|(x, y)| (y, x));
-                let angle = d.crop.geometry.angle;
-                d.crop.geometry = crop_fit_angle(w, h, angle, Some(a));
+                reshape_crop(d, w, h, a);
                 Ok(())
             })
         }),
+        cmd!(
+            "crop.resetToAsShot",
+            "Crop As Shot",
+            [],
+            None,
+            "{} — back to the true default: the whole frame as shot (no crop, no straighten, no ratio lock, no remembered punch-in); flips stay. `crop.aspect original` is the other \"as shot\": it keeps how punched in the crop is",
+            has_active,
+            |s, _| {
+                edit_crop(s, "crop.resetToAsShot", "Crop As Shot", |d| {
+                    let (flip_h, flip_v) = (d.crop.flip_h, d.crop.flip_v);
+                    d.crop = lightcraft_develop::Crop { flip_h, flip_v, ..Default::default() };
+                    Ok(())
+                })
+            }
+        ),
         cmd!("crop.reset", "Reset Crop", [], Some("Cmd+Alt+R"), "{}", has_active, |s, _| {
-            edit(s, "crop.reset", "Reset Crop", |d| {
+            edit_crop(s, "crop.reset", "Reset Crop", |d| {
                 d.crop = Default::default();
                 Ok(())
             })

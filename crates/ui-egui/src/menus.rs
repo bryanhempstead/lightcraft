@@ -830,6 +830,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 app.ui.slideshow = None;
             } else if !app.ui.tool.is_empty() {
                 app.ui.tool.clear();
+            } else if app.ui.right == RightPanel::Crop && app.ui.module == Module::Develop {
+                // Esc in the Crop tool cancels the whole crop session (every drag, dial turn and
+                // ratio since it began) and leaves the tool; Return keeps it as one undo step
+                let _ = app.run("crop.cancel", json!({}));
+                app.ui.right = RightPanel::Edit;
             } else if app.ui.lights_out != crate::state::LightsOut::On {
                 app.ui.lights_out = crate::state::LightsOut::On;
             } else if app.ui.module == Module::Develop {
@@ -1398,6 +1403,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             use RightPanel::*;
             if app.ui.dialog.is_none() && matches!(app.ui.right, Crop | Remove | RedEye | Masking) {
                 let _ = app.session.end_interaction();
+                app.session.end_merge_run();
                 app.ui.tool.clear();
                 app.ui.right = Edit;
             }

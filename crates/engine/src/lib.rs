@@ -165,6 +165,36 @@ pub struct Interaction {
     pub original: Arc<DevelopSettings>,
 }
 
+/// The last develop edit that may be merged into: the next edit of the same photo and `key` (the
+/// crop session `"crop"`, or one control) folds into its undo step and history entry, as long as
+/// nothing else was committed since (`seq` is [`Session::edit_seq`] right after it).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MergeRun {
+    photo: PhotoId,
+    key: String,
+    seq: u64,
+}
+
+/// The merge key of the Crop tool's session.
+pub const CROP_KEY: &str = "crop";
+
+/// The merge key of an interaction labelled `label`: the Crop tool's moves (whatever dial or gesture
+/// made them) are one `"crop"` session, a control's drags are one run of that control, and the
+/// generic "Edit" merges with nothing.
+fn merge_key_of(label: &str) -> Option<String> {
+    match label {
+        "" | "Edit" => None,
+        "Crop" | "Straighten" | "Crop Aspect" => Some(CROP_KEY.to_string()),
+        l if l.starts_with("crop.") => Some(CROP_KEY.to_string()),
+        l => Some(format!("control:{l}")),
+    }
+}
+
+/// The merge key of a single control's edit (`develop.set` / `develop.adjust` / a slider).
+pub(crate) fn control_key(control: &str, label: &str) -> String {
+    if control.starts_with("crop.") { CROP_KEY.to_string() } else { format!("control:{label}") }
+}
+
 /// Source of [`Session::visible_shared`] generations (process-wide, so two sessions never share one).
 static VISIBLE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -206,6 +236,10 @@ pub struct Session {
     pub undo: Vec<UndoEntry>,
     pub redo: Vec<UndoEntry>,
     pub interaction: Option<Interaction>,
+    /// Where the next keyed develop edit may merge ([`MergeRun`]).
+    pub(crate) merge_run: Option<MergeRun>,
+    /// Counts every change of the undo stack, so a [`MergeRun`] knows nothing came between.
+    pub(crate) edit_seq: u64,
     /// Set by a command whose change must not rewrite the photo's XMP sidecar even with auto-write on
     /// (a catalog-only edit of data the sidecar writer does not emit); consumed when the command ends.
     pub(crate) skip_auto_write: bool,
@@ -444,6 +478,8 @@ impl Session {
             undo: Vec::new(),
             redo: Vec::new(),
             interaction: None,
+            merge_run: None,
+            edit_seq: 0,
             skip_auto_write: false,
             clipboard: None,
             clipboard_base: None,
@@ -562,6 +598,10 @@ impl Session {
         let r = guard::catch(&format!("`{id}`"), || f(self)).unwrap_or_else(|e| Err(EngineError::Other(e)));
         self.depth -= 1;
         let t_run = t0.elapsed();
+        if self.depth == 0 && self.active() != was_active {
+            // another photo: a merge run (a crop session, a control's nudges) of the old one is over
+            self.merge_run = None;
+        }
         if self.depth == 0 && was_active.is_some() && self.active() != was_active {
             self.previous_active = was_active;
             if let Some(left) = was_active {
@@ -640,6 +680,7 @@ impl Session {
         let fwd = op.clone();
         let inv = self.catalog.apply(op)?;
         self.pending_log.push(fwd);
+        self.edit_seq = self.edit_seq.wrapping_add(1);
         self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, trashed: Vec::new() });
         if self.undo.len() > 1000 {
             self.undo.remove(0);
@@ -735,6 +776,7 @@ impl Session {
         if self.undo[self.undo.len() - n..].iter().any(|e| e.folder.is_some() || !e.trashed.is_empty()) {
             return;
         }
+        self.edit_seq = self.edit_seq.wrapping_add(1);
         let tail = self.undo.split_off(self.undo.len() - n);
         let ops = tail.into_iter().rev().map(|e| e.op).collect();
         self.undo.push(UndoEntry { label: label.to_string(), op: Op::Batch { ops }, folder: None, trashed: Vec::new() });
@@ -748,6 +790,7 @@ impl Session {
 
     pub fn undo_step(&mut self) -> Result<String> {
         let e = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
+        self.edit_seq = self.edit_seq.wrapping_add(1);
         // a delete that moved files to the Trash: they come back first (each one that can: an
         // emptied Trash or a taken path keeps that file out, the photo returns anyway)
         self.not_back.clear();
@@ -778,6 +821,7 @@ impl Session {
 
     pub fn redo_step(&mut self) -> Result<String> {
         let e = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
+        self.edit_seq = self.edit_seq.wrapping_add(1);
         // a delete's files go to the Trash again (all of them, or the redo doesn't happen)
         let again = match cmd::delete::trash_again(self, &e.trashed) {
             Ok(a) => a,
@@ -888,6 +932,14 @@ impl Session {
     /// Change a photo's develop settings. During an interaction the change is previewed without an
     /// undo step; otherwise it is committed with a history entry.
     pub fn set_develop(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
+        self.set_develop_keyed(id, settings, label, None)
+    }
+
+    /// [`Session::set_develop`] for an edit that may merge: with a `key`, the edit folds into the
+    /// previous one of the same photo and key (still the last undo step: nothing was committed since)
+    /// so a run of nudges, a crop session, a dial turned with pauses is ONE undo step and one History
+    /// entry. The step is labelled `label`; a crop session is always "Crop".
+    pub fn set_develop_keyed(&mut self, id: PhotoId, settings: DevelopSettings, label: &str, key: Option<&str>) -> Result<()> {
         let now = (self.clock)();
         let settings = Arc::new(settings);
         if let Some(i) = &self.interaction
@@ -895,10 +947,65 @@ impl Session {
         {
             return self.apply_silent(Op::SetDevelop { id, settings, label: label.into(), edited: Some(now) });
         }
-        let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
-        ops.extend(self.auto_sync_ops(id, &settings, label));
+        let mut label = label.to_string();
+        if let Some(k) = key {
+            if self.merge_live(id, k) {
+                self.undo_run_step()?;
+            }
+            if k == CROP_KEY {
+                label = "Crop".into();
+            }
+        }
+        let mut ops = vec![self.develop_op(id, (*settings).clone(), &label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
+        ops.extend(self.auto_sync_ops(id, &settings, &label));
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
-        self.commit(label, op)
+        self.commit(&label, op)?;
+        self.merge_run = key.map(|k| MergeRun { photo: id, key: k.to_string(), seq: self.edit_seq });
+        Ok(())
+    }
+
+    /// Is the last undo step the live end of a merge run of `id` and `key`?
+    fn merge_live(&self, id: PhotoId, key: &str) -> bool {
+        self.merge_run.as_ref().is_some_and(|r| r.photo == id && r.key == key && r.seq == self.edit_seq)
+            && self.undo.last().is_some_and(|e| e.folder.is_none() && e.trashed.is_empty())
+    }
+
+    /// Take the run's undo step back (silently, but logged like an undo): the state is how the run
+    /// began, ready for one merged step in its place.
+    fn undo_run_step(&mut self) -> Result<()> {
+        let Some(e) = self.undo.pop() else { return Ok(()) };
+        if let Err(err) = self.catalog.apply(e.op.clone()) {
+            self.undo.push(e);
+            return Err(err.into());
+        }
+        self.pending_log.push(e.op);
+        self.edit_seq = self.edit_seq.wrapping_add(1);
+        self.merge_run = None;
+        Ok(())
+    }
+
+    /// The current merge run ends: the next edit is a step of its own (leaving the Crop tool, Return
+    /// / Done, another photo).
+    pub fn end_merge_run(&mut self) {
+        self.merge_run = None;
+    }
+
+    /// Cancel the crop session of the active photo (Esc in the Crop tool): everything since it began
+    /// is undone and a drag in progress dropped. Returns whether anything was reverted.
+    pub fn cancel_crop_session(&mut self) -> Result<bool> {
+        let mut changed = false;
+        if self.interaction.as_ref().is_some_and(|i| merge_key_of(&i.label).as_deref() == Some(CROP_KEY)) {
+            self.cancel_interaction()?;
+            changed = true;
+        }
+        if let Some(id) = self.active()
+            && self.merge_live(id, CROP_KEY)
+        {
+            self.undo_run_step()?;
+            changed = true;
+        }
+        self.merge_run = None;
+        Ok(changed)
     }
 
     /// With Auto Sync on, the ops that carry an edit of the active photo `id` (to `new`) over to the
@@ -964,7 +1071,7 @@ impl Session {
         }
         // Restore the original silently, then commit the final value as one step.
         self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original.clone(), label: i.label.clone(), edited: None })?;
-        self.set_develop(i.photo, (*cur).clone(), &i.label)
+        self.set_develop_keyed(i.photo, (*cur).clone(), &i.label, merge_key_of(&i.label).as_deref())
     }
 
     pub fn cancel_interaction(&mut self) -> Result<()> {
@@ -1251,6 +1358,8 @@ mod tests_control_catalog;
 mod tests_delete;
 #[cfg(test)]
 mod tests_dng_export;
+#[cfg(test)]
+mod tests_edit_runs;
 #[cfg(test)]
 mod tests_enhance;
 #[cfg(test)]

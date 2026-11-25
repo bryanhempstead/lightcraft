@@ -88,6 +88,7 @@ pub const SUPER_ACTIONS: &[(&str, &str, &str, &str)] = &[
     ("crop", "crop 2x3", "crop.aspect", r#"{"aspect": "2x3"}"#),
     ("crop", "crop 5x7", "crop.aspect", r#"{"aspect": "5x7"}"#),
     ("crop", "crop reset", "crop.reset", "{}"),
+    ("crop", "crop as shot (whole frame)", "crop.resetToAsShot", "{}"),
     ("crop", "auto straighten", "crop.autoStraighten", "{}"),
     ("develop", "paste from previous", "develop.pastePrevious", "{}"),
     ("develop", "exposure +1/3", "develop.adjust", r#"{"control": "light.exposure", "delta": 0.33}"#),
@@ -318,7 +319,8 @@ pub fn default_cycles() -> BTreeMap<String, Vec<CycleItem>> {
     m.insert(
         "cropAspect".to_string(),
         vec![
-            crop("As Shot", "original"),
+            // the console's "As Shot" is the true reset: the whole frame (`original` keeps the punch-in)
+            CycleItem { label: "As Shot".into(), command: "crop.resetToAsShot".into(), params: json!({}) },
             crop("1x1", "1x1"),
             crop("4x5", "4x5"),
             crop("4x3", "4x3"),
@@ -1636,7 +1638,12 @@ pub fn console_begin(app: &mut crate::LightcraftApp, control: &str) {
         None => {}
     }
     if app.console_drag.is_none() {
-        let label = lightcraft_develop::controls::find(control).map(|s| s.label.to_string()).unwrap_or_else(|| control.to_string());
+        // every crop dial is part of the one "Crop" session (one undo step, one History entry)
+        let label = if control.starts_with("crop.") {
+            "Crop".to_string()
+        } else {
+            lightcraft_develop::controls::find(control).map(|s| s.label.to_string()).unwrap_or_else(|| control.to_string())
+        };
         if app.session.begin_interaction(&label).is_err() {
             return;
         }
@@ -1679,6 +1686,8 @@ pub fn nudge(app: &mut crate::LightcraftApp, control: &str, delta: f64) -> Resul
         "crop.x" => app.run("crop.nudge", json!({"x": delta, "axes": axes})),
         "crop.y" => app.run("crop.nudge", json!({"y": delta, "axes": axes})),
         "crop.scale" => app.run("crop.nudge", json!({"scale": delta})),
+        // the angle alone turns: the crop keeps its centre and punch-in (no refit of the whole crop)
+        "crop.angle" => app.run("crop.straighten", json!({"delta": delta})),
         _ => app.run("develop.adjust", json!({"control": control, "delta": delta})),
     };
     if r.is_ok() {
@@ -1979,7 +1988,7 @@ pub fn lr_input(app: &mut crate::LightcraftApp, line: &str) -> Result<Value, Str
         // `lc_set_<id> = 0.5`: the value itself, in the control's own units
         (None, [v]) if name.starts_with(LC_SET) => set_control(app, control, *v),
         // the crop's pseudo controls move in LightCraft's own units
-        (Some((sign, _)), [_, ..]) if control.starts_with("crop.") && control != "crop.angle" => {
+        (Some((sign, _)), [_, ..]) if control.starts_with("crop.") => {
             nudge(app, control, sign * app.keymap.steps(control)[0].abs())
         }
         (Some((sign, _)), [d, line @ ..]) => {
@@ -2094,7 +2103,7 @@ fn pot_input(app: &mut crate::LightcraftApp, name: &str, control: &str, pos: f64
 fn step_input(app: &mut crate::LightcraftApp, name: &str, target: &Target, up: bool, native: bool) -> Result<Value, String> {
     let sign = if up { 1.0 } else { -1.0 };
     let (spec, cur): (&lightcraft_develop::ControlSpec, f64) = match target {
-        Target::Control(control) if control.starts_with("crop.") && *control != "crop.angle" => {
+        Target::Control(control) if control.starts_with("crop.") => {
             return nudge(app, control, sign * app.keymap.steps(control)[0].abs());
         }
         Target::Control(control) => (
@@ -2416,13 +2425,16 @@ fn matching_item(app: &crate::LightcraftApp, items: &[CycleItem], prefer: Option
             };
             matches!((now, want), (Some(a), Some(b)) if (a - b).abs() <= 2e-3 * b)
         }
+        "crop.resetToAsShot" => d.crop.aspect.is_none() && d.crop.geometry.is_identity(),
         "develop.wb" => it.params.get("mode").is_some_and(|m| Some(m) == wb_now.as_ref()),
         _ => false,
     };
     // an unedited, unlocked photo is on "original" / As Shot, whatever position was stepped to last
     // (it may be an item of the same ratio, left behind by a crop reset)
     if d.crop.aspect.is_none() && now.is_some() {
-        let as_shot = |it: &CycleItem| matches!(it.params.get("aspect").and_then(Value::as_str), Some("original" | "asShot"));
+        let as_shot = |it: &CycleItem| {
+            it.command == "crop.resetToAsShot" || matches!(it.params.get("aspect").and_then(Value::as_str), Some("original" | "asShot"))
+        };
         if let Some(i) = items.iter().position(|it| as_shot(it) && matches(it)) {
             return Some(i);
         }

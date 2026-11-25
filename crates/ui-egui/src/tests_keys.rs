@@ -312,6 +312,8 @@ fn crop_dial_turns_are_one_drag() {
     h.request("ui.set", json!({"view": "detail"}), T);
     exec(&mut h, "panel.crop", json!({}));
     exec(&mut h, "crop.set", json!({"rect": [0.1, 0.1, 0.9, 0.9]}));
+    // the set-up is a step of its own: the dial turns that follow are a new crop session
+    exec(&mut h, "develop.endRun", json!({}));
     h.step();
     let id = h.app.session.active().unwrap();
     let steps = |h: &Headless| h.app.session.catalog.photo(id).unwrap().history.len();
