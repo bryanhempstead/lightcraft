@@ -862,7 +862,7 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, inf
         None => log_l.clone(),
     };
     // the tone statistics, from the same every-KEY_STEP-th values the CPU reads
-    let tone_stats = match (sig.base.is_some(), planes.tone_stats) {
+    let tone_stats = match (sig.base.is_some() || local::tone_stats_wanted(&plan.settings), planes.tone_stats) {
         (true, None) => {
             let step = lightcraft_pipeline::tone::lr::KEY_STEP;
             let m = n.div_ceil(step);

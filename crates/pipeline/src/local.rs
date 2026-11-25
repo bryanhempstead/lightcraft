@@ -317,6 +317,12 @@ pub struct PlaneSigmas {
     pub dz: Option<f32>,
 }
 
+/// Whether the render needs the photo's tone statistics ([`crate::tone::lr::ToneStats`]) for Camera Raw's
+/// Contrast and Whites, which read the photo's own tones as Highlights / Shadows do.
+pub fn tone_stats_wanted(s: &DevelopSettings) -> bool {
+    s.light.contrast != 0.0 || s.light.whites != 0.0
+}
+
 pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
     let local_any = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().any(|m| f(&m.adjust) != 0.0);
@@ -416,7 +422,7 @@ pub(crate) fn prepare(
             )
         },
     );
-    let tone_stats = match (base.is_some(), planes.tone_stats) {
+    let tone_stats = match (base.is_some() || tone_stats_wanted(s), planes.tone_stats) {
         (true, None) => {
             let k = crate::tone::lr::image_stats(&log_l.data);
             planes.tone_stats = k;

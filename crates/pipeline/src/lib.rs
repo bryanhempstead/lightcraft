@@ -598,7 +598,7 @@ pub fn needs_globals(s: &DevelopSettings, adobe: bool) -> bool {
     let e = s.effective();
     let sig = local::plane_sigmas(&e, 1000.0, Quality::Full);
     let (map, haze) = scene_cr::needs(&e, adobe);
-    sig.base.is_some() || sig.dark.is_some() || local::dehaze_key_needed(&e) || map || haze
+    sig.base.is_some() || sig.dark.is_some() || local::dehaze_key_needed(&e) || local::tone_stats_wanted(&e) || map || haze
 }
 
 /// What the whole, uncropped photo says about its tone: the statistics every render of it takes,

@@ -94,3 +94,12 @@ Comparing builds: `vendor/` (the DNG SDK, LibRaw) is gitignored, so a fresh work
 changed `vendor/` needs `touch crates/dng-sdk-sys/build.rs crates/libraw-sys/build.rs`). Such a binary renders every
 mid-tone different (R6 Whites +100: 23 % clipped with the SDK, 0 % without; base ΔE vs Camera Raw 1.1 → 1.8, Leica
 1.2 → 3.0): check `LIGHTCRAFT_PROFILE=1` prints `raw source (Adobe <model>)` before trusting a before / after.
+
+Exposure / Whites / Contrast vs Camera Raw (2026-11-25 fix, `tone2_study.py`): `prep` clones the study's four raws with
+one-slider sidecars (Exposure ±1…3, Whites ±50 / ±100, Contrast ±50 / ±100; GR III's banked steps reused), `cr` renders
+the rest via `hdr_ps.sh`, `lc NAME BIN` renders a build, `cmp NAME…` gives per-step dE / p95 / clip / acts-like and a
+before / after table, `strips` the before / after / Camera Raw strips. Findings: channels above raw white must reach the
+tone table (Exposure +3 clips as Camera Raw does); Whites + is `exp(c · w^0.55)` stronger than the ramps' table on a photo
+whose 99th percentile is low (`tone::lr::whites_gain`, Sony's is high: unchanged); Contrast's pivot follows the key
+at 0.35 EV per EV from -1.82 (`lr::CONTRAST_PIVOT`). Contrast ± still acts like CR 70-85 %: the ramp tables' shape, not
+only the pivot, differs (a plain gain on the shift made every raw worse).

@@ -506,7 +506,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     }
     let hdr = fp.peak.is_finite() && fp.peak > 1.0;
     p.f("PEAK", if hdr { fp.peak } else { 1.0 });
-    p.f("SCENE_TOP", if hdr { lightcraft_pipeline::tone::HDR_SCENE_TOP } else { 1.0 });
+    p.f("SCENE_TOP", lightcraft_pipeline::tone::HDR_SCENE_TOP);
     p.f("HL_SAT", fp.hl_sat);
     (p.0, aux)
 }

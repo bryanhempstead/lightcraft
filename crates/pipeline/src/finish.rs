@@ -549,8 +549,8 @@ pub struct FinishParams {
     pub scene: Option<std::sync::Arc<crate::scene_cr::SceneTone>>,
     /// The camera RGB Texture's gain applies in ([`crate::texture_cr::space`]): working → camera, back.
     pub tex_space: Option<([[f32; 3]; 3], [[f32; 3]; 3])>,
-    /// Contrast's pivot key ([`crate::tone::lr::ToneStats::key`]) the tone map was made with.
-    pub tone_key: Option<f32>,
+    /// The photo's tone statistics the tone map was made with (Contrast's pivot key, Whites' white).
+    pub tone_stats: Option<crate::tone::lr::ToneStats>,
 }
 
 /// The sliders that move Camera Raw's HDR tone ([`crate::tone_hdr`]).
@@ -626,7 +626,7 @@ impl FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: if let Some(a) = adobe.as_ref() {
-                ToneMap::adobe_lr(&a.base, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks, tone_key)
+                ToneMap::adobe_lr(&a.base, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks, tone_stats)
             } else if let Some(curve) = info.camera_tone.as_ref() {
                 ToneMap::camera_lr(curve, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks)
             } else if info.raw {
@@ -682,7 +682,7 @@ impl FinishParams {
             px_per_long,
             scene: None,
             tex_space: crate::texture_cr::space(info),
-            tone_key,
+            tone_stats,
         }
     }
 
@@ -758,7 +758,7 @@ impl FinishParams {
         let key = m.dark + ev;
         let from = if mode == b::Mode::Shift { key } else { b::RAMP_KEY + ev };
         let Some(c) = b::correction(key + shift, from, b::remaining((s.light.blacks / 100.0) as f32)) else { return };
-        self.tone = ToneMap::adobe_lr_black(&a.base, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks, self.tone_key, Some(&c[..]))
+        self.tone = ToneMap::adobe_lr_black(&a.base, s.light.exposure, s.light.contrast, s.light.whites, s.light.blacks, self.tone_stats, Some(&c[..]))
             .with_hdr_view(s.hdr.peak(), self.peak, hdr_sliders(s));
     }
 }
@@ -1091,8 +1091,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- tone map: an Adobe base's curve channel-wise in ProPhoto (after its look
             // tables), else on luminance with highlight desaturation
             let mut d = match &fp.adobe {
-                Some(a) if hdr => a.post_tone(crate::adobe::rgb_tone_to(a.pre_tone(c), |v| tone.apply(v), crate::tone::HDR_SCENE_TOP)),
-                Some(a) => a.post_tone(crate::adobe::rgb_tone(a.pre_tone(c), |v| tone.apply(v))),
+                // channels above raw white reach the table (Camera Raw's tone is defined past it: Exposure +3
+                // puts a quarter of a bright photo at white, which a clamp at 1.0 never reaches)
+                Some(a) => a.post_tone(crate::adobe::rgb_tone_to(a.pre_tone(c), |v| tone.apply(v), crate::tone::HDR_SCENE_TOP)),
                 None => {
                     let yl = luminance_2020(c);
                     let o = tone.apply(yl);

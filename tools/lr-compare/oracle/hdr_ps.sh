@@ -23,7 +23,7 @@ done
 echo $$ > "$LOCK/pid"; echo "${PS_WHO:-hdrtone} $D $(date)" > "$LOCK/who"
 # RAM: quit Photoshop (~3 GB idle) when the run ends and no other run took the lock; PS_KEEP=1 keeps it open.
 quit_ps() { [ -n "$PS_KEEP" ] && return; sleep 2; [ -d "$LOCK" ] && return
-  osascript -e 'with timeout of 30 seconds' -e 'tell application "Adobe Photoshop 2026" to quit saving no' -e 'end timeout' >/dev/null 2>&1; }
+  osascript -e 'with timeout of 30 seconds' -e 'tell application "Adobe Photoshop 2026" to quit' -e 'end timeout' >/dev/null 2>&1; }
 trap 'rm -rf "$LOCK"; quit_ps' EXIT
 ask() { osascript -e 'with timeout of 60 seconds' -e 'tell application "Adobe Photoshop 2026" to do javascript "app.documents.length"' -e 'end timeout' 2>/dev/null; }
 for i in $(seq 1 30); do

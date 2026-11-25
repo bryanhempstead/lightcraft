@@ -235,6 +235,8 @@ pub mod lr {
         pub lo: f32,
         /// The [`HsParams::q_hi`]-th percentile.
         pub hi: f32,
+        /// The [`TOP_Q`]-th percentile (where Whites finds the photo's white).
+        pub top: f32,
     }
 
     /// [`ToneStats`] of a log-luminance plane (every [`KEY_STEP`]-th value). `None` when there are
@@ -255,7 +257,7 @@ pub mod lr {
             *v.select_nth_unstable_by(i, f32::total_cmp).1
         };
         let p = HS_PARAMS;
-        Some(ToneStats { key, lin_mean, lo: at(p.q_lo), hi: at(p.q_hi) })
+        Some(ToneStats { key, lin_mean, lo: at(p.q_lo), hi: at(p.q_hi), top: at(TOP_Q) })
     }
 
     /// [`image_key`] of values already taken every [`KEY_STEP`]-th (the GPU reads them back so).
@@ -319,6 +321,34 @@ pub mod lr {
                 range * (s + h)
             })
             .collect()
+    }
+
+    /// Contrast's pivot follows the photo's key ([`ToneStats::key`]): `CONTRAST_PIVOT` EV per EV from
+    /// `CONTRAST_KEY0`. Fitted on four raws against Camera Raw's
+    /// renders at Contrast ±50 / ±100 (`tools/lr-compare/oracle/tone2_study.py`; best pivot −0.25 … +0.3 EV
+    /// for keys −2.5 … −1.0; the ramps' pivot is 0), replacing the ramp-key fit of round 4 (0.21 from −4.28).
+    pub const CONTRAST_KEY0: f32 = -1.82;
+    pub const CONTRAST_PIVOT: f32 = 0.35;
+
+    /// The percentile of [`ToneStats::top`].
+    pub const TOP_Q: f32 = 99.0;
+
+    /// Camera Raw's Whites + on a photo (measured on four of Bryan's raws against Camera Raw's own renders,
+    /// `tools/lr-compare/oracle/tone2_study.py`): the ramp tables' move (`2^shift - 1`) times
+    /// `exp(c · whites^WHITES_EXP)`, `c = WHITES_SLOPE · (WHITES_TOP - top)` for a photo whose 99th percentile
+    /// (`top`, EV of its scene luminance after exposure) lies under `WHITES_TOP`, none above it, at most
+    /// `WHITES_C_MAX`. `whites`: 0..1 (the slider over 100).
+    pub const WHITES_TOP: f32 = 2.38;
+    pub const WHITES_SLOPE: f32 = 1.9;
+    pub const WHITES_EXP: f32 = 0.55;
+    pub const WHITES_C_MAX: f32 = 2.2;
+
+    pub fn whites_gain(top: f32, whites: f32) -> f32 {
+        if !(top.is_finite() && whites.is_finite() && whites > 0.0) {
+            return 1.0;
+        }
+        let c = (WHITES_SLOPE * (WHITES_TOP - top)).clamp(0.0, WHITES_C_MAX);
+        (c * whites.min(1.0).powf(WHITES_EXP)).exp()
     }
 
     /// The fitted constants of [`adobe_hs_lut`] and [`ToneStats`].
@@ -441,8 +471,8 @@ impl ToneMap {
     /// Contrast (pivot following the photo's `key`, [`lr::image_key`] before exposure), Whites and
     /// Blacks in turn as EV moves; Highlights / Shadows are local (`hs_lut`). The table is applied
     /// channel-wise in ProPhoto (`RefBaselineRGBTone`), not on luminance.
-    pub fn adobe_lr(base: &crate::adobe::Base, exposure: f64, contrast: f64, whites: f64, blacks: f64, key: Option<f32>) -> ToneMap {
-        Self::adobe_lr_black(base, exposure, contrast, whites, blacks, key, None)
+    pub fn adobe_lr(base: &crate::adobe::Base, exposure: f64, contrast: f64, whites: f64, blacks: f64, stats: Option<lr::ToneStats>) -> ToneMap {
+        Self::adobe_lr_black(base, exposure, contrast, whites, blacks, stats, None)
     }
 
     /// [`Self::adobe_lr`] with the black response swapped for the photo's (`black`: samples of
@@ -453,13 +483,15 @@ impl ToneMap {
         contrast: f64,
         whites: f64,
         blacks: f64,
-        key: Option<f32>,
+        stats: Option<lr::ToneStats>,
         black: Option<&[f32]>,
     ) -> ToneMap {
         use crate::tone_adobe as t;
-        let pivot = key.filter(|k| k.is_finite()).map_or(0.0, |k| (k - t::KEY_RAMP).clamp(-10.0, 10.0) * t::CONTRAST_PIVOT);
+        let key = stats.map(|s| s.key);
+        let pivot = key.filter(|k| k.is_finite()).map_or(0.0, |k| (k - lr::CONTRAST_KEY0).clamp(-10.0, 10.0) * lr::CONTRAST_PIVOT);
         let (e, c, w, b) = (exposure as f32, contrast as f32, whites as f32, blacks as f32);
-        let lut = (0..LUT_N)
+        let top = stats.map(|s| s.top + e);
+        let mut lut: Vec<f32> = (0..LUT_N)
             .map(|i| {
                 // the table is indexed after Exposure's gain (the per-pixel stage applies it first):
                 // Camera Raw's Exposure is the measured shift from the photo's own EV
@@ -472,7 +504,13 @@ impl ToneMap {
                     x += adobe_shift(&t::C_VALUES, &t::C_TABLE, c, x - pivot);
                 }
                 if w != 0.0 {
-                    x += adobe_shift(&t::W_VALUES, &t::W_TABLE, w, x);
+                    let mut d = adobe_shift(&t::W_VALUES, &t::W_TABLE, w, x);
+                    if let Some(top) = top.filter(|_| w > 0.0) {
+                        // the ramps' Whites + is the weakest Camera Raw gives: a photo whose bright end is lower
+                        // (the 99th percentile of its scene luminance) gets more of the same move
+                        d = (1.0 + lr::whites_gain(top, w / 100.0) * (d.exp2() - 1.0)).max(1e-3).log2();
+                    }
+                    x += d;
                 }
                 if b != 0.0 {
                     x += adobe_shift(&t::K_VALUES, &t::K_TABLE, b, x);
@@ -485,6 +523,14 @@ impl ToneMap {
                 })
             })
             .collect();
+        if top.is_some() && w > 0.0 {
+            // a photo's Whites gain can steepen the shift past the tone's slope: never invert tones
+            let mut m = 0.0f32;
+            for v in lut.iter_mut() {
+                m = m.max(*v);
+                *v = m;
+            }
+        }
         ToneMap { lut, chroma: NO_CHROMA }
     }
 
@@ -804,7 +850,7 @@ mod tests {
             assert!((lr::hs_at(&both, x) - lr::hs_at(&s, x) - lr::hs_at(&h, x)).abs() < 1e-5, "{x}");
         }
         assert!(lr::adobe_hs_lut(1.0, 1.0, None, 0.0).iter().all(|v| *v == 0.0));
-        let bad = lr::ToneStats { key: f32::NAN, lin_mean: f32::INFINITY, lo: f32::NAN, hi: -1e30 };
+        let bad = lr::ToneStats { key: f32::NAN, lin_mean: f32::INFINITY, lo: f32::NAN, hi: -1e30, top: f32::NAN };
         for ev in [0.0, f32::NAN, 1e9] {
             assert!(lr::adobe_hs_lut(-1.0, 1.0, Some(bad), ev).iter().all(|v| v.is_finite()));
             assert!(lr::adobe_hs_lut(-1.0, 1.0, Some(st), ev).iter().all(|v| v.is_finite()));
@@ -977,7 +1023,8 @@ mod tests {
             [(0.0, 0.0, 0.0, 0.0), (1.3, -63.0, -36.0, 30.0), (-2.7, -100.0, 15.0, 68.0), (4.0, 100.0, 100.0, -100.0), (-5.0, -100.0, -100.0, 100.0)]
         {
             for key in [None, Some(-6.0), Some(2.0), Some(f32::NAN)] {
-                let t = ToneMap::adobe_lr(&base, e, c, w, b, key);
+                let stats = key.map(|k| lr::ToneStats { key: k, lin_mean: k, lo: k - 4.0, hi: k + 2.0, top: k + 3.0 });
+                let t = ToneMap::adobe_lr(&base, e, c, w, b, stats);
                 assert!(t.lut().iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{e} {c} {w} {b} {key:?}");
                 assert!(t.lut().windows(2).all(|p| p[1] >= p[0] - 1e-4), "not monotone: {e} {c} {w} {b} {key:?}");
             }
@@ -990,6 +1037,54 @@ mod tests {
         let m = adobe_shift(&crate::tone_adobe::W_VALUES, &crate::tone_adobe::W_TABLE, 37.5, 1.0);
         assert!((m - (a + b2) / 2.0).abs() < 1e-5);
         assert_eq!(adobe_shift(&crate::tone_adobe::W_VALUES, &crate::tone_adobe::W_TABLE, 0.0, 1.0), 0.0);
+    }
+
+    /// Camera Raw's Whites + moves a photo whose bright end is low (its 99th percentile under
+    /// `WHITES_TOP`) further than the ramps' table, a bright one (or any Whites −) not at all; the table stays
+    /// monotone and finite whatever the statistic.
+    #[test]
+    fn whites_plus_follows_the_photos_bright_end() {
+        assert_eq!(lr::whites_gain(0.0, 0.0), 1.0);
+        assert_eq!(lr::whites_gain(0.0, -1.0), 1.0);
+        assert_eq!(lr::whites_gain(f32::NAN, 1.0), 1.0);
+        assert_eq!(lr::whites_gain(lr::WHITES_TOP + 0.5, 1.0), 1.0);
+        assert!(lr::whites_gain(1.0, 1.0) > lr::whites_gain(2.0, 1.0) && lr::whites_gain(2.0, 1.0) > 1.0);
+        assert!(lr::whites_gain(1.0, 1.0) > lr::whites_gain(1.0, 0.5) && lr::whites_gain(1.0, 0.5) > 1.0);
+        assert!(lr::whites_gain(-50.0, 100.0) <= lr::WHITES_C_MAX.exp() + 1e-4, "bounded");
+        let base = crate::adobe::Base {
+            hue_sat: None,
+            hue_sat_ev: 0.0,
+            look: None,
+            curve: (0..=crate::adobe::CURVE_N).map(|i| (i as f32 / crate::adobe::CURVE_N as f32).sqrt()).collect(),
+            black: 0.0,
+        };
+        let stats = |top: f32| Some(lr::ToneStats { key: -2.0, lin_mean: -1.0, lo: -5.0, hi: 0.0, top });
+        let (dim, bright) = (ToneMap::adobe_lr(&base, 0.0, 0.0, 100.0, 0.0, stats(1.0)), ToneMap::adobe_lr(&base, 0.0, 0.0, 100.0, 0.0, stats(3.0)));
+        let ramp = ToneMap::adobe_lr(&base, 0.0, 0.0, 100.0, 0.0, None);
+        assert!(dim.apply(0.18) > bright.apply(0.18) + 0.01, "{} {}", dim.apply(0.18), bright.apply(0.18));
+        assert!(bright.lut().iter().zip(ramp.lut()).all(|(a, b)| (a - b).abs() < 1e-4), "a bright photo gets the ramps' move");
+        let neg = |s| ToneMap::adobe_lr(&base, 0.0, 0.0, -100.0, 0.0, s);
+        assert_eq!(neg(stats(1.0)).lut(), neg(None).lut(), "Whites − is the same on any photo");
+        for top in [-20.0, 0.0, 1.0, f32::NAN, 30.0] {
+            let t = ToneMap::adobe_lr(&base, 1.0, 40.0, 100.0, 0.0, stats(top));
+            assert!(t.lut().iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{top}");
+            assert!(t.lut().windows(2).all(|p| p[1] >= p[0] - 1e-4), "not monotone at top {top}");
+        }
+    }
+
+    #[test]
+    fn contrast_and_whites_ask_for_the_photos_statistics() {
+        let mut s = lightcraft_develop::DevelopSettings::default();
+        assert!(!crate::local::tone_stats_wanted(&s));
+        s.light.contrast = 20.0;
+        assert!(crate::local::tone_stats_wanted(&s));
+        s.light.contrast = 0.0;
+        s.light.whites = -5.0;
+        assert!(crate::local::tone_stats_wanted(&s));
+        let u = lr::stats_of(std::iter::repeat_n(-2.0f32, 300)).unwrap();
+        assert!((u.top + 2.0).abs() < 1e-6 && (u.key + 2.0).abs() < 1e-6);
+        let field: Vec<f32> = (0..1000).map(|i| if i < 985 { -3.0 } else { 2.0 }).collect();
+        assert!(lr::stats_of(field.into_iter()).unwrap().top > 1.9, "the 99th percentile sees the bright 1.5 %");
     }
 
     /// Round 12: a photo whose darkest tones sit higher than the measurement ramp's gets Camera
