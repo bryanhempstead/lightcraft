@@ -38,8 +38,10 @@ const TABLES: [[f32; 48]; 6] = [
 pub const SPATIAL: bool = true;
 /// σ of the regional level, as a fraction of the long edge.
 pub const SIGMA: f32 = 0.004;
-/// The key's percentile of the regional level.
-pub const KEY_PERCENTILE: f32 = 99.9;
+/// The key's percentile of the regional level. Round 14: the 99.9th (the brightest lamp) made night photos lift far too
+/// much (Leica M262 at −100: mids +28.8 L* against Camera Raw's +15.1); at the 95th the same photo is +14.4, and on 7 raws
+/// Dehaze −100 goes 10.6 → 7.9 ΔE with this alone (`docs/lr-match.md` → Round 14).
+pub const KEY_PERCENTILE: f32 = 95.0;
 
 /// The key (log2, before exposure) from the regional level's values ([`crate::local`]'s `log_l` blurred, over
 /// [`crate::tone::GREY`]), every `step`-th value; `None` without finite values.
@@ -52,8 +54,41 @@ pub fn key_of(values: impl Iterator<Item = f32>) -> Option<f32> {
         return None;
     }
     let n = v.len();
-    let i = ((KEY_PERCENTILE / 100.0 * n as f32) as usize).min(n - 1);
+    let i = ((key_percentile() / 100.0 * n as f32) as usize).min(n - 1);
     Some(*v.select_nth_unstable_by(i, f32::total_cmp).1 + crate::tone::GREY.log2())
+}
+
+/// [`KEY_PERCENTILE`], or `LIGHTCRAFT_DZ_KEYPCT=<percentile>` in the environment (measurement runs), read once.
+pub fn key_percentile() -> f32 {
+    static S: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *S.get_or_init(|| {
+        std::env::var("LIGHTCRAFT_DZ_KEYPCT").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| (0.0..=100.0).contains(v)).unwrap_or(KEY_PERCENTILE)
+    })
+}
+
+/// How far Camera Raw's negative Dehaze moves a pixel's colour to the airlight's: λ = [`AIRLIGHT_COLOUR`] · |s|^[`AIRLIGHT_POWER`]
+/// (capped at 1) of the way, luminance kept. Measured on 7 raws at −25 / −50 / −100: the chroma of what Camera Raw lifts is the
+/// airlight's (the colour of the photo's haziest 1 %), not the pixel's: λ ≈ 0.2 / 0.45 / 0.9 (`docs/lr-match.md` → Round 14).
+pub const AIRLIGHT_COLOUR: f32 = 0.95;
+pub const AIRLIGHT_POWER: f32 = 1.2;
+
+/// λ of [`airlight_mix`] at Dehaze `s` (−1..0).
+#[inline]
+pub fn airlight_share(s: f32) -> f32 {
+    if s.is_nan() || s >= 0.0 { 0.0 } else { (AIRLIGHT_COLOUR * (-s).min(1.0).powf(AIRLIGHT_POWER)).min(1.0) }
+}
+
+/// A linear ProPhoto pixel `q` (already toned by [`gain`]) with its chromaticity moved towards the airlight `air`'s by
+/// [`airlight_share`]; luminance unchanged. `air` of no luminance leaves `q`.
+#[inline]
+pub fn airlight_mix(q: [f32; 3], air: [f32; 3], s: f32) -> [f32; 3] {
+    let ya = crate::scene_cr::luminance_pp(air);
+    let lam = airlight_share(s);
+    if lam <= 0.0 || ya <= 1e-9 || !ya.is_finite() {
+        return q;
+    }
+    let y = crate::scene_cr::luminance_pp(q).max(0.0);
+    std::array::from_fn(|c| ((1.0 - lam) * q[c] + lam * y * air[c] / ya).max(0.0))
 }
 
 /// log2 gain of a channel at `level` whose pixel's luminance detail (log luminance less its regional level) is
@@ -168,5 +203,22 @@ mod tests {
         assert!(gain(-1.0, f32::NAN, -8.0) == 0.0 && gain(-5.0, key, -100.0).is_finite());
         assert_eq!(words().len(), 6 * 48);
         assert!(p99_of([f32::NAN].into_iter()).is_none());
+    }
+
+    #[test]
+    fn negative_dehaze_moves_the_colour_to_the_airlights_and_keeps_luminance() {
+        let (q, air) = ([0.30, 0.10, 0.02], [0.8, 0.8, 0.8]);
+        let y = crate::scene_cr::luminance_pp;
+        // no Dehaze, positive Dehaze, an airlight without luminance and hostile numbers leave the pixel as it is
+        assert_eq!(airlight_mix(q, air, 0.0), q);
+        assert_eq!(airlight_mix(q, air, 0.5), q);
+        assert_eq!(airlight_mix(q, [0.0; 3], -1.0), q);
+        assert!(airlight_mix(q, [f32::NAN; 3], -1.0) == q && airlight_mix([f32::NAN; 3], air, -1.0).iter().all(|v| *v == 0.0 || v.is_finite()));
+        // −100 takes almost all of the pixel's chroma (λ ≈ 0.95), −50 less, luminance kept
+        let spread = |c: [f32; 3]| c[0] / y(c) - c[2] / y(c);
+        let (m50, m100) = (airlight_mix(q, air, -0.5), airlight_mix(q, air, -1.0));
+        assert!(spread(m100).abs() < 0.1 * spread(q).abs() && spread(m50).abs() < spread(q).abs() && spread(m50).abs() > spread(m100).abs());
+        assert!((y(m50) - y(q)).abs() < 1e-5 && (y(m100) - y(q)).abs() < 1e-5);
+        assert!((airlight_share(-1.0) - AIRLIGHT_COLOUR).abs() < 1e-6 && airlight_share(-3.0) <= 1.0 && airlight_share(f32::NAN) == 0.0);
     }
 }

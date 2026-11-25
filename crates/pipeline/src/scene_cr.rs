@@ -1163,7 +1163,7 @@ pub fn needs(s: &lightcraft_develop::DevelopSettings, adobe: bool) -> (bool, boo
             crate::black_cr::Mode::Shift => hs && s.light.shadows != 0.0,
             crate::black_cr::Mode::Off => false,
         };
-    let haze = HAZE_MEASURED && ((effects && s.effects.dehaze > 0.0) || s.masks.iter().any(|m| m.adjust.dehaze > 0.0));
+    let haze = HAZE_MEASURED && ((effects && s.effects.dehaze != 0.0) || s.masks.iter().any(|m| m.adjust.dehaze != 0.0));
     (clarity || hs || black, haze)
 }
 

@@ -1558,3 +1558,49 @@ Photos within ΔE 2 / p95 5: 34 → 42; `geom`-flagged comparisons 90 → 43 (th
 aspects within 0.04 % of Camera Raw's. The repair's dry run on round 12's library copy (migrated before round 13)
 finds 71 crops and 10 grouped radials (78 photos) still as migrated; on round 13's, the 71 crops and the 10 radials
 already right. Neither library had changes of its own, so nothing was skipped.
+
+## Round 14 (2026-11-25): negative Dehaze's key and colour; Shadows + measured, not changed
+
+Same slider value in both engines (`make_scene.py` / `scene2_study.py`): the study's four raws (Dehaze −100 / −50 / −25 / +50,
+Shadows −50 / +25 / +50 / +100, Highlights −50) and eight held-out raws (Dehaze −100 / −50, Shadows +50 / +100), Adobe Standard,
+linear curve, 1536 px, a build with the DNG SDK (`raw source (Adobe …)`).
+
+### Negative Dehaze (R21): what Camera Raw does, and the two changes
+
+* **Colour.** What negative Dehaze lifts has the colour of the photo's *airlight*, not of the pixel: in the regions near the
+  photo's brightest level the render is `out = (1 + s) · in + (−s) · A` to three decimals (fit r² 0.999: slopes 0.73 / 0.48 / 0.02
+  and A's share 0.27 / 0.52 / 0.99 at −25 / −50 / −100); in the shadows the same share of the chromaticity moves to A's
+  (λ ≈ 0.2 / 0.45 / 0.9 on seven raws, little dependence on level). LightCraft's per-channel curve kept the pixel's colour, so
+  at −100 its lifted shadows had 3–4× Camera Raw's chroma (R6 L* 20–60: C* 10.7 vs 3.0; Sony 16 vs 3). Now the curve's result
+  keeps its luminance and its chromaticity moves λ = 0.95 · |s|^1.2 of the way to the airlight's (`dehaze_cr::airlight_mix`;
+  A = `Haze::air`, the colour of the haziest 1 % of the dark channel, already made for positive Dehaze, so the CPU render and
+  the GPU kernel share it).
+* **Key.** The curve's key was the 99.9th percentile of the regional level: one lamp in a night photo set it, and the whole
+  photo lifted as if it were 8 EV below white (Leica M262 −100: mids +28.8 L* vs Camera Raw's +15.1; L1004503 +35.6 vs +10.2).
+  Camera Raw's gain follows a lower key; the 95th percentile (`KEY_PERCENTILE`) brings those to +14.4 and +13.5.
+* Mean ΔE2000 over the study's four raws, Dehaze −100 / −50 / −25: 9.9 / 4.6 / 2.5 → 6.3 / 3.0 / 2.0 (Leica 14.9 / 6.8 / 3.3
+  and Sony 11.5 / 5.9 / 3.7 were the worst); over the eight held-out raws, −100 / −50: 8.8 / 3.9 → 4.8 / 2.5. Every raw
+  and step improves. Dehaze +50, Shadows and Highlights are bit-identical.
+
+| raw | Dehaze −100 | Dehaze −50 |
+|---|---:|---:|
+| BHM_9815 (R6) | 6.34 → 4.62 | 2.69 → 2.24 |
+| L1006344 (M262) | 14.88 → 7.84 | 6.83 → 3.44 |
+| DSC01746 (A7S III) | 11.51 → 8.85 | 5.87 → 4.71 |
+| R0003064 (GR III) | 6.98 → 3.75 | 3.19 → 1.70 |
+| held-out ×8, mean | 8.76 → 4.82 | 3.91 → 2.45 |
+
+Still off: the Leica's lamps (L1004503 −100 24.6 → 10.3: its colour share is nearer λ 0.1–0.5, so the airlight over-
+desaturates it) and Sony's depth (lift +20.8 vs +29.0 L*: the key now sits too high for a very dark photo). Next: a λ and a key
+that follow the photo (the two Leicas want less colour change and a higher key than the R6 / GR III), then the shadows' tables.
+
+### Shadows + (R02): no change
+
+LightCraft's lift against Camera Raw's at +100, the shadow band's mean L* (needed scale on the current 0.89 in brackets):
+BHM_9815 15.8 vs 24.2 (×1.3), BHM_4860 8.3 vs 26.5 (×2.7: a black jacket in front of a bright waterfall, which the rule leaves
+almost unlifted), R0003180 6.2 vs 9.0 (×1.1–1.3), the other nine raws within ±12 % (×0.85–1.1). `LIGHTCRAFT_HS_SUP` at 1.1 /
+1.3 / 1.5 makes the mean ΔE of Shadows +100 worse (3.0 → 3.5 / 4.8 / 6.6) because three of four raws are already right. The photo
+statistics tried (percentiles of the regional level, top and bottom, share within 1–3 EV of the top, share below 6 / 8 EV, texture,
+range; correlations with the needed scale on 12 raws) predict nothing: |r| ≤ 0.6, and the two outliers look like their well-behaved
+R6 neighbours (BHM_4857 needs ×1.0). The miss is in the learned rule's deepest levels, not a scale; the fix is to refit that
+rule's second ensemble on more Camera Raw renders, not a gain.
