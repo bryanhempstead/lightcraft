@@ -604,7 +604,8 @@ impl FinishParams {
         // raw files with a camera tone curve take Lightroom-matched Basic tone
         // raw files with a camera tone curve, and rendered files seen through the reference
         // curve (`tone::rendered_reference`), take Lightroom-matched Basic tone
-        let adobe = crate::adobe::Finish::new(info.adobe, &s.profile.id, s.profile.amount / 100.0, s.light.exposure);
+        let adobe_key = info.adobe.map(|k| white::for_render(k, info, s));
+        let adobe = crate::adobe::Finish::new(adobe_key, &s.profile.id, s.profile.amount / 100.0, s.light.exposure);
         let lr_tone = info.camera_tone.is_some() || adobe.is_some();
         let (hl, sh) = ((s.light.highlights / 100.0) as f32, (s.light.shadows / 100.0) as f32);
         let tone_key = tone_stats.map(|t| t.key);
@@ -1354,6 +1355,71 @@ fn encode_srgb(lut: &[f32; SRGB_LUT_N + 1], v: f32) -> f32 {
 fn enc(v: f32) -> u8 {
     // `v` is already sRGB-encoded; round to 8 bits.
     (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+/// The camera profile's hue/sat map follows the white balance (Bryan's fork, `docs/lr-match.md` →
+/// Temperature 2500 K). Camera Raw (and the DNG SDK's `dng_render`) read the map for the white of the
+/// render: the profile's two calibration tables are weighted by the white's temperature, so a custom
+/// Temp / Tint moves the map exactly as an as-shot white at the same place does. LightCraft registers
+/// one base per photo with the map of the as-shot white; the engine registers, for that base, a
+/// function from the render's Temp / Tint to the base carrying the map of that white
+/// ([`register_white_bases`]) and the per-pixel stage swaps to it ([`for_render`]).
+pub mod white {
+    use std::collections::HashMap;
+    use std::sync::{Arc, OnceLock, RwLock};
+
+    use crate::SourceInfo;
+    use lightcraft_develop::DevelopSettings;
+
+    /// Temp / Tint → the key of the base with that white's hue/sat map (`None`: keep the photo's own).
+    pub type WhiteBases = Box<dyn Fn(f64, f64) -> Option<u64> + Send + Sync>;
+
+    fn whites() -> &'static RwLock<HashMap<u64, Arc<WhiteBases>>> {
+        static R: OnceLock<RwLock<HashMap<u64, Arc<WhiteBases>>>> = OnceLock::new();
+        R.get_or_init(Default::default)
+    }
+
+    /// Make the per-white bases of the photo base `key` available.
+    pub fn register_white_bases(key: u64, f: WhiteBases) {
+        whites().write().unwrap_or_else(|e| e.into_inner()).insert(key, Arc::new(f));
+    }
+
+    /// The base to render photo base `key` with at white `temp` / `tint` (`key` itself without a
+    /// registered function, or when it has no answer).
+    pub fn base_at_white(key: u64, temp: f64, tint: f64) -> u64 {
+        if !(temp.is_finite() && tint.is_finite()) {
+            return key;
+        }
+        let f = whites().read().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
+        f.and_then(|f| f(temp.clamp(1500.0, 50000.0), tint.clamp(-150.0, 150.0))).unwrap_or(key)
+    }
+
+    /// The base for this render: the photo's own for its as-shot white, else the one with the map of
+    /// the white balance in effect.
+    pub fn for_render(key: u64, info: &SourceInfo, s: &DevelopSettings) -> u64 {
+        if !info.raw {
+            return key;
+        }
+        let (t, tint) = crate::local::effective_wb(info, s);
+        if (t - info.as_shot_temp).abs() < 1e-6 && (tint - info.as_shot_tint).abs() < 1e-6 {
+            return key;
+        }
+        base_at_white(key, t, tint)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn unregistered_or_hostile_whites_keep_the_photos_base() {
+            assert_eq!(base_at_white(0xfeed_0001, 3000.0, 0.0), 0xfeed_0001);
+            register_white_bases(0xfeed_0002, Box::new(|t, _| Some(t as u64)));
+            assert_eq!(base_at_white(0xfeed_0002, 3000.0, 0.0), 3000);
+            assert_eq!(base_at_white(0xfeed_0002, f64::NAN, 0.0), 0xfeed_0002);
+            assert_eq!(base_at_white(0xfeed_0002, 1.0e9, 0.0), 50000);
+        }
+    }
 }
 
 #[cfg(test)]
