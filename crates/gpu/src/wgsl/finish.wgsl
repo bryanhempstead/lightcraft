@@ -1242,7 +1242,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (pu(F_DZ_SP_OFF) != 0u) {
                 det = log_l[i] - dark[pu(F_DZ_SP_OFF) + i];
             }
-            c = mul3(ad_mat(F_PP_FROM), vec3<f32>(dz_cr(s, q.x, det), dz_cr(s, q.y, det), dz_cr(s, q.z, det)));
+            var q2 = vec3<f32>(dz_cr(s, q.x, det), dz_cr(s, q.y, det), dz_cr(s, q.z, det));
+            // round 14 (`dehaze_cr::airlight_mix`): the lifted colour is the photo's airlight's, not the pixel's
+            if (sc_on && (pu(F_SC) & 8u) != 0u) {
+                let air = vec3<f32>(pf(F_SC_AIR), pf(F_SC_AIR + 1u), pf(F_SC_AIR + 2u));
+                let ya = sc_lum_pp(air);
+                let lam = min(0.95 * pow(min(-s, 1.0), 1.2), 1.0);
+                if (lam > 0.0 && ya > 1e-9) {
+                    let y = max(sc_lum_pp(q2), 0.0);
+                    q2 = max((1.0 - lam) * q2 + lam * y * air / ya, vec3<f32>(0.0));
+                }
+            }
+            c = mul3(ad_mat(F_PP_FROM), q2);
         } else {
             let k = min(-dz, 1.0) * 0.7 * (0.35 + 0.65 * d);
             c = c + (air * 0.9 - c) * k;

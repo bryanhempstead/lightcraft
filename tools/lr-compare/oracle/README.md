@@ -103,3 +103,11 @@ tone table (Exposure +3 clips as Camera Raw does); Whites + is `exp(c · w^0.55)
 whose 99th percentile is low (`tone::lr::whites_gain`, Sony's is high: unchanged); Contrast's pivot follows the key
 at 0.35 EV per EV from -1.82 (`lr::CONTRAST_PIVOT`). Contrast ± still acts like CR 70-85 %: the ramp tables' shape, not
 only the pivot, differs (a plain gain on the shift made every raw worse).
+
+Round 14 (negative Dehaze, Shadows +): `make_scene.py SET [PHOTOS.json [short]]` (clones of the study raws, or `PHOTOS.json`'s, with
+one-slider sidecars for Shadows / Dehaze / Highlights; `short` = the sliders' ends only), rendered by `hdr_ps.sh SET`, then
+`scene2_study.py lc NAME BIN` / `cmp NAME…` (per raw: dE, p95, "acts like", per-slider means) / `strips NAME…`
+(`compare/2026-11-25/fix-scene2/`); `scene_curve.py`, `scene_ana.py`, `scene_fast.py` read one build's gain by level.
+Switches: `LIGHTCRAFT_DZ_KEYPCT=<percentile>` (negative Dehaze's key), `LIGHTCRAFT_HS_SUP=<scale>` (Shadows +).
+Findings: negative Dehaze is `(1 + s) · in + (-s) · A` near the brightest level and moves the shadows' chroma to the airlight's
+(λ ≈ 0.95 |s|^1.2); the key is a high but not the highest percentile (95); Shadows + has no photo statistic that predicts its gain.

@@ -700,7 +700,7 @@ impl FinishParams {
         let clarity = sc::CLARITY_MEASURED && (self.clar != 0.0 || masks(|a| a.clarity));
         let hs_used = s.light.highlights != 0.0 || s.light.shadows != 0.0 || masks(|a| a.highlights) || masks(|a| a.shadows);
         let hs = sc::hs_measured() && self.adobe.is_some() && hs_used;
-        let dehaze = sc::HAZE_MEASURED && (self.dehaze > 0.0 || s.masks.iter().any(|m| m.adjust.dehaze > 0.0));
+        let dehaze = sc::HAZE_MEASURED && (self.dehaze != 0.0 || s.masks.iter().any(|m| m.adjust.dehaze != 0.0));
         // Camera Raw's default black follows the photo's dark key, after Shadows (`black_cr`); an
         // HDR render too (its shadows are the SDR rendition's in Camera Raw: `docs/lr-match.md` → HDR tone)
         if let (Some(m), true) = (map, self.adobe.is_some()) {
@@ -948,6 +948,11 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     let s_dz = dz.max(-1.0);
                     let q =
                         q.map(|v| if v > 0.0 { v * crate::dehaze_cr::gain_spatial(s_dz, key, crate::dehaze_cr::level(v), detail).exp2() } else { v });
+                    // round 14: the lifted colour is the photo's airlight's, not the pixel's
+                    let q = match sc.and_then(|t| t.haze.as_ref()) {
+                        Some((_, air)) => crate::dehaze_cr::airlight_mix(q, *air, s_dz),
+                        None => q,
+                    };
                     c = mul3(&m.1, q);
                 } else {
                     let k = (-dz).min(1.0) * 0.7 * (0.35 + 0.65 * d);
