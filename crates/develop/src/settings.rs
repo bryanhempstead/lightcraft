@@ -695,7 +695,7 @@ impl Geometry {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Crop {
     pub geometry: CropGeometry,
@@ -707,6 +707,14 @@ pub struct Crop {
     /// returns to the same framing. Only counts while the crop still equals its `result`.
     #[serde(skip)]
     pub framing: Option<lightcraft_geom::Framing>,
+}
+
+/// Two crops are the same edit when they frame the same way: the remembered `framing` is working
+/// memory, not an edit, so it never makes a photo "edited", a no-op drag an undo step or a sync a change.
+impl PartialEq for Crop {
+    fn eq(&self, o: &Self) -> bool {
+        self.geometry == o.geometry && self.aspect == o.aspect && self.flip_h == o.flip_h && self.flip_v == o.flip_v
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

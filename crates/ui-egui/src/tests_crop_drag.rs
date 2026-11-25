@@ -52,6 +52,8 @@ fn crop_tool(warp: bool) -> Headless {
     }
     exec(&mut h, "panel.crop", json!({}));
     exec(&mut h, "crop.set", json!({"rect": [0.2, 0.2, 0.8, 0.8]}));
+    // the set-up is its own step: what a test does next is a fresh crop session
+    exec(&mut h, "develop.endRun", json!({}));
     h.step();
     h
 }
@@ -266,6 +268,146 @@ fn twenty_detents_of_each_crop_dial_are_twenty_equal_steps() {
     assert!((geometry(&h).rect.width() - 1.0).abs() < 1e-6, "{:?}", geometry(&h));
 }
 
+/// Move the wheel burst's last notch back in time, past `CROP_WHEEL_HOLD` (an injected clock: no sleeping).
+fn age_wheel(h: &mut Headless) {
+    if let Some(t) = h.app.crop_wheel {
+        h.app.crop_wheel = Some(t - 10.0);
+    }
+}
+
+fn history(h: &Headless) -> usize {
+    let id = h.app.session.active().unwrap();
+    h.app.session.catalog.photo(id).map(|p| p.history.len()).unwrap_or(0)
+}
+
+/// A drag that starts while a wheel burst is still open must not have the wheel's timer end the
+/// drag's interaction early (each later drag move would be a commit of its own). The wheel burst, the
+/// drag and everything else in the Crop tool are ONE undo step (Bryan, 2026-11-24).
+#[test]
+fn a_wheel_burst_and_the_drag_after_it_stay_in_one_session() {
+    let mut h = crop_tool(false);
+    let h0 = history(&h);
+    let at = frame_centre(&h);
+    scroll_at(&mut h, at, 2.0);
+    assert!(h.app.crop_wheel.is_some() && h.app.session.interaction.is_some());
+    // the hold runs out right as the drag begins
+    age_wheel(&mut h);
+    let before = geometry(&h);
+    let c = frame_centre(&h);
+    drag_with(&mut h, c, c + egui::vec2(40.0, 30.0), false);
+    assert!(h.app.session.interaction.is_none() && h.app.crop_wheel.is_none());
+    assert_ne!(geometry(&h).rect.center(), before.rect.center(), "the drag moved the crop");
+    assert_eq!(history(&h), h0 + 1, "the wheel burst and the drag are one step");
+    // another burst, then leaving the Crop tool: closed at once, still that one step
+    scroll_at(&mut h, at, 2.0);
+    assert!(h.app.crop_wheel.is_some());
+    exec(&mut h, "panel.edit", json!({}));
+    h.step();
+    assert!(h.app.crop_wheel.is_none() && h.app.session.interaction.is_none());
+    assert_eq!(history(&h), h0 + 1);
+}
+
+/// Bryan, 2026-11-24: "if i crop and turn it a little then stop then turn it more and then hit enter
+/// have those just be one action". Drag, pause, angle dial, pause, wheel, Return = one undo step that
+/// undoes to the crop from before; Esc cancels the whole session instead.
+#[test]
+fn a_crop_session_in_the_tool_is_one_undo_step_and_escape_cancels_it() {
+    let mut h = crop_tool(false);
+    let (h0, n0) = (history(&h), h.app.session.undo.len());
+    let original = geometry(&h);
+    let c = frame_centre(&h);
+    drag_with(&mut h, c, c + egui::vec2(30.0, 20.0), false);
+    // the angle dial (the console), a pause long enough for it to settle, and again
+    for _ in 0..2 {
+        crate::keymap::nudge(&mut h.app, "crop.angle", 1.0).unwrap();
+        h.settle(T);
+        for _ in 0..60 {
+            h.step();
+        }
+    }
+    let at = frame_centre(&h);
+    scroll_at(&mut h, at, 2.0);
+    age_wheel(&mut h);
+    h.step();
+    assert!(geometry(&h).angle != 0.0 && geometry(&h) != original);
+    h.request("ui.key", json!({"key": "Enter"}), T);
+    h.settle(T);
+    h.step();
+    assert_eq!(history(&h), h0 + 1, "one History entry");
+    assert_eq!(h.app.session.undo.len(), n0 + 1, "one undo entry");
+    assert_eq!(h.app.session.undo.last().unwrap().label, "Crop");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(geometry(&h), original, "one undo returns the crop from before the session");
+    exec(&mut h, "edit.redo", json!({}));
+
+    // Esc in a new session: everything since entering the tool is reverted, the tool closes
+    exec(&mut h, "panel.crop", json!({}));
+    h.step();
+    let kept = geometry(&h);
+    let n1 = h.app.session.undo.len();
+    let c = frame_centre(&h);
+    drag_with(&mut h, c, c + egui::vec2(-30.0, 10.0), false);
+    crate::keymap::nudge(&mut h.app, "crop.angle", -2.0).unwrap();
+    h.settle(T);
+    assert_ne!(geometry(&h), kept);
+    h.request("ui.key", json!({"key": "Escape"}), T);
+    h.settle(T);
+    h.step();
+    assert_eq!(geometry(&h), kept, "Esc reverts the whole session");
+    assert_eq!(h.app.session.undo.len(), n1, "and leaves no undo step");
+    assert_eq!(h.app.ui.right, crate::state::RightPanel::Edit, "and closes the tool");
+}
+
+/// The console's "As Shot" cycle item is the true reset (the whole frame); the default aspect keeps
+/// the punch-in. A full-height crop panned to the left edge keeps its place through a ratio cycle.
+#[test]
+fn the_console_as_shot_resets_and_a_panned_crop_keeps_its_edge() {
+    let mut h = crop_tool(false);
+    exec(&mut h, "crop.set", json!({"rect": [0.3, 0.3, 0.5, 0.5]}));
+    let r = crate::keymap::cycle(&mut h.app, "cropAspect", None, Some(0.0));
+    assert!(r.is_ok(), "{r:?}");
+    h.settle(T);
+    assert!(geometry(&h).is_identity(), "As Shot = the whole frame: {:?}", geometry(&h));
+    // a largest-size crop at the edge, through the console's ratio steps
+    exec(&mut h, "crop.aspect", json!({"aspect": "1x1"}));
+    exec(&mut h, "crop.nudge", json!({"x": -100.0, "y": -100.0}));
+    let edge = geometry(&h);
+    for _ in 0..4 {
+        let r = crate::keymap::cycle(&mut h.app, "cropAspect", Some(1.0), None);
+        assert!(r.is_ok(), "{r:?}");
+        h.settle(T);
+        assert!(geometry(&h).is_within_image(1.0, 1.0));
+    }
+    exec(&mut h, "crop.aspect", json!({"aspect": "1x1"}));
+    let back = geometry(&h);
+    assert!((back.rect.x0 - edge.rect.x0).abs() < 1e-9 && (back.rect.y0 - edge.rect.y0).abs() < 1e-9, "{edge:?} -> {back:?}");
+}
+
+/// DESIGN.md §15 on the Crop panel's button rows: neighbours ≥ 8 px apart, wrapped lines ≥ 10 px,
+/// one control height per row.
+#[test]
+fn the_crop_panels_button_rows_keep_their_spacing() {
+    let h = crop_tool(false);
+    let w = |id: &str| widget(&h, &format!("button:{id}"));
+    let row = ["cropFlipH", "cropFlipV", "cropSwapAspect", "cropReset", "cropAsShot"].map(w);
+    for a in row {
+        for b in row {
+            if a == b {
+                continue;
+            }
+            let (dx, dy) = ((b.left() - a.right()).max(a.left() - b.right()), (b.top() - a.bottom()).max(a.top() - b.bottom()));
+            // on one line the gap is sideways, on two lines it is vertical
+            if (a.center().y - b.center().y).abs() < 4.0 {
+                assert!(dx >= 7.99, "neighbours {a:?} {b:?}: {dx}");
+            } else {
+                assert!(dy >= 10.0 - 0.01, "wrapped lines {a:?} {b:?}: {dy}");
+            }
+        }
+    }
+    let heights: Vec<f32> = row.iter().map(|r| r.height()).collect();
+    assert!(heights.iter().all(|x| (x - heights[0]).abs() < 0.5), "one control height: {heights:?}");
+}
+
 fn scroll_at(h: &mut Headless, at: egui::Pos2, dy: f32) {
     h.request("ui.move", json!({"x": at.x, "y": at.y}), T);
     h.request("ui.scroll", json!({"dy": dy, "unit": "line"}), T);
@@ -293,10 +435,11 @@ fn the_wheel_punches_the_crop_in_the_crop_tool_only() {
     let down = geometry(&h);
     assert!(down.rect.width() > up.rect.width() * 1.1, "out: {up:?} -> {down:?}");
     // a burst of notches ends as one undo step
-    std::thread::sleep(Duration::from_millis(500));
-    for _ in 0..10 {
-        h.step();
-    }
+    // (the clock is injected: the burst's last notch is moved back past the hold)
+    assert!(h.app.session.interaction.is_some() && h.app.crop_wheel.is_some(), "the burst is open");
+    age_wheel(&mut h);
+    h.step();
+    h.step();
     assert!(h.app.session.interaction.is_none(), "the burst's interaction closed");
     // outside the Crop tool: the wheel is the loupe's, the crop doesn't move
     exec(&mut h, "panel.edit", json!({}));

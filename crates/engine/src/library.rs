@@ -387,6 +387,7 @@ impl Session {
         self.catalog = catalog;
         self.undo.clear();
         self.redo.clear();
+        self.merge_run = None;
         self.interaction = None;
         self.pending_log.clear();
         self.selection = Selection::default();

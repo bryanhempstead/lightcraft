@@ -194,10 +194,17 @@ impl CropGeometry {
     /// that would leave the rotated image, as near to it as the image allows. Never bigger than the
     /// image holds, never non-finite: bad input gives the largest crop of the shape.
     pub fn with_punch(angle: f64, aspect: f64, punch: f64, centre: Point, w: f64, h: f64) -> CropGeometry {
+        // nothing sane to fit into: the default (whole-frame) crop
+        if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 && angle.is_finite() && aspect.is_finite() && aspect > 0.0) {
+            return CropGeometry::default();
+        }
         let biggest = crop_fit_angle(w, h, angle, Some(aspect));
-        if !(punch.is_finite() && punch > 0.0 && centre.x.is_finite() && centre.y.is_finite()) || punch >= 1.0 {
+        if !(punch.is_finite() && punch > 0.0 && centre.x.is_finite() && centre.y.is_finite()) {
             return biggest;
         }
+        // (a largest-size crop keeps its centre too: panned to a side, it stays there, sliding only
+        // as far as the new shape needs)
+        let punch = punch.min(1.0);
         let big = biggest.rect_px(w, h);
         let (cw, ch) = (big.width() * punch, big.height() * punch);
         let want = Point::new(centre.x * w, centre.y * h);
@@ -205,6 +212,16 @@ impl CropGeometry {
         let here = at(want);
         if here.is_within_image(w, h) {
             return here;
+        }
+        // a largest-size crop panned off-centre that a turn pushes out: shrink it a hair (the turn takes
+        // that much room) and keep its place, rather than snapping it back to the image centre
+        if punch >= 0.999 {
+            for s in [0.9995, 0.999, 0.998, 0.996, 0.992, 0.985, 0.97, 0.95] {
+                let small = CropGeometry { rect: Rect::from_center(want, cw * s, ch * s).scale(1.0 / w, 1.0 / h), angle };
+                if small.is_within_image(w, h) {
+                    return small;
+                }
+            }
         }
         // slide towards the image centre only as far as it takes (the centred crop always fits)
         let mid = Point::new(w / 2.0, h / 2.0);
@@ -455,6 +472,37 @@ mod tests {
         assert!(t.is_within_image(w, h));
         assert!((t.rect.width() - k.rect.width()).abs() < 1e-9 || t.rect.width() < k.rect.width());
         assert_eq!(k.turned(f64::NAN, None, w, h).0.angle, 0.0);
+    }
+
+    /// A largest-size crop panned to the left edge keeps its place through ratio changes and a turn
+    /// of the angle (it used to jump back to the middle: "it won't let me move the crop around").
+    #[test]
+    fn a_largest_crop_panned_to_a_side_stays_there() {
+        let (w, h) = (3000.0, 2000.0);
+        let c = crop_fit_angle(w, h, 0.0, Some(4.0 / 5.0));
+        let w45 = c.rect.width();
+        let panned = CropGeometry { rect: c.rect.translate(Vec2::new(-c.rect.x0, 0.0)), angle: 0.0 };
+        assert!(panned.rect.x0.abs() < 1e-12 && panned.is_within_image(w, h));
+        let mut f: Option<Framing> = None;
+        let mut cur = panned;
+        let mut go = |cur: CropGeometry, ratio: f64| {
+            let (p, centre) = cur.framing(f, w, h);
+            let g = CropGeometry::with_punch(cur.angle, ratio, p, centre, w, h);
+            f = Some(Framing { result: g, punch: p, centre, width: g.rect.width() });
+            g
+        };
+        cur = go(cur, 4.0 / 5.0);
+        assert!(cur.rect.x0.abs() < 1e-9 && (cur.rect.width() - w45).abs() < 1e-9, "4:5 kept at the left: {cur:?}");
+        cur = go(cur, 4.0 / 3.0);
+        assert!(cur.is_within_image(w, h) && cur.rect.x0 < 1e-9, "4:3 slides only as far as it must: {cur:?}");
+        cur = go(cur, 4.0 / 5.0);
+        assert!(cur.rect.x0.abs() < 1e-9, "back at the left: {cur:?}");
+        // a 0.15° turn keeps it at the left too (sliding a hair at most)
+        let (t, _) = panned.turned(0.15, None, w, h);
+        assert!(t.is_within_image(w, h) && t.rect.x0 < 0.01, "{t:?}");
+        // nonsense sizes: the default crop, never a panic
+        assert_eq!(CropGeometry::with_punch(0.0, 0.8, 1.0, Point::new(0.5, 0.5), 0.0, f64::NAN), CropGeometry::default());
+        assert_eq!(CropGeometry::with_punch(0.0, f64::NAN, 0.5, Point::new(0.5, 0.5), 3000.0, 2000.0), CropGeometry::default());
     }
 
     #[test]

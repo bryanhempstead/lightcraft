@@ -67,6 +67,8 @@ fn develop_set_and_interaction_coalesces() {
     let mut s = demo();
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.5})).unwrap();
     assert_eq!(active_dev(&s).light.exposure, 0.5);
+    // repeated edits of one control merge into one step; end that run so the drag is a step of its own
+    s.execute("develop.endRun", &json!({})).unwrap();
     let undo_before = s.undo.len();
     s.execute("develop.beginInteraction", &json!({"label": "Exposure"})).unwrap();
     for v in [0.6, 0.8, 1.2] {
@@ -456,6 +458,71 @@ fn a_new_aspect_keeps_the_punch_in_and_cycling_returns_to_it() {
     let d = active_dev(&s);
     assert!(d.crop.geometry.is_identity() && d.crop.aspect.is_none() && d.crop.framing.is_none());
     assert!(d.crop.flip_h, "a flip isn't framing");
+}
+
+/// The default aspect on an unedited photo is the default state: the photo stays unedited, with no
+/// undo step and nothing to sync.
+#[test]
+fn the_default_aspect_on_an_unedited_photo_leaves_it_unedited() {
+    let mut s = demo();
+    let id = s.active().unwrap();
+    assert!(!s.catalog.photo(id).unwrap().is_edited());
+    s.execute("crop.aspect", &json!({"aspect": "original"})).unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    assert!(!p.is_edited(), "still unedited");
+    assert!(p.develop.is_unedited() && active_dev(&s).crop == lightcraft_develop::Crop::default());
+    // the reset on an unedited photo is the same
+    s.execute("crop.resetToAsShot", &json!({})).unwrap();
+    assert!(!s.catalog.photo(id).unwrap().is_edited());
+}
+
+/// A crop panned to an edge at its largest size keeps its place through ratio changes and a turn of
+/// the angle, instead of jumping back to the middle; the angle through `develop.set` / `develop.adjust`
+/// (the control channel, MCP) turns the crop with it and never leaves the photo.
+#[test]
+fn a_largest_crop_panned_to_an_edge_stays_there_and_the_angle_refits() {
+    let mut s = demo();
+    let id = s.active().unwrap();
+    let (w, h) = {
+        let p = s.catalog.photo(id).unwrap();
+        let d = active_dev(&s);
+        if d.orientation.swaps_axes() { (p.height as f64, p.width as f64) } else { (p.width as f64, p.height as f64) }
+    };
+    s.execute("crop.resetToAsShot", &json!({})).unwrap();
+    s.execute("crop.aspect", &json!({"aspect": "1x1"})).unwrap();
+    // one axis at a time (a nudge moves along its own line only)
+    s.execute("crop.nudge", &json!({"x": -100.0})).unwrap();
+    s.execute("crop.nudge", &json!({"y": -100.0})).unwrap();
+    let edge = active_dev(&s).crop.geometry;
+    assert!(edge.rect.x0.abs() < 1e-5 && edge.rect.y0.abs() < 1e-5, "panned to the corner: {edge:?}");
+    for ratio in ["4x5", "1x1", "4x3", "1x1"] {
+        s.execute("crop.aspect", &json!({"aspect": ratio})).unwrap();
+        let g = active_dev(&s).crop.geometry;
+        assert!(g.is_within_image(w, h), "{ratio}");
+        if ratio == "1x1" {
+            let near = |a: f64, b: f64| (a - b).abs() < 1e-5;
+            assert!(
+                near(g.rect.x0, edge.rect.x0) && near(g.rect.y0, edge.rect.y0) && near(g.rect.x1, edge.rect.x1) && near(g.rect.y1, edge.rect.y1),
+                "back to the same square in the corner: {g:?} vs {edge:?}"
+            );
+        }
+    }
+    s.execute("develop.endRun", &json!({})).unwrap();
+    s.execute("crop.straighten", &json!({"delta": 0.15})).unwrap();
+    let t = active_dev(&s).crop.geometry;
+    assert!(t.is_within_image(w, h) && t.rect.x0 < 0.02 && t.rect.y0 < 0.02, "a turn keeps it in the corner: {t:?}");
+    // the control channel's angle refits the crop
+    s.execute("crop.resetToAsShot", &json!({})).unwrap();
+    s.execute("develop.set", &json!({"control": "crop.angle", "value": 7.0})).unwrap();
+    let g = active_dev(&s).crop.geometry;
+    assert_eq!(g.angle, 7.0);
+    assert!(g.is_within_image(w, h) && g.rect.width() < 0.99, "the whole-frame crop shrank to fit the turn: {g:?}");
+    s.execute("develop.adjust", &json!({"control": "crop.angle", "delta": 20.0})).unwrap();
+    let g = active_dev(&s).crop.geometry;
+    assert_eq!(g.angle, 27.0);
+    assert!(g.is_within_image(w, h), "{g:?}");
+    s.execute("develop.set", &json!({"values": {"crop.angle": 0.0}})).unwrap();
+    assert!(active_dev(&s).crop.geometry.is_within_image(w, h));
 }
 
 // Feature: dragging crop handles (issue 295)

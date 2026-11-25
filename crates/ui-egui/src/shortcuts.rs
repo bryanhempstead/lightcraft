@@ -263,7 +263,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 && !i.modifiers.alt
                 && [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight].iter().any(|k| i.key_pressed(*k))
         });
-        if arrows {
+        // Tab steps to the next slider (the slider reads it), not to hiding the panels
+        let tab = ctx.input(|i| !i.modifiers.command && !i.modifiers.alt && i.key_pressed(Key::Tab));
+        if arrows || tab {
             return;
         }
     }
@@ -398,6 +400,15 @@ pub fn dispatch(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: 
     } else {
         run_aliased(app, ctx, id, params);
     }
+}
+
+/// [`dispatch`], reporting the error of the command the key path ended up running (an unknown id,
+/// a command that refuses): the `lc_cmd` console input, one command or a chain. A key path that runs
+/// no command (a toggle of the UI) is `Ok`.
+pub fn dispatch_checked(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: serde_json::Value) -> Result<(), String> {
+    app.last_run_error = None;
+    dispatch(app, ctx, id, params);
+    app.last_run_error.take().map_or(Ok(()), Err)
 }
 
 /// Rating/flag/label keys: in Compare/Survey they act on the active photo only; Shift+key or Auto

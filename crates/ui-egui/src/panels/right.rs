@@ -59,6 +59,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
                 _ => super::edit::show(app, ui, id),
             }
+            crate::widgets::reveal_in_scroll(ui);
         });
         crate::widgets::set_classic_rows(ui.ctx(), false);
         footer(app, ui, Rect::from_min_max(pos2(full.left(), body.bottom()), full.max));
@@ -407,6 +408,8 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
+            // wrapped lines of a row sit ≥ 10 px apart (DESIGN.md §15)
+            ui.spacing_mut().item_spacing.y = 10.0;
             if text_button(ui, "cropFlipH", crate::i18n::tr("Flip H"), d.crop.flip_h).clicked() {
                 let _ = app.run("photo.flipHorizontal", json!({}));
             }

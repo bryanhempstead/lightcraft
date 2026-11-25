@@ -1707,16 +1707,6 @@ const CROP_WHEEL_STEP: f32 = 0.94;
 /// to egui), ⌥-scroll (pan) and a trackpad's pan of a zoomed loupe keep their loupe meanings.
 fn crop_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, crop_tool: bool) {
     let now = ui.input(|i| i.time);
-    // close a finished burst (also when the tool was left meanwhile)
-    if let Some(t) = app.crop_wheel {
-        let idle = now - t;
-        if !crop_tool || idle >= crate::CROP_WHEEL_HOLD {
-            app.crop_wheel = None;
-            let _ = app.run("develop.endInteraction", json!({}));
-        } else {
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::CROP_WHEEL_HOLD - idle));
-        }
-    }
     if !crop_tool || !resp.hovered() || app.gesture.is_some() {
         return;
     }
@@ -1745,6 +1735,26 @@ fn crop_wheel(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
     app.crop_touch = Some(std::time::Instant::now());
     ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
     ui.ctx().request_repaint();
+}
+
+/// Once a frame (from the app's logic tick, so it runs on every screen): close the Crop wheel's undo
+/// group once it has been still for [`crate::CROP_WHEEL_HOLD`], or at once when the Crop tool was left.
+/// A gesture that started meanwhile owns the interaction (beginning it closed the wheel's group), so
+/// the wheel's timer never ends a drag early.
+pub(crate) fn crop_wheel_tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let Some(t) = app.crop_wheel else { return };
+    if app.gesture.is_some() {
+        app.crop_wheel = None;
+        return;
+    }
+    let idle = ctx.input(|i| i.time) - t;
+    let left = app.ui.right != RightPanel::Crop || app.ui.fullscreen;
+    if left || idle >= crate::CROP_WHEEL_HOLD {
+        app.crop_wheel = None;
+        let _ = app.run("develop.endInteraction", json!({}));
+    } else {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(crate::CROP_WHEEL_HOLD - idle));
+    }
 }
 
 fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, frame: &Frame, d: &DevelopSettings, id: PhotoId) {
@@ -1859,6 +1869,8 @@ fn crop_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         // Pick by where the button went DOWN: by `drag_started` the pointer has already moved, so a
         // quick drag on the bottom edge used to land inside the frame and move the whole crop
         // (Bryan, 2026-11-24).
+        // (beginning the drag's interaction closes a wheel burst's group: it must not close this one)
+        app.crop_wheel = None;
         let _ = app.run("develop.beginInteraction", json!({"label": "Crop"}));
         let (start, angle) = (d.crop.geometry.rect, d.crop.geometry.angle);
         // ⇧ held where the button went down on the frame (inside it, or on an edge or corner): move the

@@ -145,6 +145,27 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// The crop's remembered framing is working memory, not an edit: it changes neither equality nor
+    /// "unedited", and a settings round trip (a paste, a sync, a preset) drops it.
+    #[test]
+    fn the_crops_framing_memory_is_not_an_edit() {
+        let mut s = DevelopSettings::default();
+        s.crop.framing = Some(lightcraft_geom::Framing {
+            result: s.crop.geometry,
+            punch: 0.5,
+            centre: lightcraft_geom::Point::new(0.3, 0.3),
+            width: 0.5,
+        });
+        assert_eq!(s, DevelopSettings::default());
+        assert_eq!(s.crop, Crop::default());
+        assert!(s.is_unedited());
+        s.crop.flip_h = true;
+        assert_ne!(s.crop, Crop::default(), "a real crop edit still counts");
+        s.crop.flip_h = false;
+        let back: DevelopSettings = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        assert!(back.crop.framing.is_none(), "the memory is never saved or copied through JSON");
+    }
+
     #[test]
     fn serde_roundtrip_default_and_edited() {
         let mut s = DevelopSettings::default();

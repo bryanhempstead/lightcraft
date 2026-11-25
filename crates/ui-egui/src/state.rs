@@ -1002,6 +1002,9 @@ pub struct UiState {
     /// The develop control whose slider is being dragged (geometry sliders show a grid).
     #[serde(skip)]
     pub dragging_control: Option<String>,
+    /// A hardware-button command waiting for the next frame ([`crate::device_cmds`]).
+    #[serde(skip)]
+    pub device: crate::device_cmds::Pending,
     /// Alt (Option) is held this frame: dragging a Light / Detail slider then shows its preview
     /// (clipping, greyscale, sharpening detail or mask).
     #[serde(skip)]
@@ -1563,6 +1566,7 @@ impl Default for UiState {
             collection_parts_by_camera: false,
             hidden_locations: Vec::new(),
             dragging_control: None,
+            device: Default::default(),
             alt_down: false,
             external_edits: Vec::new(),
             was_focused: true,

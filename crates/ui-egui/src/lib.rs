@@ -10,6 +10,7 @@ pub mod accents;
 pub mod capture_time_dialog;
 pub mod control;
 pub mod credits;
+pub mod device_cmds;
 pub mod display_p3;
 pub mod enhance;
 pub mod export_dialog;
@@ -66,6 +67,8 @@ mod tests_crop_drag;
 #[cfg(test)]
 mod tests_curve;
 #[cfg(test)]
+mod tests_device_cmds;
+#[cfg(test)]
 mod tests_enhance_view;
 #[cfg(test)]
 mod tests_export_dialog;
@@ -113,6 +116,8 @@ mod tests_merges;
 mod tests_merge_page;
 #[cfg(test)]
 mod tests_metadata_views;
+#[cfg(test)]
+mod tests_monogram;
 #[cfg(test)]
 mod tests_offline;
 #[cfg(test)]
@@ -376,6 +381,9 @@ pub struct LightcraftApp {
     pub midi_rx: Option<Receiver<Vec<u8>>>,
     /// A console / MIDI slider move in progress: its last tick and control ([`keymap::console_begin`]).
     pub console_drag: Option<(std::time::Instant, String)>,
+    /// The error of the latest [`LightcraftApp::run`] (`None` if it succeeded): what
+    /// [`shortcuts::dispatch_checked`] reports for a command that went through the key path.
+    pub last_run_error: Option<String>,
     /// H held down since, and whether the hold already ran H's binding ([`shortcuts`]' tap-or-hold).
     pub h_down: Option<(std::time::Instant, bool)>,
     /// The next H press is the hold's replay: the shortcuts get it ([`shortcuts`]' tap-or-hold).
@@ -386,6 +394,8 @@ pub struct LightcraftApp {
     /// The Crop tool's wheel: when (egui time) the last notch punched the crop in or out. The notches
     /// of one burst are a single undo step, closed [`CROP_WHEEL_HOLD`] seconds after the last.
     pub crop_wheel: Option<f64>,
+    /// Was the Crop tool open last frame (its leaving ends the crop session's undo step).
+    pub crop_was_open: bool,
     /// The key of the loupe's uncropped crop-dial draft ([`lightcraft_engine::Session::reframe_draft_job`]):
     /// a Main texture with it is drawn cropped to the current crop.
     pub reframe_key: Option<u64>,
@@ -485,10 +495,12 @@ impl LightcraftApp {
             keymap: keymap::Keymap::default(),
             midi_rx: None,
             console_drag: None,
+            last_run_error: None,
             h_down: None,
             h_replay: false,
             crop_touch: None,
             crop_wheel: None,
+            crop_was_open: false,
             reframe_key: None,
             reframe_keys: Vec::new(),
             reframe_pin: None,
@@ -534,6 +546,12 @@ impl LightcraftApp {
 
     /// Run a UI or engine command by id. The single entry point for every frontend path.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let r = self.run_command(id, params);
+        self.last_run_error = r.as_ref().err().cloned();
+        r
+    }
+
+    fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
         // merges.: the finder and merges in the background, the find mode setting
         if let Some(r) = merges::run_ui(self, id, &params) {
             if let Err(e) = &r {
@@ -1013,6 +1031,7 @@ impl LightcraftApp {
         }
         self.last_time = now;
         self.drain_control(ctx);
+        device_cmds::frame(self, ctx);
         self.apply_settings(ctx);
         if !self.synthetic.is_empty() {
             ctx.request_repaint();
@@ -1085,6 +1104,13 @@ impl LightcraftApp {
         }
         keymap::poll_midi(self, ctx);
         keymap::console_tick(self, ctx);
+        panels::detail::crop_wheel_tick(self, ctx);
+        // leaving the Crop tool (any way) closes the crop session: what follows is a step of its own
+        let crop_open = self.ui.right == state::RightPanel::Crop;
+        if self.crop_was_open && !crop_open {
+            self.session.end_merge_run();
+        }
+        self.crop_was_open = crop_open;
         leftoff::tick(self, now);
         if self.left_off.unsaved() {
             // ui.json is written a second after the spot changes (the app's writer asks `save_due`)

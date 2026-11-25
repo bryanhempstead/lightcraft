@@ -297,6 +297,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // LR-MAP-PLACES: the Library's Place & Tags section ({q?} starts a search, {selection?: bool})
     ("view.places", "Set Location and Tags…", None, "Library"),
     ("view.colorMixer", "Color Mixer", None, ""),
+    // hardware buttons (Stream Deck, Monogram): crate::device_cmds
+    ("view.section", "Open Develop Panel", None, ""),
+    ("tool.targetedAdjustment", "Targeted Adjustment Tool", None, ""),
     ("view.resumeLastLeftOff", "Go to Where I Left Off", None, "View"),
     ("preset.applyByName", "Apply Preset by Name", None, ""),
     ("keys.nudge", "Nudge Slider", None, ""),
@@ -454,6 +457,9 @@ pub fn paste_meets_masks(app: &LightcraftApp, p: &Value) -> bool {
 }
 
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if let Some(r) = crate::device_cmds::run(app, id, p) {
+        return Some(r);
+    }
     // another module tab: the merge. tab is left, and Library shows the folder / collection the
     // merges were of (not the merges. view)
     if matches!(id, "view.library" | "view.develop" | "view.map" | "view.galleries") {
@@ -824,6 +830,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 app.ui.slideshow = None;
             } else if !app.ui.tool.is_empty() {
                 app.ui.tool.clear();
+            } else if app.ui.right == RightPanel::Crop && app.ui.module == Module::Develop {
+                // Esc in the Crop tool cancels the whole crop session (every drag, dial turn and
+                // ratio since it began) and leaves the tool; Return keeps it as one undo step
+                let _ = app.run("crop.cancel", json!({}));
+                app.ui.right = RightPanel::Edit;
             } else if app.ui.lights_out != crate::state::LightsOut::On {
                 app.ui.lights_out = crate::state::LightsOut::On;
             } else if app.ui.module == Module::Develop {
@@ -1392,6 +1403,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             use RightPanel::*;
             if app.ui.dialog.is_none() && matches!(app.ui.right, Crop | Remove | RedEye | Masking) {
                 let _ = app.session.end_interaction();
+                app.session.end_merge_run();
                 app.ui.tool.clear();
                 app.ui.right = Edit;
             }
