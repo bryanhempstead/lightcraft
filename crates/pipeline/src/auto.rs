@@ -31,10 +31,18 @@ fn percentile(sorted: &[f32], q: f32) -> f32 {
 /// Compute auto tone values for `src` under the current white balance (ignores current tone values).
 pub fn auto_tone(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> AutoTone {
     let mut img = lightcraft_raster::resample::fit(src, 512, 512, lightcraft_raster::resample::Filter::Box);
+    // a merged panorama's empty corners are exactly zero: they are not part of the photo
+    let empty: Vec<bool> = img.data.iter().map(|c| c.iter().all(|v| *v <= 0.0)).collect();
     let mut base = DevelopSettings { wb: s.wb, ..DevelopSettings::default() };
     base.light.exposure = 0.0;
     crate::local::scene_linear_pre(&mut img, info, &base);
-    let mut ev: Vec<f32> = img.data.iter().map(|c| (luminance_2020(*c).max(1e-6) / 0.18).log2()).collect();
+    let mut ev: Vec<f32> = img
+        .data
+        .iter()
+        .zip(&empty)
+        .filter(|(_, e)| !**e)
+        .map(|(c, _)| (luminance_2020(*c).max(1e-6) / 0.18).log2())
+        .collect();
     ev.sort_by(|a, b| a.total_cmp(b));
     let median = percentile(&ev, 0.5);
     let exposure = (-median * 0.85 - 0.1).clamp(-4.0, 4.0);

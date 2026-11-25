@@ -116,7 +116,11 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     if !model.is_empty() {
         ifd.set(t::MODEL, Value::Ascii(model.clone()));
     }
-    let unique = format!("{make} {model}").trim().to_string();
+    // as the camera writes it: the model alone when it already names the maker ("RICOH GR III",
+    // "LEICA M (Typ 262)", "Canon EOS R6"), else maker + model ("SONY ILCE-7SM3") — Adobe's
+    // camera profiles are looked up by this name, so a merged DNG keeps its camera's profiles
+    let brand = make.split_whitespace().next().unwrap_or_default().to_lowercase();
+    let unique = if !brand.is_empty() && model.to_lowercase().starts_with(&brand) { model.trim().to_string() } else { format!("{make} {model}").trim().to_string() };
     ifd.set(t::UNIQUE_CAMERA_MODEL, Value::Ascii(if unique.is_empty() { "LightCraft".into() } else { unique }));
     ifd.set(t::ORIENTATION, Value::Short(vec![raw.orientation.to_exif()]));
     ifd.set(t::SOFTWARE, Value::Ascii("LightCraft".into()));

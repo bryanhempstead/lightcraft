@@ -452,9 +452,21 @@ pub fn paste_meets_masks(app: &LightcraftApp, p: &Value) -> bool {
 }
 
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
-    // another module tab: the merge. tab is left
+    // another module tab: the merge. tab is left, and Library shows the folder / collection the
+    // merges were of (not the merges. view)
     if matches!(id, "view.library" | "view.develop" | "view.map" | "view.galleries") {
-        app.merge_tab = false;
+        let was = std::mem::take(&mut app.merge_tab);
+        if was && app.session.source == lightcraft_engine::LibrarySource::Merges {
+            use lightcraft_engine::merge_find::Scope;
+            let back = match app.session.merges_scope.clone().unwrap_or_default() {
+                Scope::Folder { path, deep } => json!({"kind": "libraryFolder", "path": path, "subfolders": deep}),
+                Scope::Album { id } => json!({"kind": "album", "id": id.0}),
+                Scope::All => json!({"kind": "all"}),
+            };
+            if app.run("library.source", back).is_err() {
+                let _ = app.run("library.source", json!({"kind": "all"}));
+            }
+        }
     }
     // The old Edit ▸ Language commands, from scripts written before LightCraft went English only.
     if id.starts_with("app.language.") {

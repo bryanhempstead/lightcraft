@@ -73,7 +73,7 @@ impl Default for MergeDialog {
             align: true,
             deghost: "none".into(),
             show_overlay: false,
-            auto_settings: true,
+            auto_settings: false,
             stack: false,
             projection: "auto".into(),
             boundary_warp: 0.0,

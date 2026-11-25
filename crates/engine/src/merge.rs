@@ -367,7 +367,7 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
         _ => MergeKind::HdrPanorama { hdr, pano, bracket: p.get("bracket").and_then(Value::as_u64).unwrap_or(0) as usize },
     };
     let finish = MergeFinish {
-        auto_settings: p.get("autoSettings").and_then(Value::as_bool).unwrap_or(true),
+        auto_settings: p.get("autoSettings").and_then(Value::as_bool).unwrap_or(false),
         stack: p.get("stack").and_then(Value::as_bool).unwrap_or(false),
         show_overlay: p.get("showOverlay").and_then(Value::as_bool).unwrap_or(false),
     };
@@ -420,6 +420,39 @@ impl Session {
         self.selection = crate::Selection::single(id);
         if job.finish.auto_settings {
             self.execute("develop.auto", &json!({}))?;
+        } else if let Some(src) = job.sources.first().and_then(|(p, _)| self.develop_of(*p)) {
+            // the merged photo looks like its frames: their first frame's tone / color / detail /
+            // effects, nothing tied to that frame's geometry (crop, lens, transforms, masks, spots)
+            use lightcraft_develop::SettingsGroup as G;
+            let look: Vec<G> = G::ALL
+                .iter()
+                .copied()
+                .filter(|g| {
+                    !matches!(
+                        g,
+                        G::Enhance
+                            | G::LensProfile
+                            | G::ChromaticAberration
+                            | G::LensDistortion
+                            | G::LensVignetting
+                            | G::UprightMode
+                            | G::UprightTransforms
+                            | G::ManualTransform
+                            | G::Masks
+                            | G::Spots
+                            | G::RedEye
+                            | G::CropRect
+                            | G::Straighten
+                            | G::AspectRatio
+                            | G::LensBlur
+                    )
+                })
+                .collect();
+            let part = lightcraft_develop::extract_groups(&src, &look);
+            if let Some(d) = self.develop_of(id) {
+                let d = lightcraft_develop::apply_partial(&d, &part, 1.0);
+                self.set_develop(id, d, "Settings from the Frames")?;
+            }
         }
         if let Some(c) = out.crop
             && let Some(d) = self.develop_of(id)

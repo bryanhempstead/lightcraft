@@ -538,9 +538,11 @@ fn the_merge_tab_opens_every_merge() {
     h.settle(SETTLE);
     assert!(matches!(h.app.session.source, lightcraft_engine::LibrarySource::Merges));
     assert_eq!(h.app.session.merges_scope.clone().unwrap_or_default(), lightcraft_engine::merge_find::Scope::All);
-    // library. leaves the tab
-    h.app.run("view.library", json!({})).unwrap();
-    h.app.run("library.source", json!({"kind": "all"})).unwrap();
+    // library. leaves the tab, back on the folder the merges were of
+    h.app.run("library.source", json!({"kind": "libraryFolder", "path": folder})).unwrap();
     h.settle(SETTLE);
-    assert!(!matches!(h.app.session.source, lightcraft_engine::LibrarySource::Merges));
+    h.app.run("view.library", json!({})).unwrap();
+    h.settle(SETTLE);
+    assert!(matches!(h.app.session.source, lightcraft_engine::LibrarySource::LibraryFolder), "{:?}", h.app.session.source);
+    assert_eq!(h.app.session.library_folder.as_deref(), Some(folder.as_str()));
 }
