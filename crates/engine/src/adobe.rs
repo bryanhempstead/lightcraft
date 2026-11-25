@@ -25,7 +25,7 @@ use lightcraft_dng_sdk_sys as sdk;
 use lightcraft_raw::profile::HsvTable;
 
 /// Bumped when what [`decode_color`] produces changes (part of the source cache key).
-pub const VERSION: u64 = 7;
+pub const VERSION: u64 = 8;
 
 /// Largest look-profile XMP read (Adobe's are ≤ ~1 MB).
 const MAX_XMP: u64 = 8 << 20;
@@ -436,7 +436,7 @@ pub fn profile_for(make: Option<&str>, model: &str, id: &str) -> Option<Arc<Came
         camera_profiles(make, model).iter().find(|e| e.id.eq_ignore_ascii_case(id)).map(|e| e.path.clone())
     };
     let found = path.and_then(|path| match load_camera(&path, Some(id)) {
-        Ok(c) => Some(Arc::new(c)),
+        Ok(c) => Some(remember(c)),
         Err(e) => {
             log::warn!("adobe: {}: {e}; {model} renders on its Adobe Standard", path.display());
             None
@@ -462,7 +462,7 @@ pub fn standard_for(make: Option<&str>, model: &str) -> Option<Arc<Camera>> {
         return hit.clone();
     }
     let found = candidates(make, model).iter().find_map(|c| standard_index().get(c).cloned()).and_then(|path| match load_camera(&path, None) {
-        Ok(c) => Some(Arc::new(c)),
+        Ok(c) => Some(remember(c)),
         Err(e) => {
             log::warn!("adobe: {}: {e}; using LightCraft's own color for {model}", path.display());
             None
@@ -511,6 +511,64 @@ pub fn hue_sat_in_finish(model: &str) -> bool {
 /// Calibration acts before the profile's hue/sat map, as in Camera Raw), registered once per
 /// distinct map; `key` itself when the camera has no registered base.
 pub fn photo_base(key: u64, hue_sat: &HsvTable, gain_ev: f64) -> u64 {
+    let k = plain_photo_base(key, hue_sat, gain_ev);
+    register_white_bases(key, k, gain_ev);
+    k
+}
+
+/// Every parsed camera, by its base key (a process holds a handful): the per-white bases read the
+/// profile's hue/sat map again for the white of each render.
+fn cameras() -> &'static Mutex<HashMap<u64, Arc<Camera>>> {
+    static C: OnceLock<Mutex<HashMap<u64, Arc<Camera>>>> = OnceLock::new();
+    C.get_or_init(Default::default)
+}
+
+fn remember(c: Camera) -> Arc<Camera> {
+    let c = Arc::new(c);
+    cameras().lock().unwrap_or_else(PoisonError::into_inner).insert(c.key, Arc::clone(&c));
+    c
+}
+
+/// Mired step of the white's hue/sat map: a render's white is rounded to it before the profile's
+/// two tables are weighted (the weight moves 4 / 196 of the range per step between the calibration
+/// illuminants, 2 % at most from the exact map).
+const WHITE_MIRED_STEP: f64 = 4.0;
+
+/// The profile's hue/sat map follows the white balance as Camera Raw's does: for photo base `photo`
+/// (made by [`photo_base`] for camera `cam_key`), the base whose map is the profile's for a render's
+/// Temp / Tint ([`lightcraft_pipeline::finish::white`]). Maps between buckets of the same white are
+/// shared by the base registry (one base per distinct table).
+fn register_white_bases(cam_key: u64, photo: u64, gain_ev: f64) {
+    static DONE: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
+    let Some(cam) = cameras().lock().unwrap_or_else(PoisonError::into_inner).get(&cam_key).cloned() else { return };
+    if cam.legacy || !DONE.get_or_init(Default::default).lock().unwrap_or_else(PoisonError::into_inner).insert(photo) {
+        return;
+    }
+    let cache: Mutex<HashMap<i64, Option<u64>>> = Mutex::new(HashMap::new());
+    lightcraft_pipeline::finish::white::register_white_bases(
+        photo,
+        Box::new(move |temp, tint| {
+            // the map depends on the white's temperature (the SDK's `dng_temperature` of its xy), not on Temp alone
+            let (temp, tint) = sdk_temp_tint(&cam.info.unique_model, temp, tint);
+            let xy = sdk::temp_tint_to_xy(temp, tint).ok()?;
+            let t = sdk::xy_to_temp_tint(xy[0], xy[1]).ok()?[0];
+            if !(t.is_finite() && t > 0.0) {
+                return None;
+            }
+            let bucket = (1e6 / t / WHITE_MIRED_STEP).round() as i64;
+            let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(hit) = cache.get(&bucket) {
+                return *hit;
+            }
+            let white = sdk::temp_tint_to_xy((1e6 / (bucket.max(1) as f64 * WHITE_MIRED_STEP)).clamp(1500.0, 50000.0), 0.0).ok()?;
+            let key = cam.profile.hue_sat_map(white).ok().flatten().as_ref().and_then(hsv_table).map(|h| plain_photo_base(cam.key, &h, gain_ev));
+            cache.insert(bucket, key);
+            key
+        }),
+    );
+}
+
+fn plain_photo_base(key: u64, hue_sat: &HsvTable, gain_ev: f64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     key.hash(&mut h);
@@ -641,6 +699,9 @@ pub fn decode_color(cam: &Arc<Camera>, raw: &lightcraft_raw::RawImage) -> Option
         cam.profile.hue_sat_map([q(spec.white_xy[0]), q(spec.white_xy[1])]).ok().flatten().as_ref().and_then(hsv_table)
     };
     let [temp, tint] = sdk::xy_to_temp_tint(spec.white_xy[0], spec.white_xy[1]).ok()?;
+    // reported as Camera Raw's Temp / Tint ([`WB_SHIFT`]), so that setting them reproduces the as-shot white
+    let (dm, dt) = wb_shift(&cam.info.unique_model);
+    let (temp, tint) = if temp.is_finite() && temp > 0.0 { (1e6 / (1e6 / temp - dm).clamp(20.0, 667.0), tint - dt) } else { (temp, tint) };
     // the file's baseline exposure (DNG tag; Fujifilm's raw exposure bias), the profile's offset
     // (a DNG carries its own baseline exposure: the measured offsets are for the camera's own format)
     let measured = if raw.format == lightcraft_raw::RawFormat::Dng { 0.0 } else { exposure_offset(&cam.info.unique_model, raw.metadata.iso) };
@@ -649,8 +710,45 @@ pub fn decode_color(cam: &Arc<Camera>, raw: &lightcraft_raw::RawImage) -> Option
     Some(DecodeColor { matrix, wb, hue_sat, gain_ev, as_shot_temp: temp, as_shot_tint: tint, camera_wb })
 }
 
+/// Camera Raw's Temp / Tint scale against the DNG colour spec's, for cameras whose raws are not
+/// DNGs (`(model, mired, tint)`): Camera Raw reads a CR3 / ARW's Temp / Tint through its own
+/// camera data, not the Adobe Standard profile's matrices, so the same Temp / Tint is a slightly
+/// different white. Measured with Camera Raw on Bryan's raws (`docs/lr-match.md` → Temperature
+/// 2500 K): LightCraft's custom-white-balance neutrals were off by a constant (a*, b*) at every Temp
+/// and Tint, the same on every photo of a camera (R6 `b*` −1.3 / `a*` +0.5, A7S III `a*` +0.9), as
+/// a constant shift of the white along the mired and tint axes; DNGs (Leica M, GR III) have none.
+/// The SDK's white for Camera Raw's `T` / `t` is at mired `1e6 / T + mired`, tint `t + tint`.
+pub const WB_SHIFT: &[(&str, f64, f64)] = &[("Canon EOS R6", -4.5, -4.2), ("Sony ILCE-7SM3", 2.5, -4.0)];
+
+/// The (mired, tint) shift of `model` (`LIGHTCRAFT_WB_SHIFT=mired,tint` overrides it for every camera:
+/// measurement runs, read once).
+pub fn wb_shift(model: &str) -> (f64, f64) {
+    static ENV: OnceLock<Option<(f64, f64)>> = OnceLock::new();
+    let env = ENV.get_or_init(|| {
+        let v = std::env::var("LIGHTCRAFT_WB_SHIFT").ok()?;
+        let (a, b) = v.split_once(',')?;
+        let (a, b) = (a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?);
+        (a.is_finite() && b.is_finite() && a.abs() <= 60.0 && b.abs() <= 60.0).then_some((a, b))
+    });
+    if let Some(s) = env {
+        return *s;
+    }
+    WB_SHIFT.iter().find(|(m, _, _)| *m == model).map_or((0.0, 0.0), |e| (e.1, e.2))
+}
+
+/// The SDK's Temp / Tint for Camera Raw's `temp` / `tint` on `model` (see [`WB_SHIFT`]).
+fn sdk_temp_tint(model: &str, temp: f64, tint: f64) -> (f64, f64) {
+    let (dm, dt) = wb_shift(model);
+    if dm == 0.0 && dt == 0.0 {
+        return (temp, tint);
+    }
+    let mired = (1e6 / temp + dm).clamp(20.0, 667.0);
+    (1e6 / mired, tint + dt)
+}
+
 /// The SDK's camera neutral (green = 1) for Temp / Tint.
 pub fn neutral_for(cam: &Camera, analog: Option<[f64; 3]>, temp: f64, tint: f64) -> Option<[f64; 3]> {
+    let (temp, tint) = sdk_temp_tint(&cam.info.unique_model, temp, tint);
     let xy = sdk::temp_tint_to_xy(temp, tint).ok()?;
     let n = cam.profile.color_spec(sdk::White::Xy(xy[0], xy[1]), analog).ok()?.camera_white;
     (n[1] > 0.0 && n.iter().all(|v| v.is_finite() && *v > 0.0)).then(|| n.map(|v| v / n[1]))
@@ -779,6 +877,7 @@ pub(crate) fn solve5(a: [[f64; 5]; 5], b: [f64; 5]) -> Option<[f64; 5]> {
 pub const MEASURED_EXPOSURE: &[(&str, u32, f64)] = &[
     ("Canon EOS R6", 0, 0.127),
     ("Canon EOS R6", 125, 0.216),
+    ("Sony ILCE-7SM3", 0, 0.157),
     ("Fujifilm X-T2", 0, -0.533),
     ("Fujifilm X-T2", 500, -1.062),
     ("Fujifilm X100F", 0, -0.37),
