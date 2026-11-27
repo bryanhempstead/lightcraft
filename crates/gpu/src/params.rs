@@ -95,6 +95,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("SC_HL", 1),
     ("SC_HS_SHIFT", 1),
     ("SC_AIR", 3),
+    // the colour negative Dehaze moves towards (`Haze::air_neg`)
+    ("SC_AIRN", 3),
     // the camera RGB Camera Raw's Texture gain applies in (`texture_cr::space`): flag, working →
     // camera, camera → working
     ("TX_SPACE", 1),
@@ -422,8 +424,9 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
             p.f("SC_HL", *hl);
             p.f("SC_HS_SHIFT", t.hs_shift);
         }
-        if let Some((_, air)) = &t.haze {
+        if let Some((h, air)) = &t.haze {
             p.fs("SC_AIR", air);
+            p.fs("SC_AIRN", &h.air_neg);
         }
     }
     if let Some((from, to)) = &fp.tex_space {

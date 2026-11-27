@@ -768,6 +768,16 @@ mod tests {
     }
 
     #[test]
+    fn the_kernels_negative_dehaze_constants_are_the_cpus() {
+        use lightcraft_pipeline::dehaze_cr::{AIRLIGHT_COLOUR, AIRLIGHT_POWER, DETAIL};
+        let src = include_str!("wgsl/finish.wgsl");
+        for (name, v) in [("DZ_DETAIL", DETAIL), ("DZ_AIR_COLOUR", AIRLIGHT_COLOUR), ("DZ_AIR_POWER", AIRLIGHT_POWER)] {
+            let line = format!("const {name}: f32 = {v:?};");
+            assert!(src.contains(&line), "finish.wgsl lacks `{line}`");
+        }
+    }
+
+    #[test]
     fn dispatches_stay_within_the_workgroup_limit() {
         // 1-D kernels over a 100 MP image and 2-D ones over 16k × 16k stay under 65535 per axis
         assert!(super::groups1(100_000_000 * 3).iter().all(|g| *g <= 65535));

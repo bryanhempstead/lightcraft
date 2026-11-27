@@ -950,7 +950,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                         q.map(|v| if v > 0.0 { v * crate::dehaze_cr::gain_spatial(s_dz, key, crate::dehaze_cr::level(v), detail).exp2() } else { v });
                     // round 14: the lifted colour is the photo's airlight's, not the pixel's
                     let q = match sc.and_then(|t| t.haze.as_ref()) {
-                        Some((_, air)) => crate::dehaze_cr::airlight_mix(q, *air, s_dz),
+                        Some((h, _)) => crate::dehaze_cr::airlight_mix(q, h.air_neg, s_dz),
                         None => q,
                     };
                     c = mul3(&m.1, q);

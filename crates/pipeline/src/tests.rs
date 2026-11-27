@@ -464,8 +464,9 @@ fn camera_raw_clarity_lifts_fine_and_coarse_detail() {
     }
 }
 
-/// Round 13: negative Dehaze keeps ×(1 + s) of fine detail's log contrast, as Camera Raw does at every period
-/// (the per-pixel curve alone kept ×0.62 at −50), and leaves a fine grating's mean level nearly where it was.
+/// Round 13 / 15: negative Dehaze keeps ×(1 + `DETAIL` · s) of fine detail's log contrast (×0.65 at −50; Round 13 measured ×(1 + s)
+/// on gratings, real photos keep more, `dehaze_cr::DETAIL`; the per-pixel curve alone kept ×0.62), and leaves a fine grating's mean
+/// level nearly where it was.
 #[test]
 fn negative_dehaze_scales_fine_detail_like_camera_raw() {
     let src = Rgb32f::from_fn(512, 96, |x, _| [0.18 * 2f32.powf(-1.5 + 0.4 * (std::f32::consts::TAU * x as f32 / 4.0).sin()); 3]);
@@ -485,7 +486,7 @@ fn negative_dehaze_scales_fine_detail_like_camera_raw() {
     s.effects.dehaze = -50.0;
     let (m1, k1) = stats(&lin(&s));
     let ratio = k1 / k0;
-    assert!((0.42..0.56).contains(&ratio), "contrast ratio {ratio}");
+    assert!((0.58..0.72).contains(&ratio), "contrast ratio {ratio}");
     assert!((m1 - m0).abs() < 0.3, "mean moved {m0} → {m1}");
 }
 
