@@ -1604,3 +1604,77 @@ statistics tried (percentiles of the regional level, top and bottom, share withi
 range; correlations with the needed scale on 12 raws) predict nothing: |r| ≤ 0.6, and the two outliers look like their well-behaved
 R6 neighbours (BHM_4857 needs ×1.0). The miss is in the learned rule's deepest levels, not a scale; the fix is to refit that
 rule's second ensemble on more Camera Raw renders, not a gain.
+
+## Round 15 (2026-11-27): Shadows + against Camera Raw at the same slider value, by level
+
+Same method as round 14, widened: the 12 raws of round 14 plus 27 more (9 M262, 9 GR III, 6 A7S III, 3 more R6: `BHM_4859 /
+8483 / 8484`), Camera Raw's Shadows +50 / +100 renders of all of them (one made for the round, 81 renders through `hdr_ps.sh`),
+LightCraft on a build with the DNG SDK (`raw source (Adobe …)`). 38 raws were read; `DSC00603` is below. Measured per level by
+binning every pixel on the map's own base level (the level the rule's tables are indexed by) and reading each engine's mean
+log2 gain there (scratch scripts, not kept: the dump of the rule's inputs and per-member outputs was a temporary
+`LIGHTCRAFT_HS_DUMP`).
+
+What the levels say:
+
+* **Camera Raw's gain is a smooth function of the base level**: on the five photos tried, 88–97 % of the variance of a photo's pixel gains is explained by the
+  regional level alone, whatever the scale of the "region" (pixel to 16 % of the long edge), and the surround adds almost nothing at a fixed
+  level (slope of the gain on surround − local level: −0.04 EV per EV on average, −0.19 at worst on BHM_9815, LightCraft's
+  ≈ 0). So the local side is not where the miss is; the curve of each photo is.
+* **The rule is right for most photos and wrong for a few by a lot**: the ratio of Camera Raw's weighted gain to LightCraft's is
+  0.9–1.1 on 26 of 38 raws, and 2.29 (BHM_4860), 1.57 (R0003835), 1.37 (DSC00736), 1.30 (BHM_9815), 1.21 (R0003180) /
+  0.70–0.73 (DSC01642, R0003851, DSC00940) at the extremes. Two R0003835 / R0003851 (same camera, same session) go opposite ways
+  on equal photo statistics; none of the photo statistics tried (percentiles, shares near the top, texture, range, bottom) predicts
+  the ratio (|r| ≤ 0.45 on 37 raws), which is round 14's finding again, now on three times the photos.
+* **What does predict it is the networks' own disagreement.** The rule is the mean of four networks; where they disagree
+  (BHM_4860, at −7 EV: 0.5 / 1.0 / 1.4 / 2.7 EV for Shadows +100) the photo is unlike the ones they were fitted on, and Camera Raw's
+  gain sits near the highest member, not the mean (r = +0.67 between the members' spread and log Camera Raw / LightCraft; leave-one-photo-out
+  error 0.207 → 0.161 in log ratio with the spread and the size of the lift). Where they agree (spread ≤ 0.1, most of the raws) the mean is right.
+  Regressing Camera Raw's gain (in table units) on the sorted members gave weights −0.52 / +0.12 / +0.42 / +0.77: the top
+  member minus the bottom one.
+* **A scale does not fix it** (round 14, confirmed): the median ratio of Camera Raw's gain to LightCraft's at a given level is 0.93–1.04 over absolute levels
+  −11 … −3 EV (1.05 around the 20–50th percentile of the photo, 0.84 at its darkest level and 0.6–0.8 at its top: small, not worth a taper).
+
+Changes (`scene_cr`, positive Shadows only; CPU and GPU read the same tables):
+
+1. **`SHADOWS_UP_SPREAD` = 2.2 above `SHADOWS_UP_GATE` = 0.15**, scale 0.89 → 0.88: the unit curve's gain is
+   `0.88 · mean + 2.2 · max(0, spread − 0.15)` per level, the spread being the members' standard deviation
+   (`LIGHTCRAFT_HS_SPREAD`, `LIGHTCRAFT_HS_GATE`, `LIGHTCRAFT_HS_SUP` for measurement). The gate keeps the photos the networks know
+   exactly as they were. Candidates measured on the 38 raws (mean Shadows +100 / +50 ΔE, worst raw): no gate, spread 1.8 and scale 0.79
+   2.35 / 2.05 (worst +0.70: L1004503); scale 0.85 spread 0.9 2.38 / 1.51 (+0.27); gate 0.12 spread 1.6 2.35 / 1.50 (+0.18); gate 0.12
+   spread 2.5 **2.31 / 1.48 (+0.32, DSC01642: over the 0.3 allowed)**; gate 0.18 spread 2.8 2.33 / 1.49 (+0.16, BHM_9815 only 5.20);
+   the kept one 2.33 / 1.49 (+0.17). Before: 2.50 / 1.55.
+2. **The rule reads highlights only up to +2 EV** (`RULE_CEILING`, `LIGHTCRAFT_HS_CEIL`; base and pixel levels clamped before the rule's
+   statistics): `DSC00603`, an A7S III frame with a light at +7 EV (a 15 EV range), had its shadows lifted +3.7 EV where Camera Raw
+   lifts +0.4 (Shadows +100 ΔE 43.6 → 4.5, +50 20.9 → 2.5). A ceiling at white breaks photos with highlights past it
+   (R0002574 2.27 → 4.45, DSC01353 3.32 → 5.58, R0002591 1.72 → 3.42), so +2: no other raw changes.
+
+Same slider value, Camera Raw ΔE2000 mean (acts like Camera Raw N), before → after, the 12 raws of round 14 (+25 only exists for the
+study's four raws):
+
+| raw | Shadows +25 | +50 | +100 |
+|---|---|---|---|
+| BHM_9815 (R6) | 1.74 / +17 → 1.66 / +18 | 2.65 / +34 → 2.48 / +35 | 5.44 / +65 → 4.98 / +69 |
+| BHM_4860 (R6) | | 3.93 / +17 → 1.82 / +40 | 9.90 / +31 → 4.34 / +82 |
+| BHM_4857 (R6) | | 1.02 / +45 → 1.05 / +44 | 2.13 / +89 → 2.22 / +88 |
+| BHM_8480 (R6) | | 2.65 / +56 → 2.56 / +55 | 3.13 / +111 → 2.96 / +109 |
+| L1006344 (M262) | 1.32 → 1.32 | 1.54 / +52 → 1.55 / +51 | 2.20 / +105 → 2.20 / +104 |
+| L1004503 (M262) | | 1.38 / +46 → 1.39 / +45 | 1.99 / +92 → 2.01 / +91 |
+| L1004631 (M262) | | 1.13 / +54 → 1.12 / +53 | 1.52 / +109 → 1.51 / +108 |
+| DSC01746 (A7S III) | 2.82 → 2.81 | 3.27 / +47 → 3.26 / +47 | 4.45 / +92 → 4.45 / +90 |
+| R0003064 (GR III) | 0.72 / +24 → 0.72 / +24 | 1.00 / +47 → 1.01 / +47 | 1.85 / +94 → 1.90 / +94 |
+| R0003180 (GR III) | | 1.12 / +35 → 1.12 / +35 | 1.91 / +69 → 1.91 / +70 |
+| R0003037 (GR III) | | 1.14 / +45 → 1.08 / +53 | 2.07 / +89 → 1.85 / +106 |
+| R0003369 (GR III) | | 1.00 / +45 → 0.97 / +45 | 1.88 / +89 → 1.79 / +91 |
+| mean, 12 raws | 1.65 → 1.63 (4) | 1.82 → 1.62 | 3.21 → 2.68 |
+
+The 26 other raws: +100 2.17 → 2.17, +50 1.43 → 1.43 (the largest moves: BHM_4859 2.88 → 3.02, DSC01642 2.76 → 2.94, BHM_8483 3.18 →
+3.02, R0002591 1.72 → 1.79). All 38: +100 better on 13, worse on 6, worst +0.17; +50 better on 7, worse on 2, worst +0.05. Every other
+slider is bit-identical (Highlights −50 on BHM_9815, Dehaze −50 / +50 on two raws compared as files; Highlights −50 against Camera
+Raw on the study's four raws to three decimals).
+
+**What is still off, plainly:** BHM_9815 (the R6 the round started from) only goes 5.44 → 4.98 (p95 15.2 → 13.4, acts like +65 →
++69): its members agree (spread 0.12–0.24) and Camera Raw still lifts 1.3× the mean at −8 … −4 EV, so no function of the members
+reaches it; a gate low enough to catch it (0.12, spread 2.5: 4.41) makes DSC01642 +0.32 worse. BHM_4860 is at 4.34 (+82); R0003835 and
+DSC00736 (Camera Raw 1.4–1.6× the rule) and the over-lifted photos DSC01642, R0003851, DSC00940, L1002450 (acts like +150) stay. The
+next step is a refit of the first ensemble on many more Camera Raw renders (now 38 raws × 2 values banked here; scratch) rather than
+another correction on its output.

@@ -111,3 +111,7 @@ one-slider sidecars for Shadows / Dehaze / Highlights; `short` = the sliders' en
 Switches: `LIGHTCRAFT_DZ_KEYPCT=<percentile>` (negative Dehaze's key), `LIGHTCRAFT_HS_SUP=<scale>` (Shadows +).
 Findings: negative Dehaze is `(1 + s) · in + (-s) · A` near the brightest level and moves the shadows' chroma to the airlight's
 (λ ≈ 0.95 |s|^1.2); the key is a high but not the highest percentile (95); Shadows + has no photo statistic that predicts its gain.
+Round 15 (Shadows + by level, 38 raws): measurement switches `LIGHTCRAFT_HS_SPREAD=<k>` / `LIGHTCRAFT_HS_GATE=<spread>` (positive Shadows adds
+k × the rule's four networks' spread above the gate), `LIGHTCRAFT_HS_CEIL=<EV>` (highest level the rule reads, default +2), with
+`LIGHTCRAFT_HS_SUP` (scale). Extra raws are made like `make_scene.py`'s (APFS clones with one-slider sidecars, Shadows +50 / +100, rendered
+by `hdr_ps.sh`); every candidate is ~4 GB of float renders for 38 raws, so delete a build's renders after reading its table.
