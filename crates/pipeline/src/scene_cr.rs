@@ -328,7 +328,13 @@ impl MapBase {
         if let Some(r) = self.rule.get() {
             return r;
         }
-        let r = RuleStats::new(&self.logs, &self.bases(), self.w, self.h);
+        // Camera Raw's rule reads the photo as it renders: highlights past white are clipped (a sun or a lamp
+        // far above white would otherwise stretch the photo's range and the rule would lift its shadows 3 EV
+        // more than Camera Raw does)
+        let ceil = rule_ceiling();
+        let logs: Vec<f32> = self.logs.iter().map(|l| l.min(ceil)).collect();
+        let bases: Vec<f32> = self.bases().into_iter().map(|b| b.min(ceil)).collect();
+        let r = RuleStats::new(&logs, &bases, self.w, self.h);
         self.rule.get_or_init(|| r)
     }
 
@@ -748,8 +754,9 @@ fn mul3(m: &[[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
 /// Positive Shadows' curve scaled by this (round 12: on 40 of Bryan's split-A raws, Camera Raw
 /// against LightCraft, the rule lifted the darks by a median 1.12× Camera Raw's, R6, M262 and
 /// GR III alike; at 0.89 the oracle's real-raw H/S renders go 1.92 / 1.50 / 1.91 → 1.77 / 1.38 /
-/// 1.87 ΔE on its three sets, Shadows +100 alone on the R6 4.63 → 2.72).
-pub const SHADOWS_UP_SCALE: f32 = 0.89;
+/// 1.87 ΔE on its three sets, Shadows +100 alone on the R6 4.63 → 2.72). 0.88 since round 15, with
+/// [`SHADOWS_UP_SPREAD`] on top.
+pub const SHADOWS_UP_SCALE: f32 = 0.88;
 
 /// [`SHADOWS_UP_SCALE`], or `LIGHTCRAFT_HS_SUP=<scale>` in the environment (measurement runs), read once.
 pub fn shadows_up_scale() -> f32 {
@@ -760,6 +767,59 @@ pub fn shadows_up_scale() -> f32 {
             .and_then(|v| v.parse::<f32>().ok())
             .filter(|v| v.is_finite() && (0.0..=2.0).contains(v))
             .unwrap_or(SHADOWS_UP_SCALE)
+    })
+}
+
+/// Positive Shadows' curve adds this many times the members' spread (`up_spread`, above [`SHADOWS_UP_GATE`]) to its
+/// scaled mean. Round 15: where the four networks disagree the photo is unlike the ones they were fitted on (BHM_4860,
+/// a black jacket in front of a bright waterfall: members' Shadows +100 gain at −7 EV 0.5 … 2.6) and Camera Raw lifts
+/// it near the highest member; where they agree the mean is right. On 38 raws (Camera Raw's Shadows +100 / +50
+/// renders of Bryan's R6 / M262 / GR III / A7S III photos) mean ΔE 2.50 / 1.55 → 2.33 / 1.49, BHM_4860 9.90 → 4.34,
+/// BHM_9815 5.44 → 4.98, no raw worse by more than 0.17.
+pub const SHADOWS_UP_SPREAD: f32 = 2.2;
+
+/// [`SHADOWS_UP_SPREAD`], or `LIGHTCRAFT_HS_SPREAD=<k>` in the environment (measurement runs), read once.
+pub fn shadows_up_spread() -> f32 {
+    static S: OnceLock<f32> = OnceLock::new();
+    *S.get_or_init(|| {
+        std::env::var("LIGHTCRAFT_HS_SPREAD")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite() && (0.0..=8.0).contains(v))
+            .unwrap_or(SHADOWS_UP_SPREAD)
+    })
+}
+
+/// The brightest level (EV from white, before Exposure) the rule reads. Round 15: a sun or a lamp far above white
+/// (DSC00603: +7 EV, a 15 EV range) stretched the photo's range and the rule lifted its shadows ~3.7 EV where Camera
+/// Raw lifts 0.4 (Shadows +100 ΔE 43.6 → 4.8); at +2 no photo of the 38 whose tops reach +1.8 changes, while
+/// a ceiling at white (0) breaks the ones with highlights past it (R0002574 2.27 → 4.45, DSC01353 3.32 → 5.58).
+pub const RULE_CEILING: f32 = 2.0;
+
+/// [`RULE_CEILING`], or `LIGHTCRAFT_HS_CEIL=<EV>` in the environment (measurement runs), read once.
+pub fn rule_ceiling() -> f32 {
+    static S: OnceLock<f32> = OnceLock::new();
+    *S.get_or_init(|| {
+        std::env::var("LIGHTCRAFT_HS_CEIL")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite() && (-4.0..=100.0).contains(v))
+            .unwrap_or(RULE_CEILING)
+    })
+}
+
+/// Spread below which the members agree and [`SHADOWS_UP_SPREAD`] adds nothing.
+pub const SHADOWS_UP_GATE: f32 = 0.15;
+
+/// [`SHADOWS_UP_GATE`], or `LIGHTCRAFT_HS_GATE=<spread>` in the environment (measurement runs), read once.
+pub fn shadows_up_gate() -> f32 {
+    static S: OnceLock<f32> = OnceLock::new();
+    *S.get_or_init(|| {
+        std::env::var("LIGHTCRAFT_HS_GATE")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite() && (0.0..=4.0).contains(v))
+            .unwrap_or(SHADOWS_UP_GATE)
     })
 }
 
@@ -907,6 +967,8 @@ struct RuleStats {
     /// The first ensemble's Shadows +100 / Highlights −100 gains at the 48 levels (they read
     /// only levels relative to the photo, so Exposure does not move them).
     up_down: [[f32; 2]; LEVELS],
+    /// The spread of the first ensemble's Shadows +100 members at the 48 levels.
+    up_spread: [f32; LEVELS],
     /// The second ensemble's inputs at the 48 levels before standardizing; the last four (the
     /// photo's top, median and mean and the level) move with Exposure.
     ext: Vec<[f32; rule_ext::FEATURES]>,
@@ -930,7 +992,9 @@ fn silu(x: f32) -> f32 {
     x / (1. + (-x).exp())
 }
 
-/// The mean of an ensemble's two outputs for the standardized inputs `z`.
+/// The mean of an ensemble's two outputs for the standardized inputs `z`, and the spread (population
+/// standard deviation over the members) of the first one: the members disagree where the photo is
+/// unlike the ones the networks were fitted on.
 #[allow(clippy::type_complexity)]
 fn ensemble<const F: usize, const H: usize, const M: usize>(
     z: &[f32; F],
@@ -940,17 +1004,24 @@ fn ensemble<const F: usize, const H: usize, const M: usize>(
     b2: &[[f32; H]; M],
     w3: &[[[f32; H]; 2]; M],
     b3: &[[f32; 2]; M],
-) -> [f32; 2] {
+) -> ([f32; 2], f32) {
     let dot = |input: &[f32], weights: &[f32], bias: f32| input.iter().zip(weights).fold(bias, |s, (v, w)| s + w * v);
     let mut sum = [0f32; 2];
+    let mut first_sq = 0f32;
     for m in 0..M {
         let h1: [f32; H] = std::array::from_fn(|j| silu(dot(z, &w1[m][j], b1[m][j])));
         let h2: [f32; H] = std::array::from_fn(|j| silu(dot(&h1, &w2[m][j], b2[m][j])));
         for (k, out) in sum.iter_mut().enumerate() {
-            *out += dot(&h2, &w3[m][k], b3[m][k]);
+            let v = dot(&h2, &w3[m][k], b3[m][k]);
+            *out += v;
+            if k == 0 {
+                first_sq += v * v;
+            }
         }
     }
-    sum.map(|v| v / M as f32)
+    let mean = sum.map(|v| v / M as f32);
+    let var = (first_sq / M as f32 - mean[0] * mean[0]).max(0.);
+    (mean, var.sqrt())
 }
 
 /// Projects output log luminance (level + gain) of a table with columns `step` apart onto
@@ -1086,12 +1157,13 @@ impl RuleStats {
         let step = (hi - lo) / LEVELS as f32;
         let floor = hist.bot.max(hist.q[0] - BOTTOM_GAP);
         let mut up_down = [[0f32; 2]; LEVELS];
+        let mut up_spread = [0f32; LEVELS];
         let mut ext = Vec::with_capacity(LEVELS);
         for (i, ud) in up_down.iter_mut().enumerate() {
             let x = lo + (i as f32 + 0.5) * step;
             let f = hist.features(x, hist.bot);
             let z: [f32; rule_data::FEATURES] = std::array::from_fn(|k| (f[k] - rule_data::MU[k]) / rule_data::SD[k]);
-            *ud = ensemble(&z, &rule_data::W1, &rule_data::B1, &rule_data::W2, &rule_data::B2, &rule_data::W3, &rule_data::B3);
+            (*ud, up_spread[i]) = ensemble(&z, &rule_data::W1, &rule_data::B1, &rule_data::W2, &rule_data::B2, &rule_data::W3, &rule_data::B3);
             let (x2, f2) = if floor > hist.bot {
                 let x2 = x.max(floor);
                 (x2, hist.features(x2, floor))
@@ -1101,7 +1173,7 @@ impl RuleStats {
             let absolute = [hist.top, hist.q[2], hist.mean, x2];
             ext.push(std::array::from_fn(|k| if k < rule_data::FEATURES { f2[k] } else { absolute[k - rule_data::FEATURES] }));
         }
-        RuleStats { sorted: hist.sorted, lo, hi, up_down, ext }
+        RuleStats { sorted: hist.sorted, lo, hi, up_down, up_spread, ext }
     }
 
     /// The four unit curves at Exposure `ev`.
@@ -1110,23 +1182,23 @@ impl RuleStats {
         let gains: Vec<[f32; 4]> = self
             .up_down
             .iter()
+            .zip(&self.up_spread)
             .zip(&self.ext)
-            .map(|(ud, e)| {
+            .map(|((ud, spread), e)| {
                 let z: [f32; rule_ext::FEATURES] = std::array::from_fn(|k| {
                     let v = if k >= rule_data::FEATURES { e[k] + ev } else { e[k] };
                     (v - rule_ext::MU[k]) / rule_ext::SD[k]
                 });
-                let [sd, hu] = ensemble(&z, &rule_ext::W1, &rule_ext::B1, &rule_ext::W2, &rule_ext::B2, &rule_ext::W3, &rule_ext::B3);
-                [ud[0], ud[1], sd, hu]
+                let ([sd, hu], _) = ensemble(&z, &rule_ext::W1, &rule_ext::B1, &rule_ext::W2, &rule_ext::B2, &rule_ext::W3, &rule_ext::B3);
+                [ud[0] * shadows_up_scale() + (spread - shadows_up_gate()).max(0.) * shadows_up_spread(), ud[1], sd, hu]
             })
             .collect();
         let (lo, hi) = (self.lo + ev, self.hi + ev);
         let step = (hi - lo) / LEVELS as f32;
         std::array::from_fn(|k| {
             let lifts = k == 0 || k == 3;
-            let scale = if k == 0 { shadows_up_scale() } else { 1. };
             let mut table: [f32; LEVELS] = std::array::from_fn(|i| {
-                let g = gains.get(i).map_or(0., |g| g[k]) * scale;
+                let g = gains.get(i).map_or(0., |g| g[k]);
                 let g = if g.is_finite() { g } else { 0. };
                 if lifts { g.max(0.) } else { g.min(0.) }
             });
@@ -1444,6 +1516,42 @@ mod tests {
             let step = (u.hi - u.lo) / LEVELS as f32;
             assert!(u.table.windows(2).all(|p| p[1] + step >= p[0] - 1e-4), "{u:?}");
         }
+    }
+
+    #[test]
+    fn a_lamp_far_above_white_does_not_stretch_the_rule() {
+        // the same dark photo with one small light at +3 EV and at +8 EV: the rule reads highlights only up to
+        // RULE_CEILING, so the shadows' curve is the one of the first (a sun in frame lifted the shadows ~3 EV more
+        // than Camera Raw does: DSC00603 ΔE 43.6 → 4.5)
+        let (w, h) = (96, 64);
+        let photo = |lamp: f32| -> Vec<f32> {
+            (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    let l = if x < 16 && y < 16 { lamp } else { -5. + 0.3 * (((x * 31 + y * 17) % 7) as f32 / 7. - 0.5) };
+                    l.exp2()
+                })
+                .collect()
+        };
+        let (a, b) = (MapBase::new(photo(RULE_CEILING + 1.), w, h).unwrap(), MapBase::new(photo(RULE_CEILING + 6.), w, h).unwrap());
+        let (ca, cb) = (a.hs_curves(0.), b.hs_curves(0.));
+        for k in [0, 1] {
+            let (ua, ub) = (&ca.units[k], &cb.units[k]);
+            // the range stops at the ceiling (+1 for the table's edge), and the shadows' lift is the same to within the
+            // edge pixels' difference (the guided base around the lamp's edge was 5 EV apart before the clamp)
+            assert!((ua.hi - ub.hi).abs() < 0.05 && (ub.hi - (RULE_CEILING + 1.)).abs() < 0.05, "{ua:?} {ub:?}");
+            assert!((ua.eval(-5.) - ub.eval(-5.)).abs() < 0.3, "{ua:?} {ub:?}");
+        }
+    }
+
+    #[test]
+    fn the_members_spread_is_finite_and_not_negative() {
+        let z = [0f32; rule_data::FEATURES];
+        let (mean, spread) = ensemble(&z, &rule_data::W1, &rule_data::B1, &rule_data::W2, &rule_data::B2, &rule_data::W3, &rule_data::B3);
+        assert!(mean[0].is_finite() && spread.is_finite() && spread >= 0.);
+        let hostile = [f32::MAX; rule_data::FEATURES];
+        let (_, spread) = ensemble(&hostile, &rule_data::W1, &rule_data::B1, &rule_data::W2, &rule_data::B2, &rule_data::W3, &rule_data::B3);
+        assert!(spread >= 0. || spread.is_nan());
     }
 
     #[test]

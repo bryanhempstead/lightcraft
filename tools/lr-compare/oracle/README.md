@@ -116,3 +116,8 @@ Round 15 (Dehaze, 2026-11-27): `dehaze3_study.py prep|lc NAME BIN|cmp NAME…|ta
 Dehaze -100…+100 and eight held-out raws at -100/-50; per raw dE / p95 / highlight-detail ratio / acts-like, before/after table, strips in
 `compare/2026-11-27/fix-dehaze3/`). Findings: detail share 1+0.7 s, lambda 0.78 |s|^1.4, key shift 0.4 (key+2.6).
 Positive airlight at the 99.5th percentile was tried and held back (breaks `tests_crop_tone`; `docs/lr-match.md` → Round 15).
+
+Round 16 (Shadows + by level, 38 raws): measurement switches `LIGHTCRAFT_HS_SPREAD=<k>` / `LIGHTCRAFT_HS_GATE=<spread>` (positive Shadows adds
+k × the rule's four networks' spread above the gate), `LIGHTCRAFT_HS_CEIL=<EV>` (highest level the rule reads, default +2), with
+`LIGHTCRAFT_HS_SUP` (scale). Extra raws are made like `make_scene.py`'s (APFS clones with one-slider sidecars, Shadows +50 / +100, rendered
+by `hdr_ps.sh`); every candidate is ~4 GB of float renders for 38 raws, so delete a build's renders after reading its table.
