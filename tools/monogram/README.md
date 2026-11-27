@@ -52,7 +52,7 @@ from its log). If you move modules around, regenerate (ctrl. ▸ monogram.) befo
    this file. It appears as "LightCraft (Lightroom 1)". Your "Lightroom 1" profile is untouched.
 3. If Creator doesn't switch to it by itself when LightCraft is in front, open the profile's settings
    and set its app to **LightCraft** (bundle id `ai.storyteller.lightcraft`, the .app in
-   `target/release/LightCraft.app`), or pick the profile by hand.
+   `~/Applications/LightCraft.app`), or pick the profile by hand.
 4. In LightCraft: Settings (⌘,) ▸ **ctrl.** ▸ tick **MIDI in**. The page shows the MIDI sources it
    hears ("Monogram…") and the last message; turn a dial to check.
 

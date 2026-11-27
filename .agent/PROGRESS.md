@@ -215,7 +215,7 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
   process, macOS reports AXWindows = [] for it (AXFocusedWindow still works) and Magnet does nothing. Fixed in
   `~/second-brain/src/crafts.js` (signs builds with his Apple Development cert → stable identity, drive access kept across
   rebuilds → launches with `open -a`); uncommitted there, takes effect after a brain restart (needs.you #131). The
-  `target/release/LightCraft.app` on disk is signed now; a plain `cargo build` + copy needs re-signing (crafts.js does it).
+  `~/Applications/LightCraft.app` (moved 11-27 from target/release, which disk cleanups delete) on disk is signed now; a plain `cargo build` + copy needs re-signing (crafts.js does it).
 - [x] (Claude, 2026-11-21) Fixed: Temp slider was linear 2,000–50,000 K (daylight at 7 % of the track, ~340 K per pixel) → Lightroom-like non-linear track (`widgets::track_frac`); Leica's "not selected" lens tag hidden in the info overlay; unrated grid cells show five quiet dots instead of an empty footer; native menu leaves Tab / ⇧Tab to the app (the `shortcuts_map_to_accelerators` failure); Monogram ↓/↑ pass-through.
 - [x] (Hermes, 2026-10-11) Round-4 apply steps DONE: rebuilt (cargo 1.99, 40s), `library.rematchProfiles readCatalog=true` real run — 6,983 adobe:Adobe Color / 117 Standard / 56 Monochrome, lensCorrectionsOn 116, verified live in catalog.snap (seq 3014). App restarted via brain-app launcher so sources re-decode on the Adobe base (cache key changed).
 - [ ] Open colour items: Highlights / Shadows and Clarity / Texture / Dehaze vs spatial targets; why Lightroom's custom WB moves 2× (Leica 1×); X-T2 at 34 600 K; Nautica.
@@ -240,7 +240,7 @@ files committed. Commit on `main` and push to origin. Upstream (storytold) chang
 - [x] (lr agent, 2026-10-08) Lightroom Classic migration: catalog + every preset folder — f6b0429, 2756349, c9f5328 (see Done)
 - [x] (keys agent, 2026-10-08) Shortcuts: user keymap + "Lightroom Classic" key profile + shrt. settings page (LrKeys / LrSuperKeys built in) — 2fab9d6
 - [x] (keys agent) Devices: MIDI in + mouse buttons; Monogram profile generated from his LR one — 2fab9d6, b307350
-- [x] (brain app) macOS .app bundle: ~/second-brain/src/crafts.js ensureApp builds target/release/LightCraft.app (bundle id ai.storyteller.lightcraft)
+- [x] (brain app) macOS .app bundle: ~/second-brain/src/crafts.js ensureApp builds ~/Applications/LightCraft.app (was target/release until 11-27) (bundle id ai.storyteller.lightcraft)
 - [x] (keys agent) "left off." resume point: button + view.resumeLastLeftOff + per-folder/album landing + grid/filmstrip marker — 2fab9d6
 - [ ] Try the Monogram profile on the real console (import tools/monogram/LightCraft.monogram in Monogram Creator, tick ctrl. ▸ MIDI in): check the relative-dial direction/speed and that Creator accepts MIDI on pressAndTurn / doubleTap / pressAndHold
 
