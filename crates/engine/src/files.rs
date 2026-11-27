@@ -627,6 +627,10 @@ fn load_adobe(
         lightcraft_raw::profile::ProfileTables::new(&look, 1.0)
     });
     // (no ProfileGainTableMap: it belongs to the file's own profile, not to Adobe's)
+    // Negative channels (sensor noise under the black level, the matrix's out-of-gamut lobes) are kept: Camera Raw
+    // carries them through its resample and clips later, so deep-shadow noise averages out instead of piling up as a
+    // per-channel positive bias (purple instead of Camera Raw's olive on a Sony A7S III at ISO 12800). They are
+    // clipped right after the resample below.
     img.map_in_place(|p| {
         let c = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
         let rgb = [
@@ -638,9 +642,10 @@ fn load_adobe(
             Some(t) => t.apply(rgb, gain),
             None => rgb.map(|v| v * gain),
         }
-        .map(|v| v.max(0.0))
     });
-    let img = if chart.is_some() { img } else { fit(&img, max_edge, max_edge, Filter::Box).into_oriented(raw.orientation) };
+    let mut img = if chart.is_some() { img } else { fit(&img, max_edge, max_edge, Filter::Box).into_oriented(raw.orientation) };
+    // Clip only after the resample has averaged the noise, so every consumer (merge, enhance, thumbnails) still gets >= 0.
+    img.map_in_place(|p| p.map(|v| v.max(0.0)));
     if lightcraft_pipeline::profiling() {
         eprintln!(
             "[profile] raw source (Adobe {}) {}×{} in {:.1} ms",

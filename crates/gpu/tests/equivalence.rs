@@ -407,6 +407,31 @@ fn cases() -> Vec<(&'static str, Edit)> {
 }
 
 #[test]
+fn negative_source_noise_matches_cpu() {
+    if !gpu() {
+        return;
+    }
+    // A raw's sensor noise under the black level reaches the render as negative channels (the decode no longer clamps
+    // them): both renderers resample them, clamp at white balance and agree.
+    let mut img = (*scene(4, 480, 320)).clone();
+    let mut x = 12345u32;
+    for p in img.data.iter_mut() {
+        for v in p.iter_mut() {
+            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            *v = *v * 0.03 + ((x >> 8) as f32 / 16_777_216.0 - 0.5) * 0.03;
+        }
+    }
+    assert!(img.data.iter().any(|p| p.iter().any(|v| *v < 0.0)));
+    let src = Arc::new(img);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    check("negative source", &src, &raw, &s, &RenderRequest::fit(300, 300));
+    s.light.exposure = 3.0;
+    s.light.shadows = 40.0;
+    check("negative source +3", &src, &raw, &s, &RenderRequest::fit(300, 300));
+}
+
+#[test]
 fn gpu_matches_cpu() {
     if !gpu() {
         return;
