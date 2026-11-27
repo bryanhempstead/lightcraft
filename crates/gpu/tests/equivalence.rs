@@ -213,6 +213,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.grain.roughness = 60.0;
         }),
         ("dehaze -", |s| s.effects.dehaze = -50.0),
+        ("dehaze -100", |s| s.effects.dehaze = -100.0),
         ("dehaze +", |s| s.effects.dehaze = 60.0),
         ("clarity/texture -", |s| {
             s.effects.clarity = -60.0;

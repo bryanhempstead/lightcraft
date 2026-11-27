@@ -55,7 +55,8 @@ pub fn key_of(values: impl Iterator<Item = f32>) -> Option<f32> {
     }
     let n = v.len();
     let i = ((key_percentile() / 100.0 * n as f32) as usize).min(n - 1);
-    Some(*v.select_nth_unstable_by(i, f32::total_cmp).1 + crate::tone::GREY.log2())
+    let k = *v.select_nth_unstable_by(i, f32::total_cmp).1 + crate::tone::GREY.log2();
+    Some(key_shifted(k))
 }
 
 /// [`KEY_PERCENTILE`], or `LIGHTCRAFT_DZ_KEYPCT=<percentile>` in the environment (measurement runs), read once.
@@ -68,9 +69,32 @@ pub fn key_percentile() -> f32 {
 
 /// How far Camera Raw's negative Dehaze moves a pixel's colour to the airlight's: λ = [`AIRLIGHT_COLOUR`] · |s|^[`AIRLIGHT_POWER`]
 /// (capped at 1) of the way, luminance kept. Measured on 7 raws at −25 / −50 / −100: the chroma of what Camera Raw lifts is the
-/// airlight's (the colour of the photo's haziest 1 %), not the pixel's: λ ≈ 0.2 / 0.45 / 0.9 (`docs/lr-match.md` → Round 14).
-pub const AIRLIGHT_COLOUR: f32 = 0.95;
-pub const AIRLIGHT_POWER: f32 = 1.2;
+/// airlight's (the colour of the photo's haziest 1 %), not the pixel's (`docs/lr-match.md` → Round 14). Round 15, on the 12
+/// study and held-out raws at −50 / −100: Camera Raw keeps more of the pixel's colour than Round 14's 0.95 · |s|^1.2 took
+/// (λ ≈ 0.73–0.85 at −100 and 0.26–0.39 at −50 on the neutral-airlight raws, lower on the Leicas); 0.78 · |s|^1.4 lowers every
+/// neutral raw's ΔE (R6 −100 4.6 → 3.9, Sony 8.9 → 7.6) and the Leicas' (L1004503 10.3 → 8.7).
+pub const AIRLIGHT_COLOUR: f32 = 0.78;
+pub const AIRLIGHT_POWER: f32 = 1.4;
+
+/// The share of the detail (log luminance less its regional level) negative Dehaze keeps: 1 + [`DETAIL`] · s. Round 13
+/// measured ×(1 + s) on gratings and flat fields; on real photos Camera Raw keeps far more at −100 (the slope of its output
+/// detail on the input's, fine scales, by regional level: 0.2–0.5, ×0.7–0.8 at −50, ×0.8–0.9 at −25), and the brightest 5 % of
+/// the Leica and Sony keep 0.69 / 0.45 of their detail where Round 14's render kept 0.1 (the lamps and faces went soft).
+/// 1 + 0.7 · s fits all three amounts; at −100 the highlight detail against Camera Raw goes 0.15 → 0.53 (Leica), 0.16 → 0.77 (Sony).
+pub const DETAIL: f32 = 0.7;
+
+/// Round 15: the key follows the photo faster than its 95th percentile. Per photo, the key offset that minimises the ΔE at −100
+/// (12 raws, −1.5 … +2.25 EV) is +0.4 · (key + 2.6) (r 0.97, residual 0.41 EV; keys are the log2 level, grey = 0.18, incl. the
+/// grey's −2.47): night photos (keys −2 … −3) keep their key, bright ones (−1 … 0.3) lift more, as Camera Raw's does. Study raws'
+/// Dehaze −100 / −50 / −25 mean ΔE 3.45 → 3.21 over the three amounts, held-out 3.35 → 3.21.
+pub const KEY_SLOPE: f32 = 0.4;
+/// The key (log2, grey included) the shift is zero at.
+pub const KEY_ANCHOR: f32 = -2.6;
+
+/// A key (log2 level incl. grey) as the tables read it: the photo's percentile shifted by [`KEY_SLOPE`] · (key − [`KEY_ANCHOR`]), at most −1 … +1.5 EV.
+pub fn key_shifted(k: f32) -> f32 {
+    if !k.is_finite() { k } else { k + (KEY_SLOPE * (k - KEY_ANCHOR)).clamp(-1.0, 1.5) }
+}
 
 /// λ of [`airlight_mix`] at Dehaze `s` (−1..0).
 #[inline]
@@ -98,7 +122,7 @@ pub fn gain_spatial(s: f32, key: f32, level: f32, detail: f32) -> f32 {
     if s.is_nan() || s >= 0.0 || !detail.is_finite() {
         return gain(s, key, level);
     }
-    gain(s, key, level - detail) + s.max(-1.0) * detail
+    gain(s, key, level - detail) + s.max(-1.0) * DETAIL * detail
 }
 
 /// The tables after RAWmakase's `monotone` projection: output log luminance (input + gain)
@@ -214,11 +238,40 @@ mod tests {
         assert_eq!(airlight_mix(q, air, 0.5), q);
         assert_eq!(airlight_mix(q, [0.0; 3], -1.0), q);
         assert!(airlight_mix(q, [f32::NAN; 3], -1.0) == q && airlight_mix([f32::NAN; 3], air, -1.0).iter().all(|v| *v == 0.0 || v.is_finite()));
-        // −100 takes almost all of the pixel's chroma (λ ≈ 0.95), −50 less, luminance kept
+        // −100 takes most of the pixel's chroma (λ = 0.78), −50 less (λ = 0.3), luminance kept
         let spread = |c: [f32; 3]| c[0] / y(c) - c[2] / y(c);
         let (m50, m100) = (airlight_mix(q, air, -0.5), airlight_mix(q, air, -1.0));
-        assert!(spread(m100).abs() < 0.1 * spread(q).abs() && spread(m50).abs() < spread(q).abs() && spread(m50).abs() > spread(m100).abs());
+        assert!(spread(m100).abs() < 0.3 * spread(q).abs() && spread(m50).abs() < spread(q).abs() && spread(m50).abs() > spread(m100).abs());
         assert!((y(m50) - y(q)).abs() < 1e-5 && (y(m100) - y(q)).abs() < 1e-5);
         assert!((airlight_share(-1.0) - AIRLIGHT_COLOUR).abs() < 1e-6 && airlight_share(-3.0) <= 1.0 && airlight_share(f32::NAN) == 0.0);
+    }
+
+    #[test]
+    fn the_key_follows_the_photo_faster_than_its_percentile_and_hostile_values_pass() {
+        // a night photo (key −3) keeps (just under) its key, a bright one (−0.5) is read about 0.8 EV higher
+        assert!(key_shifted(-3.0) < -3.0 && key_shifted(-3.0) > -3.3);
+        assert!((key_shifted(-0.5) - (-0.5 + KEY_SLOPE * (-0.5 - KEY_ANCHOR))).abs() < 1e-6);
+        assert_eq!(key_shifted(KEY_ANCHOR), KEY_ANCHOR);
+        // never more than 1 EV down or 1.5 EV up, and a key that is not a number stays as it is
+        assert_eq!(key_shifted(-40.0), -41.0);
+        assert_eq!(key_shifted(40.0), 41.5);
+        assert!(key_shifted(f32::NAN).is_nan() && key_shifted(f32::INFINITY).is_infinite());
+        // the percentile of the regional level shifts: the same values, the key through `key_shifted`
+        let v = [-1.0f32; 100];
+        let k = key_of(v.iter().copied()).unwrap();
+        assert!((k - key_shifted(-1.0 + crate::tone::GREY.log2())).abs() < 1e-5);
+    }
+
+    #[test]
+    fn negative_dehaze_keeps_a_share_of_the_detail_and_nothing_at_zero() {
+        // a pixel 1 EV above its region comes out 1 + DETAIL · s EV above the region's output: 0.3 at −100, not 0
+        let (key, level) = (-1.0, -3.0);
+        let out = |l: f32, det: f32| l + gain_spatial(-1.0, key, l, det);
+        let share = out(level, 1.0) - out(level - 1.0, 0.0);
+        assert!((share - (1.0 - DETAIL)).abs() < 1e-5 && share > 0.2 && share < 0.45, "{share}");
+        // no Dehaze, positive Dehaze and hostile detail are plain gain
+        assert_eq!(gain_spatial(0.0, key, level, 1.0), 0.0);
+        assert_eq!(gain_spatial(0.5, key, level, 1.0), 0.0);
+        assert_eq!(gain_spatial(-1.0, key, level, f32::NAN), gain(-1.0, key, level));
     }
 }

@@ -650,13 +650,41 @@ pub const CHANNEL_FLOOR: f32 = 0.5;
 /// Dehaze amounts and the fraction of the haze they remove; linear between them.
 pub const OMEGA: [(f32, f32); 4] = [(0., 0.), (0.2, 0.3), (0.4, 0.45), (1., 0.9)];
 
+/// The dark channel's percentile at and above which a pixel is hazy enough to give the airlight of positive Dehaze.
+/// Round 15 tried the 99.5th: the Leica M262 night photos' 99th-percentile airlight is a warm lit wall (0.99, 0.80, 0.46) where
+/// Camera Raw's is lamp white, and at the 99.5th the Leica's +100 goes 4.3 → 3.5 ΔE (acts like 243 → 213), the other study raws
+/// within ±0.15. Held back: on `tests_crop_tone`'s small scene it moves a flipped crop's tone by 0.85 ΔE (limit 0.6), so the
+/// airlight of so few pixels is not yet stable across renders of one photo. Kept at the 99th.
+pub const AIR_PERCENTILE: f32 = 0.99;
+/// The same for the colour negative Dehaze moves towards (`dehaze_cr::airlight_mix`): the 99th measured better there.
+pub const AIR_COLOUR_PERCENTILE: f32 = 0.99;
+
+/// The haziest pixels' mean colour: those at or above the dark channel's `q` percentile, its edge softened over
+/// 1 % of the level so the airlight moves continuously with the photo (a CPU and a GPU render of one photo, whose
+/// values differ in the last bits, get the same airlight).
+fn airlight(scene: &[[f32; 3]], dark: &[f32], q: f32) -> [f32; 3] {
+    let threshold = percentile(dark, q);
+    let soft = (0.01 * threshold.abs()).max(1e-6);
+    let (mut sum, mut n) = ([0f64; 3], 0f64);
+    for (p, d) in scene.iter().zip(dark) {
+        let k = f64::from(((d - threshold) / soft + 0.5).clamp(0., 1.));
+        if k > 0. {
+            (0..3).for_each(|c| sum[c] += k * f64::from(p[c]));
+            n += k;
+        }
+    }
+    sum.map(|v| ((v / n.max(1e-9)) as f32).max(1e-6))
+}
+
 /// A photo's haze, from the map in linear ProPhoto at Exposure 0 (RAWmakase's `Haze`).
 #[derive(Debug, PartialEq)]
 pub struct Haze {
     pub w: usize,
     pub h: usize,
-    /// The airlight per ProPhoto channel.
+    /// The airlight per ProPhoto channel (positive Dehaze: [`AIR_PERCENTILE`]).
     pub air: [f32; 3],
+    /// The airlight negative Dehaze moves the colour towards ([`AIR_COLOUR_PERCENTILE`]).
+    pub air_neg: [f32; 3],
     /// The haze's density on the map's grid.
     pub density: Vec<f32>,
     /// Of the whole uncropped photo, as [`MapBase::whole`].
@@ -681,29 +709,17 @@ impl Haze {
     /// The haze of `scene`, `w × h` linear ProPhoto values.
     pub fn of_pp(scene: &[[f32; 3]], w: usize, h: usize) -> Haze {
         if scene.is_empty() || scene.len() != w * h {
-            return Haze { w: 1, h: 1, air: [1.; 3], density: vec![0.], whole: false };
+            return Haze { w: 1, h: 1, air: [1.; 3], air_neg: [1.; 3], density: vec![0.], whole: false };
         }
         let r = ((HAZE_RADIUS * w.max(h) as f32).round() as usize).max(1);
         let dark = min_filter(&scene.iter().map(|p| p[0].min(p[1]).min(p[2])).collect::<Vec<_>>(), w, h, r);
-        // the haziest 1 %: at or above the dark channel's 99th percentile, its edge softened over
-        // 1 % of the level so the airlight moves continuously with the photo (a CPU and a GPU
-        // render of one photo, whose values differ in the last bits, get the same airlight)
-        let threshold = percentile(&dark, 0.99);
-        let soft = (0.01 * threshold.abs()).max(1e-6);
-        let (mut sum, mut n) = ([0f64; 3], 0f64);
-        for (p, d) in scene.iter().zip(&dark) {
-            let k = f64::from(((d - threshold) / soft + 0.5).clamp(0., 1.));
-            if k > 0. {
-                (0..3).for_each(|c| sum[c] += k * f64::from(p[c]));
-                n += k;
-            }
-        }
-        let air = sum.map(|v| ((v / n.max(1e-9)) as f32).max(1e-6));
+        let air = airlight(scene, &dark, AIR_PERCENTILE);
+        let air_neg = airlight(scene, &dark, AIR_COLOUR_PERCENTILE);
         let relative: Vec<f32> = scene.iter().map(|p| (p[0] / air[0]).min(p[1] / air[1]).min(p[2] / air[2])).collect();
         let raw = min_filter(&relative, w, h, r);
         let (a, b) = guided_coefficients(&raw, w, h, 2 * r, HAZE_EPSILON);
         let density = raw.iter().zip(a.iter().zip(&b)).map(|(v, (a, b))| a * v + b).collect();
-        Haze { w, h, air, density, whole: false }
+        Haze { w, h, air, air_neg, density, whole: false }
     }
 }
 

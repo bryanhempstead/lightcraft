@@ -111,3 +111,8 @@ one-slider sidecars for Shadows / Dehaze / Highlights; `short` = the sliders' en
 Switches: `LIGHTCRAFT_DZ_KEYPCT=<percentile>` (negative Dehaze's key), `LIGHTCRAFT_HS_SUP=<scale>` (Shadows +).
 Findings: negative Dehaze is `(1 + s) · in + (-s) · A` near the brightest level and moves the shadows' chroma to the airlight's
 (λ ≈ 0.95 |s|^1.2); the key is a high but not the highest percentile (95); Shadows + has no photo statistic that predicts its gain.
+
+Round 15 (Dehaze, 2026-11-27): `dehaze3_study.py prep|lc NAME BIN|cmp NAME…|tab BUILD…|strips BUILD… OUT` (the study's four raws at
+Dehaze -100…+100 and eight held-out raws at -100/-50; per raw dE / p95 / highlight-detail ratio / acts-like, before/after table, strips in
+`compare/2026-11-27/fix-dehaze3/`). Findings: detail share 1+0.7 s, lambda 0.78 |s|^1.4, key shift 0.4 (key+2.6).
+Positive airlight at the 99.5th percentile was tried and held back (breaks `tests_crop_tone`; `docs/lr-match.md` → Round 15).

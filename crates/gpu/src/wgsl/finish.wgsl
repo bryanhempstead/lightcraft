@@ -745,6 +745,11 @@ fn hs_lut_at(ev: f32) -> f32 {
     return aux[o] + (aux[o + 1u] - aux[o]) * t;
 }
 
+// `dehaze_cr::DETAIL`, `AIRLIGHT_COLOUR` and `AIRLIGHT_POWER`
+const DZ_DETAIL: f32 = 0.7;
+const DZ_AIR_COLOUR: f32 = 0.78;
+const DZ_AIR_POWER: f32 = 1.4;
+
 // `dehaze_cr::gain` applied to a channel `v` at Dehaze `s` (−1..0), tables at DZ_OFF.
 fn dz_cr(s: f32, v: f32, det: f32) -> f32 {
     if (v <= 0.0 || s >= 0.0) {
@@ -766,7 +771,7 @@ fn dz_cr(s: f32, v: f32, det: f32) -> f32 {
     } else {
         g = b2 * (s / -0.2);
     }
-    return v * exp2(g + s * det);
+    return v * exp2(g + s * DZ_DETAIL * det);
 }
 
 // `local_tone_cr::at`: table `k` (0 Contrast, 1 Whites, 2 Blacks) at amount `a`, level `l1`.
@@ -1245,9 +1250,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             var q2 = vec3<f32>(dz_cr(s, q.x, det), dz_cr(s, q.y, det), dz_cr(s, q.z, det));
             // round 14 (`dehaze_cr::airlight_mix`): the lifted colour is the photo's airlight's, not the pixel's
             if (sc_on && (pu(F_SC) & 8u) != 0u) {
-                let air = vec3<f32>(pf(F_SC_AIR), pf(F_SC_AIR + 1u), pf(F_SC_AIR + 2u));
+                let air = vec3<f32>(pf(F_SC_AIRN), pf(F_SC_AIRN + 1u), pf(F_SC_AIRN + 2u));
                 let ya = sc_lum_pp(air);
-                let lam = min(0.95 * pow(min(-s, 1.0), 1.2), 1.0);
+                let lam = min(DZ_AIR_COLOUR * pow(min(-s, 1.0), DZ_AIR_POWER), 1.0);
                 if (lam > 0.0 && ya > 1e-9) {
                     let y = max(sc_lum_pp(q2), 0.0);
                     q2 = max((1.0 - lam) * q2 + lam * y * air / ya, vec3<f32>(0.0));

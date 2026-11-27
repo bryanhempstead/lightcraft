@@ -1604,3 +1604,34 @@ statistics tried (percentiles of the regional level, top and bottom, share withi
 range; correlations with the needed scale on 12 raws) predict nothing: |r| ≤ 0.6, and the two outliers look like their well-behaved
 R6 neighbours (BHM_4857 needs ×1.0). The miss is in the learned rule's deepest levels, not a scale; the fix is to refit that
 rule's second ensemble on more Camera Raw renders, not a gain.
+
+## Round 15 (2026-11-27): negative Dehaze's detail, colour share and key
+
+Same method as Round 14 (`tools/lr-compare/oracle/dehaze3_study.py`: the study's four raws at Dehaze −100 / −50 / −25 / +25 / +50 /
++100, eight held-out raws at −100 / −50, Camera Raw's renders from the reference bank). Three changes kept (a fourth, below, held back), each only because it
+lowered the mean ΔE2000 on at least three of the four study raws and on most held-out raws:
+
+* **Detail.** Negative Dehaze kept ×(1 + s) of the detail (log luminance less its regional level); Camera Raw keeps far more on real
+  photos (slope of its output detail on the input's 0.2–0.5 at −100). Now 1 + 0.7 · s (`dehaze_cr::DETAIL`): the brightest 5 %'s
+  detail against Camera Raw's at −100 goes 0.15 → 0.52 (Leica), 0.16 → 0.72 (Sony), 0.24 → 0.86 (R0003180); the lamps and faces stop going soft.
+* **Colour share.** λ = 0.78 · |s|^1.4 (was 0.95 · |s|^1.2): Camera Raw keeps more of the pixel's colour than Round 14 took.
+* **Key.** The key follows the photo faster than its 95th percentile: shifted by 0.4 · (key + 2.6) EV, −1 … +1.5 (`dehaze_cr::key_shifted`;
+  per-photo best offsets on 12 raws: r 0.97, residual 0.41 EV). Night photos keep their key, bright ones lift more. The fit uses the
+  same 12 raws it is scored on.
+* **Held back: positive Dehaze's airlight at the 99.5th percentile** (`scene_cr::AIR_PERCENTILE`, kept at 0.99). The Leica's warm lit wall
+  sets a warm airlight where Camera Raw's is lamp-white; at 99.5 the Leica's +100 acts like CR 243 → 213 (4.3 → 3.5 ΔE) and the other three
+  study raws stay within ±0.15, but the airlight of so few pixels is not stable across renders of one photo: `tests_crop_tone`'s flipped crop
+  moves 0.85 ΔE (limit 0.6). `Haze::air_neg` (the colour negative Dehaze moves towards, also the 99th; 99.9 made it worse) is kept
+  as the hook for a stable estimate. Positive Dehaze is bit-identical to before.
+
+Mean ΔE2000, study four raws (before → after): −100 6.26 → 5.29, −50 3.02 → 2.59, −25 1.96 → 1.75, +25 / +50 / +100 unchanged (2.01 / 2.54 / 4.06);
+held-out eight: −100 4.82 → 4.16, −50 2.45 → 2.27. Per raw at −100: R6 4.62 → 3.45, Sony 8.85 → 6.82, GR III 3.75 → 2.92,
+Leica M262 7.84 → 7.98 (unchanged within noise; −50 and −25 improve). Held-out −100: six of eight improve, L1004631 7.25 → 7.37 is the other
+one. Highlights, Shadows, Clarity, Contrast, Whites, Blacks, Texture, Exposure, Saturation and Vibrance renders are bit-identical.
+CPU and GPU share every constant (`finish.wgsl`, `params.rs`: the key goes through `key_of`, the detail factor is a constant).
+
+Still off: the Leica night photos at −100 (L1006344 8.0, L1004503 8.4, L1004631 7.4 ΔE; shadows still too bright by +13 L* on
+L1004631: Camera Raw's airlight for lamp-lit photos is near-neutral, LightCraft's is warm), Sony's depth (6.8, every band too dark),
+and Leica +100 (acts like CR 243). Tried and rejected: refitting the 6 × 48 tables (no study gain), a global omega ×0.75 / 0.85
+for positive Dehaze (R6 and GR III +100 got much worse), airlight at the 99.9th percentile for the colour. The highlight-detail ratio is
+noise when Camera Raw's own detail is near zero (R0003369 ×43, R0003064 ×16 at −100).

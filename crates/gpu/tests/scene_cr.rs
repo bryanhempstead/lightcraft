@@ -60,6 +60,11 @@ fn scene_tone_map_matches_cpu() {
     s.effects.clarity = 0.0;
     s.effects.dehaze = 70.0;
     check_max("dehaze +70", &src, &info, &s, DEHAZE_MAX_LSB);
+    // negative Dehaze: the curve, the photo's key (shifted with it), the detail scale and the airlight's colour
+    s.effects.dehaze = -100.0;
+    check_max("dehaze -100", &src, &info, &s, DEHAZE_MAX_LSB);
+    s.effects.dehaze = -45.0;
+    check_max("dehaze -45", &src, &info, &s, DEHAZE_MAX_LSB);
     s.effects.dehaze = 0.0;
     s.effects.texture = 50.0;
     check("texture in camera rgb", &src, &info, &s);
